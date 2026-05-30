@@ -221,11 +221,11 @@ def main() -> None:
     print(f"  Columns: {list(merged.columns)}")
     label_cols = [c for c in merged.columns if c.endswith("_binary")]
     for col in label_cols:
-        counts = merged[col].value_counts(dropna=False).to_dict()
         total = merged[col].notna().sum()
-        pos = (merged[col] == 1).sum()
-        neg = (merged[col] == 0).sum()
-        print(f"  {col}: {total} labelled ({pos} positive / {neg} negative)")
+        counts = merged[col].value_counts(dropna=True).sort_index()
+        breakdown = " / ".join(f"{int(v)}={c}" for v, c in counts.items())
+        n_classes = len(counts)
+        print(f"  {col}: {total} labelled, {n_classes} classes ({breakdown})")
     print()
     print("Next steps:")
     print(f"  1. Check slide IDs match your .svs filenames: head -5 {out}")
