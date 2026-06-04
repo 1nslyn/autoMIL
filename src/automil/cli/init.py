@@ -38,13 +38,19 @@ def _register_claude_hooks(
     project_claude: Path,
     package_dir: Path,
 ) -> None:
-    """Register the stop hook in .claude/settings.json.
+    """Register the Stop hook and the activity hooks in .claude/settings.json.
 
-    Extracted from the original init.py block (lines 120-144) to allow
-    reuse from _install_runtime_assets without duplication.
+    - Stop (on_stop.sh): loop-guard + trajectory recording.
+    - PostToolUse / UserPromptSubmit / SessionStart (on_tool.sh): the
+      agent-activity signal for the activity-gated budget (P2.1). Registered
+      async so they never add latency to the agent's tool calls.
+
+    Idempotent: each hook is added only if its command isn't already present, so
+    re-running init / --update never duplicates entries.
     """
     settings_path = project_claude / "settings.json"
-    hook_cmd = f"bash {project_root / '.claude' / 'hooks' / 'on_stop.sh'}"
+    stop_cmd = f"bash {project_root / '.claude' / 'hooks' / 'on_stop.sh'}"
+    tool_cmd = f"bash {project_root / '.claude' / 'hooks' / 'on_tool.sh'}"
 
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
@@ -52,20 +58,32 @@ def _register_claude_hooks(
         project_claude.mkdir(parents=True, exist_ok=True)
         settings = {}
 
-    # Add Stop hook if not already registered
     hooks = settings.setdefault("hooks", {})
-    stop_hooks = hooks.setdefault("Stop", [])
-    already_registered = any(
-        hook_cmd in str(entry)
-        for entry in stop_hooks
-    )
-    if not already_registered:
-        stop_hooks.append({
-            "hooks": [{
-                "type": "command",
-                "command": hook_cmd,
-            }]
-        })
+
+    def _ensure(event: str, command: str, *, matcher: str | None = None,
+                extra: dict | None = None) -> bool:
+        """Append a hook entry for *event* if *command* isn't already present."""
+        entries = hooks.setdefault(event, [])
+        if any(command in str(e) for e in entries):
+            return False
+        hook_obj = {"type": "command", "command": command}
+        if extra:
+            hook_obj.update(extra)
+        entry: dict = {"hooks": [hook_obj]}
+        if matcher is not None:
+            entry["matcher"] = matcher
+        entries.append(entry)
+        return True
+
+    changed = False
+    changed |= _ensure("Stop", stop_cmd)
+    # Activity signal: fire on every tool call (matcher "*") plus turn/session
+    # start so the daemon can tell working from waiting. async = non-blocking.
+    changed |= _ensure("PostToolUse", tool_cmd, matcher="*", extra={"async": True})
+    changed |= _ensure("UserPromptSubmit", tool_cmd, extra={"async": True})
+    changed |= _ensure("SessionStart", tool_cmd, extra={"async": True})
+
+    if changed:
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
 
@@ -74,6 +92,7 @@ def _install_runtime_assets(
     project_root: Path,
     package_dir: Path,
     merge_skill,  # callable: (runtime, shared_path, overlay_path) -> str
+    update: bool = False,
 ) -> None:
     """Install per-runtime overlay assets (skill, hooks, native files).
 
@@ -105,8 +124,16 @@ def _install_runtime_assets(
                         overlay_arg = overlay_skill_path if overlay_skill_path.exists() else None
                         merged = merge_skill(rt, shared_skill, overlay_arg)
                         dst = dst_dir / "SKILL.md"
-                        if not dst.exists():
+                        # WR-04: skills are framework-managed (users customize
+                        # program.md, not SKILL.md). Honor --update so updated
+                        # framework guidance reaches existing projects; without
+                        # this, a stale skill could never refresh (the original
+                        # bug: anti-sweep directives never reached the agent).
+                        existed = dst.exists()
+                        if not existed or update:
                             dst.write_text(merged, encoding="utf-8")
+                            verb = "Updated" if (existed and update) else "Installed"
+                            click.echo(f"  {verb}: .claude/skills/{skill_dir.name}/SKILL.md")
 
         # Copy hook scripts from agent_assets/claude/hooks
         hooks_src = package_dir / "agent_assets" / "claude" / "hooks"
@@ -116,7 +143,10 @@ def _install_runtime_assets(
             for f in hooks_src.iterdir():
                 if f.is_file():
                     dst = hooks_dst / f.name
-                    if not dst.exists():
+                    # Hooks are framework-managed; honor --update so new/changed
+                    # hook scripts (e.g. the activity-signal hook) reach existing
+                    # projects without a manual reinstall.
+                    if not dst.exists() or update:
                         shutil.copy2(f, dst)
                         if f.suffix == ".sh":
                             dst.chmod(dst.stat().st_mode | 0o111)
@@ -170,7 +200,7 @@ def _install_runtime_assets(
     elif rt in ("deepseek-via-opencode", "deepseek-via-codex"):
         base_rt = "opencode" if "opencode" in rt else "codex"
         click.echo(f"  Runtime: {rt}. DeepSeek is a model; installing {base_rt} overlay")
-        _install_runtime_assets(base_rt, project_root, package_dir, merge_skill)
+        _install_runtime_assets(base_rt, project_root, package_dir, merge_skill, update)
 
 
 def _format_health_report(report: "HealthReport") -> str:
@@ -418,7 +448,7 @@ def init(path: str, task: str, encoder: str, runtime: str | None, update: bool, 
 
     # Install per-runtime assets
     for rt in runtimes_to_install:
-        _install_runtime_assets(rt, project_root, package_dir, merge_skill)
+        _install_runtime_assets(rt, project_root, package_dir, merge_skill, update)
 
     click.echo(f"autoMIL initialized at {automil_dir}/")
     click.echo("Next steps:")
