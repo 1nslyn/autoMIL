@@ -71,75 +71,81 @@ All file paths in `files.editable`, `uv run automil submit --files`, and `run.co
 are relative to the **git repo root**, not to where automil/ lives. The
 orchestrator creates worktrees from the git root, so overlay paths must match.
 
-## Two standing directives (do not drop these between sessions)
+## The loop is Research → Diagnose → Plan → Execute (not a hyperparameter sweep)
 
-1. **Saturate every GPU — submit experiments until the VRAM bin-packer
-   can't fit another one, not until each GPU has one run.** The
-   orchestrator's whole purpose is parallel bin-packing. Before every
-   batch, measure the actual peak VRAM of a typical run (see
-   `automil/orchestrator/archive/<node>/result.json → peak_vram_mb`)
-   and set `orchestrator.max_concurrent_per_gpu` and
-   `orchestrator.default_vram_estimate_gb` in `config.yaml` so that a
-   realistic number of workers fit per card with the safety margin.
-   Config hot-reloads live — no daemon restart needed. Then check
-   `automil/orchestrator/gpu_state.json` → `schedulable_free_gb` and
-   `running` per GPU. If `running` has fewer workers than the cap
-   allows while the queue is non-empty and `schedulable_free_gb` is
-   large, the loop is running serially and that is a framework bug,
-   not a safety feature. Propose and submit more specs until the cap
-   binds.
+Do **not** hill-climb on hyperparameters. Each batch runs six phases. The point
+is to propose **real architectural change** grounded in a named failure mode and
+recent literature — `automil portfolio` gates the loop on this.
 
-2. **Before every new experiment batch, read recent literature.** Do
-   not only hill-climb on hyperparameters. Delegate a short research
-   sub-agent (WebSearch + WebFetch) for the most recent (current year
-   and prior year) methods relevant to the project's model class and
-   bottleneck, pick 1–2 tractable drop-ins that fit the existing
-   pipeline (no full rewrites, no data-format changes), and queue
-   those alongside the usual hyperparameter sweeps. Aim for a
-   portfolio: half regularization / hyperparameter tweaks, half
-   structurally novel ideas from the literature. Log the paper title
-   and arXiv ID in `automil/learnings.md` whenever you try something
-   from a paper, so future sessions don't re-try it blind.
+First, every session/restart: read `automil/config.yaml`, `automil/graph.json`,
+`automil/learnings.md`, `automil/plan.md`, and the training + `files.editable`
+source; then `uv run automil reconcile`.
 
-## Run
+**LOOP FOREVER — one batch =**
 
-1. Read `automil/config.yaml`, `automil/graph.json`, `automil/learnings.md`
-2. Read the training script and key source files from `files.editable`
-3. Run `uv run automil reconcile` to sync graph state
+1. **RESEARCH.** Delegate a short research sub-agent (WebSearch + WebFetch) for
+   current-year and prior-year methods relevant to this model class and the
+   current bottleneck. Pick 1–2 tractable drop-ins that fit the existing
+   pipeline (no full rewrites, no data-format changes). Log title + arXiv id in
+   `learnings.md` for anything you try, so future sessions don't re-try it blind.
 
-Then follow Phase 2 in `automil/program.md`:
+2. **DIAGNOSE.** Read `graph.json` + recent `archive/<node>/result.json` +
+   `learnings.md` and name the **one primary failure mode** of the current best —
+   overfit · underfit · attention-collapse · poor calibration · class-imbalance ·
+   data/feature bottleneck — with evidence. This is what the batch attacks. Never
+   propose from "which knob is untried"; propose from "what is actually limiting
+   the model".
 
-**LOOP FOREVER:**
+3. **PLAN.** Rewrite `automil/plan.md`: the diagnosis, then a table of this
+   batch's proposals — each with `kind`, parent, and *hypothesis → expected
+   mechanism*. Queue each with
+   `uv run automil propose --parent <id> --kind <k> --desc "..."`
+   (kinds: `architecture` · `regularization` · `hp` · `data` · `ensemble`).
+   **Aim ≥50% structural** (architecture/ensemble). Then run
+   `uv run automil portfolio` — if it reports BELOW TARGET, propose more
+   architectural experiments before executing. Architecture changes (attention
+   mechanism, pooling, extra layers, custom models inline in the training
+   script) are **preferred over pure hyperparameter tuning**; actively look for
+   deficiencies in the model, don't just tune around them.
 
-1. `uv run automil reconcile`
-2. `uv run automil rank` to get top proposals. If none, brainstorm new ones.
-3. Read `automil/learnings.md` to avoid repeating failures.
-4. For each proposal — **prefer the variant-registry path**:
-   a. If the change is a variant of a registered parent (model / loss / policy),
-      add a new module under `automil/variants/<parent>/<name>.py`, update
-      `automil/config.yaml` to select it, and `uv run automil submit` — no
-      working-tree cleanup needed; the variant is committed code.
-   b. Otherwise (free-mode exploratory edit), edit the project files, then
-      `uv run automil submit --node <id> --desc "..." --files <changed files>`.
-      After submit, **selectively** restore ONLY the files you changed for
-      that proposal: `git restore --source=HEAD -- <each-file>`. Never use
-      bulk commands (`git checkout .`, `git restore .`, `git stash -k`) —
-      they discard unrelated local work, including config edits or notes
-      you may have made between submits.
-5. Wait for Monitor completion events (do **not** poll) — the watcher
-   streams `Completed node_...` lines as they arrive
-6. `uv run automil reconcile` to update graph
-7. Update `automil/learnings.md`
-8. If improved: commit winning changes
-9. If no proposals: brainstorm, `uv run automil propose`
-10. Repeat
+4. **EXECUTE.** `uv run automil rank`, then implement and submit — **prefer the
+   variant-registry path**:
+   a. Variant of a registered parent (model / loss / policy): add a module under
+      `automil/variants/<parent>/<name>.py`, select it in `config.yaml`, and
+      `uv run automil submit`. No working-tree cleanup — the variant is committed.
+   b. Free-mode edit: edit project files, then
+      `uv run automil submit --node <id> --desc "..." --files <changed files>`,
+      then **selectively** restore ONLY those files:
+      `git restore --source=HEAD -- <each-file>`. Never bulk-restore
+      (`git checkout .`, `git restore .`, `git stash -k`) — it discards unrelated work.
+
+   **Saturate every GPU** — submit until the VRAM bin-packer can't fit another
+   run, not until each GPU has one. Measure a typical run's `peak_vram_mb`
+   (`archive/<node>/result.json`) and set `orchestrator.max_concurrent_per_gpu`
+   + `orchestrator.default_vram_estimate_gb` in `config.yaml` (hot-reloads live).
+   Check `orchestrator/gpu_state.json` → `schedulable_free_gb` / `running`; if
+   workers < cap while the queue is non-empty and free VRAM is large, the loop is
+   running serially — submit more specs until the cap binds.
+
+5. **WAIT** on Monitor completion events (do **not** poll). The activity-gated
+   budget bills only the time you are *acting*, not the hours experiments run —
+   so keep working: while a batch trains, run the RESEARCH/DIAGNOSE for the next
+   one rather than sitting idle.
+
+6. **RECONCILE + LEARN.** `uv run automil reconcile`; read results; update
+   `learnings.md` (what worked / failed / near-miss, with paper ids). Commit
+   winning changes. Then loop back to RESEARCH for the next batch.
 
 ## Rules
 
 - NEVER STOP while `.automil_active` exists
+- Every batch: DIAGNOSE a failure mode and rewrite `automil/plan.md` BEFORE proposing
+- Always pass `--kind` to `automil propose`; keep the pending mix ≥50% structural
+  (`automil portfolio` must not report BELOW TARGET before you execute)
+- Prefer real architectural change over hyperparameter tuning
 - Use `uv run automil submit` for every experiment (not manual runs)
 - Use `uv run automil rank` to pick experiments (not random)
-- Update `automil/learnings.md` after every result
+- Update `automil/learnings.md` after every result (paper title + arXiv id when from a paper)
 - Commit winning experiments to git
 - File paths in submit --files must be relative to git repo root
 - Restore selectively after submit; never bulk-restore the working tree

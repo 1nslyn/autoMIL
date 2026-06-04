@@ -1,0 +1,31 @@
+# Experiment Plan — {{ project_name }}
+
+The agent rewrites this file at the **PLAN** phase of every batch (the
+Research → Diagnose → Plan → Execute loop). It is the visible record of *why*
+each queued experiment exists — diagnosis first, then a portfolio of proposals
+that is **≥50% structural** (architecture/ensemble), not a hyperparameter sweep.
+The restart protocol reads this file; keep it current.
+
+## Current best
+- node: `<id>` · composite `<x>` · `<one-line description>`
+
+## Diagnosis — failure mode of the current best
+> What is actually limiting the current best? Name ONE primary failure mode with
+> evidence from `graph.json` / results / `learnings.md`:
+> overfit · underfit · attention-collapse · poor calibration · class-imbalance ·
+> data/feature bottleneck. This is the thing the batch must attack — NOT
+> "which hyperparameter to nudge next".
+
+`<diagnosis here>`
+
+## This batch (target ≥50% structural — run `automil portfolio`)
+| node | kind | parent | hypothesis → expected mechanism |
+|------|------|--------|---------------------------------|
+| `<id>` | architecture | `<parent>` | `<what changes, and why it should move the metric>` |
+| `<id>` | regularization | `<parent>` | `<...>` |
+
+## Research notes — papers considered this batch
+> Log title + arXiv id for anything you tried from the literature, and whether
+> it was queued, so future sessions don't re-try it blind (mirror into learnings.md).
+
+- `<title>` (arXiv:`<id>`) — `<idea; queued? yes/no>`

@@ -392,6 +392,7 @@ def init(path: str, task: str, encoder: str, runtime: str | None, update: bool, 
         for template_name, target_name in [
             ("config.yaml.j2", "config.yaml"),
             ("program.md.j2", "program.md"),
+            ("plan.md.j2", "plan.md"),
             ("learnings.md.j2", "learnings.md"),
             (".gitignore.j2", ".gitignore"),
         ]:
