@@ -303,34 +303,71 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     _automil_cfg = yaml.safe_load((adir / "config.yaml").read_text()) if (adir / "config.yaml").exists() else {}
     _backend_name: str = _automil_cfg.get("backend", {}).get("name", "local")
 
-    # D-134: Resolve cap defaults with 3-tier precedence — CLI flag > config > framework fallback.
-    _cap_cfg = _automil_cfg.get("cap", {}) if isinstance(_automil_cfg, dict) else {}
-    _resolved_budget = budget_seconds if budget_seconds is not None else int(_cap_cfg.get("budget_seconds", 21600))
-    _resolved_buffer = safety_buffer_seconds if safety_buffer_seconds is not None else int(_cap_cfg.get("safety_buffer_seconds", 1800))
-    if _resolved_budget <= 0:
-        raise click.ClickException(f"--budget-seconds must be > 0 (got {_resolved_budget})")
-    if not (0 < _resolved_buffer < _resolved_budget):
+    # D-134 + P2.3: Resolve cap config — CLI flag > cap.<key> duration >
+    # legacy cap.<key>_seconds int > framework fallback. Honored only on the
+    # submit that opens the cell.
+    from automil.cells.capconfig import resolve_cap_config  # noqa: E402
+    try:
+        _cap = resolve_cap_config(
+            _automil_cfg,
+            budget_override=budget_seconds,
+            buffer_override=safety_buffer_seconds,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    if _cap.budget_seconds <= 0:
+        raise click.ClickException(f"budget must be > 0 (got {_cap.budget_seconds}s)")
+    if not (0 < _cap.safety_buffer_seconds < _cap.budget_seconds):
         raise click.ClickException(
-            f"--safety-buffer-seconds must satisfy 0 < buffer < budget "
-            f"(got buffer={_resolved_buffer}, budget={_resolved_budget})"
+            f"safety buffer must satisfy 0 < buffer < budget "
+            f"(got buffer={_cap.safety_buffer_seconds}s, budget={_cap.budget_seconds}s)"
         )
 
     # D-116: Cell refusal hook — call get_or_create_cell BEFORE writing the queue spec.
     # metadata.cell_id is the cap-membership tag the daemon reads to count in-cell experiments.
     from automil.cells import get_or_create_cell, is_refusing_new, consumed_seconds  # noqa: E402
 
-    _dataset_name = ((_automil_cfg.get("dataset") or {}).get("name", "unknown")
-                     if isinstance(_automil_cfg, dict) else "unknown")
-    _encoder_name = ((_automil_cfg.get("encoder") or {}).get("name", "unknown")
-                     if isinstance(_automil_cfg, dict) else "unknown")
+    # Cell identity: key the cap-cell by the optimization target. Real configs
+    # expose this via project.name (dataset+task) and encoders.primary — NOT
+    # top-level dataset/encoder, which never existed in any shipped config and
+    # silently collapsed every cell to (unknown, unknown), defeating per-lineage
+    # budget enforcement. Prefer the real schema; keep legacy keys as fallback.
+    def _cfg_path(cfg: object, *keys: str) -> str | None:
+        cur = cfg
+        for k in keys:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(k)
+        return cur if isinstance(cur, str) and cur.strip() else None
+
+    _dataset_name = (
+        _cfg_path(_automil_cfg, "project", "name")
+        or _cfg_path(_automil_cfg, "dataset", "name")  # legacy schema
+        or _cfg_path(_automil_cfg, "task", "name")
+        or "unknown"
+    )
+    _encoder_name = (
+        _cfg_path(_automil_cfg, "encoders", "primary")
+        or _cfg_path(_automil_cfg, "encoder", "name")  # legacy schema
+        or "unknown"
+    )
+    if _dataset_name == "unknown" or _encoder_name == "unknown":
+        click.echo(
+            f"  warning: cell identity falling back to (dataset={_dataset_name}, "
+            f"encoder={_encoder_name}); set project.name and encoders.primary in "
+            f"config.yaml so per-lineage budgets key correctly.",
+            err=True,
+        )
     _parent_for_cell = parent if parent else "root"
 
     _cell = get_or_create_cell(
         dataset=_dataset_name,
         encoder=_encoder_name,
         parent_id=_parent_for_cell,
-        budget_seconds=_resolved_budget,
-        safety_buffer_seconds=_resolved_buffer,
+        budget_seconds=_cap.budget_seconds,
+        safety_buffer_seconds=_cap.safety_buffer_seconds,
+        idle_grace_seconds=_cap.idle_grace_seconds,
+        mode=_cap.mode,
     )
     if is_refusing_new(_cell):
         raise click.ClickException(

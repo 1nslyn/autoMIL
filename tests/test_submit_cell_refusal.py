@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from automil.cli import main
@@ -50,13 +51,14 @@ def _setup_project(tmp_path: Path, monkeypatch) -> tuple[CliRunner, Path]:
     assert result.exit_code == 0, f"init failed: {result.output}"
 
     adir = tmp_path / "automil"
-    # Overwrite config.yaml to include dataset/encoder names so the cell gets
-    # deterministic IDs in all tests.
+    # Pin dataset/encoder identity so the cell gets deterministic IDs in all
+    # tests. Cell identity keys off project.name + encoders.primary (the real
+    # config schema submit.py reads), overriding the dir-stamped defaults.
     config_path = adir / "config.yaml"
-    config_text = config_path.read_text()
-    # Inject dataset and encoder top-level keys that submit.py reads.
-    config_text += "\ndataset:\n  name: test_ds\nencoder:\n  name: test_enc\n"
-    config_path.write_text(config_text)
+    cfg = yaml.safe_load(config_path.read_text()) or {}
+    cfg["project"] = {**(cfg.get("project") or {}), "name": "test_ds"}
+    cfg["encoders"] = {**(cfg.get("encoders") or {}), "primary": "test_enc"}
+    config_path.write_text(yaml.safe_dump(cfg))
 
     return runner, adir
 

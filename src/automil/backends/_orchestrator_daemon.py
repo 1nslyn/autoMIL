@@ -969,7 +969,14 @@ class ExperimentOrchestrator:
         """
         import signal as _sig
         from dataclasses import replace
-        from automil.cells import list_cells, next_status, write_cell, CellStatus
+        from automil.cells import (
+            accrue_active,
+            list_cells,
+            next_status,
+            read_last_action_at,
+            write_cell,
+            CellStatus,
+        )
 
         now = time.time()
         # Resolve cells_dir from the orchestrator's explicit automil_dir, not
@@ -980,10 +987,19 @@ class ExperimentOrchestrator:
         if not cells_dir.exists():
             logger.debug("_tick_cells: no cells dir at %s; skipping", cells_dir)
             return
+        # P2.2: project-level agent-activity marker drives agent_active billing.
+        last_action_at = read_last_action_at(self.automil_dir)
         for cell in list_cells(cells_dir):
+            # Advance the agent_active budget BEFORE the state machine so
+            # next_status sees this tick's consumed time. No-op for wall_clock.
+            cell = accrue_active(cell, now, last_action_at)
             running = self._running_in_cell(cell.cell_id)
             new_status = next_status(cell, now, len(running))
             if new_status == cell.status:
+                # Persist the accrual (consumed_active_seconds / last_tick_at)
+                # even when the status is unchanged, else it never advances.
+                if cell.mode == "agent_active":
+                    write_cell(cell, cells_dir)
                 continue
             if new_status == CellStatus.TERMINATING:
                 for handle in running:

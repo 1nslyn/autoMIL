@@ -68,6 +68,31 @@ class Cell:
     status: CellStatus
     """Current cap lifecycle state (D-110)."""
 
+    # --- Activity-gated budget fields (P2.2) ----------------------------------
+    # All default-valued so cells written before this feature deserialize
+    # unchanged. The dataclass default for ``mode`` is the LEGACY "wall_clock"
+    # so a pre-existing cell keeps its original continuous-clock semantics;
+    # newly-opened cells receive ``mode`` from cap.mode (default "agent_active").
+
+    mode: str = "wall_clock"
+    """Billing mode. ``"agent_active"``: bill only while the agent is acting —
+    ``consumed_active_seconds`` is accrued by the daemon each tick while the
+    agent acted within ``idle_grace_seconds``. ``"wall_clock"``: legacy
+    continuous ``now - started_at``."""
+
+    idle_grace_seconds: int = 300
+    """``agent_active`` only — the largest gap (s) since the last agent action
+    that still counts as 'actively working'. Beyond it the budget clock pauses."""
+
+    consumed_active_seconds: float = 0.0
+    """``agent_active`` accumulator — total billed agent-active seconds. Advanced
+    by the daemon (never by an agent-reported counter, so not a sandbagging
+    vector)."""
+
+    last_tick_at: float | None = None
+    """``agent_active`` bookkeeping — wall-clock of the last daemon tick that
+    evaluated this cell. ``None`` is treated as ``started_at`` on the first tick."""
+
 
 def make_cell_id(dataset: str, encoder: str, parent_id: str) -> str:
     """Return a 16-char deterministic hex id for the (dataset, encoder, parent_id) triple.
@@ -81,14 +106,24 @@ def make_cell_id(dataset: str, encoder: str, parent_id: str) -> str:
     return hashlib.sha256(f"{dataset}|{encoder}|{parent_id}".encode("utf-8")).hexdigest()[:16]
 
 
-def consumed_seconds(cell: Cell) -> float:
-    """Return computed wall-clock elapsed seconds for the cell (D-111).
+def consumed_seconds(cell: Cell, now: float | None = None) -> float:
+    """Return the effective consumed budget seconds for the cell (mode-aware).
 
-    Computed wall-clock — NEVER accumulated.  Restart-safe: daemon kill at hour 4
-    of a 6h cell still returns ~14400 because started_at is persisted on disk.
-    There is NO counter accumulation anywhere — that pattern is the sandbagging bug.
+    ``wall_clock`` (legacy, D-111): computed ``now - started_at`` — never
+    accumulated, restart-safe via the persisted ``started_at``.
+
+    ``agent_active`` (P2.2): the daemon-maintained ``consumed_active_seconds``
+    accumulator, which advances only while the agent is acting. This is a
+    deliberate, narrowly-scoped reversal of the old "never accumulate" rule:
+    the counter is driven by harness-observed agent actions (tool-use hooks),
+    NOT an agent-reported value, so it is not the sandbagging vector D-111
+    guarded against — the agent cannot pad it without doing real work, nor
+    suppress it while producing nodes.
     """
-    return time.time() - cell.started_at
+    if cell.mode == "wall_clock":
+        n = now if now is not None else time.time()
+        return n - cell.started_at
+    return cell.consumed_active_seconds
 
 
 def write_cell(cell: Cell, cells_dir: Path) -> None:

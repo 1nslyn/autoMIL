@@ -170,6 +170,26 @@ def check():
         if baseline_comp == 0:
             warnings.append("baseline.composite is 0. Set this after running your first experiment.")
 
+        # P2.3: surface the resolved cell budget so the operator sees it at setup.
+        from automil.cells import format_duration  # noqa: PLC0415
+        from automil.cells.capconfig import resolve_cap_config  # noqa: PLC0415
+        try:
+            cap = resolve_cap_config(config)
+            grace = (f", idle_grace={format_duration(cap.idle_grace_seconds)}"
+                     if cap.mode == "agent_active" else "")
+            click.echo(
+                f"cap budget: {format_duration(cap.budget_seconds)} "
+                f"(mode={cap.mode}{grace}, "
+                f"safety_buffer={format_duration(cap.safety_buffer_seconds)})"
+            )
+            if not (0 < cap.safety_buffer_seconds < cap.budget_seconds):
+                warnings.append(
+                    f"cap.safety_buffer ({cap.safety_buffer_seconds}s) must satisfy "
+                    f"0 < buffer < budget ({cap.budget_seconds}s)."
+                )
+        except ValueError as exc:
+            issues.append(f"cap config invalid: {exc}")
+
     # Check GPU
     try:
         result = subprocess.run(

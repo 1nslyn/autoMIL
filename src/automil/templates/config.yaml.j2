@@ -164,17 +164,23 @@ policy:
   variant: null    # e.g. "sam_lookahead"
 
 # Cap configuration: consumer-supplied, NOT framework-mandated.
-# autoMIL is generic; values below are example defaults Leo's autoMIL-paper
-# experiment campaign uses across all its datasets (CCRCC, CLWD, future
-# additions). A different consumer (sklearn-iris demo with K=1, an external
-# lab with different time budgets, a follow-up paper) would pick different
-# numbers. The framework only requires that values are present and validated
-# (see D-134); the *values* are entirely the consumer's choice.
-# Per-cell override: automil submit --budget-seconds N --safety-buffer-seconds M
-# is honored ONLY on the submit that opens the cell (D-134).
+# autoMIL is generic; the values below are just the defaults Leo's autoMIL-paper
+# campaign uses — 6h is NOT special, set whatever fits your compute. Durations
+# accept 6h / 30m / 90s / 2d (or a bare number = seconds). Change anytime with
+# `automil budget set 6h`; per-cell override via `automil submit --budget-seconds`.
+# All cap values are honored ONLY on the submit that opens a cell (D-134).
 cap:
-  budget_seconds:        21600    # 6h, Leo's autoMIL-paper campaign default
-  safety_buffer_seconds: 1800     # 30min, must be < budget_seconds; tune to longest-fold duration
+  budget: 6h               # agent-active working budget; e.g. 6h, 30m, 90s
+  safety_buffer: 30m       # pre-termination warning window; must be < budget
+  # mode: how the budget clock is metered.
+  #   agent_active (default) — bills only while the agent is actually working
+  #     (PostToolUse activity); the clock PAUSES while experiments run and the
+  #     agent waits, so you get more proposing time per budget.
+  #   wall_clock — legacy continuous now-since-creation (counts GPU + idle time).
+  mode: agent_active
+  idle_grace_seconds: 300  # agent_active only: gap (s) since the agent's last
+                           # action that still counts as "working" before the
+                           # clock pauses. Set ≥ your longest think/edit gap.
   default_vram_estimate_gb: {{ default_vram_estimate_gb | default(8.0) }}
   max_concurrent_per_gpu: {{ max_concurrent_per_gpu | default(4) }}
 
