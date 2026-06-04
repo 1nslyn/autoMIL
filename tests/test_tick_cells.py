@@ -485,3 +485,64 @@ def test_automil_fold_count_injected_into_subprocess_env(tmp_path: Path) -> None
     assert env["AUTOMIL_FOLD_COUNT"] == "7", (
         f"Expected '7' from config, got {env['AUTOMIL_FOLD_COUNT']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 9/10: activity-gated budget accrual through _tick_cells (P2.2)
+# ---------------------------------------------------------------------------
+
+def _write_agent_active_cell(cells_dir: Path, cell_id: str, now: float,
+                             consumed: float, last_tick_offset: float) -> None:
+    cells_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "cell_id": cell_id, "dataset": "test", "encoder": "enc", "parent_id": "root",
+        "started_at": now - 100, "budget_seconds": 21600, "safety_buffer_seconds": 1800,
+        "status": "active", "mode": "agent_active", "idle_grace_seconds": 300,
+        "consumed_active_seconds": consumed, "last_tick_at": now - last_tick_offset,
+    }
+    (cells_dir / f"{cell_id}.json").write_text(json.dumps(payload, indent=2))
+
+
+def test_tick_cells_agent_active_accrues_while_agent_acting(tmp_path: Path, monkeypatch) -> None:
+    """agent_active cell: a fresh .last_action_at → consumed_active_seconds advances."""
+    import automil.backends._orchestrator_daemon as dm
+    FIXED_NOW = 1_000_000.0
+    monkeypatch.setattr(dm.time, "time", lambda: FIXED_NOW)
+
+    orch = _make_orch(tmp_path)
+    cells_dir = tmp_path / "automil" / "cells"
+    _write_agent_active_cell(cells_dir, "active0000000001", FIXED_NOW,
+                             consumed=10.0, last_tick_offset=5.0)
+    # Agent acted 1s ago (< idle_grace 300) → active.
+    (tmp_path / "automil" / ".last_action_at").write_text(str(FIXED_NOW - 1))
+
+    orch.backend = MagicMock()
+    orch.running = {}
+    orch._tick_cells()
+
+    updated = json.loads((cells_dir / "active0000000001.json").read_text())
+    assert updated["consumed_active_seconds"] == 15.0  # 10 + 5s elapsed
+    assert updated["last_tick_at"] == FIXED_NOW
+    assert updated["status"] == "active"
+
+
+def test_tick_cells_agent_active_frozen_while_waiting(tmp_path: Path, monkeypatch) -> None:
+    """agent_active cell: no recent activity → budget clock frozen (agent waiting)."""
+    import automil.backends._orchestrator_daemon as dm
+    FIXED_NOW = 1_000_000.0
+    monkeypatch.setattr(dm.time, "time", lambda: FIXED_NOW)
+
+    orch = _make_orch(tmp_path)
+    cells_dir = tmp_path / "automil" / "cells"
+    _write_agent_active_cell(cells_dir, "idle000000000001", FIXED_NOW,
+                             consumed=10.0, last_tick_offset=5.0)
+    # Stale marker: agent's last action was 1h ago (>> idle_grace) → waiting.
+    (tmp_path / "automil" / ".last_action_at").write_text(str(FIXED_NOW - 3600))
+
+    orch.backend = MagicMock()
+    orch.running = {}
+    orch._tick_cells()
+
+    updated = json.loads((cells_dir / "idle000000000001.json").read_text())
+    assert updated["consumed_active_seconds"] == 10.0  # unchanged — clock paused
+    assert updated["last_tick_at"] == FIXED_NOW         # tick still advanced

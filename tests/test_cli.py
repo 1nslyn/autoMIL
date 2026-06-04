@@ -99,6 +99,59 @@ class TestInit:
         assert "results.tsv" in gitignore
         assert "orchestrator/" in gitignore
 
+    def test_update_refreshes_stale_skill(self, cli_runner, tmp_path, monkeypatch):
+        """`automil init --update` refreshes a stale framework-managed skill.
+
+        Regression: skills used `if not dst.exists()` and ignored --update
+        entirely, so updated agent guidance (e.g. the anti-HP-sweep directives)
+        could never reach an already-initialized project.
+        """
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        skill = tmp_path / ".claude" / "skills" / "automil" / "SKILL.md"
+        assert skill.exists(), "init should install the automil skill"
+        canonical = skill.read_text()
+        assert len(canonical.splitlines()) > 80, "canonical skill should be the full version"
+
+        # Simulate drift: an older/truncated skill already on disk.
+        skill.write_text("# stale skill\n")
+
+        result = cli_runner.invoke(main, ["init", "--update"])
+        assert result.exit_code == 0, result.output
+        assert skill.read_text() == canonical, (
+            "init --update must refresh the stale skill to the canonical version"
+        )
+
+    def test_registers_activity_hooks(self, cli_runner, tmp_path, monkeypatch):
+        """init installs on_tool.sh and registers the activity hooks (P2.1)."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        hook = tmp_path / ".claude" / "hooks" / "on_tool.sh"
+        assert hook.exists(), "on_tool.sh should be installed"
+
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        hooks = settings.get("hooks", {})
+        assert "PostToolUse" in hooks
+        post = hooks["PostToolUse"][0]
+        assert "on_tool.sh" in str(post)
+        assert post.get("matcher") == "*"
+        assert post["hooks"][0].get("async") is True
+        # UserPromptSubmit + SessionStart also wired
+        assert any("on_tool.sh" in str(e) for e in hooks.get("UserPromptSubmit", []))
+        assert any("on_tool.sh" in str(e) for e in hooks.get("SessionStart", []))
+        # Existing Stop hook preserved
+        assert any("on_stop.sh" in str(e) for e in hooks.get("Stop", []))
+
+        # Idempotent: --update must not duplicate entries.
+        cli_runner.invoke(main, ["init", "--update"])
+        settings2 = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert len(settings2["hooks"]["PostToolUse"]) == 1
+        assert len(settings2["hooks"]["Stop"]) == 1
+
 
 class TestCheck:
     def test_check_reports_placeholder_paths(self, cli_runner, tmp_path, monkeypatch):
