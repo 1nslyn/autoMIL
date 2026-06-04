@@ -246,7 +246,7 @@ class ExperimentGraph:
                      techniques: list[str], rationale: str = "",
                      reference: str | None = None,
                      expected_gain: str = "low", effort: str = "low",
-                     tier: int = 2) -> str:
+                     tier: int = 2, kind: str = "unspecified") -> str:
         nid = self.next_id()
         techniques = self._auto_extract_if_empty(description, techniques)
         node = {
@@ -257,6 +257,11 @@ class ExperimentGraph:
             "description": description,
             "techniques": techniques,
             "tier": tier,
+            # kind classifies the experiment for the architecture-vs-HP portfolio
+            # (P1.2): architecture | regularization | hp | data | ensemble |
+            # unspecified. Drives `automil portfolio` so the loop stays
+            # structurally exploratory, not a pure hyperparameter sweep.
+            "kind": kind,
             "rationale": rationale,
             "reference": reference,
             "expected_gain": expected_gain,
