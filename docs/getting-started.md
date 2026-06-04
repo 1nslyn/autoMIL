@@ -110,12 +110,14 @@ baseline:
   composite: 0.0                 # your starting performance
 
 cap:
-  # cap is consumer-supplied. Framework provides the mechanism, you pick
-  # the values. Examples: 21600 (6h, autoMIL-paper campaign default),
-  # 60 (sklearn-iris demo), 1800 (30-min lab demo). See note below on the
-  # CLI / config / fallback precedence chain (D-134).
-  budget_seconds: 21600
-  safety_buffer_seconds: 1800    # 30min refuse-new buffer
+  # cap is consumer-supplied — 6h is just the autoMIL-paper default, not
+  # special. Durations accept 6h / 30m / 90s / 2d (or a bare number = seconds).
+  # Change anytime with `automil budget set 6h`. See note below on precedence.
+  budget: 6h                     # agent-active working budget
+  safety_buffer: 30m             # refuse-new buffer; must be < budget
+  mode: agent_active             # bill only while the agent is working (see below)
+  idle_grace_seconds: 300        # agent_active: gap after the last action that
+                                 # still counts as "working" before the clock pauses
 
 backend:
   name: "local"                  # "local" | "slurm" | "ray"
@@ -136,18 +138,29 @@ A few notes on each:
 - **`scoring.formula`** is documentation-only. Your training script
   computes the composite scalar and writes it to `result.json`. State the
   formula here so collaborators can read the recipe at a glance.
-- **`cap.budget_seconds` / `cap.safety_buffer_seconds`** are consumer-supplied
-  values. The framework provides the per-cell wall-clock cap *mechanism*:
-  at `T - safety_buffer` the cell enters `refusing-new` (no new submits
-  accepted into this cell); at `T` the cell enters `terminating` and
-  SIGTERM is sent to running experiments. The *values* are yours to pick.
-  The precedence chain is `CLI flag > config.yaml > framework fallback
-  (21600 / 1800)`. Override per-cell via
-  `automil submit --budget-seconds N --safety-buffer-seconds M` (D-134;
-  honored ONLY on the submit that creates the cell, later submits joining
-  the same cell log INFO and use the established values, preventing
-  sandbagging). 21600 (6h) is the autoMIL-paper campaign default; the
-  sklearn-iris example uses 60s.
+- **`cap.budget` / `cap.safety_buffer`** are consumer-supplied durations
+  (`6h`, `30m`, `90s`, `2d`, or a bare number of seconds; the legacy
+  `cap.budget_seconds` integer keys still work). The framework provides the
+  per-cell cap *mechanism*: at `T - safety_buffer` the cell enters
+  `refusing-new` (no new submits accepted into this cell); at `T` the cell
+  enters `terminating` and SIGTERM is sent to running experiments. The
+  precedence chain is `CLI flag > cap.<key> duration > legacy
+  cap.<key>_seconds > framework fallback (6h / 30m)`. Set it the easy way with
+  `automil budget set 6h` (or `automil budget show` to inspect), or override
+  per-cell via `automil submit --budget-seconds N` (D-134; honored ONLY on the
+  submit that creates the cell — later submits joining the same cell log INFO
+  and keep the established value, preventing sandbagging).
+- **`cap.mode`** chooses how the budget clock is metered:
+  - **`agent_active`** (default) bills only the time the agent is *actually
+    working*. A Claude Code `PostToolUse` hook (installed by `automil init`)
+    stamps `automil/.last_action_at` on every tool call; the orchestrator
+    advances the budget only while that marker is fresher than
+    `cap.idle_grace_seconds`. Because the agent is quiescent while waiting on
+    experiments, GPU/wait time does **not** count — you get more proposing time
+    per budget. The counter is driven by harness-observed actions, not an
+    agent-reported value, so it can't be padded without doing real work.
+  - **`wall_clock`** is the legacy continuous clock (counts GPU + idle time
+    since cell creation). Use it to reproduce pre-activity-gated behavior.
 - **`backend.name`**, `local` works on any machine. `slurm` requires
   `pip install -e '.[slurm]'` and valid SLURM directives (`backend.slurm.directives.partition`,
   `account`, `cpus_per_task`, `mem_gb`). `ray` requires `pip install -e '.[ray]'`
