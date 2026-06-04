@@ -360,7 +360,8 @@ automil submit --node <id> --desc "..." [--files <f>] [--max-time SEC]
 automil cancel <node_id>                          Cancel a running experiment
 automil resubmit <node_id>                        Re-queue a terminal experiment as a new node
 automil rank                                      Show top-ranked proposals (UCB)
-automil propose --parent <id> --desc "..."        Add a brainstormed proposal
+automil propose --parent <id> --kind <k> --desc "..."  Add a proposal (kind: architecture|regularization|hp|data|ensemble)
+automil portfolio [--threshold 0.5]               Architecture-vs-HP mix of pending proposals; exits non-zero below target
 automil reconcile [--recompute-best]              Sync graph with orchestrator state
 automil status                                    Show experiment summary
 
