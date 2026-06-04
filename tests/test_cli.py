@@ -49,6 +49,7 @@ class TestInit:
         adir = tmp_path / "automil"
         assert (adir / "config.yaml").exists()
         assert (adir / "program.md").exists()
+        assert (adir / "plan.md").exists()
         assert (adir / "learnings.md").exists()
         assert (adir / ".gitignore").exists()
         assert (adir / "orchestrator" / "queue").is_dir()
