@@ -29,6 +29,14 @@ import torch
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
+# autoMIL overlay fix (ISSUE-010 / ISSUE-021): prepend THIS checkout's benchmarks/src so the
+# co-located autobench (and its LIB_ROOT -> lib/CLAM) wins over the editable install. Without
+# this, a worktree run imports autobench + CLAM from the MAIN repo and every overlay to
+# benchmarks/src or benchmarks/lib is silently ignored (the orchestrator stopped injecting
+# the worktree PYTHONPATH in D-199).
+import sys as _sys
+_sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+
 from automil.runtime_helpers import register_sigterm_flush
 from autobench.config import load_dataset_config
 from autobench.pipeline.config import (
