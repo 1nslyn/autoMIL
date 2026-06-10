@@ -4,12 +4,13 @@ milestone: v1.1
 milestone_name: Bug Fixing
 status: planning
 last_updated: "2026-06-10T18:15:54.937Z"
-last_activity: 2026-06-10 — Roadmap created; v1.1 phases 9–14 defined
+last_activity: 2026-06-10 — Phase 9 context gathered (09-CONTEXT.md)
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
+  percent: 0
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -35,8 +36,8 @@ progress:
 
 Phase: 9 — State & Recovery Integrity
 Plan: —
-Status: Planning
-Last activity: 2026-06-10 — Roadmap created; v1.1 phases 9–14 defined
+Status: Planning — context gathered (ready to plan)
+Last activity: 2026-06-10 — Phase 9 discussion complete; 09-CONTEXT.md committed (cab7bb1)
 
 ## Performance Metrics
 
@@ -107,9 +108,9 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Roadmap created 2026-06-10. v1.1 Phases 9–14 defined. REQUIREMENTS.md traceability filled. STATE.md updated.
+**Last action:** Phase 9 discussion complete (`--all`, 2026-06-10). 15 decisions (D-01..D-15) captured in `.planning/phases/09-state-recovery-integrity/09-CONTEXT.md` (committed cab7bb1) across all four areas: partial-fold quarantine + main-PID-first kill, status+termination_reason vocabulary, standalone terminal_writer + opt-in `reconcile --from-archive`, and `--mil-model` cell-keying with budget-merge migration.
 
-**To start Phase 9:** Run `/gsd-plan-phase 9` — Phase 9 covers REC-01 (S0 partial-fold recovery), REC-02 (single terminal-state writer), REC-03 (status vocabulary + schema validation), REC-04 (mil_model budget-cell keying).
+**To plan Phase 9:** `/clear` then run `/gsd-plan-phase 9` — researcher/planner read 09-CONTEXT.md. Phase 9 covers REC-01 (S0 partial-fold recovery), REC-02 (single terminal-state writer), REC-03 (status vocabulary + schema validation), REC-04 (mil_model budget-cell keying).
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*
