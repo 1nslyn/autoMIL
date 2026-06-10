@@ -90,32 +90,32 @@ Which phase covers which requirement. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REC-01 | TBD | Pending |
-| REC-02 | TBD | Pending |
-| REC-03 | TBD | Pending |
-| REC-04 | TBD | Pending |
-| APL-01 | TBD | Pending |
-| APL-02 | TBD | Pending |
-| APL-03 | TBD | Pending |
-| CFG-01 | TBD | Pending |
-| CFG-02 | TBD | Pending |
-| CFG-03 | TBD | Pending |
-| SCH-01 | TBD | Pending |
-| SCH-02 | TBD | Pending |
-| OPS-01 | TBD | Pending |
-| OPS-02 | TBD | Pending |
-| OPS-03 | TBD | Pending |
-| OPS-04 | TBD | Pending |
-| OPS-05 | TBD | Pending |
-| DBT-01 | TBD | Pending |
-| DBT-02 | TBD | Pending |
-| DBT-03 | TBD | Pending |
+| REC-01 | Phase 9 | Pending |
+| REC-02 | Phase 9 | Pending |
+| REC-03 | Phase 9 | Pending |
+| REC-04 | Phase 9 | Pending |
+| APL-01 | Phase 10 | Pending |
+| APL-02 | Phase 10 | Pending |
+| APL-03 | Phase 10 | Pending |
+| CFG-01 | Phase 11 | Pending |
+| CFG-02 | Phase 11 | Pending |
+| CFG-03 | Phase 11 | Pending |
+| SCH-01 | Phase 12 | Pending |
+| SCH-02 | Phase 12 | Pending |
+| OPS-01 | Phase 13 | Pending |
+| OPS-02 | Phase 13 | Pending |
+| OPS-03 | Phase 13 | Pending |
+| OPS-04 | Phase 13 | Pending |
+| OPS-05 | Phase 13 | Pending |
+| DBT-01 | Phase 14 | Pending |
+| DBT-02 | Phase 14 | Pending |
+| DBT-03 | Phase 14 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 20 total
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 20 ⚠️ (resolved by roadmapper)
+- Mapped to phases: 20
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-06-10*
-*Last updated: 2026-06-10 after milestone v1.1 definition*
+*Last updated: 2026-06-10 — traceability filled in after roadmap creation*
