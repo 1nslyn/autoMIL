@@ -79,6 +79,11 @@ how the framework *records and recovers* terminal state and budget identity.
   flag → config (`run.mil_model`) → **error if neither**. Honors the "required" intent (a
   model is always pinned to the cell) without breaking existing scripted submits that declare
   the model in config. Applies to both `propose` and `submit`.
+  - **(Approved extension, 2026-06-10 — accepted during plan-check.)** On `submit`, the
+    resolution chain has a middle step: **flag → config (`run.mil_model`) → inherit from the
+    existing proposal node's metadata → error**. A node proposed with `--mil-model X` does not
+    need the flag repeated on submit. Strictly additive, research-recommended; improves the
+    `propose`→`submit` workflow without weakening the "always pinned" guarantee.
 - **D-13:** Cell key changes from `sha256(dataset|encoder|parent_id)` to
   `sha256(dataset|encoder|mil_model)`. **Graph parent lineage stays separate from budget
   identity** (re-parenting must not fork the budget). `make_cell_id` signature changes

@@ -54,7 +54,7 @@ file does not exist yet and must be created before/with the implementing task.
 | REC-02 | `reconcile --from-archive` refreshes existing node composite | unit | `uv run pytest tests/test_reconcile_from_archive.py -v` | ❌ W0 |
 | REC-03 | `partial` status validates against updated schema | unit | `uv run pytest tests/test_result_schema_validation.py -v` | ✅ extend |
 | REC-03 | `termination_reason` field validates | unit | `uv run pytest tests/test_result_schema_validation.py -v` | ✅ extend |
-| REC-03 | `crashed` canonicalized to `crash` in `_crashed_payload` | unit | `uv run pytest tests/test_aggregate_folds.py -v` | ❌ W0 |
+| REC-03 | `crashed` canonicalized to `crash` in `_crashed_payload` | unit | `uv run pytest tests/test_crashed_canonicalization.py -v` | ❌ W0 |
 | REC-03 | `oom`/`timeout` synthesis produces canonical status + termination_reason | unit | `uv run pytest tests/test_collect_or_synthesize.py -v` | ❌ W0 |
 | REC-04 | `make_cell_id(dataset, encoder, mil_model)` deterministic | unit | `uv run pytest tests/test_submit_cell_identity.py -v` | ✅ extend |
 | REC-04 | Re-parenting joins same cell (not a fresh budget) | unit | `uv run pytest tests/test_submit_cell_identity.py::test_reparent_joins_same_cell -v` | ❌ W0 |
@@ -78,7 +78,7 @@ New test files (must exist before/with their implementing task):
 - [ ] `tests/test_terminal_writer.py` — REC-02 all four artifacts (normal + cap-kill)
 - [ ] `tests/test_terminal_writer_consistency.py` — REC-02 rank/TSV agreement
 - [ ] `tests/test_reconcile_from_archive.py` — REC-02 D-11 opt-in refresh
-- [ ] `tests/test_aggregate_folds.py` — REC-03 `crashed` canonicalization
+- [ ] `tests/test_crashed_canonicalization.py` — REC-03 `crashed` canonicalization (named to avoid collision with existing `tests/cells/test_aggregate_folds.py`)
 - [ ] `tests/test_mil_model_normalization.py` — REC-04 normalization
 - [ ] `tests/cells/test_migrate.py` — REC-04 budget-merge migration + legacy-cell compat shim
 

@@ -516,27 +516,29 @@ with locked_update(graph_path) as g:
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All four resolved via inline recommendations below; all four are implemented by the Phase 9 plans (09-02, 09-05, 09-06, 09-03 respectively). Q2 (propose→submit `--mil-model` inheritance) was confirmed by Leo during plan-check (2026-06-10) and recorded as an approved extension to CONTEXT.md D-12.
 
 1. **Cell dataclass field rename (`parent_id` → `mil_model`)**
    - What we know: renaming the field requires a `read_cell` compatibility shim and the migration helper.
    - What's unclear: should the `Cell` dataclass also keep a `parent_id` field for display purposes (the "cell-root experiment" concept in D-108), or is that information derivable from the graph?
-   - Recommendation: drop `parent_id` from `Cell`; it was only used for keying (now replaced by `mil_model`). Graph lineage is in `graph.json`, not the cell. Keep the `read_cell` shim for backward-compat deserialization.
+   - **RESOLVED:** drop `parent_id` from `Cell`; it was only used for keying (now replaced by `mil_model`). Graph lineage is in `graph.json`, not the cell. Keep the `read_cell` shim for backward-compat deserialization.
 
 2. **`propose` + `submit` `--mil-model` inheritance**
    - What we know: `propose` creates a graph node but no queue spec; `submit` creates the queue spec and cell.
    - What's unclear: should `--mil-model` at propose time be stored in the graph node metadata so `submit` can inherit it, or must the operator re-specify at submit?
-   - Recommendation: store `mil_model` in graph node metadata at propose time. `submit` reads it as a fallback before erroring. This avoids redundant flag specification in the common propose-then-submit workflow.
+   - **RESOLVED:** store `mil_model` in graph node metadata at propose time. `submit` reads it as a fallback before erroring. This avoids redundant flag specification in the common propose-then-submit workflow.
 
 3. **`terminal_writer` module location**
    - What we know: D-09 says "standalone module, not a daemon-private method."
    - What's unclear: `src/automil/terminal_writer.py` (top-level) vs `src/automil/backends/terminal_writer.py`.
-   - Recommendation: `src/automil/terminal_writer.py` — it has no backend dependency; it takes a `graph`, `paths`, and `result` dict. Placing it in `backends/` would imply backend coupling.
+   - **RESOLVED:** `src/automil/terminal_writer.py` — it has no backend dependency; it takes a `graph`, `paths`, and `result` dict. Placing it in `backends/` would imply backend coupling.
 
 4. **Schema version bump**
    - What we know: adding `partial` enum value and `termination_reason` is backward-compatible per `additionalProperties: true`.
    - What's unclear: whether a schema version field (e.g. `"schema_version": 2`) is warranted.
-   - Recommendation: do not add a schema version in this phase. The schema change is additive-only; existing consumers can still validate. Schema versioning is a broader concern tied to DBT-01 (Phase 14). Document the reasoning in a code comment.
+   - **RESOLVED:** do not add a schema version in this phase. The schema change is additive-only; existing consumers can still validate. Schema versioning is a broader concern tied to DBT-01 (Phase 14). Document the reasoning in a code comment.
 
 ---
 
@@ -564,7 +566,7 @@ with locked_update(graph_path) as g:
 | REC-02 | `reconcile --from-archive` refreshes existing node composite | unit | `uv run pytest tests/test_reconcile_from_archive.py -v` | Wave 0 |
 | REC-03 | `partial` status validates against updated schema | unit | `uv run pytest tests/test_result_schema_validation.py -v` | Exists — extend |
 | REC-03 | `termination_reason` field validates | unit | `uv run pytest tests/test_result_schema_validation.py -v` | Exists — extend |
-| REC-03 | `crashed` canonicalized to `crash` in `_crashed_payload` | unit | `uv run pytest tests/test_aggregate_folds.py -v` | Wave 0 |
+| REC-03 | `crashed` canonicalized to `crash` in `_crashed_payload` | unit | `uv run pytest tests/test_crashed_canonicalization.py -v` | Wave 0 |
 | REC-03 | `oom`/`timeout` synthesis produces canonical status + termination_reason | unit | `uv run pytest tests/test_collect_or_synthesize.py -v` | Wave 0 |
 | REC-04 | `make_cell_id(dataset, encoder, mil_model)` produces deterministic id | unit | `uv run pytest tests/test_submit_cell_identity.py -v` | Exists — extend |
 | REC-04 | Re-parenting joins same cell (not new cell) | unit | `uv run pytest tests/test_submit_cell_identity.py::test_reparent_joins_same_cell -v` | Wave 0 |
@@ -586,7 +588,7 @@ with locked_update(graph_path) as g:
 - [ ] `tests/test_terminal_writer.py` — covers REC-02 all four artifacts (normal + cap-kill)
 - [ ] `tests/test_terminal_writer_consistency.py` — covers REC-02 rank/TSV agreement
 - [ ] `tests/test_reconcile_from_archive.py` — covers REC-02 D-11 opt-in refresh
-- [ ] `tests/test_aggregate_folds.py` — covers REC-03 `crashed` canonicalization
+- [ ] `tests/test_crashed_canonicalization.py` — covers REC-03 `crashed` canonicalization
 - [ ] `tests/cells/test_migrate.py` — covers REC-04 budget-merge migration
 
 **Extend existing:**

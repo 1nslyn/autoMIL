@@ -44,12 +44,22 @@
   4. `automil propose` and `automil submit` require a `--mil-model` field; the budget cell key is `(dataset, encoder, mil_model)` and re-parenting a node does not open a fresh 6h budget for the same MIL model.
 **Plans**: 6 plans
 Plans:
+**Wave 1**
 - [ ] 09-01-PLAN.md — Wave-0 test stubs (all 4 REC requirements, Nyquist compliance)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 09-02-PLAN.md — Cell identity foundation: make_cell_id + normalize_mil_model + read_cell shim (REC-04)
 - [ ] 09-03-PLAN.md — Schema update + _crashed_payload canonicalization (REC-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 09-04-PLAN.md — Partial-fold recovery: SIGTERM flush + fold-first synthesis + main-PID-first timeout (REC-01)
 - [ ] 09-05-PLAN.md — CLI mil_model wiring + automil cells migrate command (REC-04)
+
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 09-06-PLAN.md — terminal_writer module + daemon refactor + reconcile --from-archive + partial quarantine (REC-01, REC-02)
+
+**Cross-cutting constraints:**
+- No regressions in existing 48-test suite
 **Parallel note**: Must complete before Phase 10 (APL depends on mil_model being first-class per REC-04). Phases 11–14 may start in parallel once Phase 9 is in progress — they do not depend on Phase 9 outputs.
 
 ---

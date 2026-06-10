@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
-status: planning
-last_updated: "2026-06-10T18:15:54.937Z"
-last_activity: 2026-06-10 — Phase 9 context gathered (09-CONTEXT.md)
+status: executing
+last_updated: "2026-06-10T19:02:05.268Z"
+last_activity: 2026-06-10 -- Phase 9 planning complete
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 0
+  total_plans: 6
   completed_plans: 0
   percent: 0
 ---
@@ -30,14 +30,14 @@ progress:
 - `CLAUDE.md` — project instructions and Leo's standing directives
 - `~/.claude/projects/-home-jma-Documents-yinshuol-autoMIL/memory/MEMORY.md` — Leo's standing memory
 
-**Current focus:** Phase 09 — State & Recovery Integrity (planning)
+**Current focus:** Phase 09 — State & Recovery Integrity (planned — ready to execute)
 
 ## Current Position
 
 Phase: 9 — State & Recovery Integrity
 Plan: —
-Status: Planning — context gathered (ready to plan)
-Last activity: 2026-06-10 — Phase 9 discussion complete; 09-CONTEXT.md committed (cab7bb1)
+Status: Ready to execute
+Last activity: 2026-06-10 -- Phase 9 planning complete
 
 ## Performance Metrics
 
@@ -108,9 +108,11 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Phase 9 discussion complete (`--all`, 2026-06-10). 15 decisions (D-01..D-15) captured in `.planning/phases/09-state-recovery-integrity/09-CONTEXT.md` (committed cab7bb1) across all four areas: partial-fold quarantine + main-PID-first kill, status+termination_reason vocabulary, standalone terminal_writer + opt-in `reconcile --from-archive`, and `--mil-model` cell-keying with budget-merge migration.
+**Last action:** Phase 9 planning complete (2026-06-10). Research + pattern-map + 6 plans in 4 waves, plan-checker PASSED (0 blockers; 4 warnings resolved in 1 revision), requirements coverage 4/4 REC-IDs, decision coverage 15/15 D-IDs. Artifacts: 09-RESEARCH.md, 09-PATTERNS.md, 09-VALIDATION.md, 09-01..09-06-PLAN.md.
 
-**To plan Phase 9:** `/clear` then run `/gsd-plan-phase 9` — researcher/planner read 09-CONTEXT.md. Phase 9 covers REC-01 (S0 partial-fold recovery), REC-02 (single terminal-state writer), REC-03 (status vocabulary + schema validation), REC-04 (mil_model budget-cell keying).
+**Wave structure:** W1 = 09-01 (test stubs) · W2 = 09-02 (cell identity), 09-03 (schema) · W3 = 09-04 (partial recovery), 09-05 (CLI + migrate) · W4 = 09-06 (terminal_writer + quarantine).
+
+**To execute Phase 9:** `/clear` then run `/gsd-execute-phase 9`. Phase 9 covers REC-01 (S0 partial-fold recovery), REC-02 (single terminal-state writer), REC-03 (status vocabulary + schema validation), REC-04 (mil_model budget-cell keying). Phase 10 depends on REC-04.
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*
