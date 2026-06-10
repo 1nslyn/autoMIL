@@ -1,15 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: completed
-last_updated: "2026-05-08T04:22:50.581Z"
+milestone: v1.1
+milestone_name: Bug Fixing
+status: planning
+last_updated: "2026-06-10T17:47:42.632Z"
+last_activity: 2026-06-10
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 92
-  completed_plans: 95
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: autoMIL - F2-readiness framework refactor
@@ -34,15 +35,10 @@ progress:
 
 ## Current Position
 
-Phase: 08 (decoupling-completion-acceptance) , COMPLETE
-Plan: 10 of 10
-
-- **Phase:** 08 , Decoupling completion + final acceptance
-- **Plans:** 10 across 4 waves shipped
-- **Status:** v1.0 milestone complete
-- **Wave execution:** W1 (08-01 || 08-02 || 08-03) -> W2 (08-04 || 08-05) -> W3 (08-06 || 08-07 || 08-08) -> W4 (08-09 -> 08-10)
-- **Progress (milestone):** [##########] 100% (9/9 phases shipped)
-- **Next:** `/gsd-verify-work 8` -> tag v1.0.0
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-10 — Milestone v1.1 started
 
 ## Phase 8 follow-ups (deferred , not Phase 8 blockers)
 

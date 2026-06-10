@@ -2,11 +2,24 @@
 
 ## What This Is
 
-autoMIL is a generic, agent-driven framework for autonomous experiment search over machine learning training scripts. It provides an experiment-tree, GPU + multi-node orchestrator, and git-worktree overlay runner so an LLM agent can iteratively propose, run, and learn from experiments under a hard time budget. Originally built for Multiple Instance Learning (MIL) benchmarks in computational pathology, the framework is intentionally domain-agnostic and plugs into any benchmark suite or training script.
+autoMIL is a generic, agent-driven framework for autonomous experiment search over multiple instance learning . It provides an experiment-tree, GPU + multi-node orchestrator, and git-worktree overlay runner so an LLM agent can iteratively propose, run, and learn from experiments under a hard time budget. Originally built for Multiple Instance Learning (MIL) benchmarks in computational pathology, the framework is intentionally domain-agnostic and plugs into any benchmark suite or training script.
 
 ## Core Value
 
 An agent can autonomously discover model improvements — architectural and training-recipe — for any user's existing training code under a 6-hour-per-cell budget, and the discovered variants are **reproducible, attributable to their parents, and portable across machines and LLM runtimes**.
+
+## Current Milestone: v1.1 Bug Fixing
+
+**Goal:** Clear the v1.0 open-defect backlog — restore intended behavior across the triaged issues and housekeeping debt — **without expanding the autoMIL search loop** or taking on registry-runtime / loop-opening architecture work.
+
+**Target features (defect themes):**
+- **State & recovery integrity** — partial-fold recovery on timeout/SIGTERM, single completion writer, result-status vocabulary, budget-cell identity keyed by MIL model (not graph parent).
+- **Config & run fidelity** — config/snapshot values drive runs instead of being masked by argparse/CLI defaults; per-node run-command overrides.
+- **Scheduling & overlay isolation** — GPU scheduling-policy knob, generic editable-install overlay protection.
+- **CLI lifecycle & operability** — cancel daemon-launched local jobs, dequeue queued nodes, pending→running on resubmit, cross-project targeting, viz.port config fallback.
+- **Housekeeping** — graph.json legacy round-trip, `tick_cells` test failures, allowlist-anchor cleanup.
+
+**Key context:** Scope source is the dated triage `tasks/test-run-issues.md` (2026-06-07). ISSUE-006 is **won't-fix** (its proposed fix is "keep the guard" — a documented design constraint). ISSUE-007 (open CLAM's closed training loop) and all registry-runtime adoption are **deferred to a future milestone** — they open the search loop and are out of scope for a bug-fix pass.
 
 ## Requirements
 
@@ -23,30 +36,25 @@ An agent can autonomously discover model improvements — architectural and trai
 - ✓ 48 passing tests across graph / runner / cli / integration — `tests/`
 - ✓ CCRCC benchmark proving the loop on 195+ experiments; honest best `node_0176` (composite 0.8074)
 - ✓ Tier 1 framework hardening (gitignore, mark_running guard, process-group kill on timeout, YAML reload logging, best_node correction) — completed 2026-05-01
+- ✓ **v1.0 F2-readiness framework refactor — shipped 2026-05-08** — all 13 milestone hypotheses delivered across Phases 0–8: variant registry, config-driven `train.py`, CLI extensions, 6h per-cell hard cap, pluggable backends (local/SLURM/Ray), multi-runtime agent support, trajectory instrumentation, generalization gate, search-scope modes, autobench decoupling, `/automil-setup` skill, hardware auto-detection, CCRCC reproduction sanity. See `milestones/v1.0-REQUIREMENTS.md` (69 REQ-IDs) and `MILESTONES.md`.
 
 ### Active
 
-<!-- This milestone: framework refactor for F2-readiness. Hypotheses until shipped. -->
+<!-- This milestone: v1.1 bug fixing. Defect-remediation requirements; REQ-IDs in REQUIREMENTS.md. -->
 
-- [ ] **Variant registry**: shared library files never edited; mutations land as committed variant modules selected via config. Resolves cross-dataset contamination at the root.
-- [ ] **Config-driven `train.py`**: hyperparameters read from YAML; no `args.X = literal` overrides in code.
-- [ ] **CLI extensions**: `apply <node>`, `revert-baseline`, `cancel <node>`, `resubmit <node>`, `port-variant <node>`, `promote-variant <node>`, `reconcile --recompute-best`.
-- [ ] **6h per-cell hard cap**: framework-enforced wall-clock budget. Orchestrator refuses new submits and terminates running ones when the cell budget hits zero.
-- [ ] **Pluggable orchestrator backends**: `local` (default, current code behind a clean interface), `slurm` (HPC), `ray` (cloud / k8s / multi-node general).
-- [ ] **Multi-runtime agent support**: reorganize `claude_assets/` → `agent_assets/{claude,codex,opencode,deepseek,...}/`; `automil init` detects/asks which runtime and installs that runtime's skill scaffolding.
-- [ ] **Trajectory instrumentation**: every submit snapshots agent prompt + tool-call trajectory to `archive/<node_id>/trajectory.jsonl` for "as-protocol" reproducibility.
-- [ ] **Generalization gate inside search loop**: candidate variants must improve on ≥K held-out cells before being promoted to the parent's registered variants directory.
-- [ ] **Search-scope mode**: `architecture-preserving` (F1-classic, identity-locked) and `free` (F2-style, full code-level). Same registry, different pre-submit validators.
-- [ ] **Decouple framework from autobench**: zero autobench paths, env vars, or training-script schema in `src/automil/`. autobench becomes one of many possible consumers.
-- [ ] **`/automil-setup` skill**: bootstraps autoMIL on any existing project — inspects repo, identifies training entry point, drafts config + agent prompt, scaffolds registry, picks defaults from detected hardware. One-shot, autonomous, idempotent.
-- [ ] **Hardware auto-detection**: GPU count, accelerator type, available VRAM detected at `init`/start; portable from single-laptop to multi-node HPC without manual config.
-- [ ] **Reproduction sanity check**: post-migration, CCRCC `node_0176` reproduces (composite within ±0.005) on the new registry-driven path.
+- [ ] **State & recovery integrity** (REC): partial-fold recovery on timeout/SIGTERM, single terminal-state writer, result-status vocabulary, budget-cell identity keyed by MIL model.
+- [ ] **Config & run fidelity** (CFG): config/snapshot values drive runs (no argparse/CLI-default masking); per-node run-command overrides.
+- [ ] **Scheduling & overlay isolation** (SCH): GPU scheduling-policy knob; generic editable-install overlay protection in the daemon.
+- [ ] **CLI lifecycle & operability** (OPS): cancel daemon-launched local jobs, dequeue queued nodes, pending→running on resubmit, cross-project targeting, viz.port config fallback.
+- [ ] **Housekeeping** (DBT): graph.json legacy round-trip, `tick_cells` test failures, allowlist-anchor cleanup.
 
 ### Out of Scope
 
 <!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
 
 - Full F2 experimental grid (5 parents × 18 cells × 4 recipes × 25 measurements) — own future milestone after the framework is F2-ready
+- **Registry runtime adoption** (a registered `LossVariant` like focal actually *executing* inside a live cell; opening any closed MIL training loop incl. CLAM/ISSUE-007; new-consumer dispatch-shim scaffolding) — deferred from v1.1 because it **opens the search loop** (new optimization surface + training-loop changes + reproduction blast-radius). Own future milestone. The registry stays a provenance/version-control layer until then; mutations continue to flow via overlay edits to snapshotted code.
+- ISSUE-006 (`submit --parent` refuses unfinished parents) — **won't-fix**: the triage's own remedy is "keep the guard." Documented design constraint, not a defect.
 - Paper writing and venue submission — own future milestone
 - F1 as originally proposed (architecture-preserving recipe-only standardization paper) — denied; subsumed into F2-style architectural exploration with a `--mode=architecture-preserving` flag for the F1 use case
 - Mac / MPS / non-CUDA accelerators — Linux + CUDA only for v1; revisit when there's a real user pulling for it
@@ -106,4 +114,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-01 after initialization (brownfield, codebase map already in `.planning/codebase/`)*
+*Last updated: 2026-06-10 — milestone v1.1 (Bug Fixing) started; v1.0 hypotheses moved to Validated*
