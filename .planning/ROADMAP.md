@@ -42,7 +42,14 @@
   2. Normal completion and cap-kill completion both write `graph.json`, `completed/<node>.json`, archive `result.json`, and `results.tsv` through a single writer; `automil rank` and the dashboard never disagree about a node's terminal state without manual reconciliation.
   3. `result.json` payloads written by framework recovery paths (`partial`, `timeout`, `oom`, `crashed`) all validate against `result.schema.json` without normalization errors.
   4. `automil propose` and `automil submit` require a `--mil-model` field; the budget cell key is `(dataset, encoder, mil_model)` and re-parenting a node does not open a fresh 6h budget for the same MIL model.
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+- [ ] 09-01-PLAN.md — Wave-0 test stubs (all 4 REC requirements, Nyquist compliance)
+- [ ] 09-02-PLAN.md — Cell identity foundation: make_cell_id + normalize_mil_model + read_cell shim (REC-04)
+- [ ] 09-03-PLAN.md — Schema update + _crashed_payload canonicalization (REC-03)
+- [ ] 09-04-PLAN.md — Partial-fold recovery: SIGTERM flush + fold-first synthesis + main-PID-first timeout (REC-01)
+- [ ] 09-05-PLAN.md — CLI mil_model wiring + automil cells migrate command (REC-04)
+- [ ] 09-06-PLAN.md — terminal_writer module + daemon refactor + reconcile --from-archive + partial quarantine (REC-01, REC-02)
 **Parallel note**: Must complete before Phase 10 (APL depends on mil_model being first-class per REC-04). Phases 11–14 may start in parallel once Phase 9 is in progress — they do not depend on Phase 9 outputs.
 
 ---
