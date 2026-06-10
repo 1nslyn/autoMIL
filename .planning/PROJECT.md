@@ -14,12 +14,13 @@ An agent can autonomously discover model improvements — architectural and trai
 
 **Target features (defect themes):**
 - **State & recovery integrity** — partial-fold recovery on timeout/SIGTERM, single completion writer, result-status vocabulary, budget-cell identity keyed by MIL model (not graph parent).
+- **Variant application integrity** — a registered variant must actually *apply* to the live model (no inert variants); apply through existing open seams; verify by real experiment. Does **not** open closed training loops.
 - **Config & run fidelity** — config/snapshot values drive runs instead of being masked by argparse/CLI defaults; per-node run-command overrides.
 - **Scheduling & overlay isolation** — GPU scheduling-policy knob, generic editable-install overlay protection.
 - **CLI lifecycle & operability** — cancel daemon-launched local jobs, dequeue queued nodes, pending→running on resubmit, cross-project targeting, viz.port config fallback.
 - **Housekeeping** — graph.json legacy round-trip, `tick_cells` test failures, allowlist-anchor cleanup.
 
-**Key context:** Scope source is the dated triage `tasks/test-run-issues.md` (2026-06-07). ISSUE-006 is **won't-fix** (its proposed fix is "keep the guard" — a documented design constraint). ISSUE-007 (open CLAM's closed training loop) and all registry-runtime adoption are **deferred to a future milestone** — they open the search loop and are out of scope for a bug-fix pass.
+**Key context:** Scope source is the dated triage `tasks/test-run-issues.md` (2026-06-07). ISSUE-006 is **won't-fix** (its proposed fix is "keep the guard" — a documented design constraint). The line on registry work: a registered variant **must apply to the real model** (fix it if it doesn't), but **opening a closed MIL training loop** (CLAM's `clam_train` / ISSUE-007) and the loss/attention variants that require it are **deferred to a future milestone** — those open the search loop. Variant application through existing open seams is in scope and may be verified with experiments.
 
 ## Requirements
 
@@ -43,6 +44,7 @@ An agent can autonomously discover model improvements — architectural and trai
 <!-- This milestone: v1.1 bug fixing. Defect-remediation requirements; REQ-IDs in REQUIREMENTS.md. -->
 
 - [ ] **State & recovery integrity** (REC): partial-fold recovery on timeout/SIGTERM, single terminal-state writer, result-status vocabulary, budget-cell identity keyed by MIL model.
+- [ ] **Variant application integrity** (APL): registered variants actually apply to the model (no inert variants) through existing open seams; loud failure when a variant would need a closed loop opened; verified by experiment.
 - [ ] **Config & run fidelity** (CFG): config/snapshot values drive runs (no argparse/CLI-default masking); per-node run-command overrides.
 - [ ] **Scheduling & overlay isolation** (SCH): GPU scheduling-policy knob; generic editable-install overlay protection in the daemon.
 - [ ] **CLI lifecycle & operability** (OPS): cancel daemon-launched local jobs, dequeue queued nodes, pending→running on resubmit, cross-project targeting, viz.port config fallback.
@@ -53,7 +55,7 @@ An agent can autonomously discover model improvements — architectural and trai
 <!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
 
 - Full F2 experimental grid (5 parents × 18 cells × 4 recipes × 25 measurements) — own future milestone after the framework is F2-ready
-- **Registry runtime adoption** (a registered `LossVariant` like focal actually *executing* inside a live cell; opening any closed MIL training loop incl. CLAM/ISSUE-007; new-consumer dispatch-shim scaffolding) — deferred from v1.1 because it **opens the search loop** (new optimization surface + training-loop changes + reproduction blast-radius). Own future milestone. The registry stays a provenance/version-control layer until then; mutations continue to flow via overlay edits to snapshotted code.
+- **Opening a closed MIL training loop** (CLAM's `clam_train` / ISSUE-007) and the loss/attention variants that can only be injected mid-loop, plus auto-scaffolding registry dispatch for arbitrary new consumers — deferred from v1.1 because they **open the search loop** (new optimization surface + training-loop changes + reproduction blast-radius). Own future milestone. NOTE: this is narrower than "all registry adoption" — making a registered variant actually *apply* to the model through existing open seams **is** in v1.1 scope (see Variant application integrity above).
 - ISSUE-006 (`submit --parent` refuses unfinished parents) — **won't-fix**: the triage's own remedy is "keep the guard." Documented design constraint, not a defect.
 - Paper writing and venue submission — own future milestone
 - F1 as originally proposed (architecture-preserving recipe-only standardization paper) — denied; subsumed into F2-style architectural exploration with a `--mode=architecture-preserving` flag for the F1 use case
