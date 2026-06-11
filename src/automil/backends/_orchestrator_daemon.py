@@ -1175,25 +1175,14 @@ class ExperimentOrchestrator:
 
         # CAP-04 cap-driven cancel branch — never falls through to the standard path.
         if self._was_cap_killed_completion(node_id):
-            self._handle_cap_killed_completion(node_id, wt_path)
+            self._handle_cap_killed_completion(
+                node_id, wt_path, elapsed_s=elapsed_s, gpu_id=gpu_id, spec=spec
+            )
             return
 
         result = self._collect_or_synthesize_result(node_id, archive, returncode, wt_path)
 
-        # Write completion notification with all fields reconcile needs
-        completion = {
-            "id": node_id,
-            "status": result.get("status", "completed"),
-            "composite": result.get("composite", 0),
-            "metrics": result.get("metrics", {}),
-            "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
-            "peak_vram_mb": result.get("peak_vram_mb", 0),
-            "gpu": gpu_id,
-            "completed_at": datetime.now().isoformat(),
-            "graph_metadata": result.get("graph_metadata") or spec.get("graph_metadata") or {},
-        }
-
-        # Include error details in completion for better agent visibility
+        # Include error details in result for better agent visibility before terminal write
         status = result.get("status", "completed")
         if status in ("crash", "oom", "timeout"):
             log_path = archive / "run.log"
@@ -1201,15 +1190,24 @@ class ExperimentOrchestrator:
             if log_path.exists():
                 lines = log_path.read_text().splitlines()
                 error_tail = "\n".join(lines[-20:])
-            completion["error"] = error_tail
-            completion["log_location"] = str(log_path)
+            result = dict(result)
+            result.setdefault("error", error_tail)
+            result.setdefault("log_location", str(log_path))
 
-        (self.completed_dir / f"{node_id}.json").write_text(
-            json.dumps(completion, indent=2) + "\n"
+        # REC-02 / D-09, D-10: delegate all four artifact writes to terminal_writer.
+        # Fixed write order: graph → completed/<node>.json → archive result.json → results.tsv.
+        from automil.terminal_writer import write_terminal_state
+        write_terminal_state(
+            node_id=node_id,
+            result=result,
+            graph=self.graph,
+            completed_dir=self.completed_dir,
+            archive_dir=archive,
+            results_tsv_writer=self._append_results_tsv,
+            spec=spec,
+            elapsed_s=elapsed_s,
+            gpu_id=gpu_id,
         )
-
-        # Append to results.tsv (sole writer)
-        self._append_results_tsv(node_id, result, description=spec.get("description", ""))
 
         # D-170: cross-backend log unification (no-op for local backend).
         self._drain_remote_backend_log(node_id, archive)
@@ -1255,14 +1253,24 @@ class ExperimentOrchestrator:
                     pass
         return False
 
-    def _handle_cap_killed_completion(self, node_id: str, wt_path: Path) -> None:
+    def _handle_cap_killed_completion(
+        self,
+        node_id: str,
+        wt_path: Path,
+        *,
+        elapsed_s: float = 0.0,
+        gpu_id: int | str = -1,
+        spec: dict | None = None,
+    ) -> None:
         """Cap-driven cancel reconcile + cleanup (CAP-04 / D-123, D-124).
 
-        Aggregates per-fold partial results, promotes the in-graph node from
-        running -> executed (or marks crashed if zero usable folds), and
-        cleans the running spec + worktree. Never throws; soft-fails to logged
+        Aggregates per-fold partial results, then delegates all four terminal
+        artifact writes to write_terminal_state (REC-02 / D-09, D-10).
+        Cleans the running spec + worktree. Never throws; soft-fails to logged
         warnings on graph access errors.
         """
+        if spec is None:
+            spec = {}
         from automil.cells.reconcile import reconcile_budget_kill
 
         expected_folds = self._read_fold_count_for_node(node_id)
@@ -1272,39 +1280,27 @@ class ExperimentOrchestrator:
             graph=self.graph if hasattr(self, "graph") else None,
             expected_fold_count=expected_folds,
         )
-        # Per PINNED API in <interfaces>: the running node already exists in the graph
-        # (created by submit() as type=running). We must NOT call add_executed (it
-        # generates a NEW node and would double-count). Instead promote-in-place via
-        # direct dict mutation mirroring mark_failed's pattern (graph.py:272-280).
+        # REC-02 / D-09, D-10: delegate all four artifact writes to terminal_writer.
+        # graph node promotion (running→executed or crash) + archive result.json +
+        # completed/<node>.json + results.tsv are all written by write_terminal_state.
+        # D-01: partial results get status="partial" in the graph (quarantined).
         if hasattr(self, "graph") and self.graph is not None:
-            gnode = self.graph.get_node(node_id)
-            if gnode is None:
-                logger.warning(
-                    "Cap-killed node %s missing from graph; cannot reconcile graph state",
-                    node_id,
-                )
-            elif payload.get("partial_folds", 0) >= 1:
-                # Promote running -> executed with partial composite.
-                gnode["type"] = "executed"
-                gnode["status"] = "keep"
-                gnode["composite"] = payload["composite"]
-                # D-200 / DEC-04: write metrics under node["metrics"], not top-level.
-                if payload.get("metrics"):
-                    gnode["metrics"] = dict(payload["metrics"])
-                gnode.setdefault("metadata", {})["budget_killed"] = True
-                self.graph._reevaluate_descendants(node_id)
-                self.graph.save()
-            else:
-                # Zero usable folds — crash semantics + budget_killed flag
-                self.graph.mark_failed(
-                    node_id=node_id,
-                    status="crash",
-                    error="cap fired with zero completed folds",
-                )
-                gnode = self.graph.get_node(node_id)
-                if gnode is not None:
-                    gnode.setdefault("metadata", {})["budget_killed"] = True
-                    self.graph.save()
+            from automil.terminal_writer import write_terminal_state
+            write_terminal_state(
+                node_id=node_id,
+                result=payload,
+                graph=self.graph,
+                completed_dir=self.completed_dir,
+                archive_dir=self.archive_dir / node_id,
+                results_tsv_writer=self._append_results_tsv,
+                spec=spec,
+                elapsed_s=elapsed_s,
+                gpu_id=gpu_id,
+            )
+        else:
+            logger.warning(
+                "Cap-killed node %s has no graph reference — artifacts not written", node_id
+            )
         logger.info(
             "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
             "partial_folds=%d/%d",

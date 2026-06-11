@@ -88,14 +88,8 @@ def test_reconcile_budget_kill_writes_partial_result_json(tmp_path: Path):
     assert payload["partial_folds"] == 3
     assert abs(payload["composite"] - 0.82) < 0.01
     assert payload.get("metadata", {}).get("budget_killed") is True
-
-    # Verify result.json written to disk
-    result_path = node_archive / "result.json"
-    assert result_path.exists(), "reconcile_budget_kill must write result.json to archive"
-    on_disk = json.loads(result_path.read_text())
-    assert on_disk["status"] == "partial"
-    assert abs(on_disk["composite"] - 0.82) < 0.01
-    assert on_disk.get("metadata", {}).get("budget_killed") is True
+    # D-10 (REC-02): archive result.json is written solely by terminal_writer, not here.
+    # reconcile_budget_kill only returns the payload; the file is written downstream.
 
 
 # ---------------------------------------------------------------------------
@@ -126,13 +120,8 @@ def test_reconcile_budget_kill_zero_folds_writes_crashed_result_json(tmp_path: P
     assert payload["composite"] == 0.0
     assert payload["partial_folds"] == 0
     assert payload.get("metadata", {}).get("budget_killed") is True
-
-    result_path = node_archive / "result.json"
-    assert result_path.exists()
-    on_disk = json.loads(result_path.read_text())
-    assert on_disk["status"] == "crash"  # D-06: was 'crashed' pre-v1.1
-    assert on_disk["composite"] == 0.0
-    assert on_disk.get("metadata", {}).get("budget_killed") is True
+    # D-10 (REC-02): archive result.json is written solely by terminal_writer, not here.
+    # reconcile_budget_kill only returns the payload; the file is written downstream.
 
 
 # ---------------------------------------------------------------------------

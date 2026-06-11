@@ -139,8 +139,9 @@ def reconcile_budget_kill(
     node_archive = archive_dir / node_id
     payload = aggregate_folds(node_archive, expected_fold_count)
     payload.setdefault("metadata", {})["budget_killed"] = True
+    # D-10 (REC-02): archive result.json is written solely by terminal_writer._atomic_write_json.
+    # The mkdir call stays — archive dirs must exist before terminal_writer writes into them.
     node_archive.mkdir(parents=True, exist_ok=True)
-    (node_archive / "result.json").write_text(json.dumps(payload, indent=2))
     logger.info(
         "reconcile_budget_kill %s: status=%s partial_folds=%d/%d composite=%.4f",
         node_id,
