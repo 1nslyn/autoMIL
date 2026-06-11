@@ -45,7 +45,7 @@
 **Plans**: 6 plans
 Plans:
 **Wave 1**
-- [ ] 09-01-PLAN.md — Wave-0 test stubs (all 4 REC requirements, Nyquist compliance)
+- [x] 09-01-PLAN.md — Wave-0 test stubs (all 4 REC requirements, Nyquist compliance)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 09-02-PLAN.md — Cell identity foundation: make_cell_id + normalize_mil_model + read_cell shim (REC-04)

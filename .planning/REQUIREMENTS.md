@@ -15,10 +15,10 @@ Committed scope of milestone v1.1. REQ-IDs grouped by defect theme. New category
 
 <!-- The framework's recorded truth (terminal state, status, budget identity) must be correct and single-sourced. Highest-severity cluster. -->
 
-- [ ] **REC-01**: When an experiment is SIGTERM/timeout-killed mid-run, completed folds already written to the archive are aggregated into `result.json` instead of being reported as a `composite=0.0` crash/timeout — `runtime_helpers` aggregates to `AUTOMIL_RESULTS_DIR`, and `_collect_or_synthesize_result()` tries archive fold-aggregation before synthesizing a timeout/crash. (ISSUE-009/018/019, S0)
-- [ ] **REC-02**: Normal completion and cap-kill completion write `graph.json`, `completed/<node>.json`, archive `result.json`, and `results.tsv` through a single terminal-state writer, so dashboard / rank / TSV / completion JSON never disagree until manual reconciliation. (ISSUE-013/014, S1)
-- [ ] **REC-03**: One canonical terminal/recovery status vocabulary is used everywhere; framework-generated recovery payloads (`partial`, `timeout`, `oom`, `crashed`) validate against `result.schema.json` (via schema aliases+normalization or canonicalization before write). (ISSUE-002, S1)
-- [ ] **REC-04**: Budget cells are keyed by `(dataset, encoder, mil_model)`, fed by a required `--mil-model` metadata field on `propose`/`submit`; re-parenting a node no longer opens a fresh 6h budget for the same MIL model. (ISSUE-024, S1 — also satisfies CONSTRAINT-01)
+- [x] **REC-01**: When an experiment is SIGTERM/timeout-killed mid-run, completed folds already written to the archive are aggregated into `result.json` instead of being reported as a `composite=0.0` crash/timeout — `runtime_helpers` aggregates to `AUTOMIL_RESULTS_DIR`, and `_collect_or_synthesize_result()` tries archive fold-aggregation before synthesizing a timeout/crash. (ISSUE-009/018/019, S0)
+- [x] **REC-02**: Normal completion and cap-kill completion write `graph.json`, `completed/<node>.json`, archive `result.json`, and `results.tsv` through a single terminal-state writer, so dashboard / rank / TSV / completion JSON never disagree until manual reconciliation. (ISSUE-013/014, S1)
+- [x] **REC-03**: One canonical terminal/recovery status vocabulary is used everywhere; framework-generated recovery payloads (`partial`, `timeout`, `oom`, `crashed`) validate against `result.schema.json` (via schema aliases+normalization or canonicalization before write). (ISSUE-002, S1)
+- [x] **REC-04**: Budget cells are keyed by `(dataset, encoder, mil_model)`, fed by a required `--mil-model` metadata field on `propose`/`submit`; re-parenting a node no longer opens a fresh 6h budget for the same MIL model. (ISSUE-024, S1 — also satisfies CONSTRAINT-01)
 
 ### Variant application integrity (APL)
 
@@ -90,10 +90,10 @@ Which phase covers which requirement. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REC-01 | Phase 9 | Pending |
-| REC-02 | Phase 9 | Pending |
-| REC-03 | Phase 9 | Pending |
-| REC-04 | Phase 9 | Pending |
+| REC-01 | Phase 9 | Complete |
+| REC-02 | Phase 9 | Complete |
+| REC-03 | Phase 9 | Complete |
+| REC-04 | Phase 9 | Complete |
 | APL-01 | Phase 10 | Pending |
 | APL-02 | Phase 10 | Pending |
 | APL-03 | Phase 10 | Pending |
