@@ -96,14 +96,30 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                     f"then submit against that new node id."
                 )
     # Also refuse if a spec for this node is already in queue/ or running/.
-    for subdir in ("queue", "running"):
-        conflict = adir / "orchestrator" / subdir / f"{node}.json"
-        if conflict.exists():
-            raise click.ClickException(
-                f"Refusing to submit: {node} is already present in "
-                f"orchestrator/{subdir}/. Wait for it to finish or remove "
-                f"the stale spec file before resubmitting."
-            )
+    # WR-03 fix: since D-169 (Phase 6) running specs are namespaced under
+    # running/<backend>/. The flat path orchestrator/running/<node>.json never
+    # exists, making the running-spec conflict check permanently ineffective for
+    # all experiments and allowing resubmit to silently overwrite completed nodes.
+    # Fix: check queue/ with the flat path (unchanged), then iterate all backend
+    # subdirs under running/ for the running-spec check.
+    queue_conflict = adir / "orchestrator" / "queue" / f"{node}.json"
+    if queue_conflict.exists():
+        raise click.ClickException(
+            f"Refusing to submit: {node} is already present in "
+            f"orchestrator/queue/. Wait for it to finish or remove "
+            f"the stale spec file before resubmitting."
+        )
+    running_root = adir / "orchestrator" / "running"
+    if running_root.exists():
+        for backend_dir in running_root.iterdir():
+            if backend_dir.is_dir():
+                running_conflict = backend_dir / f"{node}.json"
+                if running_conflict.exists():
+                    raise click.ClickException(
+                        f"Refusing to submit: {node} is currently running in "
+                        f"orchestrator/running/{backend_dir.name}/. Wait for it "
+                        f"to finish or remove the stale spec file before resubmitting."
+                    )
 
     # Guard against submitting a child before its parent has completed.
     # If the parent is still a pending/running proposal, the Pareto-dominance

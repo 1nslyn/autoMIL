@@ -643,9 +643,21 @@ class ExperimentOrchestrator:
         from the running spec lets us reap the orphan before marking it crashed
         (D-17 starttime cross-check defends against PID reuse).
         """
-        if not self.running_dir.exists():
+        # WR-02 fix: scan all per-backend subdirs (local, slurm, ray), not just
+        # running/local/. SLURM and Ray running specs live in running/slurm/ and
+        # running/ray/; the original code only looked at self.running_dir (= local).
+        # Mirror the pattern already used in _read_backend_name_for_node (lines
+        # that iterate ("local", "slurm", "ray")). Gracefully skips backends that
+        # don't have a subdirectory yet (fresh installs, single-backend deployments).
+        _backend_subdirs = [
+            self.running_root / name
+            for name in ("local", "slurm", "ray")
+            if (self.running_root / name).exists()
+        ]
+        if not _backend_subdirs:
             return
-        for f in self.running_dir.glob("*.json"):
+        import itertools
+        for f in itertools.chain.from_iterable(d.glob("*.json") for d in _backend_subdirs):
             try:
                 spec = json.loads(f.read_text())
                 node_id = spec.get("id", f.stem)
@@ -1017,7 +1029,14 @@ class ExperimentOrchestrator:
                     # D-124 / Pitfall 4: write cancel_reason='cap' BEFORE
                     # calling cancel so reconcile_budget_kill can detect cap kills
                     # even if the SIGTERM handler races the annotation write.
-                    running_spec_path = self.running_dir / f"{handle.node_id}.json"
+                    # WR-04 fix: use _read_backend_name_for_node + _backend_running_dir
+                    # so SLURM/Ray running specs are found under running/slurm/ and
+                    # running/ray/. The original self.running_dir (= running/local/)
+                    # always missed non-local backends, silently skipping the annotation
+                    # and causing _was_cap_killed_completion to return False for all
+                    # SLURM/Ray cap-triggered cancels.
+                    _backend_name = self._read_backend_name_for_node(handle.node_id)
+                    running_spec_path = self._backend_running_dir(_backend_name) / f"{handle.node_id}.json"
                     if running_spec_path.exists():
                         try:
                             spec_data = json.loads(running_spec_path.read_text())
@@ -1487,7 +1506,25 @@ class ExperimentOrchestrator:
         """
         exp = self.running[exp_id]
         pid = exp.process.pid
-        grace = int((self.config.get("orchestrator") or {}).get("timeout_grace_seconds", 10))
+        # WR-01 mitigation: cap grace to MAX_GRACE so a misconfigured
+        # timeout_grace_seconds cannot block the tick loop for an arbitrary
+        # duration. With max_concurrent_per_gpu=8 and multiple GPUs, N
+        # simultaneous timeouts each sleep `grace` seconds serially inside
+        # _check_running, stacking to N×grace seconds of total blocking.
+        # Known limitation: the sleep is still synchronous (a proper fix
+        # requires async deadline tracking like _pending_sigkill_at). Capped
+        # at 30s as a safe maximum; warn operators when configured above 15s.
+        _MAX_GRACE = 30
+        grace = min(
+            int((self.config.get("orchestrator") or {}).get("timeout_grace_seconds", 10)),
+            _MAX_GRACE,
+        )
+        if grace > 15:
+            logger.warning(
+                "timeout_grace_seconds=%ds will block the tick loop for that duration "
+                "(capped at %ds); consider lowering orchestrator.timeout_grace_seconds",
+                grace, _MAX_GRACE,
+            )
         logger.warning(
             "Timeout for %s: SIGTERMing main PID %d (grace=%ds before SIGKILL group)",
             exp_id, pid, grace,

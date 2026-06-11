@@ -72,6 +72,23 @@ def migrate_cells(
         if new_path.exists():
             # Merge case: a new-keyed cell already exists — combine budgets.
             existing = read_cell(new_path)
+            # WR-05 fix: guard against mode mismatch before merging. When
+            # cell.mode != existing.mode the merge semantics are ambiguous:
+            # - agent_active into wall_clock: consumed_active_seconds is summed
+            #   but wall_clock billing ignores it → budget silently discarded.
+            # - wall_clock into agent_active: started_at adjusted but billing
+            #   continues on agent_active accumulator without wall-clock elapsed.
+            # T-09-08 spec says "sum consumed_active_seconds" without addressing
+            # mode-mismatch; skip and require manual resolution to avoid data loss.
+            if cell.mode != existing.mode:
+                logger.warning(
+                    "migrate_cells: skipping merge of %s (mode=%s) into %s (mode=%s) — "
+                    "mode mismatch; cannot safely combine budgets. Manual review required: "
+                    "inspect both cell files and reconcile consumed budget before re-running migrate.",
+                    cell.cell_id[:8], cell.mode, existing.cell_id[:8], existing.mode,
+                )
+                summaries.append({"old_id": cell.cell_id, "new_id": new_id, "action": "skip"})
+                continue
             if cell.mode == "agent_active":
                 # T-09-08: sum consumed_active_seconds without double-counting.
                 merged_consumed = cell.consumed_active_seconds + existing.consumed_active_seconds
