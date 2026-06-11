@@ -50,8 +50,21 @@ def register_sigterm_flush(*, fold_count_env: str = "AUTOMIL_FOLD_COUNT") -> Non
         # Lazy keeps runtime_helpers importable in Wave 1 before reconcile exists.
         from automil.cells.reconcile import aggregate_folds
         n = int(os.environ.get(fold_count_env, "5"))
-        payload = aggregate_folds(Path.cwd(), n)
-        (Path.cwd() / "result.json").write_text(json.dumps(payload, indent=2))
+        # D-02 (REC-01): write to AUTOMIL_RESULTS_DIR (the archive dir set by
+        # orchestrator), not Path.cwd() (the worktree). Falls back to cwd only
+        # when running outside the orchestrator (e.g. manual run).
+        # T-09-06: validate the env-var path is absolute before use; relative
+        # values are rejected and fall back to cwd for safety.
+        results_dir_env = os.environ.get("AUTOMIL_RESULTS_DIR")
+        if results_dir_env:
+            target = Path(results_dir_env)
+            if not target.is_absolute():
+                target = Path.cwd()  # safe fallback for relative/malformed env value
+        else:
+            target = Path.cwd()
+        payload = aggregate_folds(target, n)
+        payload["termination_reason"] = "sigterm"   # D-05 (REC-03): annotate reason
+        (target / "result.json").write_text(json.dumps(payload, indent=2))
         sys.exit(0)  # NOT sys.exit(130) — clean exit signals graceful flush to daemon
 
     signal.signal(signal.SIGTERM, _handler)
