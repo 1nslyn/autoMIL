@@ -34,6 +34,9 @@ packages = ["src/autobench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "workstation: requires workstation with data + GPU; skipped in CI",
+]
 
 [dependency-groups]
 dev = [
