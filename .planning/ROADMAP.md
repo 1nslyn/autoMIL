@@ -49,7 +49,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 09-02-PLAN.md — Cell identity foundation: make_cell_id + normalize_mil_model + read_cell shim (REC-04)
-- [ ] 09-03-PLAN.md — Schema update + _crashed_payload canonicalization (REC-03)
+- [x] 09-03-PLAN.md — Schema update + _crashed_payload canonicalization (REC-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 09-04-PLAN.md — Partial-fold recovery: SIGTERM flush + fold-first synthesis + main-PID-first timeout (REC-01)
