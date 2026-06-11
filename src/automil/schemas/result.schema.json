@@ -13,7 +13,11 @@
     },
     "status": {
       "type": "string",
-      "enum": ["completed", "crash", "budget_killed", "cancelled"]
+      "enum": ["completed", "crash", "budget_killed", "cancelled", "partial"]
+    },
+    "termination_reason": {
+      "type": "string",
+      "description": "Free-form reason for non-completed terminal state. Known values: timeout, oom, sigterm, sigkill, unknown. Not an enum — consumers may extend. Added 2026-06-10 (D-05, REC-03). No schema version bump: change is additive-only; additionalProperties:true already set. Existing result.json files with status=completed|crash|budget_killed|cancelled continue to validate. Schema versioning (for breaking changes) is tracked in DBT-01 / Phase 14."
     },
     "elapsed_seconds": {"type": "number", "minimum": 0},
     "peak_vram_mb": {"type": "number", "minimum": 0},
