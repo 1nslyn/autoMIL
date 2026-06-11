@@ -151,7 +151,11 @@ class ExperimentGraph:
 
     def best_node(self) -> dict | None:
         best_id = self.meta.get("best_node_id")
-        return self.nodes.get(best_id) if best_id else None
+        node = self.nodes.get(best_id) if best_id else None
+        # D-01: partial results are quarantined — excluded from best_node
+        if node and node.get("status") == "partial":
+            return None
+        return node
 
     def children(self, node_id: str) -> list[dict]:
         return [n for n in self.nodes.values() if n.get("parent_id") == node_id]
@@ -345,6 +349,8 @@ class ExperimentGraph:
                     continue
                 if child.get("type") != "executed":
                     continue
+                if child.get("status") == "partial":
+                    continue   # D-01: partial nodes are not keep/discard candidates
                 if child.get("status") not in ("keep", "discard"):
                     continue
                 c_comp = child.get("composite", 0)
