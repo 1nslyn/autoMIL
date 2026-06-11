@@ -43,7 +43,8 @@ _SRC_AUTOMIL = _REPO_ROOT / "src" / "automil"
 _ALLOWLIST: dict[str, str] = {
     # 1. Informational comment about consumer-specific vars; documents the
     #    env.passthrough seam without auto-injecting any value.
-    "src/automil/backends/_orchestrator_daemon.py:54":
+    #    Line shifted +1 by 12-02 (added SCHEDULING_POLICY constant above it).
+    "src/automil/backends/_orchestrator_daemon.py:55":
         "Consumer-specific vars (e.g. AUTOBENCH_*_ROOT)",
     # 2. Comment in verify_repro about the clean env not leaking AUTOBENCH_*.
     "src/automil/cli/lifecycle/verify_repro.py:84":
@@ -57,12 +58,14 @@ _ALLOWLIST: dict[str, str] = {
     # 4. Migration note comment in config.yaml.j2 directing autobench-shaped
     #    consumers to the CHANGELOG 8.0.0 BREAKING section. Informational only;
     #    not a code path. Retained by 08-04 executor.
-    "src/automil/templates/config.yaml.j2:109":
+    #    Line shifted +1 by 12-02 (added scheduling_policy key above it).
+    "src/automil/templates/config.yaml.j2:110":
         "autobench-shaped consumers",
     # 5. Inline example comment in the scoring.formula block showing what an
     #    autobench consumer formula looks like. Documentation only. Retained by
     #    08-04 executor.
-    "src/automil/templates/config.yaml.j2:135":
+    #    Line shifted +1 by 12-02 (added scheduling_policy key to orchestrator block).
+    "src/automil/templates/config.yaml.j2:136":
         "autobench consumer",
 }
 
