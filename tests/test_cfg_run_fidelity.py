@@ -220,27 +220,25 @@ class TestCFG03OverrideSpec:
 
 class TestCFG03DaemonAppend:
     def test_daemon_appends_override_to_run_command(self, tmp_path):
-        """RED: daemon must append spec override args after shlex.split(base run.command).
+        """GREEN (after Plan 11-03): daemon appends spec override args after base run.command.
 
-        Verifies D-04 suffix-append semantics: the final cmd list must equal
-        shlex.split(base_command) + shlex.split(override_string).
+        Verifies D-04 suffix-append semantics: the final cmd list passed to
+        subprocess.Popen must equal shlex.split(base_command) + shlex.split(override_string).
 
-        Fails today because no override field exists in the spec or the launch path.
-
-        Strategy: import the daemon class, construct a minimal instance, mock
-        subprocess.Popen, and assert the `cmd` argument passed to Popen equals
-        the expected concatenation.
+        Strategy: construct a minimal ExperimentOrchestrator with all filesystem
+        dependencies mocked, patch subprocess.Popen, invoke _launch, and assert
+        the cmd list passed to Popen is the expected concatenation.
+        Security check: Popen must NOT be called with shell=True (T-11-03-01).
         """
         import shlex
+        from unittest.mock import MagicMock, patch, call
 
-        # Verify the daemon class is importable (sanity check).
-        from automil.backends._orchestrator_daemon import ExperimentOrchestrator  # noqa: F401
+        from automil.backends._orchestrator_daemon import ExperimentOrchestrator
 
         base_command = "python train.py --dataset ovarian"
         override_string = "--seed 99 --lr 5e-4"
         expected_cmd = shlex.split(base_command) + shlex.split(override_string)
 
-        # Minimal spec with override field (accept either naming convention).
         spec = {
             "id": "node_test",
             "base_commit": "deadbeef",
@@ -249,29 +247,73 @@ class TestCFG03DaemonAppend:
             "deletions": [],
             "priority": 1,
             "estimated_vram_gb": 0.5,
-            # The expected field name — implementer chooses; accept either convention.
             "run_command_override": override_string,
             "graph_metadata": {"parent_id": None, "techniques": [], "config_hash": "abc"},
         }
 
-        # Simulate the current (unfixed) cmd-building logic: daemon does
-        # `cmd = shlex.split(self.run_command)` with no override appended.
-        current_cmd = shlex.split(base_command)
-
-        # RED assertion: current_cmd must NOT equal expected_cmd, confirming
-        # the feature is not yet implemented. After Plan 11-03 fixes the daemon,
-        # flip this to assert launched_cmds[0] == expected_cmd using subprocess.Popen mock.
-        assert current_cmd != expected_cmd, (
-            "Precondition failed: current (unfixed) cmd already equals expected_cmd. "
-            "If the fix already landed, update this test to use Popen mock + equality."
+        # Set up minimal directory structure so the daemon constructor doesn't crash.
+        automil_dir = tmp_path / "automil"
+        automil_dir.mkdir()
+        (automil_dir / "config.yaml").write_text(
+            f"run:\n  command: \"{base_command}\"\n"
         )
-        # This is the forward assertion — RED until Plan 11-03 implements the fix.
-        # After the fix, replace `pytest.fail(...)` with a Popen-mock call that
-        # invokes the daemon launch path and asserts launched_cmds[0] == expected_cmd.
-        pytest.fail(
-            f"CFG-03 daemon override-append not yet implemented. "
-            f"Expected final cmd: {expected_cmd}. "
-            f"Fix: daemon must read spec.get('run_command_override') (or 'override_args') "
-            f"and append shlex.split(override) after shlex.split(self.run_command). "
-            f"No shell=True and no string concatenation. Implement in Plan 11-03."
+        (automil_dir / "graph.json").write_text('{"nodes": {}, "meta": {"next_id": 1}}')
+        # Create orchestrator subdirs the constructor and _launch expect.
+        for sub in ("queue", "running", "archive", "completed"):
+            (automil_dir / "orchestrator" / sub).mkdir(parents=True, exist_ok=True)
+
+        # Create node archive dir (spec.json will be written there by _launch).
+        node_archive = automil_dir / "orchestrator" / "archive" / "node_test"
+        node_archive.mkdir(parents=True, exist_ok=True)
+
+        with patch("automil.backends._orchestrator_daemon._find_automil_dir",
+                   return_value=automil_dir), \
+             patch("automil.backends._orchestrator_daemon._find_git_root",
+                   return_value=tmp_path):
+
+            orch = ExperimentOrchestrator(
+                project_root=tmp_path,
+                automil_dir=automil_dir,
+            )
+
+        # Patch runner so worktree creation/overlay are no-ops.
+        fake_wt_path = tmp_path / "worktree_node_test"
+        fake_wt_path.mkdir()
+        orch.runner = MagicMock()
+        orch.runner.create_worktree.return_value = fake_wt_path
+        orch.runner.apply_overlay.return_value = None
+
+        launched_cmds: list[list] = []
+        popen_kwargs: list[dict] = []
+
+        class _FakePopen:
+            pid = 12345
+            def __init__(self, cmd, **kwargs):
+                launched_cmds.append(cmd)
+                popen_kwargs.append(kwargs)
+            def communicate(self):
+                return (b"", b"")
+
+        with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+                   side_effect=_FakePopen):
+            try:
+                orch._launch(spec, gpu_id=0)
+            except Exception:
+                # _launch may raise after Popen if running-spec write fails —
+                # we only care about the cmd that was passed to Popen.
+                pass
+
+        assert len(launched_cmds) >= 1, (
+            "subprocess.Popen was never called — _launch did not reach the launch block. "
+            "Check that mocked runner.create_worktree returned a valid path."
+        )
+        actual_cmd = launched_cmds[0]
+        assert actual_cmd == expected_cmd, (
+            f"Daemon must append shlex.split(override) after shlex.split(run_command).\n"
+            f"Expected: {expected_cmd}\n"
+            f"Got:      {actual_cmd}"
+        )
+        # Security guard: Popen must NOT use shell=True (T-11-03-01).
+        assert not popen_kwargs[0].get("shell", False), (
+            "subprocess.Popen must NOT be called with shell=True (T-11-03-01 command-injection guard)"
         )

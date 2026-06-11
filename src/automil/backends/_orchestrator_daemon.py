@@ -900,6 +900,12 @@ class ExperimentOrchestrator:
                 cmd = shlex.split(self.run_command)
             else:
                 cmd = [sys.executable, self.run_script]
+            # D-04 (CFG-03): append per-node override args after base run.command.
+            # Must be list append (not string concat) and Popen must not use shell=True
+            # so shlex.split tokenizes metacharacters as literal tokens (T-11-03-01).
+            override_str = spec.get("run_command_override")
+            if override_str:
+                cmd = cmd + shlex.split(override_str)
             process = subprocess.Popen(
                 cmd,
                 cwd=str(wt_path),
