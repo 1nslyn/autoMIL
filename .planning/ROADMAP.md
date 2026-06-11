@@ -25,7 +25,7 @@
 ### v1.1 Bug Fixing (Phases 9-14)
 
 - [x] **Phase 9: State & Recovery Integrity** — Correct terminal-state recording, partial-fold aggregation, status vocabulary, and budget-cell identity (completed 2026-06-11)
-- [ ] **Phase 10: Variant Application Integrity** — Registered variants actually apply to the live model through existing open seams; loud failure for loop-opening variants
+- [x] **Phase 10: Variant Application Integrity** — Registered variants actually apply to the live model through existing open seams; loud failure for loop-opening variants (completed 2026-06-11)
 - [ ] **Phase 11: Config & Run Fidelity** — Config/snapshot values drive runs; argparse defaults stop masking them; per-node run-command overrides *(parallel-candidate: independent of Phase 10)*
 - [ ] **Phase 12: Scheduling & Overlay Isolation** — GPU scheduling-policy knob; generic editable-install worktree overlay guard *(parallel-candidate: independent of Phases 10–11)*
 - [ ] **Phase 13: CLI Lifecycle & Operability** — Cancel daemon-launched jobs, dequeue queued nodes, resubmit pending→running, cross-project targeting, viz.port fallback *(parallel-candidate: independent of Phases 10–12)*
@@ -83,7 +83,7 @@ Plans:
 - [x] 10-03-PLAN.md — APL-02 variant_dispatch.py implementation + run_experiment.py wiring (APL-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 10-04-PLAN.md — APL-01 iris train.py dispatch + end-to-end human verify (APL-01, APL-02)
+- [x] 10-04-PLAN.md — APL-01 iris train.py dispatch + end-to-end human verify (APL-01, APL-02)
 
 ---
 

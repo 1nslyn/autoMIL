@@ -24,9 +24,9 @@ Committed scope of milestone v1.1. REQ-IDs grouped by defect theme. New category
 
 <!-- A registered variant MUST actually take effect on the model when selected — never silently inert. Apply through existing OPEN seams; do NOT open closed training loops (deferred → RTA / ISSUE-007). Verification by real experiment is in-bounds. -->
 
-- [ ] **APL-01**: Selecting a registered variant via config (`automil apply <node>`) causes the live experiment to run with that variant applied to the actual model — a registered variant is never silently inert. Demonstrated end-to-end on the sklearn-iris reference, whose `classifier_v0` variant is currently never imported by its `train.py`.
-- [ ] **APL-02**: Registered model / config / hyperparameter variants for the autobench CLAM consumer apply to the actual model through the existing `clam_train` args seam (`model_type`, `model_size`, `B`, `bag_weight`, `dropout`, optimizer/`lr`, `bag_loss`/`inst_loss` selectors) — **without editing `lib/` and without opening the closed training loop**. Verified by a real experiment whose composite differs from the un-applied baseline.
-- [ ] **APL-03**: A variant whose only application route requires opening a closed training loop (e.g. a custom `LossVariant` callable injected into CLAM's `train_loop_clam`) is **detected and reported loudly** by the apply/validate path as "requires loop opening — deferred (ISSUE-007 / RTA)", never silently no-op'd. (Closes the inert-variant trap at its general root.)
+- [x] **APL-01**: Selecting a registered variant via config (`automil apply <node>`) causes the live experiment to run with that variant applied to the actual model — a registered variant is never silently inert. Demonstrated end-to-end on the sklearn-iris reference, whose `classifier_v0` variant is currently never imported by its `train.py`.
+- [x] **APL-02**: Registered model / config / hyperparameter variants for the autobench CLAM consumer apply to the actual model through the existing `clam_train` args seam (`model_type`, `model_size`, `B`, `bag_weight`, `dropout`, optimizer/`lr`, `bag_loss`/`inst_loss` selectors) — **without editing `lib/` and without opening the closed training loop**. Verified by a real experiment whose composite differs from the un-applied baseline.
+- [x] **APL-03**: A variant whose only application route requires opening a closed training loop (e.g. a custom `LossVariant` callable injected into CLAM's `train_loop_clam`) is **detected and reported loudly** by the apply/validate path as "requires loop opening — deferred (ISSUE-007 / RTA)", never silently no-op'd. (Closes the inert-variant trap at its general root.)
 
 ### Config & run fidelity (CFG)
 
@@ -94,9 +94,9 @@ Which phase covers which requirement. Populated during roadmap creation.
 | REC-02 | Phase 9 | Complete |
 | REC-03 | Phase 9 | Complete |
 | REC-04 | Phase 9 | Complete |
-| APL-01 | Phase 10 | Pending |
-| APL-02 | Phase 10 | Pending |
-| APL-03 | Phase 10 | Pending |
+| APL-01 | Phase 10 | Complete |
+| APL-02 | Phase 10 | Complete |
+| APL-03 | Phase 10 | Complete |
 | CFG-01 | Phase 11 | Pending |
 | CFG-02 | Phase 11 | Pending |
 | CFG-03 | Phase 11 | Pending |
