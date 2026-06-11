@@ -317,3 +317,82 @@ class TestCFG03DaemonAppend:
         assert not popen_kwargs[0].get("shell", False), (
             "subprocess.Popen must NOT be called with shell=True (T-11-03-01 command-injection guard)"
         )
+
+
+# ---------------------------------------------------------------------------
+# WR-01: --override shlex validation at CLI submit time
+# ---------------------------------------------------------------------------
+
+class TestWR01OverrideShlex:
+    def test_submit_override_malformed_quotes_raises_cli_error(
+        self, tmp_path, monkeypatch
+    ):
+        """WR-01: submit --override with unbalanced quotes must fail at CLI time.
+
+        Before the fix, shlex.split() was only called inside the daemon at
+        launch time (after the spec was dequeued), routing the node to
+        _mark_crashed with no user-visible CLI feedback.
+
+        Fix: shlex.split() is validated in submit.py before writing the spec.
+        This test asserts exit_code != 0 and that the error mentions the
+        parsing failure, so operators get immediate feedback.
+        """
+        runner = CliRunner()
+        _setup_project(tmp_path, runner, monkeypatch)
+
+        result = runner.invoke(
+            main,
+            ["submit", "--node", "node_wr01", "--desc", "override-shlex-test",
+             "--files", "train.py", "--mil-model", "test_model",
+             "--override", "'unbalanced"],
+        )
+        assert result.exit_code != 0, (
+            "WR-01: submit with malformed --override must exit non-zero; "
+            f"got exit_code={result.exit_code}, output={result.output!r}"
+        )
+        assert "unbalanced" in result.output.lower() or "parse" in result.output.lower(), (
+            f"WR-01: error output must mention parsing problem; got {result.output!r}"
+        )
+        # Confirm the spec was NOT written to queue/ (spec must not be dequeued)
+        queue_dir = tmp_path / "automil" / "orchestrator" / "queue"
+        specs = list(queue_dir.glob("*.json")) if queue_dir.exists() else []
+        assert len(specs) == 0, (
+            f"WR-01: no spec must be written to queue/ when override is invalid; "
+            f"found: {specs}"
+        )
+
+    def test_submit_override_valid_quotes_succeeds(self, tmp_path, monkeypatch):
+        """WR-01 regression guard: valid quoted --override string is accepted."""
+        runner = CliRunner()
+        _setup_project(tmp_path, runner, monkeypatch)
+
+        result = runner.invoke(
+            main,
+            ["submit", "--node", "node_wr01b", "--desc", "override-valid",
+             "--files", "train.py", "--mil-model", "test_model",
+             "--override", "--seed 42 --lr 1e-4"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, (
+            f"WR-01: valid --override must succeed; got {result.output!r}"
+        )
+        spec = _read_queue_spec(tmp_path)
+        assert spec.get("run_command_override") == "--seed 42 --lr 1e-4"
+
+    def test_submit_max_time_zero_raises_cli_error(self, tmp_path, monkeypatch):
+        """WR-03: --max-time 0 must be rejected at CLI time (not silently become 1 minute)."""
+        runner = CliRunner()
+        _setup_project(tmp_path, runner, monkeypatch)
+
+        result = runner.invoke(
+            main,
+            ["submit", "--node", "node_wr03", "--desc", "max-time-zero",
+             "--files", "train.py", "--mil-model", "test_model",
+             "--max-time", "0"],
+        )
+        assert result.exit_code != 0, (
+            f"WR-03: --max-time 0 must exit non-zero; got {result.output!r}"
+        )
+        assert "0" in result.output, (
+            f"WR-03: error must mention the bad value; got {result.output!r}"
+        )
