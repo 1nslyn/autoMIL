@@ -438,6 +438,18 @@ def test_apply_writes_applied_variant_json(tmp_path, cli_runner, monkeypatch):
     assert "loss" in payload, f"Missing 'loss' key in applied_variant.json: {payload}"
     assert "policy" in payload, f"Missing 'policy' key in applied_variant.json: {payload}"
 
+    # CR-01 fix: active_variant.json must also be written at the automil/ root
+    # so submit can propagate it into the NEW node's archive.
+    active_path = adir / "active_variant.json"
+    assert active_path.exists(), (
+        f"active_variant.json not found at {active_path}. "
+        "CR-01 fix: apply must write automil/active_variant.json for submit propagation."
+    )
+    active_payload = _json.loads(active_path.read_text())
+    assert active_payload["model"]["variant"] == "classifier_v0", (
+        f"active_variant.json model.variant mismatch: {active_payload}"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Test 16: A1 fix — AUTOMIL_VARIANT_MODEL injected into queue spec env
@@ -486,4 +498,125 @@ def test_apply_injects_env_var_into_queue_spec(tmp_path, cli_runner, monkeypatch
     )
     assert updated_spec["env"]["AUTOMIL_VARIANT_MODEL"] == "classifier_v0", (
         f"AUTOMIL_VARIANT_MODEL not injected correctly: {updated_spec['env']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 17: CR-01 real-flow trap-closer — applied_variant.json reaches the NEW
+# node's archive via apply → submit, WITHOUT the test manually placing it.
+#
+# This is the test that proves CR-01 is actually fixed. The prior tests
+# (15, 16) inject or assert on archive/<applied_node>/ — they never exercise
+# the apply→submit→overlay path. This test does:
+#
+#   1. automil apply <node_0001>    → writes active_variant.json to automil/
+#   2. automil submit <node_0002>   → submit reads active_variant.json and
+#                                     copies it into archive/node_0002/ as
+#                                     applied_variant.json
+#
+# The test then asserts that archive/node_0002/applied_variant.json exists
+# with correct content. The file is NOT placed there by the test setup.
+# ---------------------------------------------------------------------------
+
+def test_apply_then_submit_propagates_to_new_node_archive(
+    tmp_path, cli_runner, monkeypatch
+):
+    """CR-01 real-flow: apply <old_node> then submit <new_node> propagates
+    applied_variant.json into archive/<new_node>/ WITHOUT the test injecting it.
+
+    This is the trap-closer. The bug was: apply wrote to archive/<old_node>/
+    but submit creates archive/<new_node>/ — the two never intersected, so
+    applied_variant.json never reached the new worktree. The fix: apply writes
+    active_variant.json at the automil/ root; submit copies it into
+    archive/<new_node>/applied_variant.json before writing the queue spec.
+    """
+    import json as _json
+
+    adir = _setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    # Graph with two nodes: node_0001 (already executed — the "good" result
+    # we apply), node_0002 (proposal — the next experiment to submit).
+    _write_graph(adir, {
+        "node_0001": {
+            "id": "node_0001",
+            "type": "executed",
+            "status": "keep",
+            "composite": 0.88,
+            "variant_spec": {"kind": "model", "name": "classifier_v0", "parent": "baseline"},
+        },
+        "node_0002": {
+            "id": "node_0002",
+            "type": "proposed",
+            "status": "pending",
+            "composite": 0.0,
+        },
+    })
+
+    # Step 1: apply the good node's variant. This should write active_variant.json.
+    from automil.cli import main
+    apply_result = cli_runner.invoke(main, ["apply", "node_0001"])
+    assert apply_result.exit_code == 0, apply_result.output
+
+    # Verify active_variant.json was written at the framework level.
+    active_path = adir / "active_variant.json"
+    assert active_path.exists(), (
+        f"active_variant.json not found at {active_path} after apply. "
+        "CR-01 fix: apply must write to automil/active_variant.json."
+    )
+
+    # Step 2: submit the NEXT node (node_0002). Submit should copy
+    # active_variant.json → archive/node_0002/applied_variant.json.
+    # We need a changed file to snapshot — create a dummy one.
+    (tmp_path / "model.py").write_text("# next experiment\n")
+    # Mark it as a changed tracked file (git add then unstage so it's dirty)
+    import subprocess
+    subprocess.run(["git", "add", "model.py"], cwd=tmp_path, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add model"],
+        cwd=tmp_path, capture_output=True, check=True,
+    )
+    # Now make a change so the file is detected as modified
+    (tmp_path / "model.py").write_text("# next experiment v2\n")
+
+    submit_result = cli_runner.invoke(
+        main,
+        [
+            "submit",
+            "--node", "node_0002",
+            "--desc", "next experiment after apply",
+            "--files", "model.py",
+            "--parent", "node_0001",
+            "--mil-model", "classifier_v0",
+        ],
+    )
+    assert submit_result.exit_code == 0, submit_result.output
+
+    # CRITICAL assertion: applied_variant.json must be in the NEW node's archive.
+    # This file was NOT placed there by the test setup — it must arrive via
+    # submit's propagation of active_variant.json.
+    new_archive = adir / "orchestrator" / "archive" / "node_0002"
+    applied_in_new = new_archive / "applied_variant.json"
+    assert applied_in_new.exists(), (
+        f"CR-01 REGRESSION: applied_variant.json NOT found at {applied_in_new}. "
+        "submit must copy active_variant.json → archive/<new_node>/applied_variant.json. "
+        "Without this, apply_overlay never carries the selection into the worktree."
+    )
+
+    # Verify the content is correct (from the node_0001 apply).
+    payload = _json.loads(applied_in_new.read_text())
+    assert payload["model"]["variant"] == "classifier_v0", (
+        f"CR-01: applied_variant.json in new node has wrong variant: {payload}"
+    )
+    assert payload["model"]["parent"] == "baseline", (
+        f"CR-01: applied_variant.json in new node has wrong parent: {payload}"
+    )
+
+    # Also verify the overlay_dir in the queue spec points at the new node's archive,
+    # confirming apply_overlay will find applied_variant.json there at run time.
+    queue_spec_path = adir / "orchestrator" / "queue" / "node_0002.json"
+    assert queue_spec_path.exists(), "Queue spec for node_0002 not written"
+    spec = _json.loads(queue_spec_path.read_text())
+    assert spec["overlay_dir"] == "archive/node_0002", (
+        f"overlay_dir should point at new node's archive, got: {spec['overlay_dir']}"
     )

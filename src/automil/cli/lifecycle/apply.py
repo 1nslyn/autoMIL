@@ -43,9 +43,23 @@ def _classify_variant_route(selection: dict, variants_root: Path) -> None:
     from automil.registry._state import LOSS_VARIANTS, POLICY_VARIANTS
 
     loss_name = (selection.get("loss") or {}).get("variant")
+    policy_name = (selection.get("policy") or {}).get("variant")
+
+    # Only scan (and guard) when there is a loss or policy variant to classify.
+    # WR-01: scan once rather than once per branch; also warn when the variants
+    # directory does not yet exist so the operator knows the guard cannot fire.
+    if loss_name is not None or policy_name is not None:
+        if not variants_root.exists():
+            logger.warning(
+                "_classify_variant_route: variants directory %s does not exist; "
+                "loss/policy loop-opening guard cannot fire. Run `automil refresh-registry` "
+                "after committing variant modules.",
+                variants_root,
+            )
+        else:
+            scan_variants(variants_root)
+
     if loss_name is not None:
-        # Scan to populate registry from on-disk variant modules (idempotent).
-        scan_variants(variants_root)
         if loss_name in LOSS_VARIANTS:
             raise click.ClickException(
                 f"Loss variant '{loss_name}' is a custom LossVariant callable that "
@@ -55,9 +69,7 @@ def _classify_variant_route(selection: dict, variants_root: Path) -> None:
                 f"Deferred to the RTA milestone."
             )
 
-    policy_name = (selection.get("policy") or {}).get("variant")
     if policy_name is not None:
-        scan_variants(variants_root)
         if policy_name in POLICY_VARIANTS:
             raise click.ClickException(
                 f"Policy variant '{policy_name}' is a custom PolicyVariant callable that "
@@ -198,9 +210,33 @@ def apply(node_id: str):
     )
     click.echo(f"Backup: {backup_path}")
 
-    # A1 fix (D-01): write applied_variant.json into the overlay archive so that
-    # apply_overlay propagates it into the worktree. config.yaml is gitignored
-    # and NOT included in the overlay; applied_variant.json fills that gap.
+    # A1 fix (CR-01 / D-01): write a framework-level active_variant.json that
+    # survives across node boundaries.  `apply` runs BEFORE the next `submit`,
+    # so there is no "next node id" yet.  Writing to archive/<node_id>/ (the
+    # already-completed node) was the original bug: apply_overlay copies from
+    # archive/<NEW node_id>/, not the old one, so the file never reached the
+    # new worktree.
+    #
+    # Correct two-part fix:
+    #   1. Write to automil/active_variant.json (framework-level, node-agnostic).
+    #   2. submit.py reads this file and copies it into archive/<new_node>/ as
+    #      applied_variant.json so apply_overlay carries it into every future
+    #      worktree (apply_overlay copies all files from overlay_dir except the
+    #      three metadata files: spec.json, run.log, result.json).
+    #
+    # We ALSO keep the archive/<node_id>/ write for backward compatibility with
+    # tests that assert on that location and for the env-injection fallback.
+    active_variant_path = adir / "active_variant.json"
+    _atomic_write_text(
+        active_variant_path,
+        json.dumps(selection, indent=2),
+    )
+    click.echo(
+        f"Wrote active_variant.json to automil/ "
+        f"(submit will propagate into the next experiment's overlay)."
+    )
+
+    # Also write to archive/<node_id>/ for backward compat + env-injection path.
     archive_dir = adir / "orchestrator" / "archive" / node_id
     archive_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write_text(
@@ -209,7 +245,7 @@ def apply(node_id: str):
     )
     click.echo(
         f"Wrote applied_variant.json to archive/{node_id}/ "
-        f"(will be overlaid into worktree by orchestrator)."
+        f"(backward compat; orchestrator picks up active_variant.json on next submit)."
     )
 
     # Inject AUTOMIL_VARIANT_MODEL into the queue spec env for runtime fallback.

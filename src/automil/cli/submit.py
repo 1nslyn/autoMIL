@@ -411,6 +411,23 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
         )
 
+    # CR-01 fix: propagate active_variant.json into this node's archive directory
+    # as applied_variant.json so apply_overlay carries it into the worktree.
+    # apply_overlay copies every file from overlay_dir (= archive/<node>/),
+    # excluding only spec.json, run.log, and result.json (runner.py line 70).
+    # active_variant.json is written by `automil apply` BEFORE `automil submit`
+    # runs, so by the time we reach here the file is either present (user ran
+    # `apply` before this submit) or absent (no variant selected — no-op).
+    _active_variant_path = adir / "active_variant.json"
+    if _active_variant_path.exists():
+        import shutil as _shutil
+        _applied_dst = archive / "applied_variant.json"
+        _shutil.copy2(str(_active_variant_path), str(_applied_dst))
+        click.echo(
+            f"  [variant] Copied active_variant.json → archive/{node}/applied_variant.json"
+            f" (will be overlaid into worktree by orchestrator)."
+        )
+
     # Write spec to queue
     spec = {
         "id": node,
