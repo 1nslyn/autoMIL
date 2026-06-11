@@ -45,7 +45,7 @@ def test_get_or_create_creates_new_cell(fake_automil_dir):
 
     assert cell.dataset == "ccrcc"
     assert cell.encoder == "uni-v2"
-    assert cell.parent_id == "node_0042"
+    assert cell.mil_model == "node_0042"
     assert cell.budget_seconds == 21600
     assert cell.safety_buffer_seconds == 1800
     assert cell.status == CellStatus.ACTIVE
@@ -194,11 +194,11 @@ def test_started_at_persists_across_reload(fake_automil_dir):
 
 def test_cell_id_deterministic_across_calls(fake_automil_dir):
     """make_cell_id produces the same id across both get_or_create_cell calls."""
-    dataset, encoder, parent_id = "ccrcc", "uni-v2", "node_0042"
-    expected_id = make_cell_id(dataset, encoder, parent_id)
+    dataset, encoder, mil_model = "ccrcc", "uni-v2", "node_0042"
+    expected_id = make_cell_id(dataset, encoder, mil_model)
 
-    cell_1 = get_or_create_cell(dataset, encoder, parent_id, 21600, 1800)
-    cell_2 = get_or_create_cell(dataset, encoder, parent_id, 21600, 1800)
+    cell_1 = get_or_create_cell(dataset, encoder, mil_model, 21600, 1800)
+    cell_2 = get_or_create_cell(dataset, encoder, mil_model, 21600, 1800)
 
     assert cell_1.cell_id == expected_id
     assert cell_2.cell_id == expected_id

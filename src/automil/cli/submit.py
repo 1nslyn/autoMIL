@@ -363,7 +363,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     _cell = get_or_create_cell(
         dataset=_dataset_name,
         encoder=_encoder_name,
-        parent_id=_parent_for_cell,
+        mil_model=_parent_for_cell,
         budget_seconds=_cap.budget_seconds,
         safety_buffer_seconds=_cap.safety_buffer_seconds,
         idle_grace_seconds=_cap.idle_grace_seconds,
@@ -374,7 +374,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             f"Cell {_cell.cell_id[:8]} is {_cell.status.value}: budget exhausted "
             f"({consumed_seconds(_cell):.0f}/{_cell.budget_seconds}s consumed). "
             f"Wait for cell to finalize, or submit with a different "
-            f"(dataset={_dataset_name}, encoder={_encoder_name}, parent_id={_parent_for_cell}) tuple."
+            f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_parent_for_cell}) tuple."
         )
 
     # Write spec to queue

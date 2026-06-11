@@ -125,7 +125,7 @@ class TestSubmitCellLayer:
         assert data["status"] == "active"
         assert data["dataset"] == "test_ds"
         assert data["encoder"] == "test_enc"
-        assert data["parent_id"] == "root"
+        assert data["mil_model"] == "root"
         assert data["budget_seconds"] == 21600   # framework fallback — no config cap:
         assert data["safety_buffer_seconds"] == 1800
 
@@ -155,7 +155,7 @@ class TestSubmitCellLayer:
             cell_id=cell_id,
             dataset="test_ds",
             encoder="test_enc",
-            parent_id="root",
+            mil_model="root",
             started_at=time.time() - 20000,   # 5.5h ago — well past safety buffer
             budget_seconds=21600,
             safety_buffer_seconds=1800,

@@ -88,7 +88,7 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
         return
 
     header = (
-        f"{'cell_id':<8}  {'dataset':<10}  {'encoder':<10}  {'parent':<10}  "
+        f"{'cell_id':<8}  {'dataset':<10}  {'encoder':<10}  {'mil_model':<10}  "
         f"{'started':<19}  {'consumed/budget':<19}  {'status':<14}  {'running':<7}"
     )
     if not no_header:
@@ -103,7 +103,7 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
         running_count = _count_running_in_cell(cell.cell_id)
         click.echo(
             f"{cell.cell_id[:8]:<8}  {cell.dataset[:10]:<10}  {cell.encoder[:10]:<10}  "
-            f"{cell.parent_id[:10]:<10}  {started_str:<19}  "
+            f"{cell.mil_model[:10]:<10}  {started_str:<19}  "
             f"{cb:<19}  {cell.status.value:<14}  {running_count:<7}"
         )
 

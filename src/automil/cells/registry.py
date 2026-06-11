@@ -33,13 +33,13 @@ def _cells_dir() -> Path:
 def get_or_create_cell(
     dataset: str,
     encoder: str,
-    parent_id: str,
+    mil_model: str,
     budget_seconds: int,
     safety_buffer_seconds: int,
     idle_grace_seconds: int = 300,
     mode: str = "agent_active",
 ) -> Cell:
-    """Return existing cell or create a new one (lazy + idempotent, D-116).
+    """Return existing cell or create a new one (lazy + idempotent, D-116, REC-04).
 
     D-134: all cap parameters (budget_seconds, safety_buffer_seconds,
     idle_grace_seconds, mode) apply ONLY when this call CREATES the cell. If the
@@ -49,14 +49,16 @@ def get_or_create_cell(
     Args:
         dataset: e.g. "ccrcc" — from automil/config.yaml.
         encoder: e.g. "uni-v2" — from automil/config.yaml.
-        parent_id: graph node_id of cell-root experiment, or "root" for top-level.
+        mil_model: MIL model identifier for budget cell keying (D-13). Must be
+            pre-normalized via normalize_mil_model() before calling (D-14).
+            Graph parent lineage stays separate — re-parenting does not fork the budget.
         budget_seconds: cap; honored only on creation.
         safety_buffer_seconds: refusing-new lead time; honored only on creation.
         idle_grace_seconds: agent-active idle grace; honored only on creation.
         mode: "agent_active" or "wall_clock"; honored only on creation.
     """
     cells_dir = _cells_dir()
-    cell_id = make_cell_id(dataset, encoder, parent_id)
+    cell_id = make_cell_id(dataset, encoder, mil_model)
     path = cells_dir / f"{cell_id}.json"
     if path.exists():
         cell = read_cell(path)
@@ -73,12 +75,12 @@ def get_or_create_cell(
             )
         return cell
 
-    # First submit for this (dataset, encoder, parent_id) tuple → open the cell.
+    # First submit for this (dataset, encoder, mil_model) triple → open the cell.
     cell = Cell(
         cell_id=cell_id,
         dataset=dataset,
         encoder=encoder,
-        parent_id=parent_id,
+        mil_model=mil_model,
         started_at=time.time(),  # set ONCE at creation; never updated (D-111)
         budget_seconds=budget_seconds,
         safety_buffer_seconds=safety_buffer_seconds,
@@ -90,8 +92,8 @@ def get_or_create_cell(
     )
     write_cell(cell, cells_dir)
     logger.info(
-        "Opened cell %s: dataset=%s encoder=%s parent=%s budget=%ds buffer=%ds mode=%s",
-        cell_id[:8], dataset, encoder, parent_id, budget_seconds, safety_buffer_seconds, mode,
+        "Opened cell %s: dataset=%s encoder=%s mil_model=%s budget=%ds buffer=%ds mode=%s",
+        cell_id[:8], dataset, encoder, mil_model, budget_seconds, safety_buffer_seconds, mode,
     )
     return cell
 
