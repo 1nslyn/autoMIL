@@ -95,7 +95,17 @@ Plans:
   1. A `run_experiment.py` invocation that does not pass `--seed`, `--lr`, `--max_epochs`, `--patience`, `--stop_epoch`, or `--n_folds` on the command line uses the values from the snapshot/config dataclass — not argparse's hard-coded defaults.
   2. `automil submit` called without `--timeout` omits `timeout_min` from the queue spec entirely, so the orchestrator's `orchestrator.default_timeout_min` setting takes effect unmasked.
   3. A queue spec can carry per-node run-command overrides (e.g. `--seed 42 --lr 1e-4`) layered on top of `config.yaml run.command`, and `automil submit --override "..."` writes them into the spec without modifying any snapshotted file.
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+**Wave 1**
+- [ ] 11-01-PLAN.md — Wave-0 test stubs (CFG-01/02/03 RED tests, Nyquist compliance)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 11-02-PLAN.md — CFG-01: run_experiment.py None-default training overrides + conditional TrainConfig construction (CFG-01)
+- [ ] 11-03-PLAN.md — CFG-02/03: --timeout None-default + D-03 sentinel fix + --override CLI + daemon suffix-append (CFG-02, CFG-03)
+
+**Cross-cutting constraints:**
+- No regressions in existing test suites (run tests/ and benchmarks/tests/ SEPARATELY — combined run triggers rootdir collision)
 **Parallel note**: Independent of Phases 10, 12, 13, 14. Can run in parallel with any of them after Phase 9 clears.
 
 ---
