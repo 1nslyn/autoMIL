@@ -40,8 +40,8 @@ Committed scope of milestone v1.1. REQ-IDs grouped by defect theme. New category
 
 <!-- Orchestrator scheduling correctness + worktree-overlay import integrity. -->
 
-- [ ] **SCH-01**: An `orchestrator.scheduling_policy` knob (`best_fit | round_robin | least_loaded`) selects GPU placement; best-fit is reserved for memory-bound workloads so low-VRAM compute-bound jobs no longer over-stack one GPU while others idle. (ISSUE-005, S1)
-- [ ] **SCH-02**: A generic daemon-side guard/injection ensures editable-installed consumer packages import from the per-experiment worktree overlay (not the main checkout), and `automil check` warns when editable package paths are snapshotted without a worktree import guard. (ISSUE-010, S1)
+- [x] **SCH-01**: An `orchestrator.scheduling_policy` knob (`best_fit | round_robin | least_loaded`) selects GPU placement; best-fit is reserved for memory-bound workloads so low-VRAM compute-bound jobs no longer over-stack one GPU while others idle. (ISSUE-005, S1)
+- [x] **SCH-02**: A generic daemon-side guard/injection ensures editable-installed consumer packages import from the per-experiment worktree overlay (not the main checkout), and `automil check` warns when editable package paths are snapshotted without a worktree import guard. (ISSUE-010, S1)
 
 ### CLI lifecycle & operability (OPS)
 
@@ -100,8 +100,8 @@ Which phase covers which requirement. Populated during roadmap creation.
 | CFG-01 | Phase 11 | Complete |
 | CFG-02 | Phase 11 | Complete |
 | CFG-03 | Phase 11 | Complete |
-| SCH-01 | Phase 12 | Pending |
-| SCH-02 | Phase 12 | Pending |
+| SCH-01 | Phase 12 | Complete |
+| SCH-02 | Phase 12 | Complete |
 | OPS-01 | Phase 13 | Pending |
 | OPS-02 | Phase 13 | Pending |
 | OPS-03 | Phase 13 | Pending |

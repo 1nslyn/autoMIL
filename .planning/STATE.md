@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
 status: executing
-last_updated: "2026-06-11T20:48:38.325Z"
-last_activity: 2026-06-11 -- Phase 12 planning complete
+last_updated: "2026-06-11T20:55:29.532Z"
+last_activity: 2026-06-11
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 16
-  completed_plans: 13
-  percent: 81
+  completed_plans: 14
+  percent: 88
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -35,9 +35,9 @@ progress:
 ## Current Position
 
 Phase: 12 (Scheduling & Overlay Isolation) — EXECUTING
-Plan: 1 of ?
-Status: Ready to execute
-Last activity: 2026-06-11 -- Phase 12 planning complete
+Plan: 2 of 3
+Status: Executing Phase 12 — Plan 01 complete (Wave-0 RED stubs committed)
+Last activity: 2026-06-11 -- Phase 12 Plan 01 complete: 7 SCH-01 + 5 SCH-02 xfail stubs
 
 ## Performance Metrics
 
@@ -129,11 +129,11 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Phase 11 Plan 03 complete (2026-06-11). CFG-02 + CFG-03 fully implemented: --timeout default→None, D-03 sentinel fix (timeout is not None), --override option writing run_command_override to spec, daemon suffix-append via shlex list concat (no shell=True). All 5 CFG tests GREEN. 1021/1022 framework suite passed (1 pre-existing failure). Commits: 82a1d9b (submit.py), 1d3e1b5 (daemon + test GREEN upgrade).
+**Last action:** Phase 12 Plan 01 complete (2026-06-11). Wave-0 RED stubs: 7 xfail for SCH-01 (scheduling policy dispatch) in tests/test_scheduling_policy.py, 5 xfail for SCH-02 (editable overlay guard) in tests/test_editable_overlay_guard.py. FakeDaemon SimpleNamespace fixture + PropertyMock dispatch gate. D-199 invariants (15 tests) remain GREEN. Framework purity gate GREEN. Commits: 59077b6 (SCH-01 stubs), a952677 (SCH-02 stubs).
 
-**Phase 11 status:** ALL 3 PLANS COMPLETE. CFG-01 (11-02), CFG-02 + CFG-03 (11-03) delivered. Phase ready for verification.
+**Phase 12 status:** Plan 01 complete. Plans 02 (SCH-01 implementation) and 03 (SCH-02 implementation) pending.
 
-**Next:** Run `/gsd-verify-work` for Phase 11, or continue with Phase 12/13/14 (parallel-candidates).
+**Next:** Execute Phase 12 Plan 02 (SCH-01 scheduling policy dispatch implementation).
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*

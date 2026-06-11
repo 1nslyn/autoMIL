@@ -121,7 +121,7 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 12-01-PLAN.md — Wave-0 test stubs (SCH-01 + SCH-02 RED stubs, Nyquist compliance)
+- [x] 12-01-PLAN.md — Wave-0 test stubs (SCH-01 + SCH-02 RED stubs, Nyquist compliance)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 12-02-PLAN.md — SCH-01: scheduling_policy knob + _find_best_gpu dispatch + _rr_cursor (SCH-01)
