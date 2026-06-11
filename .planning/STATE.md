@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
 status: executing
-last_updated: "2026-06-11T13:34:01.713Z"
-last_activity: 2026-06-11 -- Phase 10 planning complete
+last_updated: "2026-06-11T13:45:32.977Z"
+last_activity: 2026-06-11
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 10
-  completed_plans: 6
-  percent: 60
+  completed_plans: 7
+  percent: 70
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -30,14 +30,14 @@ progress:
 - `CLAUDE.md` — project instructions and Leo's standing directives
 - `~/.claude/projects/-home-jma-Documents-yinshuol-autoMIL/memory/MEMORY.md` — Leo's standing memory
 
-**Current focus:** Phase 09 — State & Recovery Integrity
+**Current focus:** Phase 10 — Variant Application Integrity
 
 ## Current Position
 
-Phase: 10
-Plan: Not started
+Phase: 10 (Variant Application Integrity) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-06-11 -- Phase 10 planning complete
+Last activity: 2026-06-11
 
 ## Performance Metrics
 
@@ -123,11 +123,11 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Phase 9 planning complete (2026-06-10). Research + pattern-map + 6 plans in 4 waves, plan-checker PASSED (0 blockers; 4 warnings resolved in 1 revision), requirements coverage 4/4 REC-IDs, decision coverage 15/15 D-IDs. Artifacts: 09-RESEARCH.md, 09-PATTERNS.md, 09-VALIDATION.md, 09-01..09-06-PLAN.md.
+**Last action:** Phase 10 Plan 01 complete (2026-06-11). Wave-0 test scaffolding: 5 new files (4 RED test stubs + 1 importable variant_dispatch.py stub). All new tests fail RED for correct reasons. 14 existing apply tests still green. Commits: c84b9df (APL-01/03 stubs), adb89cf (APL-02 stub + workstation marker fix).
 
-**Wave structure:** W1 = 09-01 (test stubs) · W2 = 09-02 (cell identity), 09-03 (schema) · W3 = 09-04 (partial recovery), 09-05 (CLI + migrate) · W4 = 09-06 (terminal_writer + quarantine).
+**Wave structure (Phase 10):** W1 = 10-01 (test stubs, DONE) · W2 = 10-02 (apply + _classify_variant_route), 10-03 (variant_dispatch impl) · W3 = 10-04 (iris train.py dispatch).
 
-**To execute Phase 9:** `/clear` then run `/gsd-execute-phase 9`. Phase 9 covers REC-01 (S0 partial-fold recovery), REC-02 (single terminal-state writer), REC-03 (status vocabulary + schema validation), REC-04 (mil_model budget-cell keying). Phase 10 depends on REC-04.
+**To continue Phase 10:** `/gsd-execute-phase 10` for Plan 02. Plan 02 adds _classify_variant_route to apply.py (APL-03) + applied_variant.json mechanism (APL-01 A1 closure).
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*

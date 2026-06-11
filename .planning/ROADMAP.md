@@ -76,7 +76,7 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 10-01-PLAN.md — Wave-0 test stubs (APL-01/02/03 RED tests + variant_dispatch.py stub)
+- [x] 10-01-PLAN.md — Wave-0 test stubs (APL-01/02/03 RED tests + variant_dispatch.py stub)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 10-02-PLAN.md — APL-03 loud-fail classifier + A1 fix: applied_variant.json overlay write (APL-01, APL-03)
