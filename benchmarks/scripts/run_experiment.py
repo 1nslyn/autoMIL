@@ -59,13 +59,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gpu", type=int, default=None,
                    help="GPU index (default: AUTOMIL_GPU or 0)")
 
-    # Training overrides
-    p.add_argument("--max_epochs", type=int, default=200)
-    p.add_argument("--lr", type=float, default=1e-4)
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--n_folds", type=int, default=5)
-    p.add_argument("--patience", type=int, default=20)
-    p.add_argument("--stop_epoch", type=int, default=50)
+    # Training overrides — default=None so dataclass defaults are honored when not supplied (CFG-01 / D-01)
+    p.add_argument("--max_epochs", type=int, default=None)
+    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--n_folds", type=int, default=None)
+    p.add_argument("--patience", type=int, default=None)
+    p.add_argument("--stop_epoch", type=int, default=None)
     p.add_argument("--no_wandb", action="store_true")
 
     return p.parse_args()
@@ -152,23 +152,30 @@ def main() -> None:
         args.model, ModelConfig(model_type=args.model)
     )
 
-    train_cfg = TrainConfig(
-        max_epochs=args.max_epochs,
-        lr=args.lr,
-        seed=args.seed,
-        patience=args.patience,
-        stop_epoch=args.stop_epoch,
-    )
+    # CFG-01 / D-01: only pass training-override args that were explicitly supplied on the CLI.
+    # When a flag is absent, args.<flag> is None and the TrainConfig dataclass default is honored.
+    _train_overrides = {k: v for k, v in {
+        "max_epochs": args.max_epochs,
+        "lr": args.lr,
+        "seed": args.seed,
+        "patience": args.patience,
+        "stop_epoch": args.stop_epoch,
+    }.items() if v is not None}
+    train_cfg = TrainConfig(**_train_overrides)
 
+    # CFG-01 / D-01: pass n_folds only when explicitly supplied; otherwise ExperimentConfig.n_folds=10 applies.
+    _exp_kwargs = {}
+    if args.n_folds is not None:
+        _exp_kwargs["n_folds"] = args.n_folds
     exp_cfg = ExperimentConfig(
         task=task_cfg,
         encoder_key=args.encoder,
         embed_dim=embed_dim,
         model=model_cfg,
         train=train_cfg,
-        n_folds=args.n_folds,
         framework=framework,
         strategy=args.strategy,
+        **_exp_kwargs,
     )
 
     # APL-02: apply registered model variant (if any) to exp_cfg before training.
@@ -212,7 +219,7 @@ def main() -> None:
         encoder_keys=[args.encoder],
         ds=ds,
         seed=train_cfg.seed,
-        n_splits=args.n_folds,
+        n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
     )
 
     # Run the experiment
@@ -237,7 +244,7 @@ def main() -> None:
             features_base_dir=ds.features_base_dir,
             dataset_name=ds.name,
             seed=train_cfg.seed,
-            n_splits=args.n_folds,
+            n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
         )
         summary = run_nnmil_experiment(
             exp_cfg, benchmark_dir, device=str(device),
