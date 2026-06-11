@@ -72,7 +72,18 @@ Plans:
   1. `automil apply <node>` on the sklearn-iris reference causes the experiment to run with the registered `classifier_v0` variant imported and applied — the variant's `train.py` import path is no longer inert; observable by a different model object being instantiated.
   2. A registered model/config/hyperparameter variant for the autobench CLAM consumer applies through the existing `clam_train` args seam (`model_type`, `model_size`, `B`, `bag_weight`, `dropout`, optimizer/`lr`, `bag_loss`/`inst_loss`) — verified by a real experiment whose composite differs from the un-applied baseline by more than noise.
   3. Attempting to apply a variant whose only route requires injecting a callable into CLAM's `train_loop_clam` produces a loud error message citing "requires loop opening — deferred (ISSUE-007 / RTA)" — it never silently no-op's.
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+**Wave 1**
+- [ ] 10-01-PLAN.md — Wave-0 test stubs (APL-01/02/03 RED tests + variant_dispatch.py stub)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 10-02-PLAN.md — APL-03 loud-fail classifier + A1 fix: applied_variant.json overlay write (APL-01, APL-03)
+- [ ] 10-03-PLAN.md — APL-02 variant_dispatch.py implementation + run_experiment.py wiring (APL-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 10-04-PLAN.md — APL-01 iris train.py dispatch + end-to-end human verify (APL-01, APL-02)
 
 ---
 
