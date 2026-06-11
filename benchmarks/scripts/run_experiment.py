@@ -171,6 +171,14 @@ def main() -> None:
         strategy=args.strategy,
     )
 
+    # APL-02: apply registered model variant (if any) to exp_cfg before training.
+    # Reads automil/applied_variant.json (written by `automil apply` and propagated
+    # into the worktree by apply_overlay). No-op when no variant is selected or
+    # when running outside autoMIL (applied_variant.json absent).
+    from pathlib import Path as _Path
+    from autobench.pipeline.variant_dispatch import apply_model_variant_to_exp_cfg
+    apply_model_variant_to_exp_cfg(exp_cfg, _Path("automil"))
+
     benchmark_dir = ds.benchmark_dir
 
     # When running under autoMIL, write per-fold checkpoints/metrics into
