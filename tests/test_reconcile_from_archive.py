@@ -134,6 +134,96 @@ def test_from_archive_skips_running_nodes(cli_runner, tmp_path: Path, monkeypatc
     )
 
 
+def test_from_archive_maps_result_status_to_graph_vocabulary(cli_runner, tmp_path: Path, monkeypatch) -> None:
+    """CR-03 regression: --from-archive must NOT write result.json status values
+    (completed/budget_killed) directly into graph nodes. Graph status vocabulary
+    is keep/discard/crash/partial/cancelled. Writing 'completed' corrupts
+    _reevaluate_descendants and recompute_best which only match 'keep'/'discard'.
+
+    Assert: result status='completed' with composite > parent → graph status='keep'.
+    Assert: result status='budget_killed' with composite < parent → graph status='discard'.
+    Assert: result status='crash' → graph status='crash' (passthrough).
+    Assert: result status='partial' → graph status='partial' (quarantined, D-01).
+    """
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    cli_runner.invoke(main, ["init"])
+
+    from automil.graph import ExperimentGraph
+    graph_path = tmp_path / "automil" / "graph.json"
+    graph = ExperimentGraph(path=str(graph_path))
+
+    # Parent node with composite=0.7 (used as comparison baseline).
+    parent_id = graph.add_executed(
+        parent_id=None,
+        description="parent",
+        techniques=["baseline"],
+        metrics={"composite": 0.7},
+        status="keep",
+    )
+    graph.nodes[parent_id]["composite"] = 0.7
+
+    # Node A: result status=completed, composite=0.85 > parent 0.7 → expect keep.
+    node_a = graph.add_proposed(parent_id=parent_id, description="completed-high", techniques=[])
+    graph.nodes[node_a]["parent_id"] = parent_id
+
+    # Node B: result status=budget_killed, composite=0.5 < parent 0.7 → expect discard.
+    node_b = graph.add_proposed(parent_id=parent_id, description="budget-killed-low", techniques=[])
+    graph.nodes[node_b]["parent_id"] = parent_id
+
+    # Node C: result status=crash → expect crash (passthrough).
+    node_c = graph.add_proposed(parent_id=parent_id, description="crash-node", techniques=[])
+    graph.nodes[node_c]["parent_id"] = parent_id
+
+    # Node D: result status=partial → expect partial (quarantined D-01).
+    node_d = graph.add_proposed(parent_id=parent_id, description="partial-node", techniques=[])
+    graph.nodes[node_d]["parent_id"] = parent_id
+
+    graph.save()
+
+    archive_root = tmp_path / "automil" / "orchestrator" / "archive"
+    for nid, payload in [
+        (node_a, {"composite": 0.85, "status": "completed",      "metrics": {}}),
+        (node_b, {"composite": 0.50, "status": "budget_killed",  "metrics": {}}),
+        (node_c, {"composite": 0.00, "status": "crash",          "metrics": {}}),
+        (node_d, {"composite": 0.60, "status": "partial",        "metrics": {}}),
+    ]:
+        d = archive_root / nid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "result.json").write_text(json.dumps(payload))
+
+    result = cli_runner.invoke(main, ["reconcile", "--from-archive", "all"])
+    assert result.exit_code == 0, f"reconcile --from-archive failed: {result.output!r}"
+
+    graph2 = ExperimentGraph(path=str(graph_path))
+
+    status_a = graph2.get_node(node_a).get("status")
+    assert status_a == "keep", (
+        f"CR-03: result status='completed', composite=0.85>parent=0.70 → "
+        f"expected graph status='keep', got {status_a!r}"
+    )
+    status_b = graph2.get_node(node_b).get("status")
+    assert status_b == "discard", (
+        f"CR-03: result status='budget_killed', composite=0.50<parent=0.70 → "
+        f"expected graph status='discard', got {status_b!r}"
+    )
+    status_c = graph2.get_node(node_c).get("status")
+    assert status_c == "crash", (
+        f"CR-03: result status='crash' → expected graph status='crash', got {status_c!r}"
+    )
+    status_d = graph2.get_node(node_d).get("status")
+    assert status_d == "partial", (
+        f"CR-03: result status='partial' → expected graph status='partial' (D-01 quarantine), "
+        f"got {status_d!r}"
+    )
+    # Verify raw result status is preserved in metadata for traceability.
+    meta_a = graph2.get_node(node_a).get("metadata", {})
+    assert meta_a.get("result_status") == "completed", (
+        f"CR-03: raw result_status should be preserved in metadata for traceability, "
+        f"got metadata={meta_a!r}"
+    )
+
+
 def test_default_reconcile_unchanged(cli_runner, tmp_path: Path, monkeypatch) -> None:
     """baseline — must stay GREEN. Default reconcile (no --from-archive) must not change
     existing executed nodes — only recovers missing nodes.

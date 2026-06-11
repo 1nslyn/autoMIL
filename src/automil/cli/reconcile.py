@@ -82,7 +82,35 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     click.echo(f"  skip {nid}: malformed archive result.json ({exc})")
                     continue
                 gnode["composite"] = payload.get("composite", gnode.get("composite", 0.0))
-                gnode["status"] = payload.get("status", gnode.get("status"))
+
+                # CR-03 fix: result.json status enum (completed/budget_killed/crash/
+                # partial/cancelled) must NOT be written directly into gnode["status"].
+                # Graph node status vocabulary is keep/discard/crash/partial/running/
+                # pending/cancelled. Writing "completed" or "budget_killed" corrupts
+                # graph semantics: _reevaluate_descendants skips non-keep/discard nodes,
+                # recompute_best only counts "keep" nodes, and UCB scoring propagates
+                # incorrect potentials from "completed" parents.
+                #
+                # Mapping: crash/partial/cancelled pass through unchanged.
+                # completed/budget_killed are treated like a normal completion: compare
+                # the refreshed composite against the parent's composite to determine
+                # keep vs discard (same logic as terminal_writer.write_terminal_state).
+                raw_result_status = payload.get("status")
+                if raw_result_status is not None:
+                    _GRAPH_PASSTHROUGH = {"crash", "partial", "cancelled"}
+                    _COMPUTE_KEEPDISCARD = {"completed", "budget_killed"}
+                    if raw_result_status in _GRAPH_PASSTHROUGH:
+                        gnode["status"] = raw_result_status
+                    elif raw_result_status in _COMPUTE_KEEPDISCARD:
+                        parent_id = gnode.get("parent_id")
+                        parent = g.get_node(parent_id) if parent_id else None
+                        p_comp = parent.get("composite", 0.0) if parent else 0.0
+                        composite = gnode["composite"]  # already updated above
+                        gnode["status"] = "keep" if composite > p_comp else "discard"
+                    # else: unknown status value — leave gnode["status"] unchanged
+                    # Preserve raw result status for traceability (operator-visible).
+                    gnode.setdefault("metadata", {})["result_status"] = raw_result_status
+
                 if payload.get("metrics"):
                     gnode["metrics"] = payload["metrics"]
                 refreshed += 1
