@@ -130,9 +130,13 @@ def write_terminal_state(
                 composite = result.get("composite", 0.0)
 
                 # D-01: partial nodes stay quarantined — never get keep/discard
+                # crash nodes stay crash (composite=0.0 should not become discard)
                 if raw_status == "partial":
-                    graph_status = "partial"
+                    graph_status = "partial"  # D-01: quarantined
+                elif raw_status == "crash":
+                    graph_status = "crash"    # failure — not a keep/discard candidate
                 else:
+                    # completed, budget_killed, cancelled — compare composite
                     graph_status = "keep" if composite > p_comp else "discard"
 
                 gnode["type"] = "executed"
@@ -140,13 +144,16 @@ def write_terminal_state(
                 gnode["composite"] = composite
                 if result.get("metrics"):
                     gnode["metrics"] = dict(result["metrics"])
-                # Preserve the raw result status separately for traceability
-                if raw_status not in ("partial",):
-                    # Only re-evaluate descendants for non-partial completions
+                # Propagate metadata from result (e.g. budget_killed flag)
+                if result.get("metadata"):
+                    gnode.setdefault("metadata", {}).update(result["metadata"])
+
+                # Only re-evaluate descendants for non-partial, non-crash completions
+                if raw_status not in ("partial", "crash"):
                     g._reevaluate_descendants(node_id)
 
-                # D-01: only update best_node for non-partial results
-                if raw_status != "partial":
+                # D-01: only update best_node for non-partial, non-crash results
+                if raw_status not in ("partial", "crash"):
                     if composite > g.meta.get("best_composite", 0.0):
                         g.meta["best_composite"] = composite
                         g.meta["best_node_id"] = node_id

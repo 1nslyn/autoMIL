@@ -151,3 +151,12 @@ All test bodies with `pytest.fail("RED: ...")` are intentional stubs — they wi
 ## Threat Flags
 
 None — this plan adds only test files; no new network endpoints, auth paths, file access patterns, or schema changes were introduced.
+
+## Self-Check: PASSED
+
+All 11 created/modified files found on disk. Both task commits verified:
+- b090b5a: test(09-01): add Wave-0 RED stubs for REC-01 and REC-03
+- 30ac28a: test(09-01): add Wave-0 RED stubs for REC-02 and REC-04
+- cd932c4: docs(09-01): complete Wave-0 test stubs plan
+
+Full suite result: 977 passed, 28 failed (27 new RED stubs + 1 pre-existing), 53 skipped.
