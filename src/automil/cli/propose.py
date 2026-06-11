@@ -85,7 +85,10 @@ STRUCTURAL_KINDS = frozenset({"architecture", "ensemble"})
               help="Experiment kind for the architecture-vs-HP portfolio "
                    "(architecture|regularization|hp|data|ensemble). Always set "
                    "this — `automil portfolio` gates the loop on ≥50% structural.")
-def propose(parent: str, desc: str, techniques: tuple, kind: str | None):
+@click.option("--mil-model", default=None,
+              help="MIL model identifier — stored in node metadata so `automil submit` "
+                   "can inherit it as a fallback (D-12, REC-04).")
+def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_model: str | None):
     """Add a new experiment proposal to the graph."""
     adir = _find_automil_dir()
     from automil.graph import ExperimentGraph
@@ -115,6 +118,10 @@ def propose(parent: str, desc: str, techniques: tuple, kind: str | None):
         techniques=list(techniques),
         kind=kind or "unspecified",
     )
+    if mil_model:
+        from automil.cells.state import normalize_mil_model
+        gnode = graph.get_node(node_id)
+        gnode.setdefault("metadata", {})["mil_model"] = normalize_mil_model(mil_model)
     graph.recalculate_scores()
     graph.save()
     suffix = "" if kind else "  (no --kind; counts as non-structural in portfolio)"

@@ -35,9 +35,13 @@ from automil.cli._helpers import (
               help="Override cap.budget_seconds for this cell (D-134; honored only on cell creation; ignored on subsequent submits joining an existing cell with logged INFO).")
 @click.option("--safety-buffer-seconds", default=None, type=int,
               help="Override cap.safety_buffer_seconds for this cell (D-134; same scoping as --budget-seconds).")
+@click.option("--mil-model", default=None,
+              help="MIL model identifier for budget cell keying (D-12, REC-04). "
+                   "Resolved: --mil-model flag → run.mil_model in config → "
+                   "propose-time node metadata → ClickException if none found.")
 def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
            timeout: int, max_time_seconds: int | None, parent: str | None, techniques: tuple,
-           budget_seconds: int | None, safety_buffer_seconds: int | None):
+           budget_seconds: int | None, safety_buffer_seconds: int | None, mil_model: str | None):
     """Snapshot changed files and queue an experiment.
 
     Variant modules under ``automil/variants/<parent>/<name>.py`` are
@@ -358,12 +362,26 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             f"config.yaml so per-lineage budgets key correctly.",
             err=True,
         )
-    _parent_for_cell = parent if parent else "root"
+    # D-12 (REC-04): resolve mil_model — flag → config → propose node metadata → error.
+    _mil_model_raw = (
+        mil_model                                                          # --mil-model flag
+        or (_automil_cfg.get("run") or {}).get("mil_model")               # config fallback
+        or (graph_json.get("nodes", {}).get(node) or {})
+           .get("metadata", {}).get("mil_model")                          # propose-time metadata
+    )
+    if not _mil_model_raw:
+        raise click.ClickException(
+            "--mil-model is required (or set run.mil_model in config.yaml, or pass it "
+            "at propose time with automil propose --mil-model). This pins the budget cell "
+            "to a specific MIL model so re-parenting does not open a fresh budget. (D-12, REC-04)"
+        )
+    from automil.cells.state import normalize_mil_model
+    _mil_model_norm = normalize_mil_model(_mil_model_raw)
 
     _cell = get_or_create_cell(
         dataset=_dataset_name,
         encoder=_encoder_name,
-        mil_model=_parent_for_cell,
+        mil_model=_mil_model_norm,
         budget_seconds=_cap.budget_seconds,
         safety_buffer_seconds=_cap.safety_buffer_seconds,
         idle_grace_seconds=_cap.idle_grace_seconds,
@@ -374,7 +392,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             f"Cell {_cell.cell_id[:8]} is {_cell.status.value}: budget exhausted "
             f"({consumed_seconds(_cell):.0f}/{_cell.budget_seconds}s consumed). "
             f"Wait for cell to finalize, or submit with a different "
-            f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_parent_for_cell}) tuple."
+            f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
         )
 
     # Write spec to queue

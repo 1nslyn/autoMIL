@@ -45,7 +45,8 @@ def _submit_and_read_cell(tmp_path: Path, cli_runner: CliRunner, node: str = "no
     (tmp_path / "model.py").write_text("print('changed')\n")
     result = cli_runner.invoke(
         main,
-        ["submit", "--node", node, "--desc", "cell identity", "--files", "model.py"],
+        ["submit", "--node", node, "--desc", "cell identity", "--files", "model.py",
+         "--mil-model", "test_model"],  # D-12: --mil-model now required
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
@@ -102,7 +103,8 @@ class TestSubmitCellIdentity:
         (tmp_path / "model.py").write_text("print('changed')\n")
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_0001", "--desc", "no identity", "--files", "model.py"],
+            ["submit", "--node", "node_0001", "--desc", "no identity", "--files", "model.py",
+             "--mil-model", "test_model"],  # D-12: required; this test is about dataset/encoder identity
             catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output
@@ -152,8 +154,9 @@ class TestMilModelCellIdentity:
         cell_files = list((tmp_path / "automil" / "cells").glob("*.json"))
         assert cell_files, "No cell file created after submit --mil-model"
         cell = json.loads(cell_files[0].read_text())
-        assert cell.get("mil_model") == "clam_sb", (
-            f"D-12 not implemented: expected cell['mil_model']='clam_sb', "
+        # normalize_mil_model("clam_sb") → "clam sb" (underscores treated as word separators, D-14)
+        assert cell.get("mil_model") == "clam sb", (
+            f"D-12/D-14: expected cell['mil_model']='clam sb' (normalized form), "
             f"got {cell.get('mil_model')!r}."
         )
 

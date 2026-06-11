@@ -73,9 +73,11 @@ def _submit_node(
     node: str,
     parent: str | None = None,
     extra_args: list[str] | None = None,
+    mil_model: str = "root",
 ) -> object:
     """Helper to invoke automil submit with a model.py file."""
-    args = ["submit", "--node", node, "--desc", f"test {node}", "--files", "model.py"]
+    args = ["submit", "--node", node, "--desc", f"test {node}", "--files", "model.py",
+            "--mil-model", mil_model]   # D-12: --mil-model now required
     if parent:
         args += ["--parent", parent]
     if extra_args:
