@@ -601,23 +601,25 @@ This is not a rename/refactor phase. The only runtime state relevant to Phase 10
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three resolved during planning (Phase 10 plans 10-01..10-04). Q2 (the A1 config→worktree gap) is the one that mattered most: resolved via `applied_variant.json` written to `archive/<node_id>/` (propagated into the worktree by the existing `apply_overlay`) + `AUTOMIL_VARIANT_MODEL` env fallback, with `test_no_config_yaml_still_dispatches` + `test_iris_applied_variant_reaches_worktree_at_runtime` proving runtime reachability.
 
 1. **`CLAM_ARGS` convention on `ModelVariant`**
    - What we know: `ModelVariant.forward()` is abstract and unused by CLAM (CLAM uses its own internal model classes). The ABC is the type check for `@register` but has no field-override mechanism.
    - What's unclear: Should `CLAM_ARGS` be a required class attribute (enforced in `__init_subclass__`), an optional one (checked with `getattr`), or a `@classmethod` override? A required attribute breaks existing zero-variant registrations.
-   - Recommendation: Optional class attribute `CLAM_ARGS: dict = {}` via `getattr(cls, "CLAM_ARGS", {})`. Existing `ModelVariant` subclasses (currently none in the registry) are unaffected. Document in the variant-authoring guide.
+   - **RESOLVED:** Optional class attribute `CLAM_ARGS: dict = {}` via `getattr(cls, "CLAM_ARGS", {})`. Existing `ModelVariant` subclasses (currently none in the registry) are unaffected. Document in the variant-authoring guide.
 
 2. **`automil/config.yaml` availability at run time in worktrees**
    - What we know: `apply` writes `automil/config.yaml` in the project root. The orchestrator's `apply_overlay` copies overlay files from `automil/orchestrator/archive/<node_id>/` into the worktree — NOT from `automil/config.yaml`. The training script runs in the worktree root.
    - What's unclear: Does `automil/config.yaml` end up in the worktree? The overlay model copies only files in `automil/orchestrator/archive/<node_id>/`. The base commit checkout (`git worktree add --detach`) provides whatever `automil/config.yaml` was committed to git — but runtime config.yaml is gitignored.
    - Risk: If `config.yaml` is gitignored and not in the overlay, the variant dispatch in `train.py` silently falls back to baseline (variant_name is None), making APL-01/APL-02 inert in real runs.
-   - Recommendation: **The planner must verify whether `automil/config.yaml` is in `files.editable` (making it auto-included in the overlay) or needs to be explicitly submitted.** Check `examples/sklearn-iris/automil/config.yaml:39` — `files.editable` lists only `automil/variants/`. Config.yaml is NOT auto-included. The fix: either add `automil/config.yaml` to `files.editable`, or snapshot the variant selection into the spec (env var set by orchestrator, read by train.py). **This is the highest-risk gap for the planner to resolve before implementation.**
+   - **RESOLVED:** **The planner must verify whether `automil/config.yaml` is in `files.editable` (making it auto-included in the overlay) or needs to be explicitly submitted.** Check `examples/sklearn-iris/automil/config.yaml:39` — `files.editable` lists only `automil/variants/`. Config.yaml is NOT auto-included. The fix: either add `automil/config.yaml` to `files.editable`, or snapshot the variant selection into the spec (env var set by orchestrator, read by train.py). **This is the highest-risk gap for the planner to resolve before implementation.**
 
 3. **Policy variants for APL-03**
    - What we know: `POLICY_VARIANTS` is registered like `LOSS_VARIANTS`. The current APL-03 scope focuses on `LossVariant` (the concrete ISSUE-007 case).
    - What's unclear: Are policy variants (e.g., SAM optimizer) expressible through the `opt=` field in `_make_clam_args`? If SAM is not a string selector that `get_optim` recognizes, it also requires loop opening.
-   - Recommendation: APL-03 classification should also check `POLICY_VARIANTS` for the same reason. If a `PolicyVariant` is not a string selector expressible through `args.opt`, classify as loop-opening. Extend the classifier to handle policy variants symmetrically with loss variants.
+   - **RESOLVED:** APL-03 classification should also check `POLICY_VARIANTS` for the same reason. If a `PolicyVariant` is not a string selector expressible through `args.opt`, classify as loop-opening. Extend the classifier to handle policy variants symmetrically with loss variants.
 
 ---
 
