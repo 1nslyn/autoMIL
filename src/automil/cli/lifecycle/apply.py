@@ -1,6 +1,7 @@
 """apply command: copy a node's variant selection into the active config (CLI-01 / D-41)."""
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -17,6 +18,54 @@ from automil.cli.lifecycle._shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _classify_variant_route(selection: dict, variants_root: Path) -> None:
+    """Raise ClickException if any selected variant requires loop opening.
+
+    Classification rule (APL-03, D-05, RESEARCH.md §APL-03):
+    - A loss variant is loop-opening iff it is registered in LOSS_VARIANTS
+      as a custom LossVariant subclass (not a plain string bag_loss selector).
+    - A policy variant is loop-opening iff it is registered in POLICY_VARIANTS
+      as a custom PolicyVariant subclass.
+    - Model variants are always seam-expressible — never raise.
+    - String bag_loss selectors (e.g. "svm", "ce") are not in LOSS_VARIANTS — no raise.
+
+    Security (T-10-02): variant names from selection are only used for dict
+    lookup, not Path construction — no path traversal risk here.
+
+    Args:
+        selection: dict with "model", "loss", "policy" sub-dicts from _derive_variant_selection.
+        variants_root: the automil/variants directory; passed to scan_variants if needed.
+    """
+    # Lazy imports to avoid circular dependency at module load time.
+    from automil.registry.scanner import scan_variants
+    from automil.registry._state import LOSS_VARIANTS, POLICY_VARIANTS
+
+    loss_name = (selection.get("loss") or {}).get("variant")
+    if loss_name is not None:
+        # Scan to populate registry from on-disk variant modules (idempotent).
+        scan_variants(variants_root)
+        if loss_name in LOSS_VARIANTS:
+            raise click.ClickException(
+                f"Loss variant '{loss_name}' is a custom LossVariant callable that "
+                f"requires injecting into a closed MIL training loop "
+                f"(ISSUE-007 / RTA). It cannot be applied through the open "
+                f"_make_clam_args seam. This variant has NOT been applied. "
+                f"Deferred to the RTA milestone."
+            )
+
+    policy_name = (selection.get("policy") or {}).get("variant")
+    if policy_name is not None:
+        scan_variants(variants_root)
+        if policy_name in POLICY_VARIANTS:
+            raise click.ClickException(
+                f"Policy variant '{policy_name}' is a custom PolicyVariant callable that "
+                f"requires injecting into a closed MIL training loop "
+                f"(ISSUE-007 / RTA). It cannot be applied through the open "
+                f"_make_clam_args seam. This variant has NOT been applied. "
+                f"Deferred to the RTA milestone."
+            )
 
 
 def _derive_variant_selection(node: dict) -> dict[str, dict[str, Optional[str]]]:
@@ -111,6 +160,12 @@ def apply(node_id: str):
             f"Run `automil port-variant {node_id}` first to register the "
             f"variant, then `automil apply {node_id}` again."
         )
+
+    # APL-03 / D-05: classify variant route BEFORE any config mutation.
+    # Raises ClickException for loop-opening LossVariant / PolicyVariant callables.
+    # Must fire before raw_yaml load, backup, and write (Pitfall 3 / RESEARCH.md).
+    variants_root = adir / "variants"
+    _classify_variant_route(selection, variants_root)
 
     raw_yaml = yaml.safe_load(config_path.read_text()) or {}
 
