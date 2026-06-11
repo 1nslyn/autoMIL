@@ -134,20 +134,40 @@ def test_iris_applied_variant_reaches_worktree_at_runtime(tmp_path):
     """The variant selection written by 'automil apply' reaches iris train.py at runtime.
 
     This is the key A1 closure test.  It simulates a worktree: no config.yaml
-    initially — only applied_variant.json (the new file Plan 10-02 will create
-    in automil/archive/<node_id>/ and propagate via apply_overlay into the
-    worktree).
+    initially — only applied_variant.json (the file written by Plan 10-02 into
+    automil/archive/<node_id>/ and propagated via apply_overlay into the worktree).
 
     The test proves the variant selection reaches the consumer's train.py via
-    applied_variant.json (not just via config.yaml), making APL-01 correct even
+    applied_variant.json alone (not via config.yaml), making APL-01 correct even
     when config.yaml is gitignored and absent from the worktree.
-
-    RED until:
-      - Plan 10-02: 'automil apply' writes applied_variant.json to the overlay
-      - Plan 10-04: iris train.py reads applied_variant.json as a fallback
     """
-    pytest.fail(
-        "APL-01 A1: applied_variant.json mechanism not yet implemented. "
-        "Implement in Plan 10-02 (apply writes applied_variant.json into overlay) "
-        "and Plan 10-04 (iris train.py reads applied_variant.json as fallback)."
+    import shutil
+
+    automil_dir = tmp_path / "automil"
+    automil_dir.mkdir()
+
+    # Copy the classifier_v0 variant into the tmp automil/ directory.
+    src_variant = IRIS_AUTOMIL / "variants" / "classifier_v0"
+    if not src_variant.exists():
+        pytest.skip(f"classifier_v0 variant not found at {src_variant}")
+
+    dst_variants = automil_dir / "variants" / "classifier_v0"
+    shutil.copytree(str(src_variant), str(dst_variants))
+
+    # Write ONLY applied_variant.json — no config.yaml (simulates gitignored-config worktree).
+    applied_variant = {
+        "model": {"variant": "classifier_v0", "parent": None},
+        "loss": {"variant": None},
+        "policy": {"variant": None},
+    }
+    (automil_dir / "applied_variant.json").write_text(json.dumps(applied_variant, indent=2))
+
+    result = _run_iris(tmp_path)
+
+    assert result["status"] == "completed"
+    assert result.get("variant_dispatched") == "classifier_v0", (
+        "APL-01 A1 closure: iris train.py did not dispatch classifier_v0 from "
+        "applied_variant.json. The variant must be read from applied_variant.json "
+        "even when config.yaml is absent."
     )
+    assert result["composite"] > 0
