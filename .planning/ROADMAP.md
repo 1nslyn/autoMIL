@@ -117,7 +117,16 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Setting `orchestrator.scheduling_policy: round_robin` (or `least_loaded`) in `config.yaml` causes the daemon to distribute new jobs across GPUs in round-robin order rather than packing them onto the least-used GPU; observable by job placement logs showing different GPU IDs for successive submits.
   2. `automil check` warns when an editable-installed consumer package path is snapshotted in a worktree without a daemon-side import guard in place; a real experiment run with the guard active imports from the worktree overlay rather than the main checkout.
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+- [ ] 12-01-PLAN.md — Wave-0 test stubs (SCH-01 + SCH-02 RED stubs, Nyquist compliance)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 12-02-PLAN.md — SCH-01: scheduling_policy knob + _find_best_gpu dispatch + _rr_cursor (SCH-01)
+- [ ] 12-03-PLAN.md — SCH-02: automil check editable warning + opt-in daemon PYTHONPATH guard (SCH-02)
+
 **Parallel note**: Independent of Phases 11, 13, 14. Can run in parallel with any of them after Phase 9 clears.
 
 ---
