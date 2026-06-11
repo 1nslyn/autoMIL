@@ -1502,6 +1502,22 @@ class ExperimentOrchestrator:
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except OSError as exc:
+                # CR-02 fix: os.getpgid() raises OSError(EPERM) when the caller
+                # lacks permission to query the PID's process group (different
+                # session, container boundary, or kernel hardening). Without this
+                # catch the exception propagated before the two lines below,
+                # leaving the experiment stuck in self.running forever and causing
+                # an infinite blocking loop on every subsequent tick. Mirror the
+                # pattern already used by _escalate_to_sigkill and _kill_experiment.
+                logger.warning(
+                    "_handle_timeout: killpg(%d, SIGKILL) failed: %s — "
+                    "process group may still be alive; continuing cleanup.",
+                    pid, exc,
+                )
+        # These two lines MUST run regardless of whether killpg succeeded or
+        # raised OSError: marking _timed_out and calling _handle_completion
+        # removes the experiment from self.running, preventing the re-fire loop.
         self._timed_out[exp_id] = True
         self._handle_completion(exp_id, returncode=-9)
 
