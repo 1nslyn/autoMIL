@@ -197,3 +197,35 @@ def apply(node_id: str):
         f"policy.variant={selection['policy'].get('variant')}"
     )
     click.echo(f"Backup: {backup_path}")
+
+    # A1 fix (D-01): write applied_variant.json into the overlay archive so that
+    # apply_overlay propagates it into the worktree. config.yaml is gitignored
+    # and NOT included in the overlay; applied_variant.json fills that gap.
+    archive_dir = adir / "orchestrator" / "archive" / node_id
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(
+        archive_dir / "applied_variant.json",
+        json.dumps(selection, indent=2),
+    )
+    click.echo(
+        f"Wrote applied_variant.json to archive/{node_id}/ "
+        f"(will be overlaid into worktree by orchestrator)."
+    )
+
+    # Inject AUTOMIL_VARIANT_MODEL into the queue spec env for runtime fallback.
+    queue_file = adir / "orchestrator" / "queue" / f"{node_id}.json"
+    if queue_file.exists():
+        try:
+            spec_data = json.loads(queue_file.read_text())
+            if not isinstance(spec_data.get("env"), dict):
+                spec_data["env"] = {}
+            spec_data["env"]["AUTOMIL_VARIANT_MODEL"] = (
+                selection["model"].get("variant") or ""
+            )
+            _atomic_write_text(queue_file, json.dumps(spec_data, indent=2))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                "Could not inject AUTOMIL_VARIANT_MODEL into queue spec %s: %s",
+                queue_file,
+                exc,
+            )

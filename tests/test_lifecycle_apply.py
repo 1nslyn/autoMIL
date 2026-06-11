@@ -389,3 +389,101 @@ def test_apply_node_without_variant_spec(tmp_path, cli_runner, monkeypatch):
     assert result.exit_code != 0
     # Should suggest running port-variant.
     assert "port-variant" in result.output or "variant_spec" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Test 15: A1 fix — applied_variant.json written to archive/<node_id>/
+# MANDATORY per plan 10-02 done criteria.
+# ---------------------------------------------------------------------------
+
+def test_apply_writes_applied_variant_json(tmp_path, cli_runner, monkeypatch):
+    """A1 fix (D-01): apply writes applied_variant.json to archive/<node_id>/.
+
+    The file must exist AND its content must match the selection dict with
+    correct key names: {"model": {"variant": ..., "parent": ...}, "loss": {...}, "policy": {...}}.
+
+    This proves the write mechanism; the consumer-side read (iris train.py dispatch)
+    is tested separately in test_apl01_iris_dispatch.py (plan 10-04).
+    """
+    import json as _json
+    adir = _setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    _write_graph(adir, {
+        "node_0001": {
+            "id": "node_0001",
+            "type": "executed",
+            "status": "keep",
+            "composite": 0.85,
+            "variant_spec": {"kind": "model", "name": "classifier_v0", "parent": "baseline"},
+        }
+    })
+    from automil.cli import main
+    result = cli_runner.invoke(main, ["apply", "node_0001"])
+    assert result.exit_code == 0, result.output
+
+    # The applied_variant.json must exist in the archive dir.
+    archive_path = adir / "orchestrator" / "archive" / "node_0001" / "applied_variant.json"
+    assert archive_path.exists(), (
+        f"applied_variant.json not found at {archive_path}. "
+        "A1 fix: apply must write the selection snapshot for orchestrator overlay."
+    )
+
+    payload = _json.loads(archive_path.read_text())
+    assert payload["model"]["variant"] == "classifier_v0", (
+        f"model.variant mismatch: {payload}"
+    )
+    assert payload["model"]["parent"] == "baseline", (
+        f"model.parent mismatch: {payload}"
+    )
+    assert "loss" in payload, f"Missing 'loss' key in applied_variant.json: {payload}"
+    assert "policy" in payload, f"Missing 'policy' key in applied_variant.json: {payload}"
+
+
+# ---------------------------------------------------------------------------
+# Test 16: A1 fix — AUTOMIL_VARIANT_MODEL injected into queue spec env
+# MANDATORY per plan 10-02 done criteria.
+# ---------------------------------------------------------------------------
+
+def test_apply_injects_env_var_into_queue_spec(tmp_path, cli_runner, monkeypatch):
+    """A1 fix: apply injects AUTOMIL_VARIANT_MODEL into an existing queue spec's env.
+
+    Set up a node with a model variant AND a pre-existing queue spec at
+    automil/orchestrator/queue/{node_id}.json. After apply(), read back the
+    spec and assert spec["env"]["AUTOMIL_VARIANT_MODEL"] equals the variant name.
+    """
+    import json as _json
+    adir = _setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    _write_graph(adir, {
+        "node_0001": {
+            "id": "node_0001",
+            "type": "executed",
+            "status": "keep",
+            "composite": 0.85,
+            "variant_spec": {"kind": "model", "name": "classifier_v0", "parent": "baseline"},
+        }
+    })
+
+    # Create a pre-existing queue spec (simulates a submitted experiment).
+    queue_dir = adir / "orchestrator" / "queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    pre_spec = {
+        "id": "node_0001",
+        "base_commit": "abc123",
+        "overlay_dir": "archive/node_0001",
+        "priority": 0,
+    }
+    (queue_dir / "node_0001.json").write_text(_json.dumps(pre_spec, indent=2))
+
+    from automil.cli import main
+    result = cli_runner.invoke(main, ["apply", "node_0001"])
+    assert result.exit_code == 0, result.output
+
+    # Read back the queue spec and verify env injection.
+    updated_spec = _json.loads((queue_dir / "node_0001.json").read_text())
+    assert "env" in updated_spec, (
+        f"Queue spec missing 'env' key after apply: {updated_spec}"
+    )
+    assert updated_spec["env"]["AUTOMIL_VARIANT_MODEL"] == "classifier_v0", (
+        f"AUTOMIL_VARIANT_MODEL not injected correctly: {updated_spec['env']}"
+    )
