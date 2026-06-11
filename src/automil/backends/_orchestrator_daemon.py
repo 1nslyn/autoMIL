@@ -1364,21 +1364,57 @@ class ExperimentOrchestrator:
                 }
 
         if result is None:
-            log_text = (archive / "run.log").read_text() if (archive / "run.log").exists() else ""
-            if "CUDA out of memory" in log_text or "OutOfMemoryError" in log_text:
-                status = "oom"
-            elif self._timed_out.get(node_id):
-                status = "timeout"
-            elif returncode != 0:
-                status = "crash"
+            # D-03 (REC-01): try fold aggregation from archive BEFORE synthesising
+            # from log heuristics. If the process was SIGKILLed before the flush
+            # handler could run, fold files may still exist in the archive even
+            # without a result.json.
+            fold_files = list(archive.glob("fold_*_result.json"))
+            if fold_files:
+                from automil.cells.reconcile import aggregate_folds
+                expected = self._read_fold_count_for_node(node_id)
+                result = aggregate_folds(archive, expected)
+                reason = "timeout" if self._timed_out.get(node_id) else "sigkill"
+                result["termination_reason"] = reason   # D-05 (REC-03)
+                # Write atomically to archive so _collect_result finds it on retry.
+                import tempfile as _tempfile
+                _tmp_fd, _tmp_path = _tempfile.mkstemp(
+                    dir=str(archive), suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(_tmp_fd, "w") as _fh:
+                        _fh.write(json.dumps(result, indent=2) + "\n")
+                    os.replace(_tmp_path, str(archive / "result.json"))
+                except Exception:
+                    try:
+                        os.unlink(_tmp_path)
+                    except OSError:
+                        pass
             else:
-                status = "completed"
+                # Log-heuristic synthesis — no fold files exist.
+                log_text = (archive / "run.log").read_text() if (archive / "run.log").exists() else ""
+                # D-05/D-06 (REC-03): canonicalize status — "oom" and "timeout" are
+                # not in the tight enum; move them to termination_reason with
+                # status="crash". The tight enum is:
+                # [completed, crash, budget_killed, cancelled, partial].
+                termination_reason: str | None = None
+                if "CUDA out of memory" in log_text or "OutOfMemoryError" in log_text:
+                    status = "crash"
+                    termination_reason = "oom"
+                elif self._timed_out.get(node_id):
+                    status = "crash"
+                    termination_reason = "timeout"
+                elif returncode != 0:
+                    status = "crash"
+                else:
+                    status = "completed"
 
-            error_tail = log_text[-2000:] if status != "completed" else ""
-            result = {"status": status}
-            if error_tail:
-                result["error"] = error_tail
-            (archive / "result.json").write_text(json.dumps(result, indent=2))
+                error_tail = log_text[-2000:] if status != "completed" else ""
+                result = {"status": status}
+                if termination_reason:
+                    result["termination_reason"] = termination_reason
+                if error_tail:
+                    result["error"] = error_tail
+                (archive / "result.json").write_text(json.dumps(result, indent=2))
 
         if "status" not in result:
             result["status"] = "completed" if returncode == 0 else "crash"
@@ -1431,22 +1467,33 @@ class ExperimentOrchestrator:
                 "D-170 cross-backend log unification failed for %s: %s", node_id, exc
             )
 
-    def _handle_timeout(self, exp_id: str):
-        """Terminate a timed-out experiment and its full process group.
+    def _handle_timeout(self, exp_id: str) -> None:
+        """D-04 (REC-01): SIGTERM main PID first (flush handler runs), then SIGKILL
+        process group after a configurable grace window. LOCAL BACKEND ONLY —
+        SLURM and Ray backends handle their own timeout signals (SLURM via
+        --signal=B:TERM@30; Ray via ray.cancel) and never call this method.
 
-        Children launched via start_new_session=True live in their own
-        process group, so killing the parent alone leaks DataLoader
-        workers and CUDA contexts (they reparent to PID 1 and keep VRAM).
-        Signal the whole group instead.
+        Rationale: sending SIGTERM to the whole process group immediately hits
+        DataLoader workers before the main process's handler runs. The main-PID-
+        first approach lets the Python signal handler (register_sigterm_flush)
+        complete and write fold-aggregated result.json before SIGKILL reclaims VRAM.
+
+        T-09-05: os.kill raises ProcessLookupError if the process has already
+        exited; ProcessLookupError is caught on both kill calls. The Popen
+        reference keeps the PID alive until poll() confirms exit.
         """
         exp = self.running[exp_id]
         pid = exp.process.pid
-        logger.warning(f"Timeout for {exp_id}, killing PID {pid} and process group")
+        grace = int((self.config.get("orchestrator") or {}).get("timeout_grace_seconds", 10))
+        logger.warning(
+            "Timeout for %s: SIGTERMing main PID %d (grace=%ds before SIGKILL group)",
+            exp_id, pid, grace,
+        )
         try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            os.kill(pid, signal.SIGTERM)    # main PID only — lets flush handler run
         except ProcessLookupError:
             pass
-        time.sleep(5)
+        time.sleep(grace)
         if exp.process.poll() is None:
             try:
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
