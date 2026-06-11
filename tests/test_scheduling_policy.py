@@ -39,7 +39,7 @@ def _fake_daemon(
     scheduling_policy: str = "best_fit",
     rr_cursor: int = 0,
 ) -> SimpleNamespace:
-    """Build a minimal object with the attrs _find_best_gpu reads."""
+    """Build a minimal object with the attrs _find_best_gpu and _reload_orchestrator_config read."""
     fd = SimpleNamespace(
         gpu_allocations=gpu_allocations if gpu_allocations is not None else {},
         running=running if running is not None else {},
@@ -47,6 +47,10 @@ def _fake_daemon(
         safety_margin_gb=safety_margin_gb,
         scheduling_policy=scheduling_policy,
         _rr_cursor=rr_cursor,
+        # Attrs needed by _reload_orchestrator_config (hot-reload tests)
+        default_vram=1.0,
+        default_timeout=150,
+        poll_interval=5,
     )
     return fd
 
@@ -55,7 +59,6 @@ def _fake_daemon(
 # SCH-01 Tests — 7 stubs
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="SCH-01 not implemented")
 def test_best_fit_picks_tightest():
     """best_fit picks the GPU with the LEAST schedulable free VRAM (tightest fit).
 
@@ -101,7 +104,6 @@ def test_best_fit_picks_tightest():
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-01 not implemented")
 def test_least_loaded_picks_emptiest():
     """least_loaded picks the GPU with the MOST schedulable free VRAM (emptiest).
 
@@ -120,7 +122,6 @@ def test_least_loaded_picks_emptiest():
     assert result == 1, f"least_loaded should return GPU 1 (emptiest), got {result}"
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-01 not implemented")
 def test_round_robin_cycles_eligible():
     """round_robin cycles through eligible GPUs in stable index order.
 
@@ -142,7 +143,6 @@ def test_round_robin_cycles_eligible():
     assert result_2 == 1, f"Second round_robin call should return GPU 1, got {result_2}"
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-01 not implemented")
 def test_round_robin_cursor_wraps():
     """round_robin cursor wraps via modulo when it exceeds the candidate count.
 
@@ -170,7 +170,6 @@ def test_round_robin_cursor_wraps():
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-01 not implemented")
 def test_policy_hot_reload():
     """_reload_orchestrator_config reads scheduling_policy and updates self.scheduling_policy.
 
@@ -203,7 +202,6 @@ def test_policy_hot_reload():
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-01 not implemented")
 def test_unknown_policy_fallback():
     """Unknown scheduling_policy string falls back to best_fit AND emits a warning.
 
@@ -239,7 +237,6 @@ def test_unknown_policy_fallback():
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-01 not implemented")
 def test_cursor_not_reset_on_policy_change():
     """_rr_cursor is NOT reset when scheduling_policy changes during hot-reload.
 

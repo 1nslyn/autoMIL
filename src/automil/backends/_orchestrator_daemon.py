@@ -41,6 +41,7 @@ DEFAULT_TIMEOUT_MIN = 150
 # are heavier should override via config.yaml → orchestrator.max_concurrent_per_gpu.
 MAX_CONCURRENT_PER_GPU = 8
 DEFAULT_VRAM_ESTIMATE_GB = 1.0
+SCHEDULING_POLICY = "best_fit"
 
 # ---------------------------------------------------------------------------
 # Subprocess env whitelist (CLN-02 / D-04)
@@ -436,6 +437,8 @@ class ExperimentOrchestrator:
         self.default_timeout = orch_cfg.get("default_timeout_min", DEFAULT_TIMEOUT_MIN)
         self.max_per_gpu = orch_cfg.get("max_concurrent_per_gpu", MAX_CONCURRENT_PER_GPU)
         self.default_vram = orch_cfg.get("default_vram_estimate_gb", DEFAULT_VRAM_ESTIMATE_GB)
+        self.scheduling_policy: str = orch_cfg.get("scheduling_policy", SCHEDULING_POLICY)
+        self._rr_cursor: int = 0
 
         # CLN-02 / D-04: env.passthrough — literal var names the operator
         # explicitly opts in to forward into experiment subprocesses. The
@@ -741,9 +744,9 @@ class ExperimentOrchestrator:
         return pending
 
     def _find_best_gpu(self, needed_gb: float) -> int | None:
-        """Best-fit bin packing: find GPU with least free VRAM that still fits."""
+        """Find a GPU for the pending job according to self.scheduling_policy (best_fit | round_robin | least_loaded)."""
         gpus = query_gpus()
-        candidates = []
+        candidates: list[tuple[int, float]] = []
 
         for g in gpus:
             running_on = self.gpu_allocations.get(g.index, [])
@@ -761,9 +764,25 @@ class ExperimentOrchestrator:
         if not candidates:
             return None
 
-        # Best-fit: pick GPU with LEAST schedulable free (tightest fit)
-        candidates.sort(key=lambda x: x[1])
-        return candidates[0][0]
+        policy = self.scheduling_policy
+        if policy == "least_loaded":
+            # Most schedulable free VRAM = least loaded GPU
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            return candidates[0][0]
+        elif policy == "round_robin":
+            # Cycle through eligible GPUs in stable index order
+            candidates.sort(key=lambda x: x[0])
+            chosen = candidates[self._rr_cursor % len(candidates)][0]
+            self._rr_cursor += 1
+            return chosen
+        else:
+            if policy != "best_fit":
+                logger.warning(
+                    "Unknown scheduling_policy %r; falling back to best_fit", policy
+                )
+            # best_fit (default): tightest fit — preserves current behavior
+            candidates.sort(key=lambda x: x[1])
+            return candidates[0][0]
 
     def _pre_launch_check(self, gpu_id: int, needed_gb: float) -> bool:
         """Final VRAM check right before launch."""
@@ -1736,6 +1755,15 @@ class ExperimentOrchestrator:
                 f"Config reload: safety_margin_gb {self.safety_margin_gb} -> {new_safety}"
             )
             self.safety_margin_gb = new_safety
+        new_policy = orch_cfg.get("scheduling_policy", self.scheduling_policy)
+        if new_policy != self.scheduling_policy:
+            logger.info(
+                "Config reload: scheduling_policy %r -> %r",
+                self.scheduling_policy,
+                new_policy,
+            )
+            self.scheduling_policy = new_policy
+        # NOTE: self._rr_cursor is NOT reset on policy change (see 12-RESEARCH.md Pitfall 1).
 
     def tick(self):
         """Single scheduling cycle."""
