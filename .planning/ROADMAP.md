@@ -24,7 +24,7 @@
 
 ### v1.1 Bug Fixing (Phases 9-14)
 
-- [ ] **Phase 9: State & Recovery Integrity** — Correct terminal-state recording, partial-fold aggregation, status vocabulary, and budget-cell identity
+- [x] **Phase 9: State & Recovery Integrity** — Correct terminal-state recording, partial-fold aggregation, status vocabulary, and budget-cell identity (completed 2026-06-11)
 - [ ] **Phase 10: Variant Application Integrity** — Registered variants actually apply to the live model through existing open seams; loud failure for loop-opening variants
 - [ ] **Phase 11: Config & Run Fidelity** — Config/snapshot values drive runs; argparse defaults stop masking them; per-node run-command overrides *(parallel-candidate: independent of Phase 10)*
 - [ ] **Phase 12: Scheduling & Overlay Isolation** — GPU scheduling-policy knob; generic editable-install worktree overlay guard *(parallel-candidate: independent of Phases 10–11)*
@@ -56,7 +56,7 @@ Plans:
 - [x] 09-05-PLAN.md — CLI mil_model wiring + automil cells migrate command (REC-04)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 09-06-PLAN.md — terminal_writer module + daemon refactor + reconcile --from-archive + partial quarantine (REC-01, REC-02)
+- [x] 09-06-PLAN.md — terminal_writer module + daemon refactor + reconcile --from-archive + partial quarantine (REC-01, REC-02)
 
 **Cross-cutting constraints:**
 - No regressions in existing 48-test suite

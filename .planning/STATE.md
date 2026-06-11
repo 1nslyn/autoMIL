@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
-status: executing
-last_updated: "2026-06-11T09:33:48.796Z"
+status: verifying
+last_updated: "2026-06-11T09:54:24.450Z"
 last_activity: 2026-06-11
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 6
-  completed_plans: 5
-  percent: 83
+  completed_plans: 6
+  percent: 100
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -34,9 +34,9 @@ progress:
 
 ## Current Position
 
-Phase: 09 (State & Recovery Integrity) — EXECUTING
-Plan: 6 of 6
-Status: Ready to execute
+Phase: 09 (State & Recovery Integrity) — COMPLETE
+Plan: 6 of 6 (ALL PLANS COMPLETE)
+Status: Phase 9 complete — all 6 plans shipped; ready for /gsd-verify-work
 Last activity: 2026-06-11
 
 ## Performance Metrics
@@ -52,6 +52,7 @@ Last activity: 2026-06-11
 | Phase 09 P03 | 8 | 2 tasks | 5 files |
 | Phase 09 P04 | 8 | 2 tasks | 2 files |
 | Phase 09 P05 | 15 | 2 tasks | 13 files |
+| Phase 09 P06 | 35 | 2 tasks | 9 files |
 
 ## Parallel Execution Map
 
@@ -88,6 +89,10 @@ Recommended execution order: Phase 9 → then Phase 10 + Phases 11/12/13/14 in p
 - D-05/D-06 synthesis path: oom/timeout -> status=crash+termination_reason (not non-enum values) — Done (09-04)
 - D-12: submit --mil-model resolution chain: flag → run.mil_model config → propose node metadata → ClickException — Done (09-05)
 - D-15: automil cells migrate: mode-aware budget merge (agent_active sums consumed; wall_clock keeps min started_at) — Done (09-05)
+- D-09: write_terminal_state writes graph→completed/<node>.json→archive result.json→results.tsv in fixed order — Done (09-06)
+- D-10: terminal_writer sole archive result.json writer; reconcile_budget_kill write_text removed — Done (09-06)
+- D-11: automil reconcile --from-archive NODE_OR_ALL refreshes existing nodes; skips running nodes — Done (09-06)
+- D-01: graph.best_node() and _reevaluate_descendants() skip status=partial nodes (quarantine) — Done (09-06)
 
 ### Critical pitfalls defended (from research/PITFALLS.md -> ROADMAP.md anti-acceptance notes)
 
