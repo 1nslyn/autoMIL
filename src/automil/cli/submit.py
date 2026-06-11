@@ -456,7 +456,16 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     if timeout is not None:
         spec["timeout_min"] = timeout
     # D-04 (CFG-03): write per-node run-command override suffix into spec.
+    # WR-01 fix: validate shlex.split() at submit time so malformed quotes
+    # raise a ClickException immediately rather than crashing the daemon at
+    # launch time (after the spec has already been dequeued).
     if override is not None:
+        try:
+            shlex.split(override)
+        except ValueError as exc:
+            raise click.ClickException(
+                f"--override contains unbalanced quotes and cannot be parsed: {exc}"
+            ) from exc
         spec["run_command_override"] = override
     spec.setdefault("metadata", {})["backend"] = _backend_name
     # D-97: write metadata.runtime so orchestrator + cancel.py know which
