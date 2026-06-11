@@ -403,6 +403,17 @@ class ExperimentOrchestrator:
 
         self.runner = Runner(self.project_root)
 
+        # CR-01 fix: ExperimentGraph instance initialized here so _handle_completion
+        # and _handle_cap_killed_completion both receive a valid graph object at
+        # daemon runtime, without test injection. write_terminal_state uses
+        # graph.path and graph._technique_map (loaded fresh per locked_update call),
+        # so constructing the instance here is sufficient — no eager load of nodes.
+        from automil.graph import ExperimentGraph
+        self.graph = ExperimentGraph(
+            path=self.automil_dir / "graph.json",
+            technique_map=None,  # loaded fresh inside locked_update on each write
+        )
+
         # Load config
         config_path = self.automil_dir / "config.yaml"
         if config_path.exists():
@@ -1277,30 +1288,26 @@ class ExperimentOrchestrator:
         payload = reconcile_budget_kill(
             node_id=node_id,
             archive_dir=self.archive_dir,
-            graph=self.graph if hasattr(self, "graph") else None,
+            graph=self.graph,
             expected_fold_count=expected_folds,
         )
         # REC-02 / D-09, D-10: delegate all four artifact writes to terminal_writer.
         # graph node promotion (running→executed or crash) + archive result.json +
         # completed/<node>.json + results.tsv are all written by write_terminal_state.
         # D-01: partial results get status="partial" in the graph (quarantined).
-        if hasattr(self, "graph") and self.graph is not None:
-            from automil.terminal_writer import write_terminal_state
-            write_terminal_state(
-                node_id=node_id,
-                result=payload,
-                graph=self.graph,
-                completed_dir=self.completed_dir,
-                archive_dir=self.archive_dir / node_id,
-                results_tsv_writer=self._append_results_tsv,
-                spec=spec,
-                elapsed_s=elapsed_s,
-                gpu_id=gpu_id,
-            )
-        else:
-            logger.warning(
-                "Cap-killed node %s has no graph reference — artifacts not written", node_id
-            )
+        # self.graph is guaranteed by __init__ (CR-01 fix) — no hasattr guard needed.
+        from automil.terminal_writer import write_terminal_state
+        write_terminal_state(
+            node_id=node_id,
+            result=payload,
+            graph=self.graph,
+            completed_dir=self.completed_dir,
+            archive_dir=self.archive_dir / node_id,
+            results_tsv_writer=self._append_results_tsv,
+            spec=spec,
+            elapsed_s=elapsed_s,
+            gpu_id=gpu_id,
+        )
         logger.info(
             "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
             "partial_folds=%d/%d",

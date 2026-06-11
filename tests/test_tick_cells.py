@@ -546,3 +546,105 @@ def test_tick_cells_agent_active_frozen_while_waiting(tmp_path: Path, monkeypatc
     updated = json.loads((cells_dir / "idle000000000001.json").read_text())
     assert updated["consumed_active_seconds"] == 10.0  # unchanged — clock paused
     assert updated["last_tick_at"] == FIXED_NOW         # tick still advanced
+
+
+# ---------------------------------------------------------------------------
+# Test 11: CR-01 regression — daemon supplies its own graph (no test injection)
+# ---------------------------------------------------------------------------
+
+def test_handle_completion_daemon_supplies_own_graph(tmp_path: Path) -> None:
+    """CR-01 regression: _handle_completion must write all four terminal artifacts
+    WITHOUT any external orch.graph injection.
+
+    Before the CR-01 fix, self.graph was never assigned in __init__ so every
+    real daemon completion raised AttributeError. Tests masked this by setting
+    orch.graph = graph externally. This test proves the daemon wires its own
+    graph: it creates an ExperimentOrchestrator, deliberately does NOT set
+    orch.graph, calls _handle_completion, and asserts that graph.json +
+    completed/<node>.json + archive result.json are all written.
+    """
+    from automil.graph import ExperimentGraph
+
+    orch = _make_orch(tmp_path)
+    # CR-01 regression guard: confirm __init__ assigned self.graph without test help.
+    assert hasattr(orch, "graph"), (
+        "CR-01 regression: ExperimentOrchestrator.__init__ must assign self.graph. "
+        "Do not gate this on hasattr — the daemon must supply its own graph."
+    )
+    assert isinstance(orch.graph, ExperimentGraph), (
+        f"self.graph must be an ExperimentGraph instance, got {type(orch.graph)}"
+    )
+    # DO NOT set orch.graph here — that is what we are testing.
+
+    node_id = "node_cr01"
+    node_archive = orch.archive_dir / node_id
+    node_archive.mkdir(parents=True, exist_ok=True)
+
+    # Write a minimal graph.json with a pending node so terminal_writer can update it.
+    graph_path = tmp_path / "automil" / "graph.json"
+    init_graph = ExperimentGraph(path=graph_path, technique_map=None)
+    init_graph.nodes[node_id] = {
+        "id": node_id,
+        "type": "running",
+        "status": "running",
+        "description": "cr01 test",
+        "techniques": [],
+        "composite": 0.0,
+    }
+    init_graph.save()
+
+    # Stub runner so no real worktrees are touched.
+    result_payload = {
+        "status": "completed",
+        "composite": 0.82,
+        "metrics": {"val_auc": 0.82},
+        "elapsed_seconds": 100,
+    }
+    mock_process = MagicMock()
+    mock_process.pid = 99998
+    mock_log = MagicMock()
+    from automil.backends._orchestrator_daemon import RunningExperiment
+    orch.running[node_id] = RunningExperiment(
+        id=node_id,
+        spec={"id": node_id, "description": "cr01 test"},
+        gpu=0,
+        process=mock_process,
+        log_file=mock_log,
+        log_path=node_archive / "run.log",
+        started_at=time.time() - 100,
+        timeout_at=time.time() + 3600,
+        estimated_vram_gb=0.5,
+    )
+    orch.gpu_allocations[0] = [node_id]
+    orch.runner = MagicMock()
+    orch.runner.collect_result.return_value = result_payload
+    orch.runner.worktree_path.return_value = tmp_path / "worktrees" / node_id
+    orch.runner.cleanup_worktree.return_value = None
+
+    # Invoke _handle_completion WITHOUT injecting orch.graph.
+    orch._handle_completion(node_id, returncode=0)
+
+    # 1. completed/<node>.json must exist.
+    completed_json = orch.completed_dir / f"{node_id}.json"
+    assert completed_json.exists(), (
+        "CR-01: completed/<node>.json not written — terminal_writer did not run. "
+        "self.graph was likely missing (AttributeError swallowed by tick except)."
+    )
+
+    # 2. archive result.json must be valid JSON with correct composite.
+    result_path = node_archive / "result.json"
+    assert result_path.exists(), "CR-01: archive result.json not written by terminal_writer"
+    result_written = json.loads(result_path.read_text())
+    assert result_written.get("composite") == 0.82
+
+    # 3. graph.json must reflect the node as executed (status keep or discard).
+    reloaded = ExperimentGraph(path=graph_path, technique_map=None)
+    gnode = reloaded.get_node(node_id)
+    assert gnode is not None, "CR-01: graph node not found after _handle_completion"
+    assert gnode.get("type") == "executed", (
+        f"CR-01: graph node type should be 'executed', got {gnode.get('type')!r}. "
+        "terminal_writer did not update the graph."
+    )
+    assert gnode.get("status") in ("keep", "discard"), (
+        f"CR-01: graph status should be keep/discard, got {gnode.get('status')!r}."
+    )
