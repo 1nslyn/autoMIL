@@ -26,7 +26,7 @@ from automil.cli._helpers import (
 @click.option("--files", multiple=True, help="Files to snapshot (auto-detect if omitted)")
 @click.option("--priority", default=1, help="Priority (lower = higher)")
 @click.option("--vram", default=0.5, help="Estimated VRAM in GB")
-@click.option("--timeout", default=150, help="Timeout in minutes")
+@click.option("--timeout", default=None, type=int, help="Timeout in minutes (default: orchestrator.default_timeout_min from config.yaml)")
 @click.option("--max-time", "max_time_seconds", type=int, default=None,
               help="Override --timeout with seconds-precision (rounded up to 1 min minimum, D-195).")
 @click.option("--parent", default=None, help="Parent node ID")
@@ -39,9 +39,14 @@ from automil.cli._helpers import (
               help="MIL model identifier for budget cell keying (D-12, REC-04). "
                    "Resolved: --mil-model flag → run.mil_model in config → "
                    "propose-time node metadata → ClickException if none found.")
+@click.option("--override", default=None,
+              help="Extra args appended to run.command in the worktree "
+                   "(e.g. '--seed 42 --lr 1e-4'). Suffix-append only — config "
+                   "run.command remains the authoritative base. (D-04, CFG-03)")
 def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
-           timeout: int, max_time_seconds: int | None, parent: str | None, techniques: tuple,
-           budget_seconds: int | None, safety_buffer_seconds: int | None, mil_model: str | None):
+           timeout: int | None, max_time_seconds: int | None, parent: str | None, techniques: tuple,
+           budget_seconds: int | None, safety_buffer_seconds: int | None, mil_model: str | None,
+           override: str | None):
     """Snapshot changed files and queue an experiment.
 
     Variant modules under ``automil/variants/<parent>/<name>.py`` are
@@ -57,7 +62,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 f"--max-time must be non-negative seconds, got {max_time_seconds}"
             )
         translated = max(1, (max_time_seconds + 59) // 60)
-        if timeout != 150:  # caller passed --timeout explicitly
+        if timeout is not None:  # caller passed --timeout explicitly
             click.echo(
                 f"submit: both --max-time {max_time_seconds}s and --timeout {timeout}m "
                 f"provided; --max-time wins (timeout_min={translated})."
@@ -438,7 +443,6 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         "deletions": deletions,
         "priority": priority,
         "estimated_vram_gb": vram,
-        "timeout_min": timeout,
         "graph_metadata": {
             "parent_id": parent,
             "techniques": list(techniques),
@@ -446,6 +450,13 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         },
         "submitted_at": datetime.now().isoformat(),
     }
+    # D-02: only write timeout_min when explicitly supplied; daemon falls back to
+    # orchestrator.default_timeout_min (config.yaml) when the key is absent.
+    if timeout is not None:
+        spec["timeout_min"] = timeout
+    # D-04 (CFG-03): write per-node run-command override suffix into spec.
+    if override is not None:
+        spec["run_command_override"] = override
     spec.setdefault("metadata", {})["backend"] = _backend_name
     # D-97: write metadata.runtime so orchestrator + cancel.py know which
     # runtime made this submission. AUTOMIL_RUNTIME is set by the agent runtime
