@@ -62,7 +62,7 @@ class TestEndToEnd:
         result = runner.invoke(
             main,
             ["submit", "--node", "node_0001", "--desc", "test exp",
-             "--files", "model.py"],
+             "--files", "model.py", "--mil-model", "test_model"],  # D-12: required
         )
         assert result.exit_code == 0, result.output
 
@@ -106,7 +106,7 @@ class TestEndToEnd:
             result = runner.invoke(
                 main,
                 ["submit", "--node", f"node_{i:04d}", "--desc", f"exp {i}",
-                 "--files", "model.py"],
+                 "--files", "model.py", "--mil-model", "test_model"],  # D-12: required
             )
             assert result.exit_code == 0, result.output
 
@@ -170,7 +170,8 @@ class TestEndToEnd:
         result = runner.invoke(
             main,
             ["submit", "--node", "node_del", "--desc", "delete old module",
-             "--files", "old_module.py", "--files", "model.py"],
+             "--files", "old_module.py", "--files", "model.py",
+             "--mil-model", "test_model"],  # D-12: required
         )
         assert result.exit_code == 0, result.output
 

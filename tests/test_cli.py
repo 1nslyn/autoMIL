@@ -206,7 +206,8 @@ class TestSubmit:
         # Submit
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_0001", "--desc", "test", "--files", "model.py"],
+            ["submit", "--node", "node_0001", "--desc", "test", "--files", "model.py",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0
@@ -239,7 +240,8 @@ class TestSubmit:
 
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_scope", "--desc", "dir scope"],
+            ["submit", "--node", "node_scope", "--desc", "dir scope",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0
@@ -263,7 +265,8 @@ class TestSubmit:
 
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_ro", "--desc", "readonly", "--files", "data/prepare.py"],
+            ["submit", "--node", "node_ro", "--desc", "readonly", "--files", "data/prepare.py",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0
@@ -347,7 +350,8 @@ class TestSubmit:
         result = cli_runner.invoke(
             main,
             ["submit", "--node", "node_0002", "--desc", "legit child",
-             "--parent", root, "--files", "model.py"],
+             "--parent", root, "--files", "model.py",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output
@@ -521,7 +525,8 @@ class TestSubmitPathValidation:
 
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_autodetect", "--desc", "auto-detect exclusion test"],
+            ["submit", "--node", "node_autodetect", "--desc", "auto-detect exclusion test",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output

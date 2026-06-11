@@ -37,6 +37,7 @@ def _init_minimal_project(tmp_path: Path) -> Path:
         "metrics:\n  composite: {formula: 'val_auc'}\n  required: [val_auc]\n"
         "training: {}\n"
         "cap:\n  budget_seconds: 21600\n  safety_buffer_seconds: 1800\n"
+        "run:\n  mil_model: test_model\n"  # D-12: required for submit
     )
     return tmp_path
 
