@@ -177,7 +177,18 @@ def main() -> None:
     # when running outside autoMIL (applied_variant.json absent).
     from pathlib import Path as _Path
     from autobench.pipeline.variant_dispatch import apply_model_variant_to_exp_cfg
-    apply_model_variant_to_exp_cfg(exp_cfg, _Path("automil"))
+    _automil_dir = _Path("automil")
+    # WR-03: warn when automil/ is absent so the operator knows variant dispatch
+    # is skipped.  This happens on manual invocations from any directory that is
+    # not the worktree root; under the orchestrator the cwd is always the worktree
+    # root so automil/ is always present.
+    if not _automil_dir.exists():
+        print(
+            f"[automil] WARNING: automil/ directory not found in cwd "
+            f"({os.getcwd()}); variant dispatch skipped (running baseline).",
+            flush=True,
+        )
+    apply_model_variant_to_exp_cfg(exp_cfg, _automil_dir)
 
     benchmark_dir = ds.benchmark_dir
 
