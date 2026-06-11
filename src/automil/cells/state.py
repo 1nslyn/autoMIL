@@ -30,7 +30,7 @@ class CellStatus(str, Enum):
 
 @dataclass(frozen=True)
 class Cell:
-    """Immutable snapshot of a (dataset, encoder, parent_id) budget cell (D-108).
+    """Immutable snapshot of a (dataset, encoder, mil_model) budget cell (D-108, REC-04).
 
     Frozen so ``Cell`` instances cannot be mutated mid-tick.  Status transitions
     go through ``dataclasses.replace(cell, status=new_status)`` followed by
@@ -40,7 +40,7 @@ class Cell:
     """
 
     cell_id: str
-    """16-char hex derived from sha256(dataset|encoder|parent_id)[:16]."""
+    """16-char hex derived from sha256(dataset|encoder|mil_model)[:16]."""
 
     dataset: str
     """Dataset identifier, e.g. ``"ccrcc"`` — from automil/config.yaml."""
@@ -48,8 +48,10 @@ class Cell:
     encoder: str
     """Encoder identifier, e.g. ``"uni-v2"`` — from automil/config.yaml."""
 
-    parent_id: str
-    """Graph node_id of the cell-root experiment (the first submit that opens the cell)."""
+    mil_model: str
+    """MIL model identifier (normalized: stripped, lowercased, whitespace-collapsed).
+    Used as the third dimension of the budget cell key (dataset, encoder, mil_model).
+    Graph parent lineage stays separate from budget identity (D-13)."""
 
     started_at: float
     """Unix epoch seconds (UTC) when the cell was created — absolute wall-clock,
@@ -94,16 +96,33 @@ class Cell:
     evaluated this cell. ``None`` is treated as ``started_at`` on the first tick."""
 
 
-def make_cell_id(dataset: str, encoder: str, parent_id: str) -> str:
-    """Return a 16-char deterministic hex id for the (dataset, encoder, parent_id) triple.
+def make_cell_id(dataset: str, encoder: str, mil_model: str) -> str:
+    """Return a 16-char deterministic hex id for the (dataset, encoder, mil_model) triple.
 
+    mil_model must be pre-normalized via normalize_mil_model() before calling (D-14).
     Same input always maps to the same id — re-submits join the existing cell.
     Collision space: ~6.4×10¹⁹ (sha256 prefix, 64-bit).
 
-    >>> make_cell_id("ccrcc", "uni-v2", "node_0042") == make_cell_id("ccrcc", "uni-v2", "node_0042")
+    >>> make_cell_id("ccrcc", "uni-v2", "clam_sb") == make_cell_id("ccrcc", "uni-v2", "clam_sb")
     True
     """
-    return hashlib.sha256(f"{dataset}|{encoder}|{parent_id}".encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(f"{dataset}|{encoder}|{mil_model}".encode("utf-8")).hexdigest()[:16]
+
+
+def normalize_mil_model(raw: str) -> str:
+    """Strip, lowercase, normalize separators, collapse internal whitespace (D-14, REC-04).
+
+    Ensures CLAM_SB, clam_sb, and ' clam sb ' all hash to the same cell:
+    underscores are treated as word separators (replaced with a single space)
+    before whitespace collapsing, so ``CLAM_SB`` and ``clam_sb`` and
+    ``' clam sb '`` all normalize to ``'clam sb'``.
+
+    No registry validation — autoMIL is generic and cannot enumerate a
+    consumer's models (PROJECT.md).
+    """
+    # Replace underscores with spaces so CLAM_SB == clam_sb == ' clam sb '
+    normalized = raw.strip().lower().replace("_", " ")
+    return " ".join(normalized.split())
 
 
 def consumed_seconds(cell: Cell, now: float | None = None) -> float:
@@ -156,7 +175,16 @@ def read_cell(path: Path) -> Cell:
 
     Re-hydrates ``CellStatus`` from its string value so the returned ``Cell``
     is fully typed — ``cell.status == CellStatus.ACTIVE``, not ``"active"``.
+
+    Backward-compat shim (D-15 / RESEARCH.md Pitfall 4): old cells/*.json have
+    ``"parent_id"``; new cells have ``"mil_model"``. This shim maps the legacy
+    key so existing cells load without TypeError. Ships with the rename so that
+    Plan 05's ``automil cells migrate`` can read old cells to re-key them.
     """
     data = json.loads(path.read_text())
+    # Backward-compat: old cells/*.json have "parent_id"; new cells have "mil_model".
+    # This shim must ship with the rename so existing cells load without TypeError.
+    if "parent_id" in data and "mil_model" not in data:
+        data["mil_model"] = data.pop("parent_id")
     data["status"] = CellStatus(data["status"])
     return Cell(**data)
