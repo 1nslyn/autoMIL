@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
 status: executing
-last_updated: "2026-06-11T20:55:29.532Z"
+last_updated: "2026-06-11T21:02:33.235Z"
 last_activity: 2026-06-11
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 16
-  completed_plans: 14
-  percent: 88
+  completed_plans: 15
+  percent: 94
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -35,9 +35,9 @@ progress:
 ## Current Position
 
 Phase: 12 (Scheduling & Overlay Isolation) — EXECUTING
-Plan: 2 of 3
-Status: Executing Phase 12 — Plan 01 complete (Wave-0 RED stubs committed)
-Last activity: 2026-06-11 -- Phase 12 Plan 01 complete: 7 SCH-01 + 5 SCH-02 xfail stubs
+Plan: 3 of 3
+Status: Ready to execute
+Last activity: 2026-06-11
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Last activity: 2026-06-11 -- Phase 12 Plan 01 complete: 7 SCH-01 + 5 SCH-02 xfai
 | Phase 11-config-run-fidelity P01 | 12 | 2 tasks | 2 files |
 | Phase 11-config-run-fidelity P02 | 4m | 1 tasks | 1 files |
 | Phase 11-config-run-fidelity P03 | 8m | 2 tasks | 3 files |
+| Phase 12-scheduling-overlay-isolation P02 | 8 | 2 tasks | 4 files |
 
 ## Parallel Execution Map
 
