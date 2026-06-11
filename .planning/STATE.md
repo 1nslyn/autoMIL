@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
 status: executing
-last_updated: "2026-06-11T19:24:01.028Z"
-last_activity: 2026-06-11 -- Phase 11 planning complete
+last_updated: "2026-06-11T19:37:29.158Z"
+last_activity: 2026-06-11
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 13
-  completed_plans: 10
-  percent: 77
+  completed_plans: 11
+  percent: 85
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -35,9 +35,9 @@ progress:
 ## Current Position
 
 Phase: 11 (Config & Run Fidelity) — EXECUTING
-Plan: 1 of ?
+Plan: 2 of 3
 Status: Ready to execute
-Last activity: 2026-06-11 -- Phase 11 planning complete
+Last activity: 2026-06-11
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Last activity: 2026-06-11 -- Phase 11 planning complete
 | Phase 10 P02 | 15 | 2 tasks | 2 files |
 | Phase 10 P03 | 10min | 2 tasks | 4 files |
 | Phase 10 P04 | 10m | 1 tasks | 2 files |
+| Phase 11-config-run-fidelity P01 | 12 | 2 tasks | 2 files |
 
 ## Parallel Execution Map
 
@@ -126,11 +127,11 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Phase 10 Plan 01 complete (2026-06-11). Wave-0 test scaffolding: 5 new files (4 RED test stubs + 1 importable variant_dispatch.py stub). All new tests fail RED for correct reasons. 14 existing apply tests still green. Commits: c84b9df (APL-01/03 stubs), adb89cf (APL-02 stub + workstation marker fix).
+**Last action:** Phase 11 Plan 01 complete (2026-06-11). Wave-0 RED stubs for CFG-01/02/03: created tests/test_cfg_run_fidelity.py (5 tests, 3 RED) and benchmarks/tests/test_run_experiment_config.py (4 tests, 2 RED). All new stubs fail for correct reasons (AssertionError, not ImportError). Zero existing test regressions. Commits: 1c0bb76 (CFG-02/03 stubs), d8e5b98 (CFG-01 stubs).
 
-**Wave structure (Phase 10):** W1 = 10-01 (test stubs, DONE) · W2 = 10-02 (apply + _classify_variant_route), 10-03 (variant_dispatch impl) · W3 = 10-04 (iris train.py dispatch).
+**Wave structure (Phase 11):** W0 = 11-01 (RED stubs, DONE) · W1 = 11-02 (CFG-01 fix: run_experiment.py None defaults) · W1 = 11-03 (CFG-02 + CFG-03 fix: submit.py --timeout None + --override + daemon append).
 
-**To continue Phase 10:** `/gsd-execute-phase 10` for Plan 02. Plan 02 adds _classify_variant_route to apply.py (APL-03) + applied_variant.json mechanism (APL-01 A1 closure).
+**To continue Phase 11:** `/gsd-execute-phase 11` for Plan 02. Plan 02 fixes CFG-01 in benchmarks/scripts/run_experiment.py (change --lr, --n_folds, etc. defaults to None; conditional-pass into TrainConfig).
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*

@@ -98,7 +98,7 @@ Plans:
 **Plans**: 3 plans
 Plans:
 **Wave 1**
-- [ ] 11-01-PLAN.md — Wave-0 test stubs (CFG-01/02/03 RED tests, Nyquist compliance)
+- [x] 11-01-PLAN.md — Wave-0 test stubs (CFG-01/02/03 RED tests, Nyquist compliance)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 11-02-PLAN.md — CFG-01: run_experiment.py None-default training overrides + conditional TrainConfig construction (CFG-01)

@@ -32,9 +32,9 @@ Committed scope of milestone v1.1. REQ-IDs grouped by defect theme. New category
 
 <!-- Config/snapshot values must drive runs; CLI/argparse defaults must not silently mask them. -->
 
-- [ ] **CFG-01**: `run_experiment.py` argparse defaults for training overrides (`--seed`, `--lr`, `--max_epochs`, `--patience`, `--stop_epoch`, `--n_folds`) default to `None` and are only passed into `TrainConfig` when explicitly supplied, so snapshot/config dataclass defaults are honored. (ISSUE-015, S1)
-- [ ] **CFG-02**: `submit --timeout` defaults to `None` and omits `timeout_min` from the queue spec when unset, so the orchestrator's configured `orchestrator.default_timeout_min` controls per-job timeout. (ISSUE-022, S1)
-- [ ] **CFG-03**: A queue spec can carry a per-node run-command override (e.g. `--seed`, `--encoder`, `--lr`, `--n_folds`) layered on a config `run.command` base, without editing snapshotted code. (ISSUE-008, S1)
+- [x] **CFG-01**: `run_experiment.py` argparse defaults for training overrides (`--seed`, `--lr`, `--max_epochs`, `--patience`, `--stop_epoch`, `--n_folds`) default to `None` and are only passed into `TrainConfig` when explicitly supplied, so snapshot/config dataclass defaults are honored. (ISSUE-015, S1)
+- [x] **CFG-02**: `submit --timeout` defaults to `None` and omits `timeout_min` from the queue spec when unset, so the orchestrator's configured `orchestrator.default_timeout_min` controls per-job timeout. (ISSUE-022, S1)
+- [x] **CFG-03**: A queue spec can carry a per-node run-command override (e.g. `--seed`, `--encoder`, `--lr`, `--n_folds`) layered on a config `run.command` base, without editing snapshotted code. (ISSUE-008, S1)
 
 ### Scheduling & overlay isolation (SCH)
 
@@ -97,9 +97,9 @@ Which phase covers which requirement. Populated during roadmap creation.
 | APL-01 | Phase 10 | Complete |
 | APL-02 | Phase 10 | Complete |
 | APL-03 | Phase 10 | Complete |
-| CFG-01 | Phase 11 | Pending |
-| CFG-02 | Phase 11 | Pending |
-| CFG-03 | Phase 11 | Pending |
+| CFG-01 | Phase 11 | Complete |
+| CFG-02 | Phase 11 | Complete |
+| CFG-03 | Phase 11 | Complete |
 | SCH-01 | Phase 12 | Pending |
 | SCH-02 | Phase 12 | Pending |
 | OPS-01 | Phase 13 | Pending |
