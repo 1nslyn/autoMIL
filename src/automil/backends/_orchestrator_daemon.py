@@ -1131,9 +1131,13 @@ class ExperimentOrchestrator:
             1. spec.env["AUTOMIL_FOLD_COUNT"] (set by _build_subprocess_env at launch)
             2. automil/config.yaml: training.fold_count
             3. Hard fallback: 5 (Leo's paper-campaign default)
+
+        Uses backend-aware running spec path (IN-01 fix / D-169) so SLURM/Ray
+        nodes don't silently fall through to the archive-spec fallback.
         """
+        _backend_fc = self._read_backend_name_for_node(node_id)
         for path in (
-            self.running_dir / f"{node_id}.json",
+            self._backend_running_dir(_backend_fc) / f"{node_id}.json",
             self.archive_dir / node_id / "spec.json",
         ):
             if path.exists():
@@ -1248,8 +1252,11 @@ class ExperimentOrchestrator:
         # D-170: cross-backend log unification (no-op for local backend).
         self._drain_remote_backend_log(node_id, archive)
 
-        # Clean running spec
-        running_spec = self.running_dir / f"{node_id}.json"
+        # Clean running spec — use backend-aware path (WR-02 fix: D-169).
+        # self.running_dir is the alias for running/local/ only; SLURM/Ray specs
+        # live under running/<backend>/ and would never be found or cleaned here.
+        _backend_name_cleanup = self._read_backend_name_for_node(node_id)
+        running_spec = self._backend_running_dir(_backend_name_cleanup) / f"{node_id}.json"
         if running_spec.exists():
             running_spec.unlink()
 
@@ -1272,12 +1279,15 @@ class ExperimentOrchestrator:
     def _was_cap_killed_completion(self, node_id: str) -> bool:
         """True iff the running or archive spec has metadata.cancel_reason == 'cap'.
 
-        Reads running/<node>.json first (annotation written by _tick_cells
-        BEFORE backend.cancel() is called — Pitfall 4 ordering guarantee).
+        Reads running/<backend>/<node>.json first (annotation written by
+        _tick_cells BEFORE backend.cancel() is called — Pitfall 4 ordering
+        guarantee). Uses the backend-aware path so SLURM/Ray annotations in
+        running/slurm/ or running/ray/ are found correctly (WR-02 fix / D-169).
         Falls back to archive/<node>/spec.json if running/ was already cleaned.
         """
+        _backend = self._read_backend_name_for_node(node_id)
         for _spec_path in (
-            self.running_dir / f"{node_id}.json",
+            self._backend_running_dir(_backend) / f"{node_id}.json",
             self.archive_dir / node_id / "spec.json",
         ):
             if _spec_path.exists():
@@ -1339,8 +1349,9 @@ class ExperimentOrchestrator:
             node_id, payload["status"], payload["composite"],
             payload.get("partial_folds", 0), payload.get("expected_folds", 0),
         )
-        # Clean running spec and worktree
-        running_spec = self.running_dir / f"{node_id}.json"
+        # Clean running spec and worktree — use backend-aware path (WR-02 fix / D-169).
+        _backend_name_cap = self._read_backend_name_for_node(node_id)
+        running_spec = self._backend_running_dir(_backend_name_cap) / f"{node_id}.json"
         if running_spec.exists():
             running_spec.unlink()
         if wt_path.exists():

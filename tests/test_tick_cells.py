@@ -648,3 +648,79 @@ def test_handle_completion_daemon_supplies_own_graph(tmp_path: Path) -> None:
     assert gnode.get("status") in ("keep", "discard"), (
         f"CR-01: graph status should be keep/discard, got {gnode.get('status')!r}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 12: WR-02 regression — _was_cap_killed_completion uses backend-aware path
+# ---------------------------------------------------------------------------
+
+def test_was_cap_killed_completion_detects_slurm_annotation(tmp_path: Path) -> None:
+    """WR-02 regression: _was_cap_killed_completion must find cancel_reason='cap'
+    annotations written to running/slurm/<node>.json (non-local backends).
+
+    Before the WR-02 fix the method read self.running_dir / f"{node_id}.json"
+    (= running/local/<node>.json), so SLURM/Ray annotations were never found
+    and _handle_cap_killed_completion was never called for those backends.
+
+    This test writes the annotation to running/slurm/<node>.json (as _tick_cells
+    does when metadata.backend='slurm') and asserts that
+    _was_cap_killed_completion returns True.
+    """
+    orch = _make_orch(tmp_path)
+
+    node_id = "node_slurm01"
+    # Write the node spec with metadata.backend='slurm' into running/slurm/
+    slurm_running_dir = orch.running_root / "slurm"
+    slurm_running_dir.mkdir(parents=True, exist_ok=True)
+    spec_data = {
+        "id": node_id,
+        "description": "slurm cap test",
+        "metadata": {
+            "backend": "slurm",
+            "cell_id": "testcell_slurm",
+            "cancel_reason": "cap",
+        },
+    }
+    (slurm_running_dir / f"{node_id}.json").write_text(json.dumps(spec_data, indent=2))
+
+    # Pre-condition: running/local/<node>.json must NOT exist so we know
+    # the method is reading from the backend-aware path, not the local alias.
+    local_path = orch.running_dir / f"{node_id}.json"
+    assert not local_path.exists(), (
+        "Test setup error: running/local/<node>.json must not exist for this assertion"
+    )
+
+    result = orch._was_cap_killed_completion(node_id)
+    assert result is True, (
+        "WR-02 regression: _was_cap_killed_completion must return True for a "
+        "SLURM node with cancel_reason='cap' in running/slurm/<node>.json. "
+        "If False, the method is still reading from running/local/ (self.running_dir)."
+    )
+
+
+def test_was_cap_killed_completion_local_still_works(tmp_path: Path) -> None:
+    """WR-02 regression guard: local-backend cap annotation still detected after fix.
+
+    Ensures the backend-aware path resolves correctly for 'local' nodes (the
+    common case) and doesn't regress existing behaviour.
+    """
+    orch = _make_orch(tmp_path)
+
+    node_id = "node_local_cap"
+    spec_data = {
+        "id": node_id,
+        "description": "local cap test",
+        "metadata": {
+            "backend": "local",
+            "cell_id": "testcell_local",
+            "cancel_reason": "cap",
+        },
+    }
+    # Write to running/local/ — the standard local-backend location
+    (orch.running_dir / f"{node_id}.json").write_text(json.dumps(spec_data, indent=2))
+
+    result = orch._was_cap_killed_completion(node_id)
+    assert result is True, (
+        "WR-02 regression: local-backend cap annotation must still be detected "
+        "after the backend-aware path fix."
+    )
