@@ -52,7 +52,7 @@ Plans:
 - [x] 09-03-PLAN.md — Schema update + _crashed_payload canonicalization (REC-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 09-04-PLAN.md — Partial-fold recovery: SIGTERM flush + fold-first synthesis + main-PID-first timeout (REC-01)
+- [x] 09-04-PLAN.md — Partial-fold recovery: SIGTERM flush + fold-first synthesis + main-PID-first timeout (REC-01)
 - [ ] 09-05-PLAN.md — CLI mil_model wiring + automil cells migrate command (REC-04)
 
 **Wave 4** *(blocked on Wave 3 completion)*
