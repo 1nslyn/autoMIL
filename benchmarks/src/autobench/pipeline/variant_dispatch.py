@@ -120,6 +120,16 @@ def apply_model_variant_to_exp_cfg(exp_cfg, automil_dir: Path) -> None:
                         " (DEPRECATED — use applied_variant.json).  variant=%r",
                         variant_name,
                     )
+                else:
+                    # WR-02: config.yaml exists but has no model.variant — the deprecated
+                    # fallback was attempted and also missed; warn so the operator can see
+                    # the variant is inert rather than silently running baseline.
+                    logger.warning(
+                        "apply_model_variant_to_exp_cfg: config.yaml exists but has no "
+                        "model.variant key (deprecated fallback also missed). "
+                        "Variant will be inert — check that applied_variant.json is "
+                        "present in the worktree's automil/ directory."
+                    )
 
     # LAST RESORT: environment variable
     if variant_name is None:
@@ -132,6 +142,22 @@ def apply_model_variant_to_exp_cfg(exp_cfg, automil_dir: Path) -> None:
                     " AUTOMIL_VARIANT_MODEL env var.  variant=%r",
                     variant_name,
                 )
+
+    # WR-02: if all three resolution paths missed AND applied_variant.json was
+    # absent, emit a clear warning so the operator knows the variant is inert.
+    # This fires only when automil_dir exists (i.e. we are running under autoMIL)
+    # but none of the three paths produced a variant name.
+    if not variant_name and automil_dir.exists():
+        applied_json_path_check = automil_dir / "applied_variant.json"
+        if not applied_json_path_check.exists():
+            logger.warning(
+                "apply_model_variant_to_exp_cfg: no variant selection found in any "
+                "read path (applied_variant.json absent, config.yaml has no model.variant, "
+                "AUTOMIL_VARIANT_MODEL env var unset). Experiment will run BASELINE "
+                "(variant inert). If this is unexpected, check that `automil apply` was "
+                "run before `automil submit` and that applied_variant.json was propagated "
+                "into the worktree's automil/ directory."
+            )
 
     # No variant selected — return without mutation.
     if not variant_name:
@@ -158,6 +184,7 @@ def apply_model_variant_to_exp_cfg(exp_cfg, automil_dir: Path) -> None:
         raise ValueError(
             f"Variant {variant_name!r} (parent={parent_name!r}) not found in registry"
             f" after scanning {variants_root}."
+            f" Registry key attempted: {key!r}."
             f" Run `automil refresh-registry` to re-scan the variants directory."
         )
 
