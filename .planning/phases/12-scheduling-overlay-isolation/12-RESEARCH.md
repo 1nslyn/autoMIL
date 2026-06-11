@@ -724,9 +724,11 @@ cover the D-199 invariants that SCH-02 must not break.)*
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **`_build_subprocess_env` signature change vs. `_launch` post-processing**
+> Both resolved inline below and implemented by the plans (12-03): post-processing injection in `_launch`; editable-detection limitation documented in the advisory warning.
+
+1. **`_build_subprocess_env` signature change vs. `_launch` post-processing** — RESOLVED (post-processing in `_launch`).
    - What we know: `_build_subprocess_env` currently takes `gpu_id, node_id, archive, spec`.
      `wt_path` is needed for the injection but is not currently a parameter.
    - What's unclear: pass `wt_path` to `_build_subprocess_env` (changes signature + all test
@@ -736,7 +738,7 @@ cover the D-199 invariants that SCH-02 must not break.)*
      `_build_subprocess_env` signature, keeps existing env whitelist tests untouched, and the
      injection logically belongs in `_launch` where `wt_path` is in scope.
 
-2. **`automil check` editable root detection when running outside the project venv**
+2. **`automil check` editable root detection when running outside the project venv** — RESOLVED (advisory; document as known limitation).
    - What we know: `site.getsitepackages()` returns paths for the current Python interpreter.
      If `automil check` is run with a different interpreter than the project venv, the scan may
      find different (or no) `.pth` files.
