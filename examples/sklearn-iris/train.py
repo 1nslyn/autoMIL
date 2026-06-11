@@ -71,8 +71,7 @@ def main() -> None:
     variant_name: str | None = None
     applied_path = Path("automil/applied_variant.json")
     if applied_path.exists():
-        import json as _json
-        _sel = _json.loads(applied_path.read_text()) or {}
+        _sel = json.loads(applied_path.read_text()) or {}
         variant_name = (_sel.get("model") or {}).get("variant")
     if not variant_name:
         variant_name = (config.get("model") or {}).get("variant")
@@ -101,8 +100,20 @@ def main() -> None:
         )
         if _py_files:
             _spec = _ilu.spec_from_file_location(variant_name, _py_files[0])
+            if _spec is None or _spec.loader is None:
+                _write_result(status="error", partial=False)
+                raise ValueError(
+                    f"Could not load variant module at {_py_files[0]}: "
+                    "importlib returned no spec or loader. "
+                    "Ensure the file has a .py extension and is a valid Python module."
+                )
             _mod = _ilu.module_from_spec(_spec)
             _spec.loader.exec_module(_mod)
+            if not hasattr(_mod, "make_classifier"):
+                _write_result(status="error", partial=False)
+                raise AttributeError(
+                    f"Variant module {_py_files[0]} has no make_classifier() function."
+                )
             clf = _mod.make_classifier(seed=seed)
     if clf is None:
         variant_name = None  # baseline path — clear for result.json marker
