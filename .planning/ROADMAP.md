@@ -53,7 +53,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [x] 09-04-PLAN.md — Partial-fold recovery: SIGTERM flush + fold-first synthesis + main-PID-first timeout (REC-01)
-- [ ] 09-05-PLAN.md — CLI mil_model wiring + automil cells migrate command (REC-04)
+- [x] 09-05-PLAN.md — CLI mil_model wiring + automil cells migrate command (REC-04)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 09-06-PLAN.md — terminal_writer module + daemon refactor + reconcile --from-archive + partial quarantine (REC-01, REC-02)

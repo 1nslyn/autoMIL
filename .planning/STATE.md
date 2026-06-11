@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
 status: executing
-last_updated: "2026-06-11T09:14:43.873Z"
+last_updated: "2026-06-11T09:33:48.796Z"
 last_activity: 2026-06-11
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 6
-  completed_plans: 4
-  percent: 67
+  completed_plans: 5
+  percent: 83
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -35,7 +35,7 @@ progress:
 ## Current Position
 
 Phase: 09 (State & Recovery Integrity) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-06-11
 
@@ -51,6 +51,7 @@ Last activity: 2026-06-11
 | Phase 09 P02 | 16 | 2 tasks | 9 files |
 | Phase 09 P03 | 8 | 2 tasks | 5 files |
 | Phase 09 P04 | 8 | 2 tasks | 2 files |
+| Phase 09 P05 | 15 | 2 tasks | 13 files |
 
 ## Parallel Execution Map
 
@@ -85,6 +86,8 @@ Recommended execution order: Phase 9 → then Phase 10 + Phases 11/12/13/14 in p
 - D-03: _collect_or_synthesize_result probes fold files before log-heuristic synthesis — Done (09-04)
 - D-04: _handle_timeout: main-PID SIGTERM + timeout_grace_seconds grace + pgid SIGKILL; LOCAL BACKEND ONLY — Done (09-04)
 - D-05/D-06 synthesis path: oom/timeout -> status=crash+termination_reason (not non-enum values) — Done (09-04)
+- D-12: submit --mil-model resolution chain: flag → run.mil_model config → propose node metadata → ClickException — Done (09-05)
+- D-15: automil cells migrate: mode-aware budget merge (agent_active sums consumed; wall_clock keeps min started_at) — Done (09-05)
 
 ### Critical pitfalls defended (from research/PITFALLS.md -> ROADMAP.md anti-acceptance notes)
 
