@@ -80,7 +80,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 10-02-PLAN.md — APL-03 loud-fail classifier + A1 fix: applied_variant.json overlay write (APL-01, APL-03)
-- [ ] 10-03-PLAN.md — APL-02 variant_dispatch.py implementation + run_experiment.py wiring (APL-02)
+- [x] 10-03-PLAN.md — APL-02 variant_dispatch.py implementation + run_experiment.py wiring (APL-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 10-04-PLAN.md — APL-01 iris train.py dispatch + end-to-end human verify (APL-01, APL-02)
