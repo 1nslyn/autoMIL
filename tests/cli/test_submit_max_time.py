@@ -91,7 +91,10 @@ def test_max_time_overrides_timeout_with_warning(tmp_path, monkeypatch):
 
 
 def test_max_time_negative_rejected(tmp_path, monkeypatch):
-    """OQ-5: negative --max-time raises ClickException with a clear message."""
+    """OQ-5: negative --max-time raises ClickException with a clear message.
+
+    WR-03 update: guard is now <= 0, error message says 'must be > 0 seconds'.
+    """
     project = _init_minimal_project(tmp_path)
     monkeypatch.chdir(project)
     from automil.cli import main as cli_main
@@ -101,4 +104,4 @@ def test_max_time_negative_rejected(tmp_path, monkeypatch):
         "--files", "train.py", "--max-time", "-5",
     ])
     assert result.exit_code != 0
-    assert "must be non-negative" in result.output, result.output
+    assert "must be > 0" in result.output, result.output
