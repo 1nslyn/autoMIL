@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
-status: executing
-last_updated: "2026-06-11T19:43:38.740Z"
+status: verifying
+last_updated: "2026-06-11T19:54:52.860Z"
 last_activity: 2026-06-11
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 13
-  completed_plans: 12
-  percent: 92
+  completed_plans: 13
+  percent: 100
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -36,7 +36,7 @@ progress:
 
 Phase: 11 (Config & Run Fidelity) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-11
 
 ## Performance Metrics
@@ -58,6 +58,7 @@ Last activity: 2026-06-11
 | Phase 10 P04 | 10m | 1 tasks | 2 files |
 | Phase 11-config-run-fidelity P01 | 12 | 2 tasks | 2 files |
 | Phase 11-config-run-fidelity P02 | 4m | 1 tasks | 1 files |
+| Phase 11-config-run-fidelity P03 | 8m | 2 tasks | 3 files |
 
 ## Parallel Execution Map
 
@@ -128,11 +129,11 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Phase 11 Plan 01 complete (2026-06-11). Wave-0 RED stubs for CFG-01/02/03: created tests/test_cfg_run_fidelity.py (5 tests, 3 RED) and benchmarks/tests/test_run_experiment_config.py (4 tests, 2 RED). All new stubs fail for correct reasons (AssertionError, not ImportError). Zero existing test regressions. Commits: 1c0bb76 (CFG-02/03 stubs), d8e5b98 (CFG-01 stubs).
+**Last action:** Phase 11 Plan 03 complete (2026-06-11). CFG-02 + CFG-03 fully implemented: --timeout default→None, D-03 sentinel fix (timeout is not None), --override option writing run_command_override to spec, daemon suffix-append via shlex list concat (no shell=True). All 5 CFG tests GREEN. 1021/1022 framework suite passed (1 pre-existing failure). Commits: 82a1d9b (submit.py), 1d3e1b5 (daemon + test GREEN upgrade).
 
-**Wave structure (Phase 11):** W0 = 11-01 (RED stubs, DONE) · W1 = 11-02 (CFG-01 fix: run_experiment.py None defaults) · W1 = 11-03 (CFG-02 + CFG-03 fix: submit.py --timeout None + --override + daemon append).
+**Phase 11 status:** ALL 3 PLANS COMPLETE. CFG-01 (11-02), CFG-02 + CFG-03 (11-03) delivered. Phase ready for verification.
 
-**To continue Phase 11:** `/gsd-execute-phase 11` for Plan 02. Plan 02 fixes CFG-01 in benchmarks/scripts/run_experiment.py (change --lr, --n_folds, etc. defaults to None; conditional-pass into TrainConfig).
+**Next:** Run `/gsd-verify-work` for Phase 11, or continue with Phase 12/13/14 (parallel-candidates).
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*

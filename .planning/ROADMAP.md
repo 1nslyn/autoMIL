@@ -26,7 +26,7 @@
 
 - [x] **Phase 9: State & Recovery Integrity** — Correct terminal-state recording, partial-fold aggregation, status vocabulary, and budget-cell identity (completed 2026-06-11)
 - [x] **Phase 10: Variant Application Integrity** — Registered variants actually apply to the live model through existing open seams; loud failure for loop-opening variants (completed 2026-06-11)
-- [ ] **Phase 11: Config & Run Fidelity** — Config/snapshot values drive runs; argparse defaults stop masking them; per-node run-command overrides *(parallel-candidate: independent of Phase 10)*
+- [x] **Phase 11: Config & Run Fidelity** — Config/snapshot values drive runs; argparse defaults stop masking them; per-node run-command overrides *(completed 2026-06-11)*
 - [ ] **Phase 12: Scheduling & Overlay Isolation** — GPU scheduling-policy knob; generic editable-install worktree overlay guard *(parallel-candidate: independent of Phases 10–11)*
 - [ ] **Phase 13: CLI Lifecycle & Operability** — Cancel daemon-launched jobs, dequeue queued nodes, resubmit pending→running, cross-project targeting, viz.port fallback *(parallel-candidate: independent of Phases 10–12)*
 - [ ] **Phase 14: Housekeeping & Tech Debt** — Legacy graph.json round-trip, tick_cells test fixes, allowlist anchor cleanup *(parallel-candidate: independent of Phases 10–13)*
@@ -102,7 +102,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 11-02-PLAN.md — CFG-01: run_experiment.py None-default training overrides + conditional TrainConfig construction (CFG-01)
-- [ ] 11-03-PLAN.md — CFG-02/03: --timeout None-default + D-03 sentinel fix + --override CLI + daemon suffix-append (CFG-02, CFG-03)
+- [x] 11-03-PLAN.md — CFG-02/03: --timeout None-default + D-03 sentinel fix + --override CLI + daemon suffix-append (CFG-02, CFG-03)
 
 **Cross-cutting constraints:**
 - No regressions in existing test suites (run tests/ and benchmarks/tests/ SEPARATELY — combined run triggers rootdir collision)
