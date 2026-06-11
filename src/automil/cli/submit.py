@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from datetime import datetime
@@ -57,9 +58,9 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     """
     # D-195 / RESEARCH.md OQ-5: --max-time SECONDS overrides --timeout MINUTES via ceil-div.
     if max_time_seconds is not None:
-        if max_time_seconds < 0:
+        if max_time_seconds <= 0:
             raise click.ClickException(
-                f"--max-time must be non-negative seconds, got {max_time_seconds}"
+                f"--max-time must be > 0 seconds, got {max_time_seconds}"
             )
         translated = max(1, (max_time_seconds + 59) // 60)
         if timeout is not None:  # caller passed --timeout explicitly
