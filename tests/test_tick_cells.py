@@ -448,11 +448,11 @@ def test_handle_completion_with_cap_cancel_zero_folds_marks_crash(tmp_path: Path
 
     orch._handle_completion(node_id, returncode=-15)
 
-    # 1. result.json with status=crashed
+    # 1. result.json with status=crash (D-06: canonical value, was 'crashed' pre-v1.1)
     result_path = node_archive / "result.json"
     assert result_path.exists()
     result = json.loads(result_path.read_text())
-    assert result["status"] == "crashed", f"Got status: {result['status']}"
+    assert result["status"] == "crash", f"Got status: {result['status']}"
     assert result["metadata"]["budget_killed"] is True
 
     # 2. Graph node status == crash

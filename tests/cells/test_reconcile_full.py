@@ -8,7 +8,7 @@ Tests:
     test_reconcile_budget_kill_writes_partial_result_json
         reconcile_budget_kill with 3/5 folds → result.json w/ budget_killed
     test_reconcile_budget_kill_zero_folds_writes_crashed_result_json
-        reconcile_budget_kill with 0 folds → status='crashed', composite=0.0
+        reconcile_budget_kill with 0 folds → status='crash', composite=0.0 (D-06)
     test_descendant_cascade_against_partial_composite_keeps_better_descendant
         descendant that beats partial composite 0.82 stays 'keep'
     test_descendant_cascade_against_partial_composite_discards_worse_descendant
@@ -99,13 +99,15 @@ def test_reconcile_budget_kill_writes_partial_result_json(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — zero folds → crashed result.json with budget_killed
+# Test 2 — zero folds → crash result.json with budget_killed (D-06: was 'crashed')
 # ---------------------------------------------------------------------------
 
 
 def test_reconcile_budget_kill_zero_folds_writes_crashed_result_json(tmp_path: Path):
-    """Empty archive (0 fold files) → result.json status='crashed', composite=0.0,
+    """Empty archive (0 fold files) → result.json status='crash', composite=0.0,
     metadata.budget_killed=True.
+
+    D-06 (REC-03): canonical status is 'crash', not 'crashed' (drift value removed).
     """
     node_id = "node_zero_folds"
     archive_dir = tmp_path / "archive"
@@ -120,7 +122,7 @@ def test_reconcile_budget_kill_zero_folds_writes_crashed_result_json(tmp_path: P
         expected_fold_count=5,
     )
 
-    assert payload["status"] == "crashed"
+    assert payload["status"] == "crash"  # D-06: was 'crashed' pre-v1.1
     assert payload["composite"] == 0.0
     assert payload["partial_folds"] == 0
     assert payload.get("metadata", {}).get("budget_killed") is True
@@ -128,7 +130,7 @@ def test_reconcile_budget_kill_zero_folds_writes_crashed_result_json(tmp_path: P
     result_path = node_archive / "result.json"
     assert result_path.exists()
     on_disk = json.loads(result_path.read_text())
-    assert on_disk["status"] == "crashed"
+    assert on_disk["status"] == "crash"  # D-06: was 'crashed' pre-v1.1
     assert on_disk["composite"] == 0.0
     assert on_disk.get("metadata", {}).get("budget_killed") is True
 

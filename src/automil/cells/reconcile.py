@@ -8,6 +8,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# D-06 (REC-03): canonical status enum. "crashed" was emitted pre-v1.1 — normalize on write.
+_STATUS_CANON: dict[str, str] = {
+    "crashed": "crash",
+}
+
 
 def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
     """Walk archive/<node>/fold_*_result.json; return a result.json payload (D-119).
@@ -82,7 +87,7 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
 
 def _crashed_payload(expected_fold_count: int) -> dict:
     return {
-        "status": "crashed",
+        "status": "crash",  # D-06: canonical value (was "crashed")
         "composite": 0.0,
         "metrics": {},
         "partial_folds": 0,
