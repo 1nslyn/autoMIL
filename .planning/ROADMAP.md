@@ -101,7 +101,7 @@ Plans:
 - [x] 11-01-PLAN.md — Wave-0 test stubs (CFG-01/02/03 RED tests, Nyquist compliance)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 11-02-PLAN.md — CFG-01: run_experiment.py None-default training overrides + conditional TrainConfig construction (CFG-01)
+- [x] 11-02-PLAN.md — CFG-01: run_experiment.py None-default training overrides + conditional TrainConfig construction (CFG-01)
 - [ ] 11-03-PLAN.md — CFG-02/03: --timeout None-default + D-03 sentinel fix + --override CLI + daemon suffix-append (CFG-02, CFG-03)
 
 **Cross-cutting constraints:**
