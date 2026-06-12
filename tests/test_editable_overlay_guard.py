@@ -85,7 +85,7 @@ def _build_check_warnings(
             if overlap and not has_consumer_guard and not guard_enabled:
                 warnings.append(
                     f"files.editable includes paths under editable-installed "
-                    f"package root {str(root_p)!r}. Worktree overlays to this path "
+                    f"package root {str(root_p)!r}. worktree overlays to this path "
                     f"may be shadowed by the parent-venv editable install."
                 )
 
@@ -96,7 +96,6 @@ def _build_check_warnings(
 # SCH-02 Tests — 5 stubs
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="SCH-02 not implemented")
 def test_check_warns_missing_guard(tmp_path):
     """automil check warns when files.editable overlaps an editable src root and no guard.
 
@@ -119,7 +118,7 @@ def test_check_warns_missing_guard(tmp_path):
             editable_roots=[str(editable_src)],
             files_editable=["src/mymodel.py"],
             project_root=tmp_path,
-            run_script_content="# no sys.path.insert here",
+            run_script_content="# no guard here",
             overlay_guard_enabled=False,
         )
 
@@ -132,7 +131,6 @@ def test_check_warns_missing_guard(tmp_path):
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-02 not implemented")
 def test_check_no_warn_when_guard_enabled(tmp_path):
     """check suppresses the editable-overlay warning when editable_overlay_guard: true.
 
@@ -150,7 +148,7 @@ def test_check_no_warn_when_guard_enabled(tmp_path):
             editable_roots=[str(editable_src)],
             files_editable=["src/mymodel.py"],
             project_root=tmp_path,
-            run_script_content="# no sys.path.insert",
+            run_script_content="# no guard here",
             overlay_guard_enabled=True,
         )
 
@@ -161,7 +159,6 @@ def test_check_no_warn_when_guard_enabled(tmp_path):
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-02 not implemented")
 def test_check_no_warn_when_consumer_guard_present(tmp_path):
     """check suppresses warning when the run script contains sys.path.insert.
 
@@ -193,7 +190,6 @@ def test_check_no_warn_when_consumer_guard_present(tmp_path):
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-02 not implemented")
 def test_opt_in_injection_prepends_pythonpath(tmp_path):
     """Opt-in injection prepends the worktree editable root to PYTHONPATH.
 
@@ -249,7 +245,6 @@ def test_opt_in_injection_prepends_pythonpath(tmp_path):
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SCH-02 not implemented")
 def test_check_suppresses_when_no_editable_overlap(tmp_path):
     """check emits no editable-overlay warning when editable root does not overlap overlay.
 

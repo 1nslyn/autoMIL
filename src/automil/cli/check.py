@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import site
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,40 @@ import yaml
 
 from automil.cli import main
 from automil.cli._helpers import _find_automil_dir, _find_git_root
+
+def _collect_editable_source_roots() -> list[str]:
+    """Return editable source root paths from site-packages .pth / egg-link files.
+
+    Scans site.getsitepackages() and site.getusersitepackages() for three
+    editable-install file patterns:
+      - _editable_impl_*.pth   (uv / pip PEP 660, modern)
+      - __editable__*.pth      (older pip PEP 660 variant)
+      - *.egg-link             (legacy setup.py develop)
+
+    Each matching file's text content is the source root path. Returns a
+    list[str] of source root directory paths that actually exist on disk.
+    Catches OSError on file read and skips that file.
+    """
+    roots: list[str] = []
+    site_dirs = list(site.getsitepackages())
+    user_site = site.getusersitepackages()
+    if user_site:
+        site_dirs.append(user_site)
+
+    for site_dir in site_dirs:
+        p = Path(site_dir)
+        if not p.is_dir():
+            continue
+        for pattern in ("_editable_impl_*.pth", "__editable__*.pth", "*.egg-link"):
+            for pth_file in p.glob(pattern):
+                try:
+                    content = pth_file.read_text().strip()
+                    if content and Path(content).is_dir():
+                        roots.append(content)
+                except OSError:
+                    continue
+    return roots
+
 
 # D-172 — required SLURM directives. `signal` is framework-mandated (Phase 4 D-115)
 # and rejected if operator tries to override.
@@ -164,6 +199,44 @@ def check():
         editable = config.get("files", {}).get("editable", [])
         if not editable:
             warnings.append("files.editable is empty. Auto-detect will capture ALL changed files.")
+
+        # SCH-02 (D-02): warn when files.editable overlaps an editable-installed
+        # package source root and no worktree import guard is present (ISSUE-010).
+        editable_roots = _collect_editable_source_roots()
+        run_script_path = git_root / (config.get("run", {}).get("script") or "train.py")
+        run_command = config.get("run", {}).get("command")
+        if run_command:
+            # run.command set — no script file to inspect; assume no consumer guard
+            has_consumer_guard = False
+        elif run_script_path.exists():
+            has_consumer_guard = "sys.path.insert" in run_script_path.read_text()
+        else:
+            has_consumer_guard = False
+        overlay_guard_enabled = bool(
+            (config.get("orchestrator") or {}).get("editable_overlay_guard", False)
+        )
+        for root in editable_roots:
+            root_p = Path(root)
+            for editable_glob in editable:
+                candidate = git_root / editable_glob
+                # Check if the candidate path falls under the editable source root.
+                try:
+                    candidate.relative_to(root_p)
+                    overlap = True
+                except ValueError:
+                    overlap = False
+                if not overlap:
+                    # Also check via string prefix (handles non-resolved paths).
+                    overlap = str(candidate).startswith(str(root_p) + os.sep) or str(candidate) == str(root_p)
+                if overlap and not has_consumer_guard and not overlay_guard_enabled:
+                    warnings.append(
+                        f"files.editable includes paths under editable-installed package "
+                        f"source root '{root}'. Worktree overlays to this path may be "
+                        f"shadowed by the parent-venv editable install. "
+                        f"Fix: add sys.path.insert(0, <worktree_src>) to your run script, "
+                        f"or set orchestrator.editable_overlay_guard: true in automil/config.yaml."
+                    )
+                    break  # one warning per editable root is sufficient
 
         # Check baseline
         baseline_comp = config.get("baseline", {}).get("composite", 0)
