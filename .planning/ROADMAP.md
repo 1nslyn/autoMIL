@@ -144,7 +144,7 @@ Plans:
 **Plans**: 4 plans
 Plans:
 **Wave 1**
-- [ ] 13-01-PLAN.md — Wave-0 test stubs (all 5 OPS requirements, Nyquist compliance, anti-theater real-subprocess fixture for OPS-01)
+- [x] 13-01-PLAN.md — Wave-0 test stubs (all 5 OPS requirements, Nyquist compliance, anti-theater real-subprocess fixture for OPS-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 13-02-PLAN.md — OPS-01: cancel direct-kill via on-disk pid/pgid + SIGTERM→grace→SIGKILL + starttime PID-reuse guard

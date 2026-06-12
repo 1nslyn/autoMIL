@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
 status: executing
-last_updated: "2026-06-12T10:48:00.000Z"
+last_updated: "2026-06-12T11:31:38.104Z"
 last_activity: 2026-06-12
 progress:
   total_phases: 6
-  completed_phases: 5
-  total_plans: 16
-  completed_plans: 16
-  percent: 83
+  completed_phases: 4
+  total_plans: 20
+  completed_plans: 17
+  percent: 85
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -34,10 +34,10 @@ progress:
 
 ## Current Position
 
-Phase: 13 (CLI Lifecycle & Operability) — STARTING (discuss → plan → execute)
-Plan: 0 of N (not yet planned)
-Status: Phase 12 complete + gated; beginning Phase 13
-Last activity: 2026-06-12
+Phase: 13 (CLI Lifecycle & Operability) — EXECUTING
+Plan: 2 of 4
+Status: Executing Phase 13
+Last activity: 2026-06-12 -- Phase 13 Plan 01 complete (Wave-0 RED stubs: 10 xfail + 4 regression guards across 5 test files)
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Last activity: 2026-06-12
 | Phase 11-config-run-fidelity P02 | 4m | 1 tasks | 1 files |
 | Phase 11-config-run-fidelity P03 | 8m | 2 tasks | 3 files |
 | Phase 12-scheduling-overlay-isolation P02 | 8 | 2 tasks | 4 files |
+| Phase 13-cli-lifecycle-operability P01 | 11 | 2 tasks | 5 files |
 
 ## Parallel Execution Map
 

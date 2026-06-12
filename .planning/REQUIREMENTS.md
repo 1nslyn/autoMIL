@@ -47,11 +47,11 @@ Committed scope of milestone v1.1. REQ-IDs grouped by defect theme. New category
 
 <!-- Operators can drive the full node lifecycle from the CLI without manual file surgery. -->
 
-- [ ] **OPS-01**: `automil cancel` can cancel daemon-launched local jobs — it resolves a local running spec via top-level `opaque_id` or falls back to `metadata.pid` / `metadata.pgid`. (ISSUE-011, S1)
-- [ ] **OPS-02**: An operator can cleanly dequeue a queued node (`automil dequeue <node>` or a `cancel` extension) that removes the queue spec and marks the graph node `cancelled`, leaving no orphaned pending proposal. (ISSUE-016, S2)
-- [ ] **OPS-03**: Submitting against an existing `type=proposed,status=pending` node transitions it to `running` (`graph.mark_running`) after the queue spec is written, so cancellation and portfolio accounting stay consistent. (ISSUE-023, S2)
-- [ ] **OPS-04**: A CLI `--project PATH` option routes project discovery so commands target an overlay from outside its project root (monorepo / sibling-overlay layouts). (ISSUE-012, S2)
-- [ ] **OPS-05**: `automil viz start` resolves the port as explicit `--port` → `automil/config.yaml: viz.port` → default `8420`, matching the existing `viz.host` fallback. (ISSUE-004, S2)
+- [x] **OPS-01**: `automil cancel` can cancel daemon-launched local jobs — it resolves a local running spec via top-level `opaque_id` or falls back to `metadata.pid` / `metadata.pgid`. (ISSUE-011, S1)
+- [x] **OPS-02**: An operator can cleanly dequeue a queued node (`automil dequeue <node>` or a `cancel` extension) that removes the queue spec and marks the graph node `cancelled`, leaving no orphaned pending proposal. (ISSUE-016, S2)
+- [x] **OPS-03**: Submitting against an existing `type=proposed,status=pending` node transitions it to `running` (`graph.mark_running`) after the queue spec is written, so cancellation and portfolio accounting stay consistent. (ISSUE-023, S2)
+- [x] **OPS-04**: A CLI `--project PATH` option routes project discovery so commands target an overlay from outside its project root (monorepo / sibling-overlay layouts). (ISSUE-012, S2)
+- [x] **OPS-05**: `automil viz start` resolves the port as explicit `--port` → `automil/config.yaml: viz.port` → default `8420`, matching the existing `viz.host` fallback. (ISSUE-004, S2)
 
 ### Housekeeping & tech debt (DBT)
 
@@ -102,11 +102,11 @@ Which phase covers which requirement. Populated during roadmap creation.
 | CFG-03 | Phase 11 | Complete |
 | SCH-01 | Phase 12 | Complete |
 | SCH-02 | Phase 12 | Complete |
-| OPS-01 | Phase 13 | Pending |
-| OPS-02 | Phase 13 | Pending |
-| OPS-03 | Phase 13 | Pending |
-| OPS-04 | Phase 13 | Pending |
-| OPS-05 | Phase 13 | Pending |
+| OPS-01 | Phase 13 | Complete |
+| OPS-02 | Phase 13 | Complete |
+| OPS-03 | Phase 13 | Complete |
+| OPS-04 | Phase 13 | Complete |
+| OPS-05 | Phase 13 | Complete |
 | DBT-01 | Phase 14 | Pending |
 | DBT-02 | Phase 14 | Pending |
 | DBT-03 | Phase 14 | Pending |
