@@ -147,7 +147,7 @@ Plans:
 - [x] 13-01-PLAN.md — Wave-0 test stubs (all 5 OPS requirements, Nyquist compliance, anti-theater real-subprocess fixture for OPS-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 13-02-PLAN.md — OPS-01: cancel direct-kill via on-disk pid/pgid + SIGTERM→grace→SIGKILL + starttime PID-reuse guard
+- [x] 13-02-PLAN.md — OPS-01: cancel direct-kill via on-disk pid/pgid + SIGTERM→grace→SIGKILL + starttime PID-reuse guard
 - [ ] 13-03-PLAN.md — OPS-02: new dequeue command (locked_update graph.cancel) + OPS-03: submit pending→running else branch
 - [ ] 13-04-PLAN.md — OPS-04: --project group option + _PROJECT_OVERRIDE bridge + OPS-05: viz port config fallback
 
