@@ -487,17 +487,17 @@ If table is otherwise empty: All other claims in this research were verified dir
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **OPS-01: SIGTERM→grace→SIGKILL vs single SIGTERM**
+1. **RESOLVED — OPS-01: SIGTERM→grace→SIGKILL vs single SIGTERM**
    - What we know: CONTEXT.md marks this as Claude's discretion; the daemon uses SIGTERM + 5s + SIGKILL; the existing CLI cancel uses single SIGTERM then polls.
    - What's unclear: The CLI direct-kill path has no daemon tick to fire the SIGKILL escalation. A stuck process group (e.g. ignoring SIGTERM) will not be escalated unless the CLI implements it.
-   - Recommendation: Implement SIGTERM + 5s grace + SIGKILL in the CLI direct-kill path, mirroring the daemon. This is 10 extra lines and eliminates an entire failure mode.
+   - **RESOLVED:** Implement SIGTERM + 5s grace + SIGKILL in the CLI direct-kill path, mirroring the daemon. Implemented in plan 13-02/T1 (Part B).
 
-2. **OPS-02: does `graph.cancel()` require the node to already exist?**
+2. **RESOLVED — OPS-02: does `graph.cancel()` require the node to already exist?**
    - What we know: `graph.cancel()` at graph.py:381 does `node = self.nodes[node_id]` — it will raise `KeyError` if node absent.
    - What's unclear: Whether a queued node without a graph entry is a real scenario (submit.py always creates graph entry).
-   - Recommendation: `dequeue` should use `_get_node_or_die` (same as cancel.py) before entering `locked_update`; inside `locked_update`, call `graph.cancel()` safely.
+   - **RESOLVED:** Yes — `dequeue` uses `_get_node_or_die` (same as cancel.py) before entering `locked_update`; inside `locked_update`, call `graph.cancel()` safely. Implemented in plan 13-03/T1.
 
 ---
 
