@@ -28,7 +28,7 @@
 - [x] **Phase 10: Variant Application Integrity** — Registered variants actually apply to the live model through existing open seams; loud failure for loop-opening variants (completed 2026-06-11)
 - [x] **Phase 11: Config & Run Fidelity** — Config/snapshot values drive runs; argparse defaults stop masking them; per-node run-command overrides *(completed 2026-06-11)*
 - [x] **Phase 12: Scheduling & Overlay Isolation** — GPU scheduling-policy knob; generic editable-install worktree overlay guard *(parallel-candidate: independent of Phases 10–11)* (completed 2026-06-12)
-- [ ] **Phase 13: CLI Lifecycle & Operability** — Cancel daemon-launched jobs, dequeue queued nodes, resubmit pending→running, cross-project targeting, viz.port fallback *(parallel-candidate: independent of Phases 10–12)*
+- [x] **Phase 13: CLI Lifecycle & Operability** — Cancel daemon-launched jobs, dequeue queued nodes, resubmit pending→running, cross-project targeting, viz.port fallback *(parallel-candidate: independent of Phases 10–12)* (completed 2026-06-12)
 - [ ] **Phase 14: Housekeeping & Tech Debt** — Legacy graph.json round-trip, tick_cells test fixes, allowlist anchor cleanup *(parallel-candidate: independent of Phases 10–13)*
 
 ## Phase Details
@@ -149,7 +149,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 13-02-PLAN.md — OPS-01: cancel direct-kill via on-disk pid/pgid + SIGTERM→grace→SIGKILL + starttime PID-reuse guard
 - [x] 13-03-PLAN.md — OPS-02: new dequeue command (locked_update graph.cancel) + OPS-03: submit pending→running else branch
-- [ ] 13-04-PLAN.md — OPS-04: --project group option + _PROJECT_OVERRIDE bridge + OPS-05: viz port config fallback
+- [x] 13-04-PLAN.md — OPS-04: --project group option + _PROJECT_OVERRIDE bridge + OPS-05: viz port config fallback
 
 **Parallel note**: Independent of Phases 11, 12, 14. Can run in parallel with any of them after Phase 9 clears.
 
