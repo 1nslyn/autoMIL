@@ -30,14 +30,14 @@ progress:
 - `CLAUDE.md` — project instructions and Leo's standing directives
 - `~/.claude/projects/-home-jma-Documents-yinshuol-autoMIL/memory/MEMORY.md` — Leo's standing memory
 
-**Current focus:** Milestone v1.1 close — ALL 6 phases (9–14) COMPLETE; milestone audit → complete → cleanup
+**Current focus:** v1.1 Bug Fixing SHIPPED (2026-06-12) — milestone archived + tagged. Next: `/gsd-new-milestone` (and Leo merges `milestone/v1.1-bug-fixing` → main).
 
 ## Current Position
 
-Phase: ALL COMPLETE (9–14) — milestone-close lifecycle
-Plan: 23 of 23 across 6 phases
-Status: All phases verified + code-reviewed; entering milestone audit → complete → cleanup
-Last activity: 2026-06-12 -- Phase 14 verified (suite 1058 passed, 0 failed); v1.1 milestone fully green
+Phase: v1.1 COMPLETE & ARCHIVED — milestone shipped
+Plan: 23 of 23 across 6 phases (9–14)
+Status: Milestone audit PASSED; REQUIREMENTS/ROADMAP archived to milestones/v1.1-*; local tag v1.1 created (NOT pushed — Leo owns merge/push)
+Last activity: 2026-06-12 -- v1.1 shipped (suite 1058 passed, 0 failed; 20/20 reqs; 6/6 integration seams)
 
 ## Performance Metrics
 

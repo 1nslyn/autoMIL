@@ -8,7 +8,20 @@ autoMIL is a generic, agent-driven framework for autonomous experiment search ov
 
 An agent can autonomously discover model improvements — architectural and training-recipe — for any user's existing training code under a 6-hour-per-cell budget, and the discovered variants are **reproducible, attributable to their parents, and portable across machines and LLM runtimes**.
 
-## Current Milestone: v1.1 Bug Fixing
+## Current State
+
+**Shipped:** v1.1 Bug Fixing (2026-06-12) — Phases 9–14, 23 plans, **20/20 requirements satisfied**, full framework test suite green (**1058 passed, 0 failed**). Milestone audit PASSED (6/6 cross-phase integration seams wired). See [v1.1-MILESTONE-AUDIT.md](v1.1-MILESTONE-AUDIT.md) and [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md).
+
+**Previously shipped:** v1.0 F2-readiness framework refactor (2026-05-08).
+
+**Carried deferrals:** APL-02 real-data composite-delta is workstation/human-verified (`@pytest.mark.workstation`, CI-skipped — architecturally complete); results.tsv/viz generic-metric rendering and real SLURM/Ray cluster verification remain deferred to a future milestone.
+
+## Next Milestone
+
+_Not yet defined._ Run `/gsd-new-milestone` to scope it (questioning → research → requirements → roadmap). A fresh `.planning/REQUIREMENTS.md` is created at that point.
+
+<details>
+<summary>v1.1 Bug Fixing — milestone goal &amp; target features (archived 2026-06-12)</summary>
 
 **Goal:** Clear the v1.0 open-defect backlog — restore intended behavior across the triaged issues and housekeeping debt — **without expanding the autoMIL search loop** or taking on registry-runtime / loop-opening architecture work.
 
@@ -21,6 +34,8 @@ An agent can autonomously discover model improvements — architectural and trai
 - **Housekeeping** — graph.json legacy round-trip, `tick_cells` test failures, allowlist-anchor cleanup.
 
 **Key context:** Scope source is the dated triage `tasks/test-run-issues.md` (2026-06-07). ISSUE-006 is **won't-fix** (its proposed fix is "keep the guard" — a documented design constraint). The line on registry work: a registered variant **must apply to the real model** (fix it if it doesn't), but **opening a closed MIL training loop** (CLAM's `clam_train` / ISSUE-007) and the loss/attention variants that require it are **deferred to a future milestone** — those open the search loop. Variant application through existing open seams is in scope and may be verified with experiments.
+
+</details>
 
 ## Requirements
 
