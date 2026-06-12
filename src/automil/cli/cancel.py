@@ -183,16 +183,46 @@ def cancel(node_id: str, timeout: int) -> None:
             # state is a non-Z letter ('R', 'S', 'D', etc.) — process is alive.
             return True
 
+        def _signal_group(sig: int) -> None:
+            """Signal the process group, re-validating _pid liveness first (WR-01).
+
+            _pgid is read straight from disk and is NOT starttime-validated, so
+            signalling it directly reintroduces the exact PID-reuse hazard the
+            _is_alive starttime cross-check exists to defend against: if the
+            original group leader exited and its PGID was recycled by an
+            unrelated new group, killpg(_pgid) would land on the wrong group.
+
+            Defence: (1) re-probe _is_alive(_pid, _starttime) immediately before
+            signalling so a starttime-verified target is confirmed live, and
+            (2) derive the PGID from the validated _pid via os.getpgid(_pid)
+            rather than trusting the on-disk _pgid, so the group comes from a
+            starttime-verified PID. Falls back to the on-disk _pgid only when
+            _starttime is None (non-Linux best-effort, where OPS-01 already
+            accepts the PID-reuse risk). If _pid is gone, treat as already-dead
+            and skip.
+            """
+            if not _is_alive(_pid, _starttime):
+                return
+            try:
+                target_pgid = os.getpgid(_pid) if _starttime is not None else _pgid
+            except ProcessLookupError:
+                # _pid vanished between the liveness probe and getpgid — dead.
+                return
+            try:
+                os.killpg(target_pgid, sig)
+                logger.debug(
+                    "cancel: sent %s to pgid %d for %s",
+                    _signal.Signals(sig).name, target_pgid, node_id,
+                )
+            except (ProcessLookupError, PermissionError):
+                pass
+
         if not _is_alive(_pid, _starttime):
             # Process already gone — skip signalling, proceed to graph update.
             logger.debug("cancel: process %d already gone, skipping kill", _pid)
         else:
             # SIGTERM first (mirror daemon's SIGTERM→grace→SIGKILL pattern).
-            try:
-                os.killpg(_pgid, _signal.SIGTERM)
-                logger.debug("cancel: sent SIGTERM to pgid %d for %s", _pgid, node_id)
-            except (ProcessLookupError, PermissionError):
-                pass
+            _signal_group(_signal.SIGTERM)
 
             # 5-second grace period (mirrors daemon's _pending_sigkill_at pattern).
             _grace_deadline = time.monotonic() + 5.0
@@ -201,11 +231,7 @@ def cancel(node_id: str, timeout: int) -> None:
 
             if _is_alive(_pid, _starttime):
                 # Grace elapsed — escalate to SIGKILL.
-                try:
-                    os.killpg(_pgid, _signal.SIGKILL)
-                    logger.debug("cancel: sent SIGKILL to pgid %d for %s", _pgid, node_id)
-                except (ProcessLookupError, PermissionError):
-                    pass
+                _signal_group(_signal.SIGKILL)
                 # Brief wait for SIGKILL to land.
                 for _ in range(10):
                     if not _is_alive(_pid, _starttime):
