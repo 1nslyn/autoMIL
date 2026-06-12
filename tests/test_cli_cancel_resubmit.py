@@ -13,6 +13,8 @@ Test architecture:
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -74,12 +76,16 @@ def _make_adir(tmp_path: Path) -> Path:
     """Create a minimal automil/ directory structure under tmp_path.
 
     Also creates a .git marker so _find_git_root() can resolve the git root.
+    D-169: running specs are stored per-backend under running/<backend>/;
+    create running/local/ so the OPS-01 local-backend cancel path has a home.
     """
     (tmp_path / ".git").mkdir(exist_ok=True)
     adir = tmp_path / "automil"
     orch_dir = adir / "orchestrator"
     for sub in ("queue", "running", "archive"):
         (orch_dir / sub).mkdir(parents=True, exist_ok=True)
+    # Per-backend running subdirectory for local jobs (D-169).
+    (orch_dir / "running" / "local").mkdir(parents=True, exist_ok=True)
     # Minimal config.yaml so _find_automil_dir() resolves adir.
     (adir / "config.yaml").write_text("run:\n  script: train.py\n")
     return adir
@@ -461,3 +467,197 @@ def test_resubmit_happy_path(
         f"expected metadata.resubmitted_from={crashed_id!r}, "
         f"got: {new_node.get('metadata', {})!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# OPS-01 RED stubs (Wave 0 — Nyquist compliance)
+# These tests xfail until plan 13-02 implements the local direct-kill path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(reason="OPS-01 not yet implemented", strict=True)
+def test_cancel_local_direct_kill(
+    cli_runner: CliRunner, tmp_path: Path, monkeypatch
+) -> None:
+    """Cancel a daemon-launched local job via metadata.pid/pgid in the running spec.
+
+    Anti-theater constraint (13-VALIDATION.md §Critical Anti-Theater Constraints):
+    This test MUST spawn a real subprocess and assert that cancel kills it.
+    Do NOT mock os.killpg — the test verifies real process termination.
+    """
+    from automil.cli import main  # noqa: PLC0415
+
+    adir = _make_adir(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    node_id = "node_0010"
+
+    # Spawn a real child process with its own session (mirrors daemon behaviour).
+    proc = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        pgid = os.getpgid(proc.pid)
+
+        # Lazy import inside test body to avoid circular-import risk at collection time.
+        from automil.orchestrator import _read_proc_starttime  # noqa: PLC0415
+        starttime = _read_proc_starttime(proc.pid)  # None on non-Linux — that is fine.
+
+        # Write running spec in the shape the daemon writes (D-169 local backend).
+        running_spec: dict = {
+            "id": node_id,
+            "metadata": {
+                "pid": proc.pid,
+                "pgid": pgid,
+            },
+        }
+        if starttime is not None:
+            running_spec["metadata"]["starttime_ticks"] = starttime
+
+        running_path = adir / "orchestrator" / "running" / "local" / f"{node_id}.json"
+        running_path.write_text(json.dumps(running_spec, indent=2))
+
+        # Write graph node as running with local backend.
+        _write_graph(adir, {
+            node_id: {
+                "id": node_id,
+                "parent_id": None,
+                "type": "proposed",
+                "status": "running",
+                "description": "direct kill test",
+                "techniques": [],
+                "metadata": {"backend": "local"},
+            }
+        })
+
+        result = cli_runner.invoke(main, ["cancel", node_id], catch_exceptions=False)
+
+        # Give the signal a moment to propagate.
+        time.sleep(0.3)
+
+        # Assert the process is dead (OPS-01 success criterion).
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+
+        # Graph must be updated to cancelled.
+        graph = json.loads((adir / "graph.json").read_text())
+        assert graph["nodes"][node_id]["status"] == "cancelled"
+
+    finally:
+        # Teardown: kill the sleep process if still alive (e.g., while xfail).
+        try:
+            proc.kill()
+            proc.wait()
+        except Exception:
+            pass
+
+
+def test_cancel_missing_pid_metadata(
+    cli_runner: CliRunner, tmp_path: Path, monkeypatch
+) -> None:
+    """Cancel when running spec has no opaque_id and no metadata.pid/pgid → hard fail.
+
+    OPS-01: cancel must loud-fail (non-zero exit) with a message indicating
+    the spec is corrupted or unmanageable when neither opaque_id nor metadata
+    is present. This behavior already exists in the current implementation
+    (the opaque_id hard-fail at cancel.py:100-105 catches this case);
+    it must remain correct after OPS-01 adds the pid/pgid fallback path.
+    NOT xfail — this specific sub-case already works correctly.
+    """
+    from automil.cli import main  # noqa: PLC0415
+
+    adir = _make_adir(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    node_id = "node_0011"
+
+    # Running spec with neither opaque_id nor metadata (corrupted state).
+    running_path = adir / "orchestrator" / "running" / "local" / f"{node_id}.json"
+    running_path.write_text(json.dumps({"id": node_id}, indent=2))
+
+    _write_graph(adir, {
+        node_id: {
+            "id": node_id,
+            "parent_id": None,
+            "type": "proposed",
+            "status": "running",
+            "description": "corrupted spec test",
+            "techniques": [],
+            "metadata": {"backend": "local"},
+        }
+    })
+
+    result = cli_runner.invoke(main, ["cancel", node_id])
+
+    assert result.exit_code != 0
+    lower_out = result.output.lower()
+    assert (
+        "corrupted" in lower_out
+        or "cannot cancel" in lower_out
+        or "manage" in lower_out
+    ), f"expected error message in output: {result.output!r}"
+
+
+@pytest.mark.xfail(reason="OPS-01 not yet implemented", strict=True)
+def test_cancel_no_starttime_ticks(
+    cli_runner: CliRunner, tmp_path: Path, monkeypatch
+) -> None:
+    """Cancel succeeds using only pid/pgid when starttime_ticks is absent.
+
+    OPS-01: starttime_ticks is optional (omitted on non-Linux). Cancellation
+    must succeed via pid/pgid alone (with accepted PID-reuse risk on non-Linux).
+    """
+    from automil.cli import main  # noqa: PLC0415
+
+    adir = _make_adir(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    node_id = "node_0012"
+
+    # Spawn a real child process (mirrors daemon behaviour).
+    proc = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        pgid = os.getpgid(proc.pid)
+
+        # Running spec WITHOUT starttime_ticks (simulates non-Linux environment).
+        running_spec = {
+            "id": node_id,
+            "metadata": {
+                "pid": proc.pid,
+                "pgid": pgid,
+                # starttime_ticks intentionally omitted
+            },
+        }
+        running_path = adir / "orchestrator" / "running" / "local" / f"{node_id}.json"
+        running_path.write_text(json.dumps(running_spec, indent=2))
+
+        _write_graph(adir, {
+            node_id: {
+                "id": node_id,
+                "parent_id": None,
+                "type": "proposed",
+                "status": "running",
+                "description": "no starttime_ticks test",
+                "techniques": [],
+                "metadata": {"backend": "local"},
+            }
+        })
+
+        result = cli_runner.invoke(main, ["cancel", node_id], catch_exceptions=False)
+
+        # Give the signal a moment to propagate.
+        time.sleep(0.3)
+
+        # Process must be dead even without starttime_ticks.
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+
+        # Graph must be cancelled.
+        graph = json.loads((adir / "graph.json").read_text())
+        assert graph["nodes"][node_id]["status"] == "cancelled"
+
+    finally:
+        # Teardown: clean up if still alive while xfail.
+        try:
+            proc.kill()
+            proc.wait()
+        except Exception:
+            pass
