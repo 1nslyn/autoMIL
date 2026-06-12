@@ -57,7 +57,7 @@ Committed scope of milestone v1.1. REQ-IDs grouped by defect theme. New category
 
 <!-- v1.1-tagged debt from STATE.md deferred items. -->
 
-- [ ] **DBT-01**: Pre-D-200 `graph.json` files load without a silent `KeyError` — `_load` detects the legacy schema and dict-spreads existing nodes' `val_auc`/`test_auc`/etc. on read (with `schema_version` handling). (STATE.md Phase 8 follow-up #2)
+- [x] **DBT-01**: Pre-D-200 `graph.json` files load without a silent `KeyError` — `_load` detects the legacy schema and dict-spreads existing nodes' `val_auc`/`test_auc`/etc. on read (with `schema_version` handling). (STATE.md Phase 8 follow-up #2)
 - [ ] **DBT-02**: The 3 pre-existing `tick_cells` failures pass — `test_tick_cells_active_to_refusing_new`, `test_tick_cells_terminating_fires_cancel_with_cap_reason`, `test_tick_cells_finalized_when_running_empty` (Phase-4-origin `cells_dir` resolution mismatch). (STATE.md Phase 6 follow-up #1)
 - [ ] **DBT-03**: The em-dashes neighboring the daemon allowlist anchor (`_orchestrator_daemon.py` ~L45-55) are removed so future re-flow cannot break the anchor at the allowlist comment. (STATE.md Phase 8 follow-up #5 / F-13)
 
@@ -107,7 +107,7 @@ Which phase covers which requirement. Populated during roadmap creation.
 | OPS-03 | Phase 13 | Complete |
 | OPS-04 | Phase 13 | Complete |
 | OPS-05 | Phase 13 | Complete |
-| DBT-01 | Phase 14 | Pending |
+| DBT-01 | Phase 14 | Complete |
 | DBT-02 | Phase 14 | Pending |
 | DBT-03 | Phase 14 | Pending |
 
