@@ -116,7 +116,10 @@ def cancel(node_id: str, timeout: int) -> None:
         # on-disk metadata. The daemon's in-memory self.running is empty in a fresh CLI
         # process, so routing through backend.cancel() + _kill_experiment() is a no-op.
         import signal as _signal  # noqa: PLC0415
-        from automil.orchestrator import _is_pid_alive_with_starttime  # noqa: PLC0415
+        from automil.orchestrator import (  # noqa: PLC0415
+            _is_pid_alive_with_starttime,
+            _read_proc_starttime,
+        )
 
         def _proc_state(pid: int) -> str | None:
             """Return the single-char process state from /proc/<pid>/stat, or None."""
@@ -136,6 +139,11 @@ def cancel(node_id: str, timeout: int) -> None:
             this allows os.kill(pid, 0) to subsequently raise ProcessLookupError
             as callers expect. Safe to call even if the process is not a child
             (ChildProcessError is silently ignored).
+
+            WR-02: callers MUST gate this on a starttime cross-check so we never
+            reap an unrelated PID-reused child the CLI happens to parent — doing
+            so would silently consume that innocent child's exit status and
+            desync a still-live job's bookkeeping.
             """
             try:
                 os.waitpid(pid, os.WNOHANG)
@@ -213,7 +221,23 @@ def cancel(node_id: str, timeout: int) -> None:
         # Reap any zombie: when CLI and the killed process share the same parent
         # (e.g. in-process test runners), the dead process lingers as a zombie
         # until wait() is called. _try_reap uses WNOHANG so it never blocks.
-        _try_reap(_pid)
+        #
+        # WR-02: gate the reap on the starttime cross-check so we never reap an
+        # unrelated PID-reused child this CLI happens to parent.
+        #   - Linux (_starttime set): reap ONLY when /proc still reports the same
+        #     starttime for _pid. If _read_proc_starttime(_pid) now differs (or is
+        #     None), the original target is gone and _pid may have been recycled
+        #     into an innocent child — skip the reap so we never consume its exit
+        #     status. (A just-SIGKILLed zombie keeps its original starttime in
+        #     /proc until reaped, so the legitimate reap still fires here.)
+        #   - Non-Linux (_starttime is None): /proc is unavailable, so there is no
+        #     starttime to verify. OPS-01 already accepts the PID-reuse risk on
+        #     this path (the kill itself targets the on-disk pid/pgid unverified),
+        #     so a best-effort reap of the just-killed _pid is consistent with
+        #     that contract and is required to clear the zombie.
+        _reap_starttime = _read_proc_starttime(_pid) if _starttime is not None else None
+        if _starttime is None or _reap_starttime == _starttime:
+            _try_reap(_pid)
 
         # Fall through to graph update + archive move (Steps 8-10 below — shared path).
 
