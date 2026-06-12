@@ -81,13 +81,17 @@ class ExperimentGraph:
             loaded_from_disk = True
         else:
             self._data = {}
+        # Capture the on-disk schema_version BEFORE setdefault fills in the new
+        # default of 2.  Absent key → 1 (legacy); present → whatever was stored.
+        # Used by the DBT-01 migration gate below.
+        _on_disk_schema_version = self._data.get("schema_version", 1)
         # Normalize: fill in missing top-level / meta keys with defaults
         # so legacy schemas and fresh-init paths both work. When loading
         # an existing file that's missing keys, log a warning — partial-
         # write corruption silently filled in with defaults would mask
         # real data loss, and operators need a paper trail.
         defaults = {
-            "schema_version": 1,
+            "schema_version": 2,
             "meta": {
                 "best_composite": 0.0,
                 "best_node_id": None,
@@ -122,6 +126,29 @@ class ExperimentGraph:
                 "write corruption.",
                 self.path, missing_top, missing_meta,
             )
+        # DBT-01: migrate pre-D-200 nodes (flat metric keys) to metrics-dict layout on read.
+        # Gate: on-disk schema_version < 2 AND node lacks "metrics" — idempotent on post-D-200.
+        # Uses _on_disk_schema_version (captured before setdefault filled in the new default of 2)
+        # so that graphs written without a schema_version key are correctly treated as legacy.
+        # Migration is in-memory only; caller decides when to save.
+        if _on_disk_schema_version < 2:
+            _LEGACY_METRIC_KEYS = ("val_auc", "val_bacc", "test_auc", "test_bacc")
+            _migrated = 0
+            for _node in self._data.get("nodes", {}).values():
+                if "metrics" not in _node:
+                    _node["metrics"] = {
+                        k: _node.get(k, 0.0) for k in _LEGACY_METRIC_KEYS
+                    }
+                    _migrated += 1
+            self._data["schema_version"] = 2
+            if loaded_from_disk and _migrated > 0:
+                logger.warning(
+                    "graph.json at %s: legacy schema (pre-D-200) detected; "
+                    "migrated %d node(s) to metrics-dict layout on read. "
+                    "Re-save to persist the migration.",
+                    self.path,
+                    _migrated,
+                )
 
     @staticmethod
     def load(path: str | Path, technique_map: dict[str, str] | None = None) -> ExperimentGraph:
