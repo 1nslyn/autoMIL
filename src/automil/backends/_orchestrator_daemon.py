@@ -890,12 +890,17 @@ class ExperimentOrchestrator:
                 prepends.append(str(wt_candidate))
         if prepends:
             existing_pp = env.get("PYTHONPATH", "")
-            parts = prepends + ([existing_pp] if existing_pp else [])
-            env["PYTHONPATH"] = ":".join(parts)
-            logger.debug(
-                "editable_overlay_guard: prepended %d path(s) to PYTHONPATH for wt=%s",
-                len(prepends), wt_path,
-            )
+            existing_parts = existing_pp.split(":") if existing_pp else []
+            # Only prepend paths not already present; dedup prevents misleading
+            # "prepended N path(s)" log when the daemon inherited PYTHONPATH
+            # that already includes the worktree src (common in dev environments).
+            new_parts = [p for p in prepends if p not in existing_parts]
+            if new_parts:
+                env["PYTHONPATH"] = ":".join(new_parts + existing_parts)
+                logger.debug(
+                    "editable_overlay_guard: prepended %d path(s) to PYTHONPATH for wt=%s",
+                    len(new_parts), wt_path,
+                )
 
     def _launch(self, spec: dict, gpu_id: int):
         """Launch an experiment in an isolated git worktree."""
