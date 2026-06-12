@@ -30,14 +30,14 @@ progress:
 - `CLAUDE.md` — project instructions and Leo's standing directives
 - `~/.claude/projects/-home-jma-Documents-yinshuol-autoMIL/memory/MEMORY.md` — Leo's standing memory
 
-**Current focus:** Phase 14 — Housekeeping & Tech Debt
+**Current focus:** Milestone v1.1 close — ALL 6 phases (9–14) COMPLETE; milestone audit → complete → cleanup
 
 ## Current Position
 
-Phase: 14 (Housekeeping & Tech Debt) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-Last activity: 2026-06-12
+Phase: ALL COMPLETE (9–14) — milestone-close lifecycle
+Plan: 23 of 23 across 6 phases
+Status: All phases verified + code-reviewed; entering milestone audit → complete → cleanup
+Last activity: 2026-06-12 -- Phase 14 verified (suite 1058 passed, 0 failed); v1.1 milestone fully green
 
 ## Performance Metrics
 
@@ -136,11 +136,11 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Phase 13 (CLI Lifecycle & Operability) COMPLETE (2026-06-12). All 4 plans executed + verified + code-reviewed (2 iterations, converged clean) on `milestone/v1.1-bug-fixing`. Deliverables: OPS-01 `automil cancel` direct-kill of daemon-launched LOCAL jobs (reads pid/pgid from on-disk running spec, os.killpg SIGTERM→grace→SIGKILL, starttime PID-reuse guard — fixes the empty-in-memory-map no-op); OPS-02 new `automil dequeue` (locked_update + graph.cancel, positive state guard); OPS-03 submit pending→running else-branch; OPS-04 group-level `--project PATH` via `_PROJECT_OVERRIDE`; OPS-05 viz.port config fallback. Verification: **5/5 success criteria PASSED**. Authoritative full gate: **1054 passed, 1 failed (pre-existing clause_11), 53 skipped**.
+**Last action:** Phase 14 (Housekeeping & Tech Debt) COMPLETE (2026-06-12) — the FINAL v1.1 phase. All 3 plans executed + verified + code-reviewed (0 critical/0 warning/1 info) on `milestone/v1.1-bug-fixing`. Deliverables: DBT-01 pre-D-200 graph.json migrate-on-read in `ExperimentGraph.__init__` (capture on-disk schema_version BEFORE setdefault, gate `<2 AND no metrics dict`, spread 4 consumer keys, bump default→2, idempotent — anti-theater real-legacy-fixture tests); DBT-02 verify-and-guard the 3 tick_cells tests (already green via Phase 9 CR-01 33b5383, attributed + closed, NOT re-implemented); DBT-03 daemon em-dash→ASCII + clause_07 switched to STABLE-TEXT anchoring (ends the line-number brittleness permanently); clause_11 fold-in (req_path precedence flipped to prefer v1.0 archive). Verification: **3/3 success criteria + milestone-close gate PASSED**. Full suite: **1058 passed, 0 failed, 53 skipped** — v1.1 milestone suite is 100% GREEN.
 
-**Phase 13 code review:** iter-1 (13-REVIEW.md) found 1 critical + 6 warnings + 5 info; ALL fixed (CR-01 locked_update graph mutation + total_proposed decrement; WR-01 PID-validated killpg; WR-02 starttime-guarded reap; WR-03 PermissionError→alive; WR-04 dequeue unlink+guard under lock; WR-05 positive state guard; WR-06 real server-side viz port test). Plus: added `cli/cancel.py` to BCK-04 process-control allowlist (OPS-01 sanctioned direct-kill — the violation was masked during execution by an `os as _os` alias, unmasked by CR-01's de-aliasing). iter-2 (13-REVIEW-2.md) = CLEAN, all closed, no regressions. Commits: 027234c,bb576ba,5cff39b,7f25d73,76141be,78d5617,23669a6 + allowlist fix.
+**v1.1 milestone — ALL 6 PHASES COMPLETE (9–14, 23 plans):** Phase 9 (REC state/recovery integrity), Phase 10 (APL variant application), Phase 11 (CFG config/run fidelity), Phase 12 (SCH scheduling/overlay), Phase 13 (OPS CLI lifecycle), Phase 14 (DBT housekeeping). All 20 v1.1 REQ-IDs delivered. Code review caught + closed ship-stoppers in Phases 9/10/12/13 (the hard gate earned its keep). Known micro-cleanup deferred post-v1.1: test_framework_purity.py `_ALLOWLIST` still uses a `:60` line-number anchor (drift-guarded, Info-only — switch to stable-text like clause_07 someday).
 
-**>>> NEXT — Phase 14 (DBT — Housekeeping & Tech Debt, the FINAL v1.1 phase):** DBT-01 legacy graph.json round-trip (schema-version detect + dict-spread on read), DBT-02 pre-existing tick_cells test failures (Phase 4/6-origin, 3 tests), DBT-03 allowlist anchor neighbor cleanup (em-dashes near the BCK-04/framework-purity anchors). **STRONG CANDIDATE to fold in:** the pre-existing `test_d208_clause_11_state_roadmap_complete` failure (the persistent v1.0 acceptance test reading the v1.1 REQUIREMENTS.md, expecting v1.0 DEC-01..07 'Complete' rows) — Phase 14 should resolve this so the framework suite goes fully green at milestone close. Flow: discuss → plan → execute → verify → code-review. THEN: milestone audit → complete → cleanup. Continuing autonomously per Leo's directive (no pausing except true hard blockers).
+**>>> NEXT — Milestone-close lifecycle (autonomous run final stage):** `init.milestone-op` reports `all_phases_complete: true`. Run: gsd-audit-milestone (cross-phase integration + requirement-coverage audit) → gsd-complete-milestone (archive REQUIREMENTS/ROADMAP to .planning/milestones/v1.1-*, transition DBT/etc. traceability, CHANGELOG) → gsd-cleanup. Branch `milestone/v1.1-bug-fixing` is ahead of main by the full milestone; Leo handles the merge/PR. Continuing autonomously per Leo's directive (no pausing except true hard blockers).
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*
