@@ -84,3 +84,41 @@ def test_schema_top_level_id_locked():
     assert RESULT_SCHEMA["$schema"].endswith("draft/2020-12/schema")
     assert RESULT_SCHEMA["required"] == ["composite"]
     assert RESULT_SCHEMA["additionalProperties"] is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 / REC-03 extensions (D-05, D-07) — RED until Plan 03 updates schema
+# ---------------------------------------------------------------------------
+
+
+def test_partial_status_validates() -> None:
+    """D-07: 'partial' is a valid status after schema update.
+
+    RED until Plan 03 adds 'partial' to result.schema.json enum.
+    """
+    validate_result({
+        "composite": 0.42,
+        "status": "partial",
+        "termination_reason": "sigterm",
+    })  # must not raise
+
+
+def test_termination_reason_is_optional() -> None:
+    """D-05: termination_reason is optional and free-form — no status field needed.
+
+    RED until Plan 03 adds optional termination_reason to result.schema.json.
+    """
+    validate_result({
+        "composite": 0.5,
+        "termination_reason": "oom",
+    })  # no status field; termination_reason alone is valid
+
+
+def test_crashed_drift_value_fails_validation() -> None:
+    """D-06: 'crashed' is not in the tight status enum — must fail validation.
+
+    This should be RED now (crashed was never in the schema enum), confirming
+    the tight enum is enforced. Serves as a regression guard after D-06 fix.
+    """
+    with pytest.raises(ValidationError):
+        validate_result({"composite": 0.5, "status": "crashed"})

@@ -3,6 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 F2-readiness framework refactor** — Phases 0-8 (shipped 2026-05-08), see [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
+- ✅ **v1.1 Bug Fixing** — Phases 9-14 (shipped 2026-06-12), see [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 
 ## Phases
 
@@ -21,23 +22,16 @@
 
 </details>
 
-## Progress
+<details>
+<summary>✅ v1.1 Bug Fixing (Phases 9-14) — SHIPPED 2026-06-12 (1058 tests green, 20/20 reqs)</summary>
 
-| Milestone | Phases | Plans | Status | Shipped |
-|-----------|--------|-------|--------|---------|
-| v1.0 F2-readiness framework refactor | 9 | 92 | Complete | 2026-05-08 |
+- [x] **Phase 9: State & Recovery Integrity** — Correct terminal-state recording, partial-fold aggregation, status vocabulary, and budget-cell identity (completed 2026-06-11)
+- [x] **Phase 10: Variant Application Integrity** — Registered variants actually apply to the live model through existing open seams; loud failure for loop-opening variants (completed 2026-06-11)
+- [x] **Phase 11: Config & Run Fidelity** — Config/snapshot values drive runs; argparse defaults stop masking them; per-node run-command overrides *(completed 2026-06-11)*
+- [x] **Phase 12: Scheduling & Overlay Isolation** — GPU scheduling-policy knob; generic editable-install worktree overlay guard *(parallel-candidate: independent of Phases 10–11)* (completed 2026-06-12)
+- [x] **Phase 13: CLI Lifecycle & Operability** — Cancel daemon-launched jobs, dequeue queued nodes, resubmit pending→running, cross-project targeting, viz.port fallback *(parallel-candidate: independent of Phases 10–12)* (completed 2026-06-12)
+- [x] **Phase 14: Housekeeping & Tech Debt** — Legacy graph.json round-trip, tick_cells test fixes, allowlist anchor cleanup *(parallel-candidate: independent of Phases 10–13)* (completed 2026-06-12)
 
-## Workstation UAT items deferred to /gsd-verify-work 8
+</details>
 
-These are workstation-data-gated tests that require Leo's environment with `AUTOBENCH_CCRCC_ROOT` set:
-
-- **Sub-gate A**: CCRCC `node_0176` ±0.005 reproduction (D-205 / DEC-07)
-- **Sub-gate C**: heterogeneous consumers (sklearn-iris + CCRCC side-by-side in same project)
-- Real SLURM cluster verification (`@pytest.mark.requires_slurm` marker) (BCK-05 success criterion 5)
-- Real Ray multi-node cluster verification (`@pytest.mark.requires_ray` marker) (BCK-06)
-- External hardware shapes (CPU-only laptop, ROCm system) per Phase 7 D-197 MEDIUM portability
-
-## Pre-existing tech debt for v1.1+
-
-- 3 pre-existing tick_cells failures (Phase 4-origin, documented as Phase 6 follow-up #1)
-- Phase 5 calibration pilot K-determination (Leo runs with CCRCC + CLWD cells)
+<!-- Full v1.1 phase details archived in milestones/v1.1-ROADMAP.md -->

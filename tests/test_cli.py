@@ -49,6 +49,7 @@ class TestInit:
         adir = tmp_path / "automil"
         assert (adir / "config.yaml").exists()
         assert (adir / "program.md").exists()
+        assert (adir / "plan.md").exists()
         assert (adir / "learnings.md").exists()
         assert (adir / ".gitignore").exists()
         assert (adir / "orchestrator" / "queue").is_dir()
@@ -98,6 +99,59 @@ class TestInit:
         assert "graph.json" in gitignore
         assert "results.tsv" in gitignore
         assert "orchestrator/" in gitignore
+
+    def test_update_refreshes_stale_skill(self, cli_runner, tmp_path, monkeypatch):
+        """`automil init --update` refreshes a stale framework-managed skill.
+
+        Regression: skills used `if not dst.exists()` and ignored --update
+        entirely, so updated agent guidance (e.g. the anti-HP-sweep directives)
+        could never reach an already-initialized project.
+        """
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        skill = tmp_path / ".claude" / "skills" / "automil" / "SKILL.md"
+        assert skill.exists(), "init should install the automil skill"
+        canonical = skill.read_text()
+        assert len(canonical.splitlines()) > 80, "canonical skill should be the full version"
+
+        # Simulate drift: an older/truncated skill already on disk.
+        skill.write_text("# stale skill\n")
+
+        result = cli_runner.invoke(main, ["init", "--update"])
+        assert result.exit_code == 0, result.output
+        assert skill.read_text() == canonical, (
+            "init --update must refresh the stale skill to the canonical version"
+        )
+
+    def test_registers_activity_hooks(self, cli_runner, tmp_path, monkeypatch):
+        """init installs on_tool.sh and registers the activity hooks (P2.1)."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        hook = tmp_path / ".claude" / "hooks" / "on_tool.sh"
+        assert hook.exists(), "on_tool.sh should be installed"
+
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        hooks = settings.get("hooks", {})
+        assert "PostToolUse" in hooks
+        post = hooks["PostToolUse"][0]
+        assert "on_tool.sh" in str(post)
+        assert post.get("matcher") == "*"
+        assert post["hooks"][0].get("async") is True
+        # UserPromptSubmit + SessionStart also wired
+        assert any("on_tool.sh" in str(e) for e in hooks.get("UserPromptSubmit", []))
+        assert any("on_tool.sh" in str(e) for e in hooks.get("SessionStart", []))
+        # Existing Stop hook preserved
+        assert any("on_stop.sh" in str(e) for e in hooks.get("Stop", []))
+
+        # Idempotent: --update must not duplicate entries.
+        cli_runner.invoke(main, ["init", "--update"])
+        settings2 = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert len(settings2["hooks"]["PostToolUse"]) == 1
+        assert len(settings2["hooks"]["Stop"]) == 1
 
 
 class TestCheck:
@@ -152,7 +206,8 @@ class TestSubmit:
         # Submit
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_0001", "--desc", "test", "--files", "model.py"],
+            ["submit", "--node", "node_0001", "--desc", "test", "--files", "model.py",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0
@@ -185,7 +240,8 @@ class TestSubmit:
 
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_scope", "--desc", "dir scope"],
+            ["submit", "--node", "node_scope", "--desc", "dir scope",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0
@@ -209,7 +265,8 @@ class TestSubmit:
 
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_ro", "--desc", "readonly", "--files", "data/prepare.py"],
+            ["submit", "--node", "node_ro", "--desc", "readonly", "--files", "data/prepare.py",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0
@@ -293,7 +350,8 @@ class TestSubmit:
         result = cli_runner.invoke(
             main,
             ["submit", "--node", "node_0002", "--desc", "legit child",
-             "--parent", root, "--files", "model.py"],
+             "--parent", root, "--files", "model.py",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output
@@ -467,7 +525,8 @@ class TestSubmitPathValidation:
 
         result = cli_runner.invoke(
             main,
-            ["submit", "--node", "node_autodetect", "--desc", "auto-detect exclusion test"],
+            ["submit", "--node", "node_autodetect", "--desc", "auto-detect exclusion test",
+             "--mil-model", "test_model"],  # D-12: required
             catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output
@@ -515,3 +574,81 @@ class TestCliHelp:
             f"automil --help is missing subcommands: {missing}\n"
             f"Full output:\n{output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# OPS-03 RED stub (Wave 0 — Nyquist compliance)
+# ---------------------------------------------------------------------------
+
+
+def test_submit_existing_pending_marks_running(cli_runner, tmp_path, monkeypatch):
+    """Submit against existing type=proposed,status=pending node transitions it to running.
+
+    OPS-03: submit.py locked_update block (~L497) is missing an else branch that calls
+    graph.mark_running() for pre-existing pending nodes. The current code only calls
+    mark_running for newly-created nodes inside the `if not graph.get_node(node)` branch.
+    """
+    # Create a minimal git repo + automil structure.
+    _init_git_repo(tmp_path)
+    adir = tmp_path / "automil"
+    adir.mkdir(exist_ok=True)
+    (adir / "config.yaml").write_text(
+        "run:\n  script: train.py\n  mil_model: clam_sb\n"
+    )
+    (adir / "orchestrator" / "queue").mkdir(parents=True, exist_ok=True)
+
+    # Dummy training script (submit preflight checks it exists).
+    (tmp_path / "train.py").write_text("# dummy\n")
+
+    node_id = "node_0030"
+
+    # Pre-write graph with a pending node (type=proposed, status=pending).
+    graph_data = {
+        "schema_version": 1,
+        "meta": {
+            "best_composite": 0.0,
+            "best_node_id": None,
+            "total_executed": 0,
+            "total_proposed": 1,
+            "next_id": 10,
+            "baseline_composite": 0.0,
+            "scoring": {
+                "exploration_weight": 0.005,
+                "novelty_weight": 0.003,
+            },
+        },
+        "nodes": {
+            node_id: {
+                "id": node_id,
+                "parent_id": None,
+                "type": "proposed",
+                "status": "pending",
+                "description": "pre-existing pending node",
+                "techniques": [],
+                "metadata": {},
+            }
+        },
+        "technique_stats": {},
+    }
+    (adir / "graph.json").write_text(json.dumps(graph_data, indent=2))
+
+    monkeypatch.chdir(tmp_path)
+
+    result = cli_runner.invoke(
+        main,
+        [
+            "submit",
+            "--node", node_id,
+            "--desc", "test existing pending",
+            "--files", "train.py",
+            "--mil-model", "clam_sb",
+        ],
+        catch_exceptions=False,
+    )
+
+    # After submit, graph node must be running (OPS-03 success criterion).
+    graph = json.loads((adir / "graph.json").read_text())
+    assert graph["nodes"][node_id]["status"] == "running", (
+        f"expected status='running', got {graph['nodes'][node_id].get('status')!r}\n"
+        f"submit output: {result.output}"
+    )

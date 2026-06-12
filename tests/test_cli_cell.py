@@ -38,7 +38,7 @@ def _make_cell(
     cell_id: str = "abc1234567890123",
     dataset: str = "ccrcc",
     encoder: str = "uni-v2",
-    parent_id: str = "node_0042",
+    mil_model: str = "node_0042",
     started_at: float | None = None,
     budget_seconds: int = 21600,
     safety_buffer_seconds: int = 1800,
@@ -48,7 +48,7 @@ def _make_cell(
         cell_id=cell_id,
         dataset=dataset,
         encoder=encoder,
-        parent_id=parent_id,
+        mil_model=mil_model,
         started_at=started_at if started_at is not None else time.time(),
         budget_seconds=budget_seconds,
         safety_buffer_seconds=safety_buffer_seconds,
@@ -88,14 +88,14 @@ def test_cell_list_with_cells(tmp_path, monkeypatch):
         cell_id="aaaa1234567890ab",
         dataset="ccrcc",
         encoder="uni-v2",
-        parent_id="node_0001",
+        mil_model="node_0001",
         status=CellStatus.ACTIVE,
     )
     cell_b = _make_cell(
         cell_id="bbbb1234567890cd",
         dataset="clwd",
         encoder="conch",
-        parent_id="node_0002",
+        mil_model="node_0002",
         status=CellStatus.REFUSING_NEW,
     )
     write_cell(cell_a, cells_dir)
@@ -128,7 +128,7 @@ def test_cell_status_lists_all_when_no_arg(tmp_path, monkeypatch):
             cell_id=cell_id,
             dataset=f"ds{i}",
             encoder="uni-v2",
-            parent_id=f"node_{i:04d}",
+            mil_model=f"node_{i:04d}",
             status=CellStatus.ACTIVE,
         )
         write_cell(cell, cells_dir)
@@ -162,7 +162,7 @@ def test_cell_status_specific_id_full(tmp_path, monkeypatch):
         cell_id="zzzz1234567890ef",
         dataset="ccrcc",
         encoder="uni-v2",
-        parent_id="node_0099",
+        mil_model="node_0099",
         status=CellStatus.ACTIVE,
     )
     write_cell(cell, cells_dir)
@@ -190,7 +190,7 @@ def test_cell_status_specific_id_short_prefix(tmp_path, monkeypatch):
         cell_id="deadbeef12345678",
         dataset="clwd",
         encoder="conch",
-        parent_id="node_0010",
+        mil_model="node_0010",
         status=CellStatus.ACTIVE,
     )
     write_cell(cell, cells_dir)
@@ -236,13 +236,13 @@ def test_cell_status_ambiguous_prefix_errors(tmp_path, monkeypatch):
         cell_id="abc1234567890123",
         dataset="ccrcc",
         encoder="uni-v2",
-        parent_id="node_0001",
+        mil_model="node_0001",
     )
     cell_b = _make_cell(
         cell_id="abc4567890123456",
         dataset="clwd",
         encoder="conch",
-        parent_id="node_0002",
+        mil_model="node_0002",
     )
     write_cell(cell_a, cells_dir)
     write_cell(cell_b, cells_dir)
@@ -270,14 +270,14 @@ def test_cell_list_no_header_pipe_friendly(tmp_path, monkeypatch):
         cell_id="hdrtest0123456789",
         dataset="ccrcc",
         encoder="uni-v2",
-        parent_id="node_0001",
+        mil_model="node_0001",
         status=CellStatus.ACTIVE,
     )
     cell_b = _make_cell(
         cell_id="hdrtest9876543210",
         dataset="clwd",
         encoder="conch",
-        parent_id="node_0002",
+        mil_model="node_0002",
         status=CellStatus.REFUSING_NEW,
     )
     write_cell(cell_a, cells_dir)
@@ -318,7 +318,7 @@ def test_cell_status_running_count_from_disk(tmp_path, monkeypatch):
         cell_id=target_cell_id,
         dataset="ccrcc",
         encoder="uni-v2",
-        parent_id="node_0042",
+        mil_model="node_0042",
     )
     write_cell(cell, cells_dir)
 
@@ -356,7 +356,7 @@ def test_cell_status_consumed_grows_with_started_at(tmp_path, monkeypatch):
         cell_id="timetest1234567a",
         dataset="ccrcc",
         encoder="uni-v2",
-        parent_id="node_0001",
+        mil_model="node_0001",
         started_at=started_at,
         budget_seconds=21600,
     )

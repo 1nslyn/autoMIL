@@ -86,10 +86,13 @@ def test_partial_folds_returns_partial_status(tmp_path: Path) -> None:
 
 
 def test_zero_folds_returns_crashed_status(tmp_path: Path) -> None:
-    """Empty directory → status='crashed', composite=0.0, partial_folds=0."""
+    """Empty directory → status='crash', composite=0.0, partial_folds=0.
+
+    D-06 (REC-03): canonical status is 'crash', not 'crashed' (drift value removed).
+    """
     result = aggregate_folds(tmp_path, expected_fold_count=5)
 
-    assert result["status"] == "crashed"
+    assert result["status"] == "crash"  # D-06: was 'crashed' pre-v1.1
     assert result["composite"] == 0.0
     assert result["partial_folds"] == 0
     assert result["expected_folds"] == 5

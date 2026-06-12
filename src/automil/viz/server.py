@@ -263,7 +263,7 @@ def create_app() -> web.Application:
 
 
 def cmd_start(
-    port: int = DEFAULT_PORT,
+    port: int | None = None,
     project_root: Path | None = None,
     host: str | None = None,
 ):
@@ -276,23 +276,35 @@ def cmd_start(
     PID_FILE = automil_dir / "orchestrator" / "viz_server.pid"
     LOG_FILE = automil_dir / "orchestrator" / "viz_server.log"
 
-    # Bind host resolution order: explicit arg > automil/config.yaml viz.host
+    # Bind host + port resolution — load config once for both.
+    # Host resolution order: explicit arg > automil/config.yaml viz.host
     # > AUTOMIL_VIZ_HOST env var > 127.0.0.1 (loopback default).
+    # Port resolution order: explicit arg > automil/config.yaml viz.port
+    # > DEFAULT_PORT (8420).
     # Loopback default keeps the dashboard off the LAN unless the operator
     # opts in explicitly. The SSE stream and gpu_state.json carry PIDs,
     # GPU utilization, and node descriptions; on a shared workstation those
     # should not be browseable by every host on the subnet.
-    if host is None:
-        cfg_host: str | None = None
+    if host is None or port is None:
+        cfg_loaded: dict = {}
         config_path = automil_dir / "config.yaml"
         if config_path.exists():
             try:
-                import yaml as _yaml
-                cfg = _yaml.safe_load(config_path.read_text()) or {}
-                cfg_host = (cfg.get("viz") or {}).get("host")
+                import yaml as _yaml  # noqa: PLC0415
+                cfg_loaded = _yaml.safe_load(config_path.read_text()) or {}
             except Exception:
-                cfg_host = None
-        host = cfg_host or os.environ.get("AUTOMIL_VIZ_HOST") or "127.0.0.1"
+                cfg_loaded = {}
+
+        if host is None:
+            cfg_host: str | None = (cfg_loaded.get("viz") or {}).get("host")
+            host = cfg_host or os.environ.get("AUTOMIL_VIZ_HOST") or "127.0.0.1"
+
+        if port is None:
+            raw_port = (cfg_loaded.get("viz") or {}).get("port")
+            try:
+                port = int(raw_port) if raw_port is not None else DEFAULT_PORT
+            except (TypeError, ValueError):
+                port = DEFAULT_PORT
 
     if PID_FILE.exists():
         pid = int(PID_FILE.read_text().strip())
@@ -400,7 +412,13 @@ def main():
 
     cmd = sys.argv[1]
     if cmd == "start":
-        port = DEFAULT_PORT
+        # WR-06: pass port=None when no --port flag so cmd_start's config-based
+        # resolution (viz.port → DEFAULT_PORT) runs. Previously this legacy shim
+        # hard-coded port=DEFAULT_PORT and silently ignored config, so
+        # `python -m automil.viz.server start` bypassed viz.port entirely while
+        # the Click `automil viz start` path honored it. The Click path remains
+        # the supported entry point; this shim now shares the same resolution.
+        port: int | None = None
         if "--port" in sys.argv:
             idx = sys.argv.index("--port")
             port = int(sys.argv[idx + 1])

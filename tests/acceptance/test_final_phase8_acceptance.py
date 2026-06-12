@@ -178,7 +178,8 @@ def test_subgate_b_sklearn_iris_end_to_end(tmp_path: Path):
     out = _run(
         ["automil", "submit", "--node", "iris_001",
          "--desc", "D-205 sub-gate B sklearn-iris acceptance run",
-         "--files", "train.py", "--max-time", "60"],
+         "--files", "train.py", "--max-time", "60",
+         "--mil-model", "sklearn_iris"],  # D-12: required
         cwd=project, timeout=60,
     )
     assert out.returncode == 0, (

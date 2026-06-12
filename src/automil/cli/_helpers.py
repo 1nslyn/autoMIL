@@ -14,12 +14,33 @@ import click
 
 logger = logging.getLogger(__name__)
 
+# Module-level project override set by the --project group option on `main`.
+# None = use cwd walk (default behaviour).
+# Path = use this path for project discovery (set by main() callback before any subcommand).
+# Tests must reset this to None in teardown via monkeypatch.setattr to prevent bleed.
+_PROJECT_OVERRIDE: Path | None = None
+
 
 def _find_automil_dir() -> Path:
     """Walk up from cwd to find a directory containing automil/config.yaml.
 
+    Honors _PROJECT_OVERRIDE when set by the --project group option before
+    falling through to the cwd walk.
+
     Returns the ``automil/`` directory itself.
     """
+    if _PROJECT_OVERRIDE is not None:
+        # Accept either: (a) project root (parent of automil/) or (b) automil/ dir itself.
+        for candidate in (_PROJECT_OVERRIDE / "automil", _PROJECT_OVERRIDE):
+            if (candidate / "config.yaml").exists():
+                # Always normalise: return the automil/ dir.
+                return candidate if candidate.name == "automil" else candidate / "automil"
+        raise click.ClickException(
+            f"--project {_PROJECT_OVERRIDE}: no automil/config.yaml found under "
+            f"{_PROJECT_OVERRIDE}. Point --project at the project root or the "
+            f"automil/ dir directly."
+        )
+    # Existing cwd walk — unchanged:
     p = Path.cwd()
     while p != p.parent:
         candidate = p / "automil" / "config.yaml"

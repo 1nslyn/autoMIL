@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from automil.cli import main
@@ -50,13 +51,14 @@ def _setup_project(tmp_path: Path, monkeypatch) -> tuple[CliRunner, Path]:
     assert result.exit_code == 0, f"init failed: {result.output}"
 
     adir = tmp_path / "automil"
-    # Overwrite config.yaml to include dataset/encoder names so the cell gets
-    # deterministic IDs in all tests.
+    # Pin dataset/encoder identity so the cell gets deterministic IDs in all
+    # tests. Cell identity keys off project.name + encoders.primary (the real
+    # config schema submit.py reads), overriding the dir-stamped defaults.
     config_path = adir / "config.yaml"
-    config_text = config_path.read_text()
-    # Inject dataset and encoder top-level keys that submit.py reads.
-    config_text += "\ndataset:\n  name: test_ds\nencoder:\n  name: test_enc\n"
-    config_path.write_text(config_text)
+    cfg = yaml.safe_load(config_path.read_text()) or {}
+    cfg["project"] = {**(cfg.get("project") or {}), "name": "test_ds"}
+    cfg["encoders"] = {**(cfg.get("encoders") or {}), "primary": "test_enc"}
+    config_path.write_text(yaml.safe_dump(cfg))
 
     return runner, adir
 
@@ -71,9 +73,11 @@ def _submit_node(
     node: str,
     parent: str | None = None,
     extra_args: list[str] | None = None,
+    mil_model: str = "root",
 ) -> object:
     """Helper to invoke automil submit with a model.py file."""
-    args = ["submit", "--node", node, "--desc", f"test {node}", "--files", "model.py"]
+    args = ["submit", "--node", node, "--desc", f"test {node}", "--files", "model.py",
+            "--mil-model", mil_model]   # D-12: --mil-model now required
     if parent:
         args += ["--parent", parent]
     if extra_args:
@@ -123,7 +127,7 @@ class TestSubmitCellLayer:
         assert data["status"] == "active"
         assert data["dataset"] == "test_ds"
         assert data["encoder"] == "test_enc"
-        assert data["parent_id"] == "root"
+        assert data["mil_model"] == "root"
         assert data["budget_seconds"] == 21600   # framework fallback — no config cap:
         assert data["safety_buffer_seconds"] == 1800
 
@@ -153,7 +157,7 @@ class TestSubmitCellLayer:
             cell_id=cell_id,
             dataset="test_ds",
             encoder="test_enc",
-            parent_id="root",
+            mil_model="root",
             started_at=time.time() - 20000,   # 5.5h ago — well past safety buffer
             budget_seconds=21600,
             safety_buffer_seconds=1800,

@@ -28,6 +28,11 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+# NOTE (IN-01): _collect_editable_source_roots lives in automil.cli.check but has
+# no CLI dependency (only uses site + pathlib). The import works today because no
+# CLI submodule imports the daemon (no circular import). A future refactor could
+# move it to automil.utils or automil.editable to resolve the layering concern.
+from automil.cli.check import _collect_editable_source_roots
 from automil.runner import Runner
 
 # ---------------------------------------------------------------------------
@@ -41,18 +46,19 @@ DEFAULT_TIMEOUT_MIN = 150
 # are heavier should override via config.yaml → orchestrator.max_concurrent_per_gpu.
 MAX_CONCURRENT_PER_GPU = 8
 DEFAULT_VRAM_ESTIMATE_GB = 1.0
+SCHEDULING_POLICY = "best_fit"
 
 # ---------------------------------------------------------------------------
 # Subprocess env whitelist (CLN-02 / D-04)
 # ---------------------------------------------------------------------------
 # Hardcoded system-minimal whitelist applied to os.environ when building the
 # experiment subprocess env. Operator secrets (OPENAI_API_KEY, WANDB_API_KEY,
-# GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, ...) are NOT inherited — closing the
+# GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, ...) are NOT inherited -- closing the
 # HIGH-severity exfiltration vector documented in
 # CONCERNS.md §"Subprocess `env` inherits the full operator environment".
 #
 # Consumer-specific vars (e.g. AUTOBENCH_*_ROOT) are opted in per project via
-# `automil/config.yaml: env.passthrough` — see _build_subprocess_env.
+# `automil/config.yaml: env.passthrough` -- see _build_subprocess_env.
 _SYSTEM_ENV_WHITELIST_LITERAL: frozenset[str] = frozenset({
     "PATH", "HOME", "USER", "SHELL", "LANG", "TZ", "TMPDIR",
     "LD_LIBRARY_PATH", "PYTHONPATH",
@@ -403,6 +409,17 @@ class ExperimentOrchestrator:
 
         self.runner = Runner(self.project_root)
 
+        # CR-01 fix: ExperimentGraph instance initialized here so _handle_completion
+        # and _handle_cap_killed_completion both receive a valid graph object at
+        # daemon runtime, without test injection. write_terminal_state uses
+        # graph.path and graph._technique_map (loaded fresh per locked_update call),
+        # so constructing the instance here is sufficient — no eager load of nodes.
+        from automil.graph import ExperimentGraph
+        self.graph = ExperimentGraph(
+            path=self.automil_dir / "graph.json",
+            technique_map=None,  # loaded fresh inside locked_update on each write
+        )
+
         # Load config
         config_path = self.automil_dir / "config.yaml"
         if config_path.exists():
@@ -425,6 +442,14 @@ class ExperimentOrchestrator:
         self.default_timeout = orch_cfg.get("default_timeout_min", DEFAULT_TIMEOUT_MIN)
         self.max_per_gpu = orch_cfg.get("max_concurrent_per_gpu", MAX_CONCURRENT_PER_GPU)
         self.default_vram = orch_cfg.get("default_vram_estimate_gb", DEFAULT_VRAM_ESTIMATE_GB)
+        self.scheduling_policy: str = orch_cfg.get("scheduling_policy", SCHEDULING_POLICY)
+        self._rr_cursor: int = 0
+        # SCH-02 / D-03: opt-in editable-install overlay guard (default OFF).
+        # When True, _launch prepends the worktree's editable src root to PYTHONPATH.
+        # Default is False to preserve D-199/DEC-01 invariant (no auto-injection).
+        self.editable_overlay_guard: bool = bool(
+            orch_cfg.get("editable_overlay_guard", False)
+        )
 
         # CLN-02 / D-04: env.passthrough — literal var names the operator
         # explicitly opts in to forward into experiment subprocesses. The
@@ -632,9 +657,21 @@ class ExperimentOrchestrator:
         from the running spec lets us reap the orphan before marking it crashed
         (D-17 starttime cross-check defends against PID reuse).
         """
-        if not self.running_dir.exists():
+        # WR-02 fix: scan all per-backend subdirs (local, slurm, ray), not just
+        # running/local/. SLURM and Ray running specs live in running/slurm/ and
+        # running/ray/; the original code only looked at self.running_dir (= local).
+        # Mirror the pattern already used in _read_backend_name_for_node (lines
+        # that iterate ("local", "slurm", "ray")). Gracefully skips backends that
+        # don't have a subdirectory yet (fresh installs, single-backend deployments).
+        _backend_subdirs = [
+            self.running_root / name
+            for name in ("local", "slurm", "ray")
+            if (self.running_root / name).exists()
+        ]
+        if not _backend_subdirs:
             return
-        for f in self.running_dir.glob("*.json"):
+        import itertools
+        for f in itertools.chain.from_iterable(d.glob("*.json") for d in _backend_subdirs):
             try:
                 spec = json.loads(f.read_text())
                 node_id = spec.get("id", f.stem)
@@ -718,9 +755,9 @@ class ExperimentOrchestrator:
         return pending
 
     def _find_best_gpu(self, needed_gb: float) -> int | None:
-        """Best-fit bin packing: find GPU with least free VRAM that still fits."""
+        """Find a GPU for the pending job according to self.scheduling_policy (best_fit | round_robin | least_loaded)."""
         gpus = query_gpus()
-        candidates = []
+        candidates: list[tuple[int, float]] = []
 
         for g in gpus:
             running_on = self.gpu_allocations.get(g.index, [])
@@ -738,9 +775,25 @@ class ExperimentOrchestrator:
         if not candidates:
             return None
 
-        # Best-fit: pick GPU with LEAST schedulable free (tightest fit)
-        candidates.sort(key=lambda x: x[1])
-        return candidates[0][0]
+        policy = self.scheduling_policy
+        if policy == "least_loaded":
+            # Most schedulable free VRAM = least loaded GPU
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            return candidates[0][0]
+        elif policy == "round_robin":
+            # Cycle through eligible GPUs in stable index order
+            candidates.sort(key=lambda x: x[0])
+            chosen = candidates[self._rr_cursor % len(candidates)][0]
+            self._rr_cursor += 1
+            return chosen
+        else:
+            if policy != "best_fit":
+                logger.warning(
+                    "Unknown scheduling_policy %r; falling back to best_fit", policy
+                )
+            # best_fit (default): tightest fit — preserves current behavior
+            candidates.sort(key=lambda x: x[1])
+            return candidates[0][0]
 
     def _pre_launch_check(self, gpu_id: int, needed_gb: float) -> bool:
         """Final VRAM check right before launch."""
@@ -811,6 +864,48 @@ class ExperimentOrchestrator:
 
         return env
 
+    def _apply_editable_overlay_guard(
+        self, env: dict[str, str], wt_path: Path
+    ) -> None:
+        """SCH-02 / D-03: opt-in editable-install worktree PYTHONPATH guard.
+
+        When self.editable_overlay_guard is True, prepends the worktree-relative
+        equivalent of each editable source root to env["PYTHONPATH"] so that
+        Python resolves imports from the worktree overlay first.
+
+        Called from _launch AFTER _build_subprocess_env returns.
+        Default OFF (editable_overlay_guard: false) preserves D-199/DEC-01
+        invariant: PYTHONPATH is NOT force-set unless the operator opts in.
+
+        Roots outside self.project_root are silently skipped (ValueError).
+        Only roots whose worktree counterpart actually exists are prepended.
+        """
+        if not self.editable_overlay_guard:
+            return
+        prepends: list[str] = []
+        for editable_root in _collect_editable_source_roots():
+            root_p = Path(editable_root)
+            try:
+                rel = root_p.relative_to(self.project_root)
+            except ValueError:
+                continue  # editable root not under project_root; skip
+            wt_candidate = wt_path / rel
+            if wt_candidate.is_dir():
+                prepends.append(str(wt_candidate))
+        if prepends:
+            existing_pp = env.get("PYTHONPATH", "")
+            existing_parts = existing_pp.split(":") if existing_pp else []
+            # Only prepend paths not already present; dedup prevents misleading
+            # "prepended N path(s)" log when the daemon inherited PYTHONPATH
+            # that already includes the worktree src (common in dev environments).
+            new_parts = [p for p in prepends if p not in existing_parts]
+            if new_parts:
+                env["PYTHONPATH"] = ":".join(new_parts + existing_parts)
+                logger.debug(
+                    "editable_overlay_guard: prepended %d path(s) to PYTHONPATH for wt=%s",
+                    len(new_parts), wt_path,
+                )
+
     def _launch(self, spec: dict, gpu_id: int):
         """Launch an experiment in an isolated git worktree."""
         node_id = spec["id"]
@@ -870,6 +965,10 @@ class ExperimentOrchestrator:
             spec=spec,
         )
 
+        # SCH-02 / D-03: opt-in editable-install worktree PYTHONPATH guard.
+        # Post-processing step after _build_subprocess_env — signature unchanged.
+        self._apply_editable_overlay_guard(env=env, wt_path=wt_path)
+
         log_path = archive / "run.log"
         log_fh = open(log_path, "w")
         try:
@@ -877,6 +976,12 @@ class ExperimentOrchestrator:
                 cmd = shlex.split(self.run_command)
             else:
                 cmd = [sys.executable, self.run_script]
+            # D-04 (CFG-03): append per-node override args after base run.command.
+            # Must be list append (not string concat) and Popen must not use shell=True
+            # so shlex.split tokenizes metacharacters as literal tokens (T-11-03-01).
+            override_str = spec.get("run_command_override")
+            if override_str:
+                cmd = cmd + shlex.split(override_str)
             process = subprocess.Popen(
                 cmd,
                 cwd=str(wt_path),
@@ -969,7 +1074,14 @@ class ExperimentOrchestrator:
         """
         import signal as _sig
         from dataclasses import replace
-        from automil.cells import list_cells, next_status, write_cell, CellStatus
+        from automil.cells import (
+            accrue_active,
+            list_cells,
+            next_status,
+            read_last_action_at,
+            write_cell,
+            CellStatus,
+        )
 
         now = time.time()
         # Resolve cells_dir from the orchestrator's explicit automil_dir, not
@@ -980,17 +1092,33 @@ class ExperimentOrchestrator:
         if not cells_dir.exists():
             logger.debug("_tick_cells: no cells dir at %s; skipping", cells_dir)
             return
+        # P2.2: project-level agent-activity marker drives agent_active billing.
+        last_action_at = read_last_action_at(self.automil_dir)
         for cell in list_cells(cells_dir):
+            # Advance the agent_active budget BEFORE the state machine so
+            # next_status sees this tick's consumed time. No-op for wall_clock.
+            cell = accrue_active(cell, now, last_action_at)
             running = self._running_in_cell(cell.cell_id)
             new_status = next_status(cell, now, len(running))
             if new_status == cell.status:
+                # Persist the accrual (consumed_active_seconds / last_tick_at)
+                # even when the status is unchanged, else it never advances.
+                if cell.mode == "agent_active":
+                    write_cell(cell, cells_dir)
                 continue
             if new_status == CellStatus.TERMINATING:
                 for handle in running:
                     # D-124 / Pitfall 4: write cancel_reason='cap' BEFORE
                     # calling cancel so reconcile_budget_kill can detect cap kills
                     # even if the SIGTERM handler races the annotation write.
-                    running_spec_path = self.running_dir / f"{handle.node_id}.json"
+                    # WR-04 fix: use _read_backend_name_for_node + _backend_running_dir
+                    # so SLURM/Ray running specs are found under running/slurm/ and
+                    # running/ray/. The original self.running_dir (= running/local/)
+                    # always missed non-local backends, silently skipping the annotation
+                    # and causing _was_cap_killed_completion to return False for all
+                    # SLURM/Ray cap-triggered cancels.
+                    _backend_name = self._read_backend_name_for_node(handle.node_id)
+                    running_spec_path = self._backend_running_dir(_backend_name) / f"{handle.node_id}.json"
                     if running_spec_path.exists():
                         try:
                             spec_data = json.loads(running_spec_path.read_text())
@@ -1079,9 +1207,13 @@ class ExperimentOrchestrator:
             1. spec.env["AUTOMIL_FOLD_COUNT"] (set by _build_subprocess_env at launch)
             2. automil/config.yaml: training.fold_count
             3. Hard fallback: 5 (Leo's paper-campaign default)
+
+        Uses backend-aware running spec path (IN-01 fix / D-169) so SLURM/Ray
+        nodes don't silently fall through to the archive-spec fallback.
         """
+        _backend_fc = self._read_backend_name_for_node(node_id)
         for path in (
-            self.running_dir / f"{node_id}.json",
+            self._backend_running_dir(_backend_fc) / f"{node_id}.json",
             self.archive_dir / node_id / "spec.json",
         ):
             if path.exists():
@@ -1159,25 +1291,14 @@ class ExperimentOrchestrator:
 
         # CAP-04 cap-driven cancel branch — never falls through to the standard path.
         if self._was_cap_killed_completion(node_id):
-            self._handle_cap_killed_completion(node_id, wt_path)
+            self._handle_cap_killed_completion(
+                node_id, wt_path, elapsed_s=elapsed_s, gpu_id=gpu_id, spec=spec
+            )
             return
 
         result = self._collect_or_synthesize_result(node_id, archive, returncode, wt_path)
 
-        # Write completion notification with all fields reconcile needs
-        completion = {
-            "id": node_id,
-            "status": result.get("status", "completed"),
-            "composite": result.get("composite", 0),
-            "metrics": result.get("metrics", {}),
-            "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
-            "peak_vram_mb": result.get("peak_vram_mb", 0),
-            "gpu": gpu_id,
-            "completed_at": datetime.now().isoformat(),
-            "graph_metadata": result.get("graph_metadata") or spec.get("graph_metadata") or {},
-        }
-
-        # Include error details in completion for better agent visibility
+        # Include error details in result for better agent visibility before terminal write
         status = result.get("status", "completed")
         if status in ("crash", "oom", "timeout"):
             log_path = archive / "run.log"
@@ -1185,21 +1306,33 @@ class ExperimentOrchestrator:
             if log_path.exists():
                 lines = log_path.read_text().splitlines()
                 error_tail = "\n".join(lines[-20:])
-            completion["error"] = error_tail
-            completion["log_location"] = str(log_path)
+            result = dict(result)
+            result.setdefault("error", error_tail)
+            result.setdefault("log_location", str(log_path))
 
-        (self.completed_dir / f"{node_id}.json").write_text(
-            json.dumps(completion, indent=2) + "\n"
+        # REC-02 / D-09, D-10: delegate all four artifact writes to terminal_writer.
+        # Fixed write order: graph → completed/<node>.json → archive result.json → results.tsv.
+        from automil.terminal_writer import write_terminal_state
+        write_terminal_state(
+            node_id=node_id,
+            result=result,
+            graph=self.graph,
+            completed_dir=self.completed_dir,
+            archive_dir=archive,
+            results_tsv_writer=self._append_results_tsv,
+            spec=spec,
+            elapsed_s=elapsed_s,
+            gpu_id=gpu_id,
         )
-
-        # Append to results.tsv (sole writer)
-        self._append_results_tsv(node_id, result, description=spec.get("description", ""))
 
         # D-170: cross-backend log unification (no-op for local backend).
         self._drain_remote_backend_log(node_id, archive)
 
-        # Clean running spec
-        running_spec = self.running_dir / f"{node_id}.json"
+        # Clean running spec — use backend-aware path (WR-02 fix: D-169).
+        # self.running_dir is the alias for running/local/ only; SLURM/Ray specs
+        # live under running/<backend>/ and would never be found or cleaned here.
+        _backend_name_cleanup = self._read_backend_name_for_node(node_id)
+        running_spec = self._backend_running_dir(_backend_name_cleanup) / f"{node_id}.json"
         if running_spec.exists():
             running_spec.unlink()
 
@@ -1222,12 +1355,15 @@ class ExperimentOrchestrator:
     def _was_cap_killed_completion(self, node_id: str) -> bool:
         """True iff the running or archive spec has metadata.cancel_reason == 'cap'.
 
-        Reads running/<node>.json first (annotation written by _tick_cells
-        BEFORE backend.cancel() is called — Pitfall 4 ordering guarantee).
+        Reads running/<backend>/<node>.json first (annotation written by
+        _tick_cells BEFORE backend.cancel() is called — Pitfall 4 ordering
+        guarantee). Uses the backend-aware path so SLURM/Ray annotations in
+        running/slurm/ or running/ray/ are found correctly (WR-02 fix / D-169).
         Falls back to archive/<node>/spec.json if running/ was already cleaned.
         """
+        _backend = self._read_backend_name_for_node(node_id)
         for _spec_path in (
-            self.running_dir / f"{node_id}.json",
+            self._backend_running_dir(_backend) / f"{node_id}.json",
             self.archive_dir / node_id / "spec.json",
         ):
             if _spec_path.exists():
@@ -1239,64 +1375,59 @@ class ExperimentOrchestrator:
                     pass
         return False
 
-    def _handle_cap_killed_completion(self, node_id: str, wt_path: Path) -> None:
+    def _handle_cap_killed_completion(
+        self,
+        node_id: str,
+        wt_path: Path,
+        *,
+        elapsed_s: float = 0.0,
+        gpu_id: int | str = -1,
+        spec: dict | None = None,
+    ) -> None:
         """Cap-driven cancel reconcile + cleanup (CAP-04 / D-123, D-124).
 
-        Aggregates per-fold partial results, promotes the in-graph node from
-        running -> executed (or marks crashed if zero usable folds), and
-        cleans the running spec + worktree. Never throws; soft-fails to logged
+        Aggregates per-fold partial results, then delegates all four terminal
+        artifact writes to write_terminal_state (REC-02 / D-09, D-10).
+        Cleans the running spec + worktree. Never throws; soft-fails to logged
         warnings on graph access errors.
         """
+        if spec is None:
+            spec = {}
         from automil.cells.reconcile import reconcile_budget_kill
 
         expected_folds = self._read_fold_count_for_node(node_id)
         payload = reconcile_budget_kill(
             node_id=node_id,
             archive_dir=self.archive_dir,
-            graph=self.graph if hasattr(self, "graph") else None,
+            graph=self.graph,
             expected_fold_count=expected_folds,
         )
-        # Per PINNED API in <interfaces>: the running node already exists in the graph
-        # (created by submit() as type=running). We must NOT call add_executed (it
-        # generates a NEW node and would double-count). Instead promote-in-place via
-        # direct dict mutation mirroring mark_failed's pattern (graph.py:272-280).
-        if hasattr(self, "graph") and self.graph is not None:
-            gnode = self.graph.get_node(node_id)
-            if gnode is None:
-                logger.warning(
-                    "Cap-killed node %s missing from graph; cannot reconcile graph state",
-                    node_id,
-                )
-            elif payload.get("partial_folds", 0) >= 1:
-                # Promote running -> executed with partial composite.
-                gnode["type"] = "executed"
-                gnode["status"] = "keep"
-                gnode["composite"] = payload["composite"]
-                # D-200 / DEC-04: write metrics under node["metrics"], not top-level.
-                if payload.get("metrics"):
-                    gnode["metrics"] = dict(payload["metrics"])
-                gnode.setdefault("metadata", {})["budget_killed"] = True
-                self.graph._reevaluate_descendants(node_id)
-                self.graph.save()
-            else:
-                # Zero usable folds — crash semantics + budget_killed flag
-                self.graph.mark_failed(
-                    node_id=node_id,
-                    status="crash",
-                    error="cap fired with zero completed folds",
-                )
-                gnode = self.graph.get_node(node_id)
-                if gnode is not None:
-                    gnode.setdefault("metadata", {})["budget_killed"] = True
-                    self.graph.save()
+        # REC-02 / D-09, D-10: delegate all four artifact writes to terminal_writer.
+        # graph node promotion (running→executed or crash) + archive result.json +
+        # completed/<node>.json + results.tsv are all written by write_terminal_state.
+        # D-01: partial results get status="partial" in the graph (quarantined).
+        # self.graph is guaranteed by __init__ (CR-01 fix) — no hasattr guard needed.
+        from automil.terminal_writer import write_terminal_state
+        write_terminal_state(
+            node_id=node_id,
+            result=payload,
+            graph=self.graph,
+            completed_dir=self.completed_dir,
+            archive_dir=self.archive_dir / node_id,
+            results_tsv_writer=self._append_results_tsv,
+            spec=spec,
+            elapsed_s=elapsed_s,
+            gpu_id=gpu_id,
+        )
         logger.info(
             "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
             "partial_folds=%d/%d",
             node_id, payload["status"], payload["composite"],
             payload.get("partial_folds", 0), payload.get("expected_folds", 0),
         )
-        # Clean running spec and worktree
-        running_spec = self.running_dir / f"{node_id}.json"
+        # Clean running spec and worktree — use backend-aware path (WR-02 fix / D-169).
+        _backend_name_cap = self._read_backend_name_for_node(node_id)
+        running_spec = self._backend_running_dir(_backend_name_cap) / f"{node_id}.json"
         if running_spec.exists():
             running_spec.unlink()
         if wt_path.exists():
@@ -1348,21 +1479,57 @@ class ExperimentOrchestrator:
                 }
 
         if result is None:
-            log_text = (archive / "run.log").read_text() if (archive / "run.log").exists() else ""
-            if "CUDA out of memory" in log_text or "OutOfMemoryError" in log_text:
-                status = "oom"
-            elif self._timed_out.get(node_id):
-                status = "timeout"
-            elif returncode != 0:
-                status = "crash"
+            # D-03 (REC-01): try fold aggregation from archive BEFORE synthesising
+            # from log heuristics. If the process was SIGKILLed before the flush
+            # handler could run, fold files may still exist in the archive even
+            # without a result.json.
+            fold_files = list(archive.glob("fold_*_result.json"))
+            if fold_files:
+                from automil.cells.reconcile import aggregate_folds
+                expected = self._read_fold_count_for_node(node_id)
+                result = aggregate_folds(archive, expected)
+                reason = "timeout" if self._timed_out.get(node_id) else "sigkill"
+                result["termination_reason"] = reason   # D-05 (REC-03)
+                # Write atomically to archive so _collect_result finds it on retry.
+                import tempfile as _tempfile
+                _tmp_fd, _tmp_path = _tempfile.mkstemp(
+                    dir=str(archive), suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(_tmp_fd, "w") as _fh:
+                        _fh.write(json.dumps(result, indent=2) + "\n")
+                    os.replace(_tmp_path, str(archive / "result.json"))
+                except Exception:
+                    try:
+                        os.unlink(_tmp_path)
+                    except OSError:
+                        pass
             else:
-                status = "completed"
+                # Log-heuristic synthesis — no fold files exist.
+                log_text = (archive / "run.log").read_text() if (archive / "run.log").exists() else ""
+                # D-05/D-06 (REC-03): canonicalize status — "oom" and "timeout" are
+                # not in the tight enum; move them to termination_reason with
+                # status="crash". The tight enum is:
+                # [completed, crash, budget_killed, cancelled, partial].
+                termination_reason: str | None = None
+                if "CUDA out of memory" in log_text or "OutOfMemoryError" in log_text:
+                    status = "crash"
+                    termination_reason = "oom"
+                elif self._timed_out.get(node_id):
+                    status = "crash"
+                    termination_reason = "timeout"
+                elif returncode != 0:
+                    status = "crash"
+                else:
+                    status = "completed"
 
-            error_tail = log_text[-2000:] if status != "completed" else ""
-            result = {"status": status}
-            if error_tail:
-                result["error"] = error_tail
-            (archive / "result.json").write_text(json.dumps(result, indent=2))
+                error_tail = log_text[-2000:] if status != "completed" else ""
+                result = {"status": status}
+                if termination_reason:
+                    result["termination_reason"] = termination_reason
+                if error_tail:
+                    result["error"] = error_tail
+                (archive / "result.json").write_text(json.dumps(result, indent=2))
 
         if "status" not in result:
             result["status"] = "completed" if returncode == 0 else "crash"
@@ -1415,27 +1582,72 @@ class ExperimentOrchestrator:
                 "D-170 cross-backend log unification failed for %s: %s", node_id, exc
             )
 
-    def _handle_timeout(self, exp_id: str):
-        """Terminate a timed-out experiment and its full process group.
+    def _handle_timeout(self, exp_id: str) -> None:
+        """D-04 (REC-01): SIGTERM main PID first (flush handler runs), then SIGKILL
+        process group after a configurable grace window. LOCAL BACKEND ONLY —
+        SLURM and Ray backends handle their own timeout signals (SLURM via
+        --signal=B:TERM@30; Ray via ray.cancel) and never call this method.
 
-        Children launched via start_new_session=True live in their own
-        process group, so killing the parent alone leaks DataLoader
-        workers and CUDA contexts (they reparent to PID 1 and keep VRAM).
-        Signal the whole group instead.
+        Rationale: sending SIGTERM to the whole process group immediately hits
+        DataLoader workers before the main process's handler runs. The main-PID-
+        first approach lets the Python signal handler (register_sigterm_flush)
+        complete and write fold-aggregated result.json before SIGKILL reclaims VRAM.
+
+        T-09-05: os.kill raises ProcessLookupError if the process has already
+        exited; ProcessLookupError is caught on both kill calls. The Popen
+        reference keeps the PID alive until poll() confirms exit.
         """
         exp = self.running[exp_id]
         pid = exp.process.pid
-        logger.warning(f"Timeout for {exp_id}, killing PID {pid} and process group")
+        # WR-01 mitigation: cap grace to MAX_GRACE so a misconfigured
+        # timeout_grace_seconds cannot block the tick loop for an arbitrary
+        # duration. With max_concurrent_per_gpu=8 and multiple GPUs, N
+        # simultaneous timeouts each sleep `grace` seconds serially inside
+        # _check_running, stacking to N×grace seconds of total blocking.
+        # Known limitation: the sleep is still synchronous (a proper fix
+        # requires async deadline tracking like _pending_sigkill_at). Capped
+        # at 30s as a safe maximum; warn operators when configured above 15s.
+        _MAX_GRACE = 30
+        grace = min(
+            int((self.config.get("orchestrator") or {}).get("timeout_grace_seconds", 10)),
+            _MAX_GRACE,
+        )
+        if grace > 15:
+            logger.warning(
+                "timeout_grace_seconds=%ds will block the tick loop for that duration "
+                "(capped at %ds); consider lowering orchestrator.timeout_grace_seconds",
+                grace, _MAX_GRACE,
+            )
+        logger.warning(
+            "Timeout for %s: SIGTERMing main PID %d (grace=%ds before SIGKILL group)",
+            exp_id, pid, grace,
+        )
         try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            os.kill(pid, signal.SIGTERM)    # main PID only — lets flush handler run
         except ProcessLookupError:
             pass
-        time.sleep(5)
+        time.sleep(grace)
         if exp.process.poll() is None:
             try:
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except OSError as exc:
+                # CR-02 fix: os.getpgid() raises OSError(EPERM) when the caller
+                # lacks permission to query the PID's process group (different
+                # session, container boundary, or kernel hardening). Without this
+                # catch the exception propagated before the two lines below,
+                # leaving the experiment stuck in self.running forever and causing
+                # an infinite blocking loop on every subsequent tick. Mirror the
+                # pattern already used by _escalate_to_sigkill and _kill_experiment.
+                logger.warning(
+                    "_handle_timeout: killpg(%d, SIGKILL) failed: %s — "
+                    "process group may still be alive; continuing cleanup.",
+                    pid, exc,
+                )
+        # These two lines MUST run regardless of whether killpg succeeded or
+        # raised OSError: marking _timed_out and calling _handle_completion
+        # removes the experiment from self.running, preventing the re-fire loop.
         self._timed_out[exp_id] = True
         self._handle_completion(exp_id, returncode=-9)
 
@@ -1600,6 +1812,27 @@ class ExperimentOrchestrator:
                 f"Config reload: safety_margin_gb {self.safety_margin_gb} -> {new_safety}"
             )
             self.safety_margin_gb = new_safety
+        new_policy = orch_cfg.get("scheduling_policy", self.scheduling_policy)
+        if new_policy != self.scheduling_policy:
+            logger.info(
+                "Config reload: scheduling_policy %r -> %r",
+                self.scheduling_policy,
+                new_policy,
+            )
+            self.scheduling_policy = new_policy
+        # _rr_cursor is intentionally NOT reset on policy change or on topology change.
+        # Rationale: (1) resetting on policy change would re-visit recently-used GPUs
+        # when an operator briefly switches policy and reverts; (2) cursor % len(candidates)
+        # is always a valid index regardless of how many candidates are currently eligible,
+        # so correctness is preserved across topology changes (e.g. a GPU going offline).
+        # The counter grows unbounded but Python int has no overflow.
+        new_guard = bool(orch_cfg.get("editable_overlay_guard", self.editable_overlay_guard))
+        if new_guard != self.editable_overlay_guard:
+            logger.info(
+                "Config reload: editable_overlay_guard %r -> %r",
+                self.editable_overlay_guard, new_guard,
+            )
+            self.editable_overlay_guard = new_guard
 
     def tick(self):
         """Single scheduling cycle."""

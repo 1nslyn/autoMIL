@@ -5,14 +5,49 @@ Side-effect-free → unit-testable without filesystem.
 """
 from __future__ import annotations
 
-from automil.cells.state import Cell, CellStatus
+from dataclasses import replace
+
+from automil.cells.state import Cell, CellStatus, consumed_seconds
+
+
+def accrue_active(cell: Cell, now_epoch: float, last_action_at: float | None) -> Cell:
+    """Return a cell with its ``agent_active`` budget advanced for this tick.
+
+    Pure function — no I/O. The caller (daemon ``_tick_cells``) persists the
+    result. A no-op for ``wall_clock`` cells and for non-billable statuses
+    (TERMINATING/FINALIZED).
+
+    The clock advances by the wall-clock since the last tick ONLY when the agent
+    acted within ``idle_grace_seconds`` (``last_action_at`` fresh). The per-tick
+    delta is capped at ``idle_grace_seconds`` so a daemon restart gap cannot dump
+    a large accrual in one tick. ``last_tick_at`` is always advanced so a
+    following active tick measures only ~one poll interval.
+
+    Args:
+        cell: current cell state (immutable).
+        now_epoch: current wall-clock (caller passes time.time()).
+        last_action_at: epoch of the agent's last action, or None if unknown.
+    """
+    if cell.mode != "agent_active":
+        return cell
+    if cell.status not in (CellStatus.ACTIVE, CellStatus.REFUSING_NEW):
+        return cell
+
+    last_tick = cell.last_tick_at if cell.last_tick_at is not None else cell.started_at
+    elapsed = min(max(0.0, now_epoch - last_tick), float(cell.idle_grace_seconds))
+    agent_active = (
+        last_action_at is not None
+        and (now_epoch - last_action_at) < cell.idle_grace_seconds
+    )
+    new_consumed = cell.consumed_active_seconds + (elapsed if agent_active else 0.0)
+    return replace(cell, consumed_active_seconds=new_consumed, last_tick_at=now_epoch)
 
 
 def next_status(cell: Cell, now_epoch: float, running_count: int) -> CellStatus:
     """Return the next CellStatus given current time and running experiment count.
 
-    Pure function — no I/O, no global state, no time.time() call.
-    Idempotent: FINALIZED always returns FINALIZED.
+    Pure function — no I/O, no global state. Idempotent: FINALIZED always
+    returns FINALIZED.
 
     Args:
         cell: Current cell state (immutable).
@@ -20,7 +55,7 @@ def next_status(cell: Cell, now_epoch: float, running_count: int) -> CellStatus:
             injection makes the function testable without monkeypatch.
         running_count: Count of in-cell experiments NOT in terminal state.
     """
-    consumed = now_epoch - cell.started_at
+    consumed = consumed_seconds(cell, now_epoch)
     remaining = cell.budget_seconds - consumed
 
     if cell.status == CellStatus.ACTIVE:

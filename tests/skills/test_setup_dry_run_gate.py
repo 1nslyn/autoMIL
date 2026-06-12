@@ -128,7 +128,8 @@ def _run_gate(repo: Path, automil_dir: Path, node_id: str) -> str:
          "--node", node_id,
          "--desc", "setup-validation",
          "--files", "train.py",
-         "--max-time", "60"],
+         "--max-time", "60",
+         "--mil-model", "test_model"],  # D-12: required
         cwd=repo, capture_output=True, text=True, timeout=30,
     )
     assert submit_proc.returncode == 0, (

@@ -29,24 +29,34 @@ def make_cell(
     cell_id: str = "abc1234567890123",
     dataset: str = "test",
     encoder: str = "enc",
-    parent_id: str = "node_0001",
+    mil_model: str = "node_0001",
     started_at: float | None = None,
     budget_seconds: int = 21600,
     safety_buffer_seconds: int = 1800,
     status: CellStatus = CellStatus.ACTIVE,
+    mode: str = "wall_clock",
+    idle_grace_seconds: int = 300,
+    consumed_active_seconds: float = 0.0,
+    last_tick_at: float | None = None,
 ) -> Cell:
     """Construct a ``Cell`` with sensible defaults; override any field as needed.
 
     Plain function (not a fixture) so tests can call it with arbitrary keyword
-    args inline without fixture injection ceremony.
+    args inline without fixture injection ceremony. ``mode`` defaults to the
+    legacy ``"wall_clock"`` so existing cap-state tests keep their now-started_at
+    semantics; activity-gated tests pass ``mode="agent_active"``.
     """
     return Cell(
         cell_id=cell_id,
         dataset=dataset,
         encoder=encoder,
-        parent_id=parent_id,
+        mil_model=mil_model,
         started_at=started_at if started_at is not None else time.time(),
         budget_seconds=budget_seconds,
         safety_buffer_seconds=safety_buffer_seconds,
         status=status,
+        mode=mode,
+        idle_grace_seconds=idle_grace_seconds,
+        consumed_active_seconds=consumed_active_seconds,
+        last_tick_at=last_tick_at,
     )
