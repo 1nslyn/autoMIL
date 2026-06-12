@@ -214,9 +214,12 @@ def check():
         if run_command:
             # run.command set — no script file to inspect; assume no consumer guard
             has_consumer_guard = False
-        elif run_script_path.exists():
+        elif run_script_path.exists() and run_script_path.suffix == ".py":
+            # Only inspect Python scripts for sys.path.insert; shell wrappers
+            # (.sh, etc.) never contain it and would always produce a false positive.
             has_consumer_guard = "sys.path.insert" in run_script_path.read_text()
         else:
+            # Non-Python script or missing script: can't determine guard presence.
             has_consumer_guard = False
         overlay_guard_enabled = bool(
             (config.get("orchestrator") or {}).get("editable_overlay_guard", False)
