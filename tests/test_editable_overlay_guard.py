@@ -271,3 +271,26 @@ def test_check_suppresses_when_no_editable_overlap(tmp_path):
         "check must NOT warn when editable root does not overlap files.editable "
         f"(no path intersection); got warnings: {editable_warnings}"
     )
+
+
+def test_collect_editable_source_roots_handles_missing_getsitepackages():
+    """_collect_editable_source_roots returns [] (no crash) when site.getsitepackages is absent.
+
+    Old virtualenv on SLURM/HPC monkey-patches away site.getsitepackages;
+    calling _collect_editable_source_roots must not raise AttributeError in
+    that environment (CR-01 fix).
+    """
+    import site as _site  # noqa: PLC0415
+
+    from automil.cli.check import _collect_editable_source_roots  # noqa: PLC0415
+
+    with patch.object(_site, "getsitepackages", side_effect=AttributeError("monkeypatched away")):
+        result = _collect_editable_source_roots()
+
+    assert isinstance(result, list), (
+        "_collect_editable_source_roots must return a list even when "
+        "site.getsitepackages raises AttributeError (CR-01)"
+    )
+    # Result may or may not be empty depending on getusersitepackages; the
+    # important invariant is: no AttributeError raised.
+

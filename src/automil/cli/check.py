@@ -26,7 +26,13 @@ def _collect_editable_source_roots() -> list[str]:
     Catches OSError on file read and skips that file.
     """
     roots: list[str] = []
-    site_dirs = list(site.getsitepackages())
+    try:
+        site_dirs = list(site.getsitepackages())
+    except AttributeError:
+        # Old virtualenv (common on SLURM/HPC) monkey-patches away
+        # getsitepackages; fall back gracefully so automil check and
+        # _apply_editable_overlay_guard never crash in those environments.
+        site_dirs = []
     user_site = site.getusersitepackages()
     if user_site:
         site_dirs.append(user_site)
