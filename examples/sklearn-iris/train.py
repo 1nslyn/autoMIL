@@ -101,7 +101,7 @@ def main() -> None:
         if _py_files:
             _spec = _ilu.spec_from_file_location(variant_name, _py_files[0])
             if _spec is None or _spec.loader is None:
-                _write_result(status="error", partial=False)
+                _write_result(status="crash", partial=False, variant_dispatched=variant_name)
                 raise ValueError(
                     f"Could not load variant module at {_py_files[0]}: "
                     "importlib returned no spec or loader. "
