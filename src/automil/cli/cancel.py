@@ -164,8 +164,14 @@ def cancel(node_id: str, timeout: int) -> None:
                 try:
                     os.kill(pid, 0)
                     return True
-                except (ProcessLookupError, PermissionError):
+                except ProcessLookupError:
                     return False
+                except PermissionError:
+                    # WR-03: EPERM from kill(pid, 0) means the process EXISTS but
+                    # is owned by another user — it is alive, not dead. Mapping it
+                    # to dead would falsely flip the graph to 'cancelled' while the
+                    # real job keeps running and holding GPU/VRAM.
+                    return True
             # state is a non-Z letter ('R', 'S', 'D', etc.) — process is alive.
             return True
 
