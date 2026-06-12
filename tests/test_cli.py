@@ -574,3 +574,82 @@ class TestCliHelp:
             f"automil --help is missing subcommands: {missing}\n"
             f"Full output:\n{output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# OPS-03 RED stub (Wave 0 — Nyquist compliance)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(reason="OPS-03 not yet implemented", strict=True)
+def test_submit_existing_pending_marks_running(cli_runner, tmp_path, monkeypatch):
+    """Submit against existing type=proposed,status=pending node transitions it to running.
+
+    OPS-03: submit.py locked_update block (~L497) is missing an else branch that calls
+    graph.mark_running() for pre-existing pending nodes. The current code only calls
+    mark_running for newly-created nodes inside the `if not graph.get_node(node)` branch.
+    """
+    # Create a minimal git repo + automil structure.
+    _init_git_repo(tmp_path)
+    adir = tmp_path / "automil"
+    adir.mkdir(exist_ok=True)
+    (adir / "config.yaml").write_text(
+        "run:\n  script: train.py\n  mil_model: clam_sb\n"
+    )
+    (adir / "orchestrator" / "queue").mkdir(parents=True, exist_ok=True)
+
+    # Dummy training script (submit preflight checks it exists).
+    (tmp_path / "train.py").write_text("# dummy\n")
+
+    node_id = "node_0030"
+
+    # Pre-write graph with a pending node (type=proposed, status=pending).
+    graph_data = {
+        "schema_version": 1,
+        "meta": {
+            "best_composite": 0.0,
+            "best_node_id": None,
+            "total_executed": 0,
+            "total_proposed": 1,
+            "next_id": 10,
+            "baseline_composite": 0.0,
+            "scoring": {
+                "exploration_weight": 0.005,
+                "novelty_weight": 0.003,
+            },
+        },
+        "nodes": {
+            node_id: {
+                "id": node_id,
+                "parent_id": None,
+                "type": "proposed",
+                "status": "pending",
+                "description": "pre-existing pending node",
+                "techniques": [],
+                "metadata": {},
+            }
+        },
+        "technique_stats": {},
+    }
+    (adir / "graph.json").write_text(json.dumps(graph_data, indent=2))
+
+    monkeypatch.chdir(tmp_path)
+
+    result = cli_runner.invoke(
+        main,
+        [
+            "submit",
+            "--node", node_id,
+            "--desc", "test existing pending",
+            "--files", "train.py",
+            "--mil-model", "clam_sb",
+        ],
+        catch_exceptions=False,
+    )
+
+    # After submit, graph node must be running (OPS-03 success criterion).
+    graph = json.loads((adir / "graph.json").read_text())
+    assert graph["nodes"][node_id]["status"] == "running", (
+        f"expected status='running', got {graph['nodes'][node_id].get('status')!r}\n"
+        f"submit output: {result.output}"
+    )
