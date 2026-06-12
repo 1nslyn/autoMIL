@@ -98,68 +98,177 @@ def cancel(node_id: str, timeout: int) -> None:
         ) from exc
 
     opaque_id: str = running_spec.get("opaque_id", "")
-    if not opaque_id:
+    metadata: dict = running_spec.get("metadata", {})
+    _pid: int | None = metadata.get("pid")
+    _pgid: int | None = metadata.get("pgid")
+    _starttime: int | None = metadata.get("starttime_ticks")  # absent on non-Linux
+
+    if not opaque_id and not (_pid and _pgid):
         raise click.ClickException(
-            f"Running spec at {running_path} is missing 'opaque_id' — corrupted state. "
+            f"Running spec at {running_path} has neither 'opaque_id' nor "
+            f"'metadata.pid'/'metadata.pgid' — corrupted state. "
             f"Manage the process manually."
         )
 
-    submitted_at: float = running_spec.get("submitted_at", 0.0)
-    if isinstance(submitted_at, str):
-        # ISO-8601 string → epoch float (some specs write ISO-8601).
-        try:
-            submitted_at = datetime.fromisoformat(submitted_at).replace(
-                tzinfo=timezone.utc
-            ).timestamp()
-        except (ValueError, TypeError):
-            submitted_at = 0.0
+    if not opaque_id:
+        # Direct-kill path (OPS-01 / D-01): signal the process group from the CLI using
+        # on-disk metadata. The daemon's in-memory self.running is empty in a fresh CLI
+        # process, so routing through backend.cancel() + _kill_experiment() is a no-op.
+        import os as _os  # noqa: PLC0415
+        import signal as _signal  # noqa: PLC0415
+        from automil.orchestrator import _is_pid_alive_with_starttime  # noqa: PLC0415
 
-    # Step 5: resolve backend class.
-    BackendClass = BACKENDS.get(backend_name)
-    if BackendClass is None:
-        raise click.ClickException(
-            f"Unknown backend {backend_name!r}; available: {sorted(BACKENDS.keys())}. "
-            f"Check automil/config.yaml or import the backend module first."
+        def _proc_state(pid: int) -> str | None:
+            """Return the single-char process state from /proc/<pid>/stat, or None."""
+            try:
+                line = Path(f"/proc/{pid}/stat").read_text()
+                # Format: <pid> (<comm>) <state> ...  — state is after the closing ')'
+                return line.split(")", 1)[1].strip().split()[0]
+            except (FileNotFoundError, PermissionError, OSError, IndexError):
+                return None
+
+        def _try_reap(pid: int) -> None:
+            """Attempt a non-blocking waitpid to reap a zombie child.
+
+            When the CLI process is the parent of the killed process (e.g. in
+            in-process test runners), the dead process becomes a zombie until
+            wait() is called. os.waitpid with WNOHANG reaps it without blocking;
+            this allows os.kill(pid, 0) to subsequently raise ProcessLookupError
+            as callers expect. Safe to call even if the process is not a child
+            (ChildProcessError is silently ignored).
+            """
+            try:
+                _os.waitpid(pid, _os.WNOHANG)
+            except (ChildProcessError, PermissionError, OSError):
+                pass
+
+        def _is_alive(pid: int, st: int | None) -> bool:
+            """PID-reuse-safe liveness check, zombie-aware.
+
+            A zombie process (state 'Z') has been killed but not yet reaped by
+            its parent. Its /proc entry still exists, so os.kill(pid, 0) and
+            _is_pid_alive_with_starttime both return True even though the process
+            is effectively dead. We treat zombie as dead so the cancel command
+            does not spin waiting for a parent it cannot control to call wait().
+
+            Falls back to os.kill(pid, 0) probe on non-Linux (no /proc).
+            """
+            state = _proc_state(pid)
+            if state == "Z":
+                # Zombie — process terminated, waiting for parent reap. Treat as dead.
+                return False
+            if st is not None:
+                return _is_pid_alive_with_starttime(pid, st)
+            if state is None:
+                # Non-Linux: /proc unavailable; fall back to signal-0 probe.
+                try:
+                    _os.kill(pid, 0)
+                    return True
+                except (ProcessLookupError, PermissionError):
+                    return False
+            # state is a non-Z letter ('R', 'S', 'D', etc.) — process is alive.
+            return True
+
+        if not _is_alive(_pid, _starttime):
+            # Process already gone — skip signalling, proceed to graph update.
+            logger.debug("cancel: process %d already gone, skipping kill", _pid)
+        else:
+            # SIGTERM first (mirror daemon's SIGTERM→grace→SIGKILL pattern).
+            try:
+                _os.killpg(_pgid, _signal.SIGTERM)
+                logger.debug("cancel: sent SIGTERM to pgid %d for %s", _pgid, node_id)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+            # 5-second grace period (mirrors daemon's _pending_sigkill_at pattern).
+            _grace_deadline = time.monotonic() + 5.0
+            while time.monotonic() < _grace_deadline and _is_alive(_pid, _starttime):
+                time.sleep(0.2)
+
+            if _is_alive(_pid, _starttime):
+                # Grace elapsed — escalate to SIGKILL.
+                try:
+                    _os.killpg(_pgid, _signal.SIGKILL)
+                    logger.debug("cancel: sent SIGKILL to pgid %d for %s", _pgid, node_id)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                # Brief wait for SIGKILL to land.
+                for _ in range(10):
+                    if not _is_alive(_pid, _starttime):
+                        break
+                    time.sleep(0.1)
+
+            if _is_alive(_pid, _starttime):
+                raise click.ClickException(
+                    f"Could not kill process group {_pgid} for node {node_id!r} after "
+                    f"SIGTERM + SIGKILL. Manage the process manually."
+                )
+
+        # Reap any zombie: when CLI and the killed process share the same parent
+        # (e.g. in-process test runners), the dead process lingers as a zombie
+        # until wait() is called. _try_reap uses WNOHANG so it never blocks.
+        _try_reap(_pid)
+
+        # Fall through to graph update + archive move (Steps 8-10 below — shared path).
+
+    else:
+        # opaque_id present: existing backend.cancel() + poll path (Steps 5-7 — UNCHANGED).
+        submitted_at: float = running_spec.get("submitted_at", 0.0)
+        if isinstance(submitted_at, str):
+            # ISO-8601 string → epoch float (some specs write ISO-8601).
+            try:
+                submitted_at = datetime.fromisoformat(submitted_at).replace(
+                    tzinfo=timezone.utc
+                ).timestamp()
+            except (ValueError, TypeError):
+                submitted_at = 0.0
+
+        # Step 5: resolve backend class.
+        BackendClass = BACKENDS.get(backend_name)
+        if BackendClass is None:
+            raise click.ClickException(
+                f"Unknown backend {backend_name!r}; available: {sorted(BACKENDS.keys())}. "
+                f"Check automil/config.yaml or import the backend module first."
+            )
+
+        # Step 6: instantiate backend + reconstruct JobHandle.
+        try:
+            git_root = _find_git_root()
+        except click.ClickException:
+            git_root = adir.parent
+
+        backend = BackendClass(project_root=git_root, automil_dir=adir)
+        handle = JobHandle(
+            node_id=node_id,
+            backend=backend_name,
+            opaque_id=opaque_id,
+            submitted_at=submitted_at,
         )
 
-    # Step 6: instantiate backend + reconstruct JobHandle.
-    try:
-        git_root = _find_git_root()
-    except click.ClickException:
-        git_root = adir.parent
+        # Step 7: fire-and-forget cancel; poll for CANCELLED.
+        backend.cancel(handle)
+        logger.debug("cancel sent for %s via %s; polling for CANCELLED...", node_id, backend_name)
 
-    backend = BackendClass(project_root=git_root, automil_dir=adir)
-    handle = JobHandle(
-        node_id=node_id,
-        backend=backend_name,
-        opaque_id=opaque_id,
-        submitted_at=submitted_at,
-    )
+        deadline = time.monotonic() + timeout
+        final_state: JobState | None = None
+        while time.monotonic() < deadline:
+            try:
+                final_state = backend.poll(handle)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("poll error during cancel wait: %s", exc)
+                final_state = None
+            if final_state == JobState.CANCELLED:
+                break
+            time.sleep(1.0)
 
-    # Step 7: fire-and-forget cancel; poll for CANCELLED.
-    backend.cancel(handle)
-    logger.debug("cancel sent for %s via %s; polling for CANCELLED...", node_id, backend_name)
-
-    deadline = time.monotonic() + timeout
-    final_state: JobState | None = None
-    while time.monotonic() < deadline:
-        try:
-            final_state = backend.poll(handle)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("poll error during cancel wait: %s", exc)
-            final_state = None
-        if final_state == JobState.CANCELLED:
-            break
-        time.sleep(1.0)
-
-    if final_state != JobState.CANCELLED:
-        current = final_state.value if final_state is not None else "unknown"
-        raise click.ClickException(
-            f"Cancel sent but state did not transition to 'cancelled' within "
-            f"{timeout}s (current state: {current!r}). "
-            f"Inspect the process manually and re-run `automil cancel {node_id}` "
-            f"or use `automil status`."
-        )
+        if final_state != JobState.CANCELLED:
+            current = final_state.value if final_state is not None else "unknown"
+            raise click.ClickException(
+                f"Cancel sent but state did not transition to 'cancelled' within "
+                f"{timeout}s (current state: {current!r}). "
+                f"Inspect the process manually and re-run `automil cancel {node_id}` "
+                f"or use `automil status`."
+            )
 
     # Step 8: atomically update graph node.
     graph_path = adir / "graph.json"

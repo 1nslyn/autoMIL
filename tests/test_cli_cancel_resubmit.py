@@ -475,7 +475,6 @@ def test_resubmit_happy_path(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="OPS-01 not yet implemented", strict=True)
 def test_cancel_local_direct_kill(
     cli_runner: CliRunner, tmp_path: Path, monkeypatch
 ) -> None:
@@ -596,7 +595,6 @@ def test_cancel_missing_pid_metadata(
     ), f"expected error message in output: {result.output!r}"
 
 
-@pytest.mark.xfail(reason="OPS-01 not yet implemented", strict=True)
 def test_cancel_no_starttime_ticks(
     cli_runner: CliRunner, tmp_path: Path, monkeypatch
 ) -> None:
