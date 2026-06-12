@@ -581,7 +581,6 @@ class TestCliHelp:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="OPS-03 not yet implemented", strict=True)
 def test_submit_existing_pending_marks_running(cli_runner, tmp_path, monkeypatch):
     """Submit against existing type=proposed,status=pending node transitions it to running.
 

@@ -517,6 +517,22 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 # Transition to running through the official state-machine
                 # path so the counter math stays consistent.
                 graph.mark_running(allocated)
+            else:
+                # OPS-03 (D-06): existing node that already exists as
+                # type=proposed, status=pending transitions to running here.
+                # Without this else branch, mark_running is never called for
+                # pre-existing pending proposals, leaving the graph stuck in
+                # pending state while the queue spec is already written.
+                # mark_running is already type/status-guarded (graph.py:280) —
+                # it logs a warning and returns False for any other state, so
+                # this branch is safe to call unconditionally on any existing node.
+                existing = graph.get_node(node)
+                if (
+                    existing
+                    and existing.get("type") == "proposed"
+                    and existing.get("status") == "pending"
+                ):
+                    graph.mark_running(node)
 
     n_snap = len(overlay_manifest)
     n_del = len(deletions)
