@@ -27,7 +27,7 @@
 - [x] **Phase 9: State & Recovery Integrity** — Correct terminal-state recording, partial-fold aggregation, status vocabulary, and budget-cell identity (completed 2026-06-11)
 - [x] **Phase 10: Variant Application Integrity** — Registered variants actually apply to the live model through existing open seams; loud failure for loop-opening variants (completed 2026-06-11)
 - [x] **Phase 11: Config & Run Fidelity** — Config/snapshot values drive runs; argparse defaults stop masking them; per-node run-command overrides *(completed 2026-06-11)*
-- [ ] **Phase 12: Scheduling & Overlay Isolation** — GPU scheduling-policy knob; generic editable-install worktree overlay guard *(parallel-candidate: independent of Phases 10–11)*
+- [x] **Phase 12: Scheduling & Overlay Isolation** — GPU scheduling-policy knob; generic editable-install worktree overlay guard *(parallel-candidate: independent of Phases 10–11)* (completed 2026-06-12)
 - [ ] **Phase 13: CLI Lifecycle & Operability** — Cancel daemon-launched jobs, dequeue queued nodes, resubmit pending→running, cross-project targeting, viz.port fallback *(parallel-candidate: independent of Phases 10–12)*
 - [ ] **Phase 14: Housekeeping & Tech Debt** — Legacy graph.json round-trip, tick_cells test fixes, allowlist anchor cleanup *(parallel-candidate: independent of Phases 10–13)*
 
@@ -125,7 +125,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 12-02-PLAN.md — SCH-01: scheduling_policy knob + _find_best_gpu dispatch + _rr_cursor (SCH-01)
-- [ ] 12-03-PLAN.md — SCH-02: automil check editable warning + opt-in daemon PYTHONPATH guard (SCH-02)
+- [x] 12-03-PLAN.md — SCH-02: automil check editable warning + opt-in daemon PYTHONPATH guard (SCH-02)
 
 **Parallel note**: Independent of Phases 11, 13, 14. Can run in parallel with any of them after Phase 9 clears.
 
