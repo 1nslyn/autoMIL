@@ -14,7 +14,12 @@ def viz_group():
 
 
 @viz_group.command("start")
-@click.option("--port", default=8420, help="Server port")
+@click.option(
+    "--port",
+    default=None,
+    type=int,
+    help="Server port (default: viz.port in automil/config.yaml, then 8420).",
+)
 @click.option(
     "--host", default=None,
     help="Bind address (default: 127.0.0.1; falls back to viz.host in "
@@ -22,10 +27,26 @@ def viz_group():
          "only on trusted networks — the dashboard exposes PIDs and node "
          "descriptions and has no auth.",
 )
-def viz_start(port: int, host: str | None):
+def viz_start(port: int | None, host: str | None):
     """Start the 3D visualization dashboard."""
+    from automil.viz.server import DEFAULT_PORT, cmd_start  # noqa: PLC0415
     adir = _find_automil_dir()
-    from automil.viz.server import cmd_start
+    # Port resolution order: explicit --port > viz.port in config > DEFAULT_PORT (8420).
+    # Resolution happens here (CLI layer) so cmd_start receives a resolved int
+    # regardless of whether it is called directly or via the CLI.
+    if port is None:
+        config_path = adir / "config.yaml"
+        cfg_port: int | None = None
+        if config_path.exists():
+            try:
+                import yaml as _yaml  # noqa: PLC0415
+                _cfg = _yaml.safe_load(config_path.read_text()) or {}
+                raw = (_cfg.get("viz") or {}).get("port")
+                if raw is not None:
+                    cfg_port = int(raw)
+            except Exception:  # noqa: BLE001
+                cfg_port = None
+        port = cfg_port if cfg_port is not None else DEFAULT_PORT
     cmd_start(port=port, project_root=adir.parent, host=host)
 
 

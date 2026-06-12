@@ -62,7 +62,6 @@ def test_viz_port_default(tmp_path: Path, monkeypatch, cli_runner: CliRunner) ->
     )
 
 
-@pytest.mark.xfail(reason="OPS-05 not yet implemented", strict=True)
 def test_viz_port_from_config(tmp_path: Path, monkeypatch, cli_runner: CliRunner) -> None:
     """viz start with viz.port in config uses the config value.
 
