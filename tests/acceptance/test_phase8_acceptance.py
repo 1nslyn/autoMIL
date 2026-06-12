@@ -297,12 +297,20 @@ def test_d208_clause_11_state_roadmap_complete():
 
     # 2. REQUIREMENTS.md DEC-XX rows transitioned Pending -> Complete.
     # After milestone close, REQUIREMENTS.md is archived to milestones/v1.0-REQUIREMENTS.md
-    # per the standard /gsd-complete-milestone workflow. Honor either location.
-    req_path = _REPO_ROOT / ".planning" / "REQUIREMENTS.md"
-    if not req_path.exists():
-        req_path = _REPO_ROOT / ".planning" / "milestones" / "v1.0-REQUIREMENTS.md"
+    # per the standard /gsd-complete-milestone workflow. The archive takes precedence
+    # when it exists (post-v1.0-close state); fall back to live path when absent.
+    archive_path = _REPO_ROOT / ".planning" / "milestones" / "v1.0-REQUIREMENTS.md"
+    live_path = _REPO_ROOT / ".planning" / "REQUIREMENTS.md"
+    # v1.0 acceptance gate must validate the v1.0 record.
+    # Archive takes precedence when it exists (post-v1.0-close state).
+    if archive_path.exists():
+        req_path = archive_path
+    elif live_path.exists():
+        req_path = live_path
+    else:
+        req_path = live_path  # triggers assert below
     assert req_path.exists(), (
-        "Neither .planning/REQUIREMENTS.md nor .planning/milestones/v1.0-REQUIREMENTS.md found"
+        "Neither .planning/milestones/v1.0-REQUIREMENTS.md nor .planning/REQUIREMENTS.md found"
     )
     req_text = req_path.read_text()
 
