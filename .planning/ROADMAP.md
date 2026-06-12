@@ -148,7 +148,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 13-02-PLAN.md — OPS-01: cancel direct-kill via on-disk pid/pgid + SIGTERM→grace→SIGKILL + starttime PID-reuse guard
-- [ ] 13-03-PLAN.md — OPS-02: new dequeue command (locked_update graph.cancel) + OPS-03: submit pending→running else branch
+- [x] 13-03-PLAN.md — OPS-02: new dequeue command (locked_update graph.cancel) + OPS-03: submit pending→running else branch
 - [ ] 13-04-PLAN.md — OPS-04: --project group option + _PROJECT_OVERRIDE bridge + OPS-05: viz port config fallback
 
 **Parallel note**: Independent of Phases 11, 12, 14. Can run in parallel with any of them after Phase 9 clears.
