@@ -110,7 +110,7 @@ def main() -> None:
             _mod = _ilu.module_from_spec(_spec)
             _spec.loader.exec_module(_mod)
             if not hasattr(_mod, "make_classifier"):
-                _write_result(status="error", partial=False)
+                _write_result(status="crash", partial=False, variant_dispatched=variant_name)
                 raise AttributeError(
                     f"Variant module {_py_files[0]} has no make_classifier() function."
                 )
