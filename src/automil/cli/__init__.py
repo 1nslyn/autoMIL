@@ -9,18 +9,34 @@ import click
 
 
 @click.group()
-def main():
+@click.option(
+    "--project",
+    "project_path",
+    default=None,
+    type=click.Path(exists=True),
+    metavar="PATH",
+    help=(
+        "Path to project root (containing automil/config.yaml) or the automil/ dir. "
+        "Overrides cwd-based project discovery for all subcommands. "
+        "Use this when running automil from outside the project root."
+    ),
+    is_eager=True,
+)
+def main(project_path: str | None = None):
     """autoMIL: Autonomous agent-driven MIL model improvement."""
     # Activity signal (P2.1): every automil invocation is an agent action.
     # Stamp the project-level marker so the activity-gated budget counts CLI
     # work too — and so runtimes without Claude Code's PostToolUse hook (codex,
     # opencode) still register activity. Best-effort: never break a command if
     # we're not inside a project or the marker can't be written.
+    import automil.cli._helpers as _h  # noqa: PLC0415
+    if project_path is not None:
+        from pathlib import Path as _Path  # noqa: PLC0415
+        _h._PROJECT_OVERRIDE = _Path(project_path).resolve()
     try:
-        from automil.cli._helpers import _find_automil_dir
-        from automil.cells.activity import touch_last_action
-
-        touch_last_action(_find_automil_dir())
+        from automil.cli._helpers import _find_automil_dir  # noqa: PLC0415
+        from automil.cells.activity import touch_last_action  # noqa: PLC0415
+        touch_last_action(_find_automil_dir())  # now respects _PROJECT_OVERRIDE
     except Exception:
         pass
 

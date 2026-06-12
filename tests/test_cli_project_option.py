@@ -52,7 +52,6 @@ def _reset_project_override(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="OPS-04 not yet implemented", strict=True)
 def test_project_option_project_root(
     cli_runner: CliRunner, tmp_path: Path, monkeypatch
 ) -> None:
@@ -92,7 +91,6 @@ def test_project_option_project_root(
     )
 
 
-@pytest.mark.xfail(reason="OPS-04 not yet implemented", strict=True)
 def test_project_option_automil_dir(
     cli_runner: CliRunner, tmp_path: Path, monkeypatch
 ) -> None:
