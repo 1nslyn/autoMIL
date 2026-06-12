@@ -412,7 +412,13 @@ def main():
 
     cmd = sys.argv[1]
     if cmd == "start":
-        port = DEFAULT_PORT
+        # WR-06: pass port=None when no --port flag so cmd_start's config-based
+        # resolution (viz.port → DEFAULT_PORT) runs. Previously this legacy shim
+        # hard-coded port=DEFAULT_PORT and silently ignored config, so
+        # `python -m automil.viz.server start` bypassed viz.port entirely while
+        # the Click `automil viz start` path honored it. The Click path remains
+        # the supported entry point; this shim now shares the same resolution.
+        port: int | None = None
         if "--port" in sys.argv:
             idx = sys.argv.index("--port")
             port = int(sys.argv[idx + 1])

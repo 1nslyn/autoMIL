@@ -117,3 +117,60 @@ def test_viz_port_explicit_overrides_config(
         f"expected port=7777 (explicit flag), got port={captured.get('port')!r}\n"
         f"viz start output: {result.output!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# WR-06: server-side resolution test (NO cmd_start mock)
+# ---------------------------------------------------------------------------
+
+
+def test_server_cmd_start_resolves_config_port(tmp_path: Path) -> None:
+    """server.cmd_start(port=None) resolves viz.port from config (server-side).
+
+    WR-06: the three tests above all patch `automil.viz.server.cmd_start`, so
+    server.py's OWN `port is None` fallback branch is never exercised — the path
+    that direct callers (and the legacy `viz.server.main()` shim) actually hit.
+    This test calls cmd_start DIRECTLY with port=None against a config carrying
+    `viz.port: 9001` and asserts the server resolves to 9001, intercepting at the
+    aiohttp TCPSite construction so no server is ever bound/left running.
+    """
+    from automil.viz import server as viz_server  # noqa: PLC0415
+
+    adir = tmp_path / "automil"
+    adir.mkdir()
+    (adir / "config.yaml").write_text(
+        "run:\n  script: train.py\nviz:\n  port: 9001\n"
+    )
+    # orchestrator/ dir so cmd_start can place its PID/log files.
+    (adir / "orchestrator").mkdir()
+
+    captured: dict = {}
+
+    class _StopBeforeBind(Exception):
+        """Sentinel raised to abort cmd_start at TCPSite construction."""
+
+    def fake_tcpsite(runner, host, port, **kwargs):  # noqa: ANN001
+        captured["host"] = host
+        captured["port"] = port
+        raise _StopBeforeBind
+
+    # Patch TCPSite so the resolved (host, port) is captured at the moment the
+    # server would bind, then abort before any socket is opened. cmd_start's
+    # finally-block still runs (observer stop, PID file cleanup).
+    with patch("automil.viz.server.web.TCPSite", side_effect=fake_tcpsite):
+        try:
+            viz_server.cmd_start(
+                port=None, project_root=tmp_path, host="127.0.0.1"
+            )
+        except _StopBeforeBind:
+            pass
+
+    assert captured.get("port") == 9001, (
+        f"server-side resolution should read viz.port=9001 from config, "
+        f"got port={captured.get('port')!r}"
+    )
+    assert captured.get("host") == "127.0.0.1"
+    # No server left running: cmd_start's finally removed the PID file.
+    assert not (adir / "orchestrator" / "viz_server.pid").exists(), (
+        "viz_server.pid must not linger after the aborted cmd_start"
+    )
