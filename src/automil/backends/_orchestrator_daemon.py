@@ -28,6 +28,12 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+# NOTE (IN-01): _collect_editable_source_roots lives in automil.cli.check but has
+# no CLI dependency (only uses site + pathlib). The import works today because no
+# CLI submodule imports the daemon (no circular import). A future refactor could
+# move it to automil.utils or automil.editable to resolve the layering concern,
+# but that shift would re-number daemon lines and re-break the framework-purity
+# allowlist / acceptance anchors. Left here until Phase 14 / DBT-03 anchor cleanup.
 from automil.cli.check import _collect_editable_source_roots
 from automil.runner import Runner
 

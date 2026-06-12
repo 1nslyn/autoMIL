@@ -43,8 +43,8 @@ _SRC_AUTOMIL = _REPO_ROOT / "src" / "automil"
 _ALLOWLIST: dict[str, str] = {
     # 1. Informational comment about consumer-specific vars; documents the
     #    env.passthrough seam without auto-injecting any value.
-    #    Line shifted +1 by 12-03 (added _collect_editable_source_roots import above it).
-    "src/automil/backends/_orchestrator_daemon.py:56":
+    #    Line shifted +6 by 12-review IN-01 note (added 6-line comment block above import).
+    "src/automil/backends/_orchestrator_daemon.py:62":
         "Consumer-specific vars (e.g. AUTOBENCH_*_ROOT)",
     # 2. Comment in verify_repro about the clean env not leaking AUTOBENCH_*.
     "src/automil/cli/lifecycle/verify_repro.py:84":

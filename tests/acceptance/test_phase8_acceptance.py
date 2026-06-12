@@ -160,7 +160,11 @@ def test_d208_clause_07_framework_purity_grep_gate():
     assert test_file.exists()
     test_src = test_file.read_text()
     assert "_ALLOWLIST" in test_src
-    assert "src/automil/backends/_orchestrator_daemon.py:54" in test_src
+    # NOTE: This line number is brittle — it tracks the daemon AUTOBENCH comment and
+    # shifts whenever imports are added above it. Tracked for cleanup in Phase 14 /
+    # DBT-03 (allowlist anchor cleanup). Always keep this in sync with _ALLOWLIST in
+    # tests/test_framework_purity.py. Current value after 12-review IN-01 note: :62.
+    assert "src/automil/backends/_orchestrator_daemon.py:62" in test_src
     assert "src/automil/cli/lifecycle/verify_repro.py:84" in test_src
     # Iter-2 / F-01 fix: revert_baseline.py:87 default-help allowlist entry.
     assert "src/automil/cli/lifecycle/revert_baseline.py:87" in test_src
