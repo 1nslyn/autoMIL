@@ -30,6 +30,7 @@ def main():
 # repeated import so cycles are not a concern.
 from automil.cli import budget  # noqa: E402,F401  (P2.3 — cap.budget show/set)
 from automil.cli import cancel  # noqa: E402,F401
+from automil.cli import dequeue  # noqa: E402,F401  (OPS-02 / D-04)
 from automil.cli import cell    # noqa: E402,F401  (CAP-06 / D-125)
 from automil.cli import cells   # noqa: E402,F401  (REC-04 / D-15)
 from automil.cli import check  # noqa: E402,F401

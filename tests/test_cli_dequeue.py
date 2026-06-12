@@ -84,7 +84,6 @@ def _write_graph(adir: Path, nodes: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="OPS-02 not yet implemented", strict=True)
 def test_dequeue_removes_queue_spec(
     cli_runner: CliRunner, tmp_path: Path, monkeypatch
 ) -> None:
@@ -130,7 +129,6 @@ def test_dequeue_removes_queue_spec(
     )
 
 
-@pytest.mark.xfail(reason="OPS-02 not yet implemented", strict=True)
 def test_dequeue_refuses_running(
     cli_runner: CliRunner, tmp_path: Path, monkeypatch
 ) -> None:
@@ -167,7 +165,6 @@ def test_dequeue_refuses_running(
     )
 
 
-@pytest.mark.xfail(reason="OPS-02 not yet implemented", strict=True)
 def test_dequeue_pending_no_spec(
     cli_runner: CliRunner, tmp_path: Path, monkeypatch
 ) -> None:
@@ -205,7 +202,6 @@ def test_dequeue_pending_no_spec(
     )
 
 
-@pytest.mark.xfail(reason="OPS-02 not yet implemented", strict=True)
 def test_dequeue_unknown_node(
     cli_runner: CliRunner, tmp_path: Path, monkeypatch
 ) -> None:
