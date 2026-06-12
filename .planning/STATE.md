@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Bug Fixing
-status: verifying
-last_updated: "2026-06-12T10:19:11.180Z"
+status: executing
+last_updated: "2026-06-12T10:48:00.000Z"
 last_activity: 2026-06-12
 progress:
   total_phases: 6
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 16
   completed_plans: 16
-  percent: 100
+  percent: 83
 ---
 
 # State: autoMIL - v1.1 Bug Fixing
@@ -30,13 +30,13 @@ progress:
 - `CLAUDE.md` — project instructions and Leo's standing directives
 - `~/.claude/projects/-home-jma-Documents-yinshuol-autoMIL/memory/MEMORY.md` — Leo's standing memory
 
-**Current focus:** Phase 12 — Scheduling & Overlay Isolation
+**Current focus:** Phase 13 — CLI Lifecycle & Operability
 
 ## Current Position
 
-Phase: 12 (Scheduling & Overlay Isolation) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
+Phase: 13 (CLI Lifecycle & Operability) — STARTING (discuss → plan → execute)
+Plan: 0 of N (not yet planned)
+Status: Phase 12 complete + gated; beginning Phase 13
 Last activity: 2026-06-12
 
 ## Performance Metrics
@@ -130,11 +130,11 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Phase 12 Plan 01 complete (2026-06-11). Wave-0 RED stubs: 7 xfail for SCH-01 (scheduling policy dispatch) in tests/test_scheduling_policy.py, 5 xfail for SCH-02 (editable overlay guard) in tests/test_editable_overlay_guard.py. FakeDaemon SimpleNamespace fixture + PropertyMock dispatch gate. D-199 invariants (15 tests) remain GREEN. Framework purity gate GREEN. Commits: 59077b6 (SCH-01 stubs), a952677 (SCH-02 stubs).
+**Last action:** Phase 12 (Scheduling & Overlay Isolation) COMPLETE (2026-06-12). All 3 plans executed, verified 2/2, code-reviewed (CR-01 `site.getsitepackages` AttributeError guard + 3 warnings + clause-07 stale-line fix, all applied). Definitive full-framework gate: **1039 passed, 1 failed, 53 skipped** — the single failure is the pre-existing `clause_11` stale v1.0 acceptance test (reads `.planning/REQUIREMENTS.md`, now the v1.1 file, expecting v1.0 DEC rows) — slated for Phase 14/DBT. Iris/sklearn tests PASS in the full run (the fixer's "sklearn not installed" was a subprocess-isolation artifact). Tracking artifacts committed: 2676515.
 
-**Phase 12 status:** Plan 01 complete. Plans 02 (SCH-01 implementation) and 03 (SCH-02 implementation) pending.
+**Phase 12 deliverables:** SCH-01 `orchestrator.scheduling_policy` (best_fit default | least_loaded | round_robin) in `_find_best_gpu`; SCH-02 opt-in `editable_overlay_guard` + always-on `automil check` warning (D-199 honored — detect-and-warn always, inject only when opted in).
 
-**Next:** Execute Phase 12 Plan 02 (SCH-01 scheduling policy dispatch implementation).
+**Next:** Phase 13 (OPS — CLI Lifecycle & Operability, OPS-01..05): discuss → plan → execute → verify → code-review. Then Phase 14 (DBT — Housekeeping), then milestone audit → complete → cleanup. Continuing autonomously per Leo's directive (no pausing except true hard blockers).
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*
