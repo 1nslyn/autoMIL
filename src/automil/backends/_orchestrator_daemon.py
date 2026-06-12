@@ -1816,7 +1816,12 @@ class ExperimentOrchestrator:
                 new_policy,
             )
             self.scheduling_policy = new_policy
-        # NOTE: self._rr_cursor is NOT reset on policy change (see 12-RESEARCH.md Pitfall 1).
+        # _rr_cursor is intentionally NOT reset on policy change or on topology change.
+        # Rationale: (1) resetting on policy change would re-visit recently-used GPUs
+        # when an operator briefly switches policy and reverts; (2) cursor % len(candidates)
+        # is always a valid index regardless of how many candidates are currently eligible,
+        # so correctness is preserved across topology changes (e.g. a GPU going offline).
+        # The counter grows unbounded but Python int has no overflow.
         new_guard = bool(orch_cfg.get("editable_overlay_guard", self.editable_overlay_guard))
         if new_guard != self.editable_overlay_guard:
             logger.info(
