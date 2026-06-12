@@ -80,6 +80,14 @@ class _FakeRunningExp:
 
 
 # ---------------------------------------------------------------------------
+# DBT-02 regression guard (Phase 9 CR-01, commit 33b5383)
+# ---------------------------------------------------------------
+# These three tests were the "3 pre-existing tick_cells failures" tracked since
+# Phase 4/6 origin. They pass because ExperimentOrchestrator.__init__ now wires
+# self.graph via ExperimentGraph(...), fixing the cells_dir resolution path.
+# The fix was incidental to Phase 9 CR-01 (self.graph assignment). Do NOT remove
+# or weaken these tests — they are the sole regression guard for DBT-02.
+# ---------------------------------------------------------------------------
 # Test 1: ACTIVE → REFUSING_NEW
 # ---------------------------------------------------------------------------
 
