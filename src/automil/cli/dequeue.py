@@ -16,7 +16,15 @@ from automil.cli.lifecycle._shared import _get_node_or_die
 
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATES = frozenset({"completed", "cancelled", "crashed", "keep", "discard"})
+# WR-05: dequeue is only valid for a not-yet-executed proposal. graph.cancel()
+# unconditionally decrements meta.total_proposed and flips status to
+# "cancelled" with no type/status guard of its own, so allowing it on any
+# other state double-decrements the proposed counter (the node was already
+# decremented by mark_failed/promote) and rewrites already-executed results.
+# Guard POSITIVELY on the only safe shape rather than enumerating a negative
+# TERMINAL_STATES set — the codebase uses crash/oom/timeout/partial/registered
+# statuses too (submit.py, graph.py), none of which belong in dequeue.
+DEQUEUEABLE_STATES = frozenset({"pending", "queued"})
 
 
 @main.command("dequeue")
@@ -40,15 +48,20 @@ def dequeue(node_id: str) -> None:
     # Step 1: look up node — hard-fail if unknown (prevents graph.cancel KeyError).
     node = _get_node_or_die(adir, node_id)
 
-    # Step 2: state guard (per D-05).
+    # Step 2: positive state guard (WR-05, per D-05). Only a proposed node in a
+    # pending/queued (not-yet-launched) state may be dequeued. Everything else —
+    # running, or any executed/terminal status — is rejected so graph.cancel()
+    # can never double-decrement total_proposed or rewrite executed results.
     state = node.get("status", "")
+    node_type = node.get("type", "")
     if state == "running":
         raise click.ClickException(
             f"Node {node_id!r} is running. Use `automil cancel {node_id}` to stop it."
         )
-    if state in TERMINAL_STATES:
+    if not (node_type == "proposed" and state in DEQUEUEABLE_STATES):
         raise click.ClickException(
-            f"Node {node_id!r} is already terminal (status={state!r}). Nothing to dequeue."
+            f"Node {node_id!r} is {node_type or 'unknown'}/{state or 'unknown'}; "
+            f"only pending proposals can be dequeued."
         )
 
     # Step 3: remove queue spec if present (flat path — NOT backend-namespaced per RESEARCH §OPS-02).
