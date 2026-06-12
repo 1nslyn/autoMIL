@@ -28,6 +28,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from automil.cli.check import _collect_editable_source_roots
 from automil.runner import Runner
 
 # ---------------------------------------------------------------------------
@@ -439,6 +440,12 @@ class ExperimentOrchestrator:
         self.default_vram = orch_cfg.get("default_vram_estimate_gb", DEFAULT_VRAM_ESTIMATE_GB)
         self.scheduling_policy: str = orch_cfg.get("scheduling_policy", SCHEDULING_POLICY)
         self._rr_cursor: int = 0
+        # SCH-02 / D-03: opt-in editable-install overlay guard (default OFF).
+        # When True, _launch prepends the worktree's editable src root to PYTHONPATH.
+        # Default is False to preserve D-199/DEC-01 invariant (no auto-injection).
+        self.editable_overlay_guard: bool = bool(
+            orch_cfg.get("editable_overlay_guard", False)
+        )
 
         # CLN-02 / D-04: env.passthrough — literal var names the operator
         # explicitly opts in to forward into experiment subprocesses. The
@@ -853,6 +860,43 @@ class ExperimentOrchestrator:
 
         return env
 
+    def _apply_editable_overlay_guard(
+        self, env: dict[str, str], wt_path: Path
+    ) -> None:
+        """SCH-02 / D-03: opt-in editable-install worktree PYTHONPATH guard.
+
+        When self.editable_overlay_guard is True, prepends the worktree-relative
+        equivalent of each editable source root to env["PYTHONPATH"] so that
+        Python resolves imports from the worktree overlay first.
+
+        Called from _launch AFTER _build_subprocess_env returns.
+        Default OFF (editable_overlay_guard: false) preserves D-199/DEC-01
+        invariant: PYTHONPATH is NOT force-set unless the operator opts in.
+
+        Roots outside self.project_root are silently skipped (ValueError).
+        Only roots whose worktree counterpart actually exists are prepended.
+        """
+        if not self.editable_overlay_guard:
+            return
+        prepends: list[str] = []
+        for editable_root in _collect_editable_source_roots():
+            root_p = Path(editable_root)
+            try:
+                rel = root_p.relative_to(self.project_root)
+            except ValueError:
+                continue  # editable root not under project_root; skip
+            wt_candidate = wt_path / rel
+            if wt_candidate.is_dir():
+                prepends.append(str(wt_candidate))
+        if prepends:
+            existing_pp = env.get("PYTHONPATH", "")
+            parts = prepends + ([existing_pp] if existing_pp else [])
+            env["PYTHONPATH"] = ":".join(parts)
+            logger.debug(
+                "editable_overlay_guard: prepended %d path(s) to PYTHONPATH for wt=%s",
+                len(prepends), wt_path,
+            )
+
     def _launch(self, spec: dict, gpu_id: int):
         """Launch an experiment in an isolated git worktree."""
         node_id = spec["id"]
@@ -911,6 +955,10 @@ class ExperimentOrchestrator:
             archive=archive,
             spec=spec,
         )
+
+        # SCH-02 / D-03: opt-in editable-install worktree PYTHONPATH guard.
+        # Post-processing step after _build_subprocess_env — signature unchanged.
+        self._apply_editable_overlay_guard(env=env, wt_path=wt_path)
 
         log_path = archive / "run.log"
         log_fh = open(log_path, "w")
@@ -1764,6 +1812,13 @@ class ExperimentOrchestrator:
             )
             self.scheduling_policy = new_policy
         # NOTE: self._rr_cursor is NOT reset on policy change (see 12-RESEARCH.md Pitfall 1).
+        new_guard = bool(orch_cfg.get("editable_overlay_guard", self.editable_overlay_guard))
+        if new_guard != self.editable_overlay_guard:
+            logger.info(
+                "Config reload: editable_overlay_guard %r -> %r",
+                self.editable_overlay_guard, new_guard,
+            )
+            self.editable_overlay_guard = new_guard
 
     def tick(self):
         """Single scheduling cycle."""

@@ -51,6 +51,8 @@ def _fake_daemon(
         default_vram=1.0,
         default_timeout=150,
         poll_interval=5,
+        # SCH-02: editable overlay guard (default OFF, D-199 invariant)
+        editable_overlay_guard=False,
     )
     return fd
 
