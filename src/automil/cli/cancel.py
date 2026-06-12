@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,7 +115,6 @@ def cancel(node_id: str, timeout: int) -> None:
         # Direct-kill path (OPS-01 / D-01): signal the process group from the CLI using
         # on-disk metadata. The daemon's in-memory self.running is empty in a fresh CLI
         # process, so routing through backend.cancel() + _kill_experiment() is a no-op.
-        import os as _os  # noqa: PLC0415
         import signal as _signal  # noqa: PLC0415
         from automil.orchestrator import _is_pid_alive_with_starttime  # noqa: PLC0415
 
@@ -138,7 +138,7 @@ def cancel(node_id: str, timeout: int) -> None:
             (ChildProcessError is silently ignored).
             """
             try:
-                _os.waitpid(pid, _os.WNOHANG)
+                os.waitpid(pid, os.WNOHANG)
             except (ChildProcessError, PermissionError, OSError):
                 pass
 
@@ -162,7 +162,7 @@ def cancel(node_id: str, timeout: int) -> None:
             if state is None:
                 # Non-Linux: /proc unavailable; fall back to signal-0 probe.
                 try:
-                    _os.kill(pid, 0)
+                    os.kill(pid, 0)
                     return True
                 except (ProcessLookupError, PermissionError):
                     return False
@@ -175,7 +175,7 @@ def cancel(node_id: str, timeout: int) -> None:
         else:
             # SIGTERM first (mirror daemon's SIGTERM→grace→SIGKILL pattern).
             try:
-                _os.killpg(_pgid, _signal.SIGTERM)
+                os.killpg(_pgid, _signal.SIGTERM)
                 logger.debug("cancel: sent SIGTERM to pgid %d for %s", _pgid, node_id)
             except (ProcessLookupError, PermissionError):
                 pass
@@ -188,7 +188,7 @@ def cancel(node_id: str, timeout: int) -> None:
             if _is_alive(_pid, _starttime):
                 # Grace elapsed — escalate to SIGKILL.
                 try:
-                    _os.killpg(_pgid, _signal.SIGKILL)
+                    os.killpg(_pgid, _signal.SIGKILL)
                     logger.debug("cancel: sent SIGKILL to pgid %d for %s", _pgid, node_id)
                 except (ProcessLookupError, PermissionError):
                     pass
@@ -270,39 +270,29 @@ def cancel(node_id: str, timeout: int) -> None:
                 f"or use `automil status`."
             )
 
-    # Step 8: atomically update graph node.
+    # Step 8: atomically update graph node via locked_update (CR-01).
+    # Routes through graph.cancel() so the terminal transition (a) serializes
+    # against the daemon under the same lock every other writer uses, and (b)
+    # decrements meta.total_proposed — a running/pending node was counted as
+    # proposed (mark_running does NOT decrement), so the raw write previously
+    # drifted the proposed counter on every cancel.
+    from automil.graph import locked_update  # noqa: PLC0415
+    from automil.cli._helpers import _load_technique_map  # noqa: PLC0415
+
     graph_path = adir / "graph.json"
-    try:
-        graph_data: dict = json.loads(graph_path.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
-        raise click.ClickException(
-            f"Could not read graph.json for update: {exc}."
-        ) from exc
-
-    nodes = graph_data.get("nodes", {})
-    if node_id in nodes:
-        target = nodes[node_id]
-        target["status"] = "cancelled"
-        target.setdefault("metadata", {})["cancelled_at"] = datetime.now().isoformat()
-        target["metadata"]["cancel_reason"] = "cli"
-    else:
-        logger.warning("cancel: node %s disappeared from graph.json after state check", node_id)
-
-    import os
-    import tempfile
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(graph_path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as fh:
-            json.dump(graph_data, fh, indent=2)
-            fh.write("\n")
-        os.replace(tmp_path, str(graph_path))
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    if graph_path.exists():
+        with locked_update(graph_path, technique_map=_load_technique_map(adir)) as graph:
+            node = graph.get_node(node_id)
+            if node:
+                graph.cancel(node_id)  # decrements total_proposed + sets status
+                node.setdefault("metadata", {})["cancelled_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+                node["metadata"]["cancel_reason"] = "cli"
+            else:
+                logger.warning(
+                    "cancel: node %s vanished from graph during lock", node_id
+                )
 
     # Step 9: move running/<id>.json to archive/<id>/.
     archive_node_dir = orch_dir / "archive" / node_id
