@@ -30,9 +30,8 @@ def main(project_path: str | None = None):
     # opencode) still register activity. Best-effort: never break a command if
     # we're not inside a project or the marker can't be written.
     import automil.cli._helpers as _h  # noqa: PLC0415
-    if project_path is not None:
-        from pathlib import Path as _Path  # noqa: PLC0415
-        _h._PROJECT_OVERRIDE = _Path(project_path).resolve()
+    from pathlib import Path as _Path  # noqa: PLC0415
+    _h._PROJECT_OVERRIDE = _Path(project_path).resolve() if project_path is not None else None
     try:
         from automil.cli._helpers import _find_automil_dir  # noqa: PLC0415
         from automil.cells.activity import touch_last_action  # noqa: PLC0415
