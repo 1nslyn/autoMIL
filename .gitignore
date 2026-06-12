@@ -19,3 +19,4 @@ tasks/
 ref/
 .automil_worktrees/
 .automil_active
+outputs/
