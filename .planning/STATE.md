@@ -30,14 +30,14 @@ progress:
 - `CLAUDE.md` — project instructions and Leo's standing directives
 - `~/.claude/projects/-home-jma-Documents-yinshuol-autoMIL/memory/MEMORY.md` — Leo's standing memory
 
-**Current focus:** Phase 13 — CLI Lifecycle & Operability
+**Current focus:** Phase 14 — Housekeeping & Tech Debt (final v1.1 phase)
 
 ## Current Position
 
-Phase: 13 (CLI Lifecycle & Operability) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-06-12
+Phase: 14 (Housekeeping & Tech Debt) — STARTING (discuss → plan → execute)
+Plan: 0 of N (not yet planned)
+Status: Phase 13 COMPLETE + gated; beginning final phase 14
+Last activity: 2026-06-12 -- Phase 13 closed, starting Phase 14
 
 ## Performance Metrics
 
@@ -133,13 +133,11 @@ Roadmap: Phases 9–14. Phase 9 (REC) first due to S0 priority of REC-01; Phases
 
 ## Session Continuity
 
-**Last action:** Phase 13 (CLI Lifecycle & Operability) EXECUTED + code-reviewed; code-FIX in progress (interrupted by 11am Toronto session-limit reset). All 4 plans executed on main branch `milestone/v1.1-bug-fixing` (HEAD 1846272): 13-01 Wave-0 stubs (anti-theater real subprocess), 13-02 OPS-01 cancel direct-kill (+ zombie-state/reap edge-case fixes), 13-03 OPS-02 dequeue + OPS-03 submit pending→running, 13-04 OPS-04 `--project` + OPS-05 viz.port. Full framework gate: **1053 passed, 1 failed (pre-existing clause_11), 53 skipped** — zero new failures.
+**Last action:** Phase 13 (CLI Lifecycle & Operability) COMPLETE (2026-06-12). All 4 plans executed + verified + code-reviewed (2 iterations, converged clean) on `milestone/v1.1-bug-fixing`. Deliverables: OPS-01 `automil cancel` direct-kill of daemon-launched LOCAL jobs (reads pid/pgid from on-disk running spec, os.killpg SIGTERM→grace→SIGKILL, starttime PID-reuse guard — fixes the empty-in-memory-map no-op); OPS-02 new `automil dequeue` (locked_update + graph.cancel, positive state guard); OPS-03 submit pending→running else-branch; OPS-04 group-level `--project PATH` via `_PROJECT_OVERRIDE`; OPS-05 viz.port config fallback. Verification: **5/5 success criteria PASSED**. Authoritative full gate: **1054 passed, 1 failed (pre-existing clause_11), 53 skipped**.
 
-**Phase 13 code review (13-REVIEW.md, deep, committed 1846272):** 1 critical + 6 warning + 5 info. Confirmed clean: D-206 purity, anti-theater (real subprocess), OPS-03/04 wiring.
+**Phase 13 code review:** iter-1 (13-REVIEW.md) found 1 critical + 6 warnings + 5 info; ALL fixed (CR-01 locked_update graph mutation + total_proposed decrement; WR-01 PID-validated killpg; WR-02 starttime-guarded reap; WR-03 PermissionError→alive; WR-04 dequeue unlink+guard under lock; WR-05 positive state guard; WR-06 real server-side viz port test). Plus: added `cli/cancel.py` to BCK-04 process-control allowlist (OPS-01 sanctioned direct-kill — the violation was masked during execution by an `os as _os` alias, unmasked by CR-01's de-aliasing). iter-2 (13-REVIEW-2.md) = CLEAN, all closed, no regressions. Commits: 027234c,bb576ba,5cff39b,7f25d73,76141be,78d5617,23669a6 + allowlist fix.
 
-**>>> RESUME POINTER (Phase 13 code-fix):** gsd-code-fixer (agentId `af42dc3b336e73821`) was applying CR-01+WR-01..06. It works in an ISOLATED worktree `/tmp/sv-13-reviewfix-LyQL5P` on branch `gsd-reviewfix/13-486052` (commits durable in shared .git even if /tmp is cleaned). **2 of 7 fixes committed there, NOT yet merged to main, NOT yet test-verified:** `b0b2d0b` CR-01 (route cancel graph mutation through locked_update + graph.cancel() — fixes daemon race + total_proposed drift; subsumes IN-01 tempfile import + IN-03 tz stamp), `4766a1f` WR-03 (PermissionError→alive in signal-0 probe). **REMAINING 5 warnings:** WR-01 (killpg targets unvalidated _pgid — derive group from starttime-validated pid), WR-02 (_try_reap can reap PID-reused child — guard on starttime match), WR-04 (dequeue TOCTOU — move guard+unlink INSIDE locked_update; verify daemon locks before dequeuing), WR-05 (dequeue positive state guard: only type=proposed + status in {pending,queued}), WR-06 (viz test theater — add real server-side cmd_start(port=None) test + fold server.main() onto config resolution). Skipped Info: IN-02/IN-04/IN-05 (cosmetic). **To resume:** SendMessage(`af42dc3b336e73821`) to continue, OR re-dispatch a fresh gsd-code-fixer for the 5 remaining warnings against worktree branch. THEN: merge `gsd-reviewfix/13-486052` → main (fast-forward or cherry-pick), run framework suite (`uv run pytest tests/ -q`, tests/ only), re-review (--auto loop), then close Phase 13 → verify → mark complete. Delete `.review-fix-recovery-pending.json` after merge.
-
-**Next after Phase 13 closes:** Phase 14 (DBT — Housekeeping: DBT-01 legacy graph.json round-trip, DBT-02 tick_cells fixes, DBT-03 allowlist anchor cleanup — note clause_11 stale v1.0 acceptance test is a DBT candidate). Then milestone audit → complete → cleanup. Continuing autonomously per Leo's directive (no pausing except true hard blockers).
+**>>> NEXT — Phase 14 (DBT — Housekeeping & Tech Debt, the FINAL v1.1 phase):** DBT-01 legacy graph.json round-trip (schema-version detect + dict-spread on read), DBT-02 pre-existing tick_cells test failures (Phase 4/6-origin, 3 tests), DBT-03 allowlist anchor neighbor cleanup (em-dashes near the BCK-04/framework-purity anchors). **STRONG CANDIDATE to fold in:** the pre-existing `test_d208_clause_11_state_roadmap_complete` failure (the persistent v1.0 acceptance test reading the v1.1 REQUIREMENTS.md, expecting v1.0 DEC-01..07 'Complete' rows) — Phase 14 should resolve this so the framework suite goes fully green at milestone close. Flow: discuss → plan → execute → verify → code-review. THEN: milestone audit → complete → cleanup. Continuing autonomously per Leo's directive (no pausing except true hard blockers).
 
 ---
 *State initialised: 2026-05-01 after roadmap creation*
