@@ -64,27 +64,54 @@ def dequeue(node_id: str) -> None:
             f"only pending proposals can be dequeued."
         )
 
-    # Step 3: remove queue spec if present (flat path — NOT backend-namespaced per RESEARCH §OPS-02).
-    # Queue files are orchestrator/queue/<node>.json. D-169 backend namespacing applies
-    # to RUNNING specs only (orchestrator/running/<backend>/<node>.json).
+    # Queue spec path (flat — NOT backend-namespaced per RESEARCH §OPS-02).
+    # Queue files are orchestrator/queue/<node>.json. D-169 backend namespacing
+    # applies to RUNNING specs only (orchestrator/running/<backend>/<node>.json).
     orch_dir = adir / "orchestrator"
     queue_spec = orch_dir / "queue" / f"{node_id}.json"
-    if queue_spec.exists():
-        try:
-            queue_spec.unlink()
-            logger.debug("dequeue: removed queue spec %s", queue_spec)
-        except OSError as exc:
-            raise click.ClickException(
-                f"Could not remove queue spec at {queue_spec}: {exc}"
-            ) from exc
 
-    # Step 4: mark graph node cancelled via locked_update (serializes against daemon).
+    # Step 3+4 (WR-04): perform the running-state re-check, the queue-spec
+    # unlink, and the graph mark ALL under the same locked_update so the daemon
+    # cannot interleave between them. The out-of-lock guard above is only a fast
+    # fail; the authoritative decision is re-made here under the lock against a
+    # freshly re-read node status.
+    #
+    # Residual TOCTOU (documented): the daemon's _get_pending()/_launch() globs
+    # and unlinks queue specs WITHOUT holding the graph lock (see
+    # _orchestrator_daemon.py _launch L921-924), so taking the graph lock here
+    # narrows but does not fully close the window — the daemon can still pull a
+    # spec out of queue/ concurrently. Re-reading status under the lock means we
+    # will at worst observe the node as 'running' (daemon won the race) and
+    # refuse, instead of marking a live job 'cancelled'. Fully closing it would
+    # require the daemon to also take the graph lock before queue pickup.
     graph_path = adir / "graph.json"
     if graph_path.exists():
         with locked_update(graph_path, technique_map=_load_technique_map(adir)) as graph:
-            if graph.get_node(node_id):
-                graph.cancel(node_id)
-            else:
+            locked_node = graph.get_node(node_id)
+            if not locked_node:
                 logger.warning("dequeue: node %s vanished from graph during lock", node_id)
+            else:
+                locked_state = locked_node.get("status", "")
+                locked_type = locked_node.get("type", "")
+                if locked_state == "running":
+                    raise click.ClickException(
+                        f"Node {node_id!r} started running before it could be "
+                        f"dequeued. Use `automil cancel {node_id}` to stop it."
+                    )
+                if not (locked_type == "proposed" and locked_state in DEQUEUEABLE_STATES):
+                    raise click.ClickException(
+                        f"Node {node_id!r} is {locked_type or 'unknown'}/"
+                        f"{locked_state or 'unknown'}; only pending proposals can "
+                        f"be dequeued."
+                    )
+                if queue_spec.exists():
+                    try:
+                        queue_spec.unlink()
+                        logger.debug("dequeue: removed queue spec %s", queue_spec)
+                    except OSError as exc:
+                        raise click.ClickException(
+                            f"Could not remove queue spec at {queue_spec}: {exc}"
+                        ) from exc
+                graph.cancel(node_id)
 
     click.echo(f"Dequeued {node_id}.")
