@@ -152,14 +152,18 @@ run_mode () {
     local prep_exit=$?
     if [ $prep_exit -ne 0 ]; then echo "ERROR: prep failed ($mode, exit $prep_exit)"; return $prep_exit; fi
 
+    # Use the CONCURRENT budget-packed scheduler (--gpus, not --gpu): it bin-packs
+    # ~5-8 CLAM experiments onto the one H100 by VRAM estimate (clam ~9-14 GB each),
+    # runs each in an isolated spawn subprocess, checks per-exp free VRAM, and
+    # auto-retries OOM/transient-no-VRAM with a bumped estimate. Far better H100
+    # utilization than the sequential --gpu path, and more robust to a dirty GPU.
     echo "---- benchmark ($mode) ----  GPU: $(gpu_mem_status)"
     python benchmarks/scripts/run_benchmark.py \
         --dataset "$DATASET" \
         --benchmark_dir "$bench_dir" \
         --mapping_csv "$MAPPING_CSV" \
         --features_base_dir "$H5_BASE" \
-        --gpu 0 \
-        --experiments_per_gpu 1 \
+        --gpus 0 \
         --frameworks $FRAMEWORKS \
         --models $CLAM_MODELS \
         --encoders $ENCODERS \
