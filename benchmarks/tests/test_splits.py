@@ -126,6 +126,115 @@ class TestStandardCV:
             assert df1.equals(df2)
 
 
+class TestGoldmarkParity:
+    """GOLDMARK-parity 2-way splits: holdout fold doubles as val AND test.
+
+    Reproduces GOLDMARK's internal-CV protocol (val_split == test_split ==
+    'test'). Opt-in via ``holdout_frac``; must NOT perturb the default 3-way
+    path.
+    """
+
+    def test_val_equals_test_per_fold(self, task_csv, tmp_path, registries):
+        splits_dir = str(tmp_path / "splits_parity")
+        strategy_cfg = registries.strategy_registry["standard"]
+        paths = create_strategy_splits(
+            task_csv, splits_dir, strategy_cfg, n_splits=5, seed=42,
+            holdout_frac=0.30,
+        )
+        assert len(paths) == 5
+        for fold in range(5):
+            df = pd.read_csv(os.path.join(splits_dir, f"splits_{fold}.csv"))
+            val = set(df["val"].dropna())
+            test = set(df["test"].dropna())
+            assert val == test, f"fold {fold}: val must equal test in parity mode"
+            assert len(val) > 0
+
+    def test_holdout_fraction_and_train_disjoint(self, task_csv, tmp_path, registries):
+        splits_dir = str(tmp_path / "splits_parity")
+        strategy_cfg = registries.strategy_registry["standard"]
+        create_strategy_splits(
+            task_csv, splits_dir, strategy_cfg, n_splits=5, seed=42,
+            holdout_frac=0.30,
+        )
+        for fold in range(5):
+            df = pd.read_csv(os.path.join(splits_dir, f"splits_{fold}.csv"))
+            train = set(df["train"].dropna())
+            test = set(df["test"].dropna())
+            # train and holdout must be disjoint (no patient leakage)
+            assert len(train & test) == 0, f"fold {fold}: train∩holdout leakage"
+            # ~30% of slides in holdout (2-way, no third partition)
+            frac = len(test) / (len(train) + len(test))
+            assert 0.25 <= frac <= 0.35, f"fold {fold}: holdout frac {frac:.2f} off 0.30"
+
+    def test_patient_level_no_case_crosses(self, tmp_path, registries):
+        # 40 cases, 2 slides each; every slide of a case must stay together
+        rows = []
+        for case_idx in range(40):
+            label = "pos" if case_idx % 2 == 0 else "neg"
+            for slide_idx in range(2):
+                rows.append({
+                    "case_id": f"P{case_idx:03d}",
+                    "slide_id": f"P{case_idx:03d}_slide{slide_idx}",
+                    "label": label,
+                })
+        csv_path = tmp_path / "multi.csv"
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        splits_dir = str(tmp_path / "splits_parity_multi")
+        strategy_cfg = registries.strategy_registry["standard"]
+        create_strategy_splits(
+            str(csv_path), splits_dir, strategy_cfg, n_splits=5, seed=42,
+            holdout_frac=0.30,
+        )
+        slide_to_case = pd.read_csv(csv_path).set_index("slide_id")["case_id"].to_dict()
+        for fold in range(5):
+            sdf = pd.read_csv(os.path.join(splits_dir, f"splits_{fold}.csv"))
+            train_cases = {slide_to_case[s] for s in sdf["train"].dropna()}
+            test_cases = {slide_to_case[s] for s in sdf["test"].dropna()}
+            assert not (train_cases & test_cases), f"fold {fold}: case crosses train/holdout"
+
+    def test_reproducible(self, task_csv, tmp_path, registries):
+        strategy_cfg = registries.strategy_registry["standard"]
+        d1 = str(tmp_path / "p1")
+        d2 = str(tmp_path / "p2")
+        create_strategy_splits(task_csv, d1, strategy_cfg, n_splits=5, seed=42, holdout_frac=0.30)
+        create_strategy_splits(task_csv, d2, strategy_cfg, n_splits=5, seed=42, holdout_frac=0.30)
+        for fold in range(5):
+            df1 = pd.read_csv(os.path.join(d1, f"splits_{fold}.csv"))
+            df2 = pd.read_csv(os.path.join(d2, f"splits_{fold}.csv"))
+            assert df1.equals(df2)
+
+    def test_default_path_unchanged_when_holdout_none(self, task_csv, tmp_path, registries):
+        """Regression guard: holdout_frac=None (default) yields the 3-way
+        disjoint split, identical to not passing the argument at all."""
+        strategy_cfg = registries.strategy_registry["standard"]
+        d_explicit = str(tmp_path / "explicit_none")
+        d_implicit = str(tmp_path / "implicit")
+        create_strategy_splits(task_csv, d_explicit, strategy_cfg, n_splits=3, seed=42, holdout_frac=None)
+        create_strategy_splits(task_csv, d_implicit, strategy_cfg, n_splits=3, seed=42)
+        for fold in range(3):
+            a = pd.read_csv(os.path.join(d_explicit, f"splits_{fold}.csv"))
+            b = pd.read_csv(os.path.join(d_implicit, f"splits_{fold}.csv"))
+            assert a.equals(b)
+            # and it is genuinely 3-way disjoint (val != test)
+            val = set(a["val"].dropna()); test = set(a["test"].dropna())
+            assert val != test or (len(val) == 0 and len(test) == 0)
+            assert len(val & test) == 0
+
+    def test_raises_when_minority_too_small_for_holdout(self, tmp_path, registries):
+        """A class with only 1 case cannot appear in both train and holdout."""
+        rows = [{"case_id": f"a{i:02d}", "slide_id": f"a{i:02d}_s0", "label": "a"} for i in range(20)]
+        rows.append({"case_id": "b00", "slide_id": "b00_s0", "label": "b"})  # minority = 1
+        csv_path = tmp_path / "tiny_minority.csv"
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        splits_dir = str(tmp_path / "splits_parity_bad")
+        strategy_cfg = registries.strategy_registry["standard"]
+        with pytest.raises(ValueError, match=r"smallest class"):
+            create_strategy_splits(
+                str(csv_path), splits_dir, strategy_cfg, n_splits=5, seed=42,
+                holdout_frac=0.30,
+            )
+
+
 class TestPatientLevelStratification:
     """Splits must keep all slides of one case in the same partition."""
 

@@ -127,6 +127,11 @@ class BenchmarkConfig:
     tasks: list[str] = field(default_factory=list)
     train: TrainConfig = field(default_factory=TrainConfig)
     n_folds: int = 10
+    # GOLDMARK-parity comparison mode. None => conservative 3-way held-out
+    # test split (default). A float (e.g. 0.30) => 2-way 70/30 patient split
+    # where the holdout fold doubles as val (selection) AND test (reported),
+    # reproducing GOLDMARK's optimistic internal-CV protocol. Opt-in only.
+    holdout_frac: float | None = None
     gpu: int = 0
     wandb_project: str | None = None
     experiments_per_gpu: int | None = None

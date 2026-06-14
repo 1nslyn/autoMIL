@@ -87,10 +87,17 @@ def prepare_all(
     ds: DatasetConfig,
     seed: int = 42,
     n_splits: int = 5,
+    holdout_frac: float | None = None,
 ) -> None:
     """Run the complete data-preparation pipeline (idempotent).
 
     Uses task definitions from ``DatasetConfig`` instead of hardcoded values.
+
+    ``holdout_frac`` is forwarded to ``create_strategy_splits``: ``None`` keeps
+    the conservative 3-way split (default); a float selects GOLDMARK-parity
+    2-way splits (val==test). Splits are cached per ``benchmark_dir``, so a
+    parity run must use a distinct ``benchmark_dir`` to avoid reusing
+    previously-written 3-way splits.
     """
     all_slide_ids: set[str] = set()
 
@@ -116,7 +123,10 @@ def prepare_all(
         first_split = os.path.join(splits_dir, "splits_0.csv")
         if not os.path.exists(first_split):
             print(f"[prep] Creating splits: {task_name}")
-            create_strategy_splits(csv_path, splits_dir, n_splits=n_splits, seed=seed)
+            create_strategy_splits(
+                csv_path, splits_dir, n_splits=n_splits, seed=seed,
+                holdout_frac=holdout_frac,
+            )
         else:
             print(f"[prep] Splits already exist: {splits_dir}")
 

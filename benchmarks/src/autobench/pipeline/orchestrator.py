@@ -256,6 +256,7 @@ def _prepare_data(cfg: BenchmarkConfig, ds: DatasetConfig) -> None:
         ds=ds,
         seed=cfg.train.seed,
         n_splits=cfg.n_folds,
+        holdout_frac=cfg.holdout_frac,
     )
 
 

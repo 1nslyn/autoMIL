@@ -98,6 +98,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stop_epoch", type=int, default=50)
     p.add_argument("--no_weighted_sample", action="store_true")
 
+    # GOLDMARK-parity comparison mode (opt-in; default stays 3-way held-out test)
+    p.add_argument("--goldmark_parity", action="store_true",
+                   help="GOLDMARK-parity mode: 2-way patient split where the holdout "
+                        "fold doubles as val (selection) AND test (reported), "
+                        "reproducing GOLDMARK's optimistic internal-CV protocol. "
+                        "Comparison instrument only — keep the conservative default "
+                        "for headline numbers. Use a dedicated --benchmark_dir since "
+                        "splits are cached per dir.")
+    p.add_argument("--holdout_frac", type=float, default=0.30,
+                   help="Holdout fraction for --goldmark_parity (default 0.30 = "
+                        "GOLDMARK's 70/30). Ignored unless --goldmark_parity is set.")
+
     # Logging
     p.add_argument("--wandb_project", type=str, default=None,
                    help="Wandb project name (default: {dataset}-benchmark)")
@@ -156,6 +168,12 @@ def main() -> None:
 
     wandb_project = args.wandb_project or f"{ds.name}-benchmark"
 
+    holdout_frac = args.holdout_frac if args.goldmark_parity else None
+    if holdout_frac is not None:
+        print(f"  GOLDMARK-parity mode ON: 2-way "
+              f"{int(round((1 - holdout_frac) * 100))}/{int(round(holdout_frac * 100))} "
+              f"patient split, holdout fold = val == test (comparison-only).")
+
     cfg = BenchmarkConfig(
         benchmark_dir=args.benchmark_dir or ds.benchmark_dir,
         mapping_csv=args.mapping_csv or ds.mapping_csv,
@@ -171,6 +189,7 @@ def main() -> None:
         strategies=strategies,
         frameworks=frameworks,
         nnmil_model_types=nnmil_models,
+        holdout_frac=holdout_frac,
     )
 
     if args.prep_only:
@@ -184,6 +203,7 @@ def main() -> None:
             ds=ds,
             seed=cfg.train.seed,
             n_splits=cfg.n_folds,
+            holdout_frac=cfg.holdout_frac,
         )
         print("Data preparation complete.")
         return

@@ -16,7 +16,11 @@ import os
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import (
+    StratifiedKFold,
+    StratifiedShuffleSplit,
+    train_test_split,
+)
 
 from autobench.pipeline.config import StrategyConfig
 
@@ -27,6 +31,7 @@ def create_strategy_splits(
     strategy_cfg: StrategyConfig | None = None,
     n_splits: int = 5,
     seed: int = 42,
+    holdout_frac: float | None = None,
 ) -> list[str]:
     """Create split CSVs using patient-stratified k-fold CV.
 
@@ -47,6 +52,13 @@ def create_strategy_splits(
         is rejected explicitly so a new strategy added to a dataset YAML
         doesn't silently produce in-distribution splits while the
         operator believes they configured a held-out cohort.
+    holdout_frac:
+        When ``None`` (default), produces our conservative 3-way
+        train/val/test split (``_splits_standard_cv``). When set (e.g.
+        ``0.30``), produces GOLDMARK-parity 2-way splits where the holdout
+        fold doubles as val (model selection) AND test (reported metric) —
+        see ``_splits_goldmark_parity``. This is an opt-in comparison mode,
+        never the default.
 
     Returns a list of paths to the generated split CSVs.
     """
@@ -67,6 +79,9 @@ def create_strategy_splits(
                 "the strategy branch explicitly before using it."
             )
     os.makedirs(splits_dir, exist_ok=True)
+
+    if holdout_frac is not None:
+        return _splits_goldmark_parity(df, splits_dir, n_splits, seed, holdout_frac)
 
     return _splits_standard_cv(df, splits_dir, n_splits, seed)
 
@@ -155,6 +170,92 @@ def _splits_standard_cv(
     return split_paths
 
 
+def _splits_goldmark_parity(
+    df: pd.DataFrame,
+    splits_dir: str,
+    n_splits: int,
+    seed: int,
+    holdout_frac: float,
+) -> list[str]:
+    """GOLDMARK-parity 2-way patient splits (holdout doubles as val AND test).
+
+    Reproduces GOLDMARK's *internal TCGA-CV* protocol, in which
+    ``val_split_value == test_split_value == 'test'`` (their
+    ``scripts/train_task_v2.py``): the single held-out fold of an N×(1-frac)/frac
+    patient split is used BOTH for best-epoch checkpoint selection (val) AND as
+    the reported metric (test). That makes their number a *select-on-report*
+    validation figure (they self-report ~+0.039 AUROC of selection optimism),
+    not a held-out test figure like our 3-way default.
+
+    We mirror it by writing the *same* holdout slide_ids into BOTH the ``val``
+    and ``test`` columns, so the existing select-on-val / report-on-test
+    machinery (CLAM early-stopping checkpoint + ``test`` summary; nnMIL
+    ``evaluate('test')``) lands on the identical fold with no downstream change.
+
+    Uses ``StratifiedShuffleSplit`` (matching GOLDMARK's
+    ``StratifiedShuffleSplit``, test_frac≈0.33): the N folds are independent
+    random (1-frac)/frac draws, NOT a disjoint K-fold partition. Splitting is
+    case-level (patient), then expanded to slides, so no patient crosses the
+    train/holdout boundary.
+
+    This path is opt-in (``--goldmark_parity``); it is a comparison instrument,
+    never our headline. The conservative 3-way held-out test split
+    (``_splits_standard_cv``) remains the default.
+    """
+    case_table = df.groupby("case_id", sort=True)["label"].first().reset_index()
+    case_ids = case_table["case_id"].values
+    case_labels = case_table["label"].values
+
+    # Feasibility: StratifiedShuffleSplit needs >= 2 cases per class, and the
+    # holdout must retain >= 1 case per class (so AUC is computable on it).
+    label_counts = pd.Series(case_labels).value_counts().to_dict()
+    min_label_count = int(min(label_counts.values()))
+    holdout_per_min_class = int(round(min_label_count * holdout_frac))
+    if min_label_count < 2 or holdout_per_min_class < 1:
+        raise ValueError(
+            f"Cannot build GOLDMARK-parity {1 - holdout_frac:.0%}/{holdout_frac:.0%} "
+            f"splits: smallest class has {min_label_count} cases, which would put "
+            f"{holdout_per_min_class} in the holdout fold (need >= 1 per class on "
+            f"both sides). Per-class case counts (case_id-deduplicated): "
+            f"{label_counts}. Lower holdout_frac or use a larger cohort."
+        )
+
+    case_to_slides = df.groupby("case_id")["slide_id"].apply(list).to_dict()
+
+    splitter = StratifiedShuffleSplit(
+        n_splits=n_splits, test_size=holdout_frac, random_state=seed
+    )
+    split_paths: list[str] = []
+
+    for fold_idx, (train_case_idx, holdout_case_idx) in enumerate(
+        splitter.split(case_ids, case_labels)
+    ):
+        train_cases = case_ids[train_case_idx]
+        holdout_cases = case_ids[holdout_case_idx]
+
+        _assert_no_patient_leakage_2way(
+            train_cases=np.asarray(train_cases),
+            holdout_cases=np.asarray(holdout_cases),
+            fold_idx=fold_idx,
+        )
+
+        train_ids = _expand_cases_to_slides(train_cases, case_to_slides)
+        holdout_ids = _expand_cases_to_slides(holdout_cases, case_to_slides)
+
+        # val == test == holdout: GOLDMARK's select-on-report behavior.
+        path = _write_split_csv(
+            splits_dir, fold_idx, train_ids, holdout_ids, holdout_ids
+        )
+        split_paths.append(path)
+
+    print(
+        f"  Splits: {splits_dir}  ({n_splits} folds, GOLDMARK-parity "
+        f"{int(round((1 - holdout_frac) * 100))}/{int(round(holdout_frac * 100))} "
+        f"patient split, val==test [comparison-only])"
+    )
+    return split_paths
+
+
 def _expand_cases_to_slides(
     cases: np.ndarray | list,
     case_to_slides: dict[str, list[str]],
@@ -183,6 +284,24 @@ def _assert_no_patient_leakage(
         raise AssertionError(
             f"Patient leakage in fold {fold_idx}: "
             f"train∩val={train_val}, train∩test={train_test}, val∩test={val_test}"
+        )
+
+
+def _assert_no_patient_leakage_2way(
+    train_cases: np.ndarray,
+    holdout_cases: np.ndarray,
+    fold_idx: int,
+) -> None:
+    """Hard fail if any case_id crosses the train/holdout boundary.
+
+    The GOLDMARK-parity split is 2-way (val==test==holdout), so the only
+    leakage that matters is train vs holdout; val∩test overlap is intentional.
+    """
+    overlap = set(train_cases.tolist()) & set(holdout_cases.tolist())
+    if overlap:
+        raise AssertionError(
+            f"Patient leakage in GOLDMARK-parity fold {fold_idx}: "
+            f"train∩holdout={overlap}"
         )
 
 
