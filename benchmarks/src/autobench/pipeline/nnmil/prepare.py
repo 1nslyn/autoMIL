@@ -27,6 +27,8 @@ def prepare_nnmil_experiment(
     dataset_name: str = "dataset",
     seed: int = 42,
     n_splits: int = 5,
+    max_seq_multiplier: float = 0.5,
+    use_original_length: bool = False,
 ) -> str:
     """Prepare nnMIL dataset artifacts for one (task, encoder, strategy) combo.
 
@@ -35,6 +37,19 @@ def prepare_nnmil_experiment(
     The generated plan embeds the SAME splits from the shared split CSVs
     into nnMIL's ``data_splits`` format so that CLAM and nnMIL use
     identical patient/slide assignments.
+
+    Patch-cap knobs (default reproduces upstream planner behavior exactly):
+
+    ``max_seq_multiplier`` (default 0.5)
+        Train-time sub-bag length = ``int(median_patches * max_seq_multiplier)``.
+        nnMIL's planner uses 0.5 (keep half the median); GOLDMARK and CLAM keep
+        ALL patches. On rare-event tasks the 0.5x cap can drop the few
+        discriminative tiles, hurting train signal. Raise toward 1.0+ to retain
+        more (note: lengths above a slide's patch count are zero-padded).
+    ``use_original_length`` (default False)
+        When True, train on the full variable-length bag (dropping only ~10%
+        random patches) instead of the fixed sub-bag — the closest match to
+        GOLDMARK's keep-all protocol. Val/test always use all patches either way.
     """
     dataset_dir = os.path.join(
         benchmark_dir, "nnmil", strategy, f"{task_name}_{encoder_key}"
@@ -88,7 +103,10 @@ def prepare_nnmil_experiment(
     csv_df.to_csv(os.path.join(dataset_dir, "dataset.csv"), index=False)
 
     # --- feature statistics (from a sample of H5 files) ---
-    feature_stats = _analyze_features(h5_dir, task_df["slide_id"].tolist(), embed_dim)
+    feature_stats = _analyze_features(
+        h5_dir, task_df["slide_id"].tolist(), embed_dim,
+        max_seq_multiplier=max_seq_multiplier,
+    )
 
     # --- data splits (from shared split CSVs) ---
     splits_dir = os.path.join(benchmark_dir, "splits", strategy, task_name)
@@ -107,6 +125,8 @@ def prepare_nnmil_experiment(
             n_classes=len(label_dict),
             metric=dataset_json["metric"],
             min_class_count=int(task_df["label"].value_counts().min()),
+            max_seq_multiplier=max_seq_multiplier,
+            use_original_length=use_original_length,
         ),
         "random_seed": seed,
     }
@@ -122,6 +142,7 @@ def _analyze_features(
     slide_ids: list[str],
     expected_dim: int,
     sample_size: int = 100,
+    max_seq_multiplier: float = 0.5,
 ) -> dict:
     """Analyze H5 feature files to get statistics for nnMIL config.
 
@@ -165,7 +186,7 @@ def _analyze_features(
             "percentile_75": float(np.percentile(arr, 75)),
             "percentile_95": float(np.percentile(arr, 95)),
         },
-        "recommended_max_seq_length": int(median * 0.5),
+        "recommended_max_seq_length": int(median * max_seq_multiplier),
     }
 
 
@@ -236,6 +257,8 @@ def _generate_training_config(
     n_classes: int = 2,
     metric: str = "bacc",
     min_class_count: int | None = None,
+    max_seq_multiplier: float = 0.5,
+    use_original_length: bool = False,
 ) -> dict:
     """Generate nnMIL training configuration, matching upstream planner.
 
@@ -254,7 +277,9 @@ def _generate_training_config(
     if "recommended_max_seq_length" in feature_stats:
         max_seq_length = int(feature_stats["recommended_max_seq_length"])
     else:
-        max_seq_length = int(feature_stats["num_patches_per_slide"]["median"] * 0.5)
+        max_seq_length = int(
+            feature_stats["num_patches_per_slide"]["median"] * max_seq_multiplier
+        )
 
     # planner.py:596 fallback: train set ≈ 80% of total when split info absent
     num_train_samples = int(n_samples * 0.8)
@@ -300,7 +325,7 @@ def _generate_training_config(
         "feature_dimension": feat_dim,
         "hidden_dim": hidden_dim,
         "max_seq_length": max_seq_length,
-        "use_original_length": False,
+        "use_original_length": use_original_length,
         "batch_size": batch_size,
         "batch_sampler": batch_sampler,
         "learning_rate": 3e-4,

@@ -110,6 +110,15 @@ def parse_args() -> argparse.Namespace:
                    help="Holdout fraction for --goldmark_parity (default 0.30 = "
                         "GOLDMARK's 70/30). Ignored unless --goldmark_parity is set.")
 
+    # nnMIL patch-cap knobs (default reproduces upstream planner exactly)
+    p.add_argument("--nnmil_max_seq_multiplier", type=float, default=0.5,
+                   help="nnMIL train-time sub-bag length = multiplier * median "
+                        "patches (default 0.5 = upstream). Raise toward 1.0+ to "
+                        "keep more patches on rare-event tasks (GOLDMARK/CLAM keep all).")
+    p.add_argument("--nnmil_use_original_length", action="store_true",
+                   help="nnMIL: train on full variable-length bags (~10%% drop) "
+                        "instead of the fixed sub-bag — closest to GOLDMARK keep-all.")
+
     # Logging
     p.add_argument("--wandb_project", type=str, default=None,
                    help="Wandb project name (default: {dataset}-benchmark)")
@@ -190,6 +199,8 @@ def main() -> None:
         frameworks=frameworks,
         nnmil_model_types=nnmil_models,
         holdout_frac=holdout_frac,
+        nnmil_max_seq_multiplier=args.nnmil_max_seq_multiplier,
+        nnmil_use_original_length=args.nnmil_use_original_length,
     )
 
     if args.prep_only:

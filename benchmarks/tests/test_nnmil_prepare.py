@@ -194,6 +194,60 @@ class TestGenerateTrainingConfig:
         assert 16 <= cfg_virchow2["batch_size"] <= 48
 
 
+class TestPatchCapKnobs:
+    """Configurable nnMIL train-time patch cap (default reproduces 0.5*median)."""
+
+    def test_analyze_features_multiplier_scales_recommendation(self, tmp_path):
+        h5_dir = tmp_path / "features_big"
+        h5_dir.mkdir()
+        for i in range(5):
+            with h5py.File(h5_dir / f"slide_{i:05d}.h5", "w") as f:
+                f.create_dataset("features", data=np.zeros((10000, 768), dtype=np.float32))
+                f.create_dataset("coords", data=np.zeros((10000, 2), dtype=np.int32))
+        sids = [f"slide_{i:05d}" for i in range(5)]
+        # default 0.5 -> 5000
+        assert _analyze_features(str(h5_dir), sids, 768)["recommended_max_seq_length"] == 5000
+        # 1.0 -> keep ~all (median) -> 10000
+        assert _analyze_features(str(h5_dir), sids, 768, max_seq_multiplier=1.0)[
+            "recommended_max_seq_length"] == 10000
+        # 2.0 -> 20000
+        assert _analyze_features(str(h5_dir), sids, 768, max_seq_multiplier=2.0)[
+            "recommended_max_seq_length"] == 20000
+
+    def test_training_config_default_is_unchanged(self):
+        """Regression: defaults must match the pre-change upstream planner."""
+        stats = {"feature_dimension": 768, "num_patches_per_slide": {"median": 1000}}
+        cfg = _generate_training_config(stats, n_samples=200)
+        assert cfg["max_seq_length"] == 500          # 0.5 * 1000
+        assert cfg["use_original_length"] is False
+
+    def test_training_config_honors_knobs(self):
+        stats = {"feature_dimension": 768, "num_patches_per_slide": {"median": 1000}}
+        cfg = _generate_training_config(
+            stats, n_samples=200, max_seq_multiplier=1.5, use_original_length=True,
+        )
+        assert cfg["max_seq_length"] == 1500         # 1.5 * 1000
+        assert cfg["use_original_length"] is True
+
+    def test_prepare_experiment_threads_knobs_into_plan(
+        self, benchmark_dir, h5_features_dir, task_csv_with_splits,
+    ):
+        features_base_dir = os.path.dirname(h5_features_dir)
+        plan_path = prepare_nnmil_experiment(
+            benchmark_dir=benchmark_dir, task_name="brca", encoder_key="conch_v15",
+            strategy="standard", label_col="BRCA_predict_label",
+            label_dict={"neg": 0, "pos": 1}, embed_dim=768,
+            features_base_dir=features_base_dir, seed=42, n_splits=3,
+            max_seq_multiplier=1.0, use_original_length=True,
+        )
+        with open(plan_path) as f:
+            plan = json.load(f)
+        tc = plan["training_configuration"]
+        median = plan["feature_statistics"]["num_patches_per_slide"]["median"]
+        assert tc["max_seq_length"] == int(median * 1.0)
+        assert tc["use_original_length"] is True
+
+
 # ---------------------------------------------------------------------------
 # Splits -> nnMIL format conversion
 # ---------------------------------------------------------------------------

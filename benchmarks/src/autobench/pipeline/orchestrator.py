@@ -290,6 +290,8 @@ def _prepare_nnmil_plans(
             dataset_name=dataset_name,
             seed=cfg.train.seed,
             n_splits=cfg.n_folds,
+            max_seq_multiplier=cfg.nnmil_max_seq_multiplier,
+            use_original_length=cfg.nnmil_use_original_length,
         )
 
 

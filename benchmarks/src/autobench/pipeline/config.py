@@ -139,6 +139,13 @@ class BenchmarkConfig:
     strategies: list[str] = field(default_factory=list)
     frameworks: list[Framework] = field(default_factory=lambda: [Framework.CLAM])
     nnmil_model_types: list[str] = field(default_factory=list)
+    # nnMIL train-time patch cap. Defaults reproduce the upstream planner
+    # exactly (sub-bag = 0.5 * median patches; fixed length). Raise the
+    # multiplier toward 1.0+ or set use_original_length=True (keep-all, ~10%
+    # drop) to stop discarding discriminative tiles on rare-event tasks —
+    # GOLDMARK/CLAM keep all patches. Affects nnMIL only; val/test uncapped.
+    nnmil_max_seq_multiplier: float = 0.5
+    nnmil_use_original_length: bool = False
 
     @classmethod
     def from_dataset_config(cls, ds: DatasetConfig, **overrides) -> BenchmarkConfig:
