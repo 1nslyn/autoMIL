@@ -86,9 +86,28 @@ source "$MAIN_CHECKOUT/.venv/bin/activate"
 export PYTHONPATH="$WORKTREE/benchmarks/src:$WORKTREE/src${PYTHONPATH:+:$PYTHONPATH}"
 # .env (HF/WANDB tokens + AUTOBENCH_TCGA_LUAD_ROOT) lives only in the main checkout.
 set -a; source "$MAIN_CHECKOUT/benchmarks/.env"; set +a
+# Reduce fragmentation OOM on the big LUAD bags (some slides ~52k patches).
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 echo "Python:     $(which python)"
 echo "autobench:  $(python -c 'import autobench, os; print(os.path.dirname(autobench.__file__))')"
-nvidia-smi --query-gpu=index,name,memory.total --format=csv 2>/dev/null || true
+
+# GPU preflight: job 44355372 OOM'd at model.to() on a fresh 80GB H100 — the
+# allocated GPU was not actually empty. Log used/free and bail early (so the
+# auto-resubmit retries on another node) if the GPU isn't clean at start.
+gpu_mem_status () {
+    nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free \
+        --format=csv,noheader 2>/dev/null || echo "nvidia-smi unavailable"
+}
+echo "GPU at start: $(gpu_mem_status)"
+USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)
+if [ -n "${USED_MIB:-}" ] && [ "${USED_MIB:-0}" -gt 2000 ] 2>/dev/null; then
+    echo "ERROR: GPU already has ${USED_MIB} MiB in use at job start — not a clean"
+    echo "       allocation (this caused the OOM in job 44355372). Resubmitting to"
+    echo "       land on a clean GPU..."
+    NEW_JOB_ID=$(sbatch --parsable "$SELF")
+    [ $? -eq 0 ] && echo "Requeued as: $NEW_JOB_ID" || echo "ERROR: requeue failed. Run: sbatch $SELF"
+    exit 0
+fi
 
 # Sanity: the branch code must expose --goldmark_parity, else we'd silently
 # run main's code and produce a meaningless (non-parity) result.
@@ -133,13 +152,14 @@ run_mode () {
     local prep_exit=$?
     if [ $prep_exit -ne 0 ]; then echo "ERROR: prep failed ($mode, exit $prep_exit)"; return $prep_exit; fi
 
-    echo "---- benchmark ($mode) ----"
+    echo "---- benchmark ($mode) ----  GPU: $(gpu_mem_status)"
     python benchmarks/scripts/run_benchmark.py \
         --dataset "$DATASET" \
         --benchmark_dir "$bench_dir" \
         --mapping_csv "$MAPPING_CSV" \
         --features_base_dir "$H5_BASE" \
         --gpu 0 \
+        --experiments_per_gpu 1 \
         --frameworks $FRAMEWORKS \
         --models $CLAM_MODELS \
         --encoders $ENCODERS \
