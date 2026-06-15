@@ -120,6 +120,35 @@ Compare per (encoder, task): `parity_holdout_auc − default_test_auc`.
 
 Results land in `…/goldmark_parity_luad/{parity,default}/benchmark/aggregated/clam/standard.csv`.
 
+## 6a. RESULTS (first-order; job 44355922)
+
+Parity mode completed all 12 CLAM experiments (clam_sb + clam_mb × {egfr,kras} ×
+3 encoders, 5-fold). The default-mode arm hit the 12h wall (full-bag CLAM on LUAD
+is slow) — fold-matched default-5fold is being re-run; numbers below compare
+parity-5fold against our **existing default-10fold** held-out-TEST baseline.
+
+**Parity (val==test holdout AUC, 70/30) vs default-10fold (held-out TEST), clam_mb:**
+
+| task | encoder | parity | default(test) | Δ |
+|---|---|---|---|---|
+| egfr | hoptimus1 | 0.836 | 0.809 | +0.027 |
+| egfr | uni_v2 | 0.775 | 0.742 | +0.034 |
+| egfr | virchow2 | 0.799 | 0.802 | −0.003 |
+| kras | hoptimus1 | 0.653 | 0.607 | +0.046 |
+| kras | uni_v2 | 0.615 | 0.592 | +0.023 |
+| kras | virchow2 | 0.602 | 0.585 | +0.017 |
+
+**Mean Δ ≈ +0.024** (5/6 positive). `val_auc == test_auc` in every parity row
+(aliasing verified). This is in the predicted +0.02–0.06 band and is a
+conservative *lower bound* on GOLDMARK's optimism (we still select the checkpoint
+on val-loss, not best-AUC; GOLDMARK self-reports +0.039 from best-AUC selection
+alone). clam_sb parity (egfr: 0.823/0.756/0.798; kras: 0.635/0.631/0.617) tracks
+clam_mb closely.
+
+**Conclusion: adopting GOLDMARK's reporting protocol raises our number by ~the
+size of the reported gap — the deficit is a reporting/protocol artifact, not a
+pipeline deficiency.** Fold-matched default-5fold will tighten the per-cell delta.
+
 ## 7. Open questions / caveats (carried, not blocking)
 
 - GOLDMARK FOV: code says 112 µm (= ours); paper prose says 128 µm. If the
