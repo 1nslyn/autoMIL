@@ -44,7 +44,12 @@ set -uo pipefail
 # ==================== CONFIG ====================
 DATASET="tcga_luad"
 FRAMEWORKS="clam"
-CLAM_MODELS="clam_sb clam_mb"
+# clam_mb only: the headline model (has an existing default-10fold baseline) and
+# the GMA analog. The full parity arm (clam_sb + clam_mb) already completed in
+# job 44355922; this run fills in the fold-matched DEFAULT side. 6 clam_mb exps
+# (~62 GB total est.) pack into one concurrent wave on the H100 -> fits in 12h,
+# vs the 12-exp run that hit the wall. Parity exps are idempotently skipped.
+CLAM_MODELS="clam_mb"
 ENCODERS="hoptimus1 uni_v2 virchow2"
 TASKS="egfr kras"
 # Fold-matched to GOLDMARK's 5 stratified splits (and cheaper than our 10-fold).
