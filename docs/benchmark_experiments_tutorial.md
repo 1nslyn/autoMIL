@@ -574,6 +574,9 @@ Logging:
   --no_wandb                Disable W&B logging
 
 Other:
+  --experiments_per_gpu N   Max concurrent worker processes per GPU (default: 12).
+                            VRAM-budget scheduling still gates actual submission;
+                            this only binds for small-VRAM model sweeps.
   --prep_only               Only run data preparation, skip training (used internally by SLURM script)
 ```
 

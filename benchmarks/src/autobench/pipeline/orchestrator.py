@@ -568,7 +568,13 @@ def run_benchmark_multigpu(
         )
 
     # Query real GPU VRAM
-    from autobench.pipeline._gpu_worker import _is_cuda_oom, query_gpu_vram, gpu_init, run_single_experiment
+    from autobench.pipeline._gpu_worker import (
+        MAX_WORKERS_PER_GPU,
+        _is_cuda_oom,
+        query_gpu_vram,
+        gpu_init,
+        run_single_experiment,
+    )
 
     gpu_vram = query_gpu_vram(gpu_ids)
     reserve_gb = 2.0  # reserve for OS / display server
@@ -661,11 +667,16 @@ def run_benchmark_multigpu(
             submitted += 1
         return submitted
 
+    # Per-GPU worker cap. cfg.experiments_per_gpu (CLI: --experiments_per_gpu)
+    # overrides MAX_WORKERS_PER_GPU when set; the VRAM budget still gates actual
+    # submission, so this cap only binds for small-VRAM model sweeps where the
+    # budget would otherwise admit more concurrent experiments than the pool can
+    # service. Default 12 is tuned for H100 + 48-CPU nodes.
+    pool_workers = cfg.experiments_per_gpu if cfg.experiments_per_gpu else MAX_WORKERS_PER_GPU
     try:
-        # Create one pool per GPU (high max_workers; budget controls concurrency)
         for g in gpu_ids:
             pools[g] = ProcessPoolExecutor(
-                max_workers=8,
+                max_workers=pool_workers,
                 mp_context=ctx,
                 initializer=gpu_init,
                 initargs=(g,),

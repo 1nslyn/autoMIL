@@ -104,15 +104,17 @@ class TestDetectExperimentsPerGpu:
 
     def test_custom_mem_params(self):
         # GPU 0: 24000 MiB (~23.4 GiB), reserve=2, per_exp=2, context=0.5
-        # (23.4 - 2) / (2 + 0.5) = 21.4 / 2.5 = 8.56 -> int = 8 = MAX
+        # (23.4 - 2) / (2 + 0.5) = 21.4 / 2.5 = 8.56 -> int = 8 (below cap)
         stdout = "0, 24000\n"
         with self._mock_nvidia_smi(stdout):
             n = detect_experiments_per_gpu([0], mem_per_exp_gb=2.0, reserve_gb=2.0)
-        assert n == MAX_WORKERS_PER_GPU
+        assert n == 8
 
     def test_cap_at_max_workers(self):
-        # Even with massive free memory, capped at MAX_WORKERS_PER_GPU
-        stdout = "0, 98000\n"
+        # Even with massive free memory, capped at MAX_WORKERS_PER_GPU.
+        # Need free_gb such that (free_gb - 4) / 10.5 > MAX_WORKERS_PER_GPU.
+        # At 200000 MiB free (~195.3 GiB): (195.3-4)/10.5 = 18.2 -> capped.
+        stdout = "0, 200000\n"
         with self._mock_nvidia_smi(stdout):
             n = detect_experiments_per_gpu([0])
         assert n == MAX_WORKERS_PER_GPU
