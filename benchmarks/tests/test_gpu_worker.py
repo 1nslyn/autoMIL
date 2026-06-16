@@ -221,6 +221,21 @@ class TestQueryGpuVram:
         assert result[0] == 48.0
         assert result[1] == 24.0
 
+    def test_free_metric_queries_memory_free(self):
+        # With metric="free" the scheduler must budget against memory.free so a
+        # co-tenant/stale allocation cannot make it over-pack and OOM.
+        stdout = "0, 32768\n"  # 32 GiB free on a partially-used 80 GB card
+        with patch(
+            "autobench.pipeline._gpu_worker.subprocess.run",
+            return_value=MagicMock(stdout=stdout, returncode=0),
+        ) as mock_run:
+            result = query_gpu_vram([0], metric="free")
+        assert result[0] == 32.0
+        # the nvidia-smi query must target memory.free, not memory.total
+        args = mock_run.call_args[0][0]
+        assert any("memory.free" in a for a in args)
+        assert not any("memory.total" in a for a in args)
+
     def test_fallback_for_missing_gpu(self):
         stdout = "0, 49152\n"
         with self._mock_nvidia_smi(stdout):
@@ -526,7 +541,7 @@ def _patch_multigpu_runtime(
     )
     monkeypatch.setattr(
         "autobench.pipeline._gpu_worker.query_gpu_vram",
-        lambda gpu_ids: gpu_vram or {g: 48.0 for g in gpu_ids},
+        lambda gpu_ids, metric="total": gpu_vram or {g: 48.0 for g in gpu_ids},
     )
     monkeypatch.setattr(
         "autobench.pipeline._gpu_worker.gpu_init",

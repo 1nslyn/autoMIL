@@ -96,23 +96,35 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 echo "Python:     $(which python)"
 echo "autobench:  $(python -c 'import autobench, os; print(os.path.dirname(autobench.__file__))')"
 
-# GPU preflight: job 44355372 OOM'd at model.to() on a fresh 80GB H100 — the
-# allocated GPU was not actually empty. Log used/free and bail early (so the
-# auto-resubmit retries on another node) if the GPU isn't clean at start.
+# GPU preflight. The orchestrator now budgets against FREE VRAM (memory.free),
+# so a GPU with a co-tenant/stale allocation is FINE as long as there's room for
+# at least one experiment — it just packs fewer concurrently. We therefore only
+# requeue when free is genuinely too small to fit one CLAM run, and we CAP the
+# number of requeues so a contended cluster can never trigger an infinite
+# 2-second resubmit loop (the failure mode of jobs 44388861..44391211, where the
+# old `used > 2000 MiB` guard rejected GPUs that had 50+ GB free).
 gpu_mem_status () {
     nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free \
         --format=csv,noheader 2>/dev/null || echo "nvidia-smi unavailable"
 }
-echo "GPU at start: $(gpu_mem_status)"
-USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)
-if [ -n "${USED_MIB:-}" ] && [ "${USED_MIB:-0}" -gt 2000 ] 2>/dev/null; then
-    echo "ERROR: GPU already has ${USED_MIB} MiB in use at job start — not a clean"
-    echo "       allocation (this caused the OOM in job 44355372). Resubmitting to"
-    echo "       land on a clean GPU..."
-    NEW_JOB_ID=$(sbatch --parsable "$SELF")
+MIN_FREE_MIB=16000          # ~1 clam_mb bag (13.5 GB) + CUDA context + headroom
+MAX_PREFLIGHT_TRIES=4
+TRY="${GMPARITY_PREFLIGHT_TRY:-1}"
+echo "GPU at start (preflight try $TRY/$MAX_PREFLIGHT_TRIES): $(gpu_mem_status)"
+FREE_MIB=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1)
+if [ -n "${FREE_MIB:-}" ] && [ "${FREE_MIB:-0}" -lt "$MIN_FREE_MIB" ] 2>/dev/null; then
+    if [ "$TRY" -ge "$MAX_PREFLIGHT_TRIES" ]; then
+        echo "ERROR: only ${FREE_MIB} MiB free after $TRY tries — giving up (NOT looping)."
+        echo "       The node is heavily contended; investigate, then resubmit manually."
+        exit 1
+    fi
+    echo "WARN: only ${FREE_MIB} MiB free (< ${MIN_FREE_MIB}) — requeue for a roomier GPU"
+    echo "      (attempt $((TRY+1))/$MAX_PREFLIGHT_TRIES)..."
+    NEW_JOB_ID=$(sbatch --parsable --export=ALL,GMPARITY_PREFLIGHT_TRY=$((TRY+1)) "$SELF")
     [ $? -eq 0 ] && echo "Requeued as: $NEW_JOB_ID" || echo "ERROR: requeue failed. Run: sbatch $SELF"
     exit 0
 fi
+echo "GPU preflight OK: ${FREE_MIB:-unknown} MiB free (packer budgets against free VRAM)."
 
 # Sanity: the branch code must expose --goldmark_parity, else we'd silently
 # run main's code and produce a meaningless (non-parity) result.

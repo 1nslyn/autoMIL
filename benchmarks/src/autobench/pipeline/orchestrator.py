@@ -573,7 +573,10 @@ def run_benchmark_multigpu(
     # Query real GPU VRAM
     from autobench.pipeline._gpu_worker import _is_cuda_oom, query_gpu_vram, gpu_init, run_single_experiment
 
-    gpu_vram = query_gpu_vram(gpu_ids)
+    # Budget against FREE VRAM, not total: a co-tenant or stale allocation on a
+    # shared H100 would otherwise make the packer over-commit and OOM (job
+    # 44355372). On a clean GPU free ≈ total, so this is a no-op there.
+    gpu_vram = query_gpu_vram(gpu_ids, metric="free")
     reserve_gb = 2.0  # reserve for OS / display server
 
     gpu_states: dict[int, _GpuState] = {
@@ -599,8 +602,8 @@ def run_benchmark_multigpu(
     print(f"\nTotal: {len(experiments)}  Completed: {len(completed)}  "
           f"Pending: {len(pending)}  GPUs: {gpu_ids}")
     for g in gpu_ids:
-        print(f"  GPU {g}: {gpu_vram[g]:.1f} GB total, "
-              f"{gpu_vram[g] - reserve_gb:.1f} GB usable")
+        print(f"  GPU {g}: {gpu_vram[g]:.1f} GB free, "
+              f"{gpu_vram[g] - reserve_gb:.1f} GB usable (budgeting against free VRAM)")
     log_dir = os.path.join(cfg.benchmark_dir, "logs")
     print(f"Per-experiment logs: {log_dir}/<framework>/<strategy>/"
           f"<task>__<encoder>__<model>__s<seed>.log")

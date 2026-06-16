@@ -150,18 +150,26 @@ def run_single_experiment(
 MAX_WORKERS_PER_GPU = 8
 
 
-def query_gpu_vram(gpu_ids: list[int]) -> dict[int, float]:
-    """Query total VRAM per GPU in GiB via nvidia-smi.
+def query_gpu_vram(gpu_ids: list[int], metric: str = "total") -> dict[int, float]:
+    """Query per-GPU VRAM in GiB via nvidia-smi.
 
-    Returns a mapping ``{gpu_id: total_vram_gib}``.
+    ``metric`` selects ``memory.total`` (default) or ``memory.free``. The
+    budget-based scheduler queries ``free`` so it packs against memory that is
+    *actually* available: on this cluster an H100 can come up with a co-tenant
+    or stale allocation already resident, and budgeting against ``total`` then
+    over-packs and OOMs (job 44355372). Falling back to ``free`` makes the
+    packer simply schedule fewer experiments on a contended GPU.
+
+    Returns a mapping ``{gpu_id: vram_gib}``.
     Falls back to 48.0 GiB for GPUs not found in nvidia-smi output.
     """
     fallback_gb = 48.0
+    query_field = "memory.free" if metric == "free" else "memory.total"
     try:
         result = subprocess.run(
             [
                 "nvidia-smi",
-                "--query-gpu=index,memory.total",
+                f"--query-gpu=index,{query_field}",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
@@ -173,16 +181,16 @@ def query_gpu_vram(gpu_ids: list[int]) -> dict[int, float]:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return {g: fallback_gb for g in gpu_ids}
 
-    total_by_gpu: dict[int, float] = {}
+    vram_by_gpu: dict[int, float] = {}
     for line in result.stdout.strip().splitlines():
         parts = line.split(",")
         if len(parts) != 2:
             continue
         idx = int(parts[0].strip())
-        total_mib = float(parts[1].strip())
-        total_by_gpu[idx] = total_mib / 1024  # MiB → GiB
+        vram_mib = float(parts[1].strip())
+        vram_by_gpu[idx] = vram_mib / 1024  # MiB → GiB
 
-    return {g: total_by_gpu.get(g, fallback_gb) for g in gpu_ids}
+    return {g: vram_by_gpu.get(g, fallback_gb) for g in gpu_ids}
 
 
 def detect_experiments_per_gpu(
