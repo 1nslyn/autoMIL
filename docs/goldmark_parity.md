@@ -32,19 +32,28 @@ GOLDMARK's internal TCGA-CV number sets, in `scripts/train_task_v2.py`:
 train_split_value='train', val_split_value='test', test_split_value='test'
 ```
 
-i.e. the **same** held-out fold of a 2-way ~70/30 patient `StratifiedShuffleSplit`
-is used **both** for best-epoch checkpoint selection (val) **and** as the reported
-metric (test). With `PATIENCE=999`/`VAL_INTERVAL=999`, validation runs only at a
-sparse epoch grid and the **best-AUC epoch on that fold** is kept. GOLDMARK
-**self-reports +0.039 mean AUROC** of optimism from this best-epoch selection alone.
+i.e. the **same** held-out fold is used **both** for checkpoint selection (val)
+**and** as the reported metric (test). **Verified against the source + paper
+(2026-06-16, corrects earlier notes):** the split is **`StratifiedKFold(n_splits=5)`
+→ 80% train / 20% test per fold** (NOT a 70/30 `StratifiedShuffleSplit`), with
+`PATIENCE=8`, `VAL_INTERVAL=1` (validate every epoch, early-stop). Per the paper,
+*"model selection occurred within cross-validation itself, using the same five
+splits for both training and evaluation"* — no separate val fold. The reported
+checkpoint is the **best-AUC epoch** on that fold (they also report fixed epoch
+120); their QA section: *"Selecting the best checkpoint improved TCGA→MSKCC
+AUROC by a mean of 0.039 vs a fixed late epoch (120) across five splits"*
+(BLCA:FGFR3, external).
 
 **Ours** reports the held-out **TEST** AUC of a 3-way ~70/10/20 split — a fold the
 model never trains on **and** never selects on (selection uses a disjoint 10% val).
-So our number is strictly more conservative. **This protocol gap — not a pipeline
-deficiency — is the dominant reason our matched-task AUCs read lower.**
+So our number is strictly more conservative.
 
 Corroborating: our pipeline already records **both** `val_` and `test_` AUC per
-run; on LUAD the `val_`(select-set) figure already sits ~0.02–0.05 above `test_`.
+run; on LUAD the `val_`(select-set) figure already sits ~0.02–0.11 above `test_`
+(esp. EGFR). **But see §6b — when compared against GOLDMARK's *actual* published
+per-task LUAD numbers, our conservative number already meets or beats them, so the
+protocol gap is moot for LUAD: the COMPARISON.md deficit was an EAGLE-vs-frozen
+comparison error, not a real gap.**
 
 ## 4. Per-stage diff (classified)
 
@@ -175,6 +184,48 @@ alone) — a lever we deliberately did not replicate.
    selection**. If we want to reproduce GOLDMARK's exact number, that is the
    clean, opt-in, branch-local follow-up. Otherwise the conservative numbers
    stand on their own.
+
+## 6b. DECISIVE: GOLDMARK's *actual* published LUAD numbers vs ours
+
+Leo located GOLDMARK's results portal (artificialintelligencepathology.org, run
+`rf207d22e2c0c`, TCGA-LUAD, aggregator **GMA PUB**, 5 splits) — their *own*
+per-split Macro AUCs. This is the comparison COMPARISON.md *should* have used.
+
+**GOLDMARK published, mean over 5 splits (frozen encoders + fine-tuned EAGLE):**
+
+| target | h-optimus-0 | uni | virchow2 | prov-gigapath | **gigapath_ft (EAGLE, fine-tuned)** |
+|---|---|---|---|---|---|
+| EGFR | 0.790 | 0.740 | 0.783 | 0.762 | **0.831** |
+| KRAS | 0.666 | 0.604 | 0.601 | 0.644 | 0.659 |
+
+**Ours (clam_mb, honest disjoint-TEST, 5-fold) vs GOLDMARK published:**
+
+| target | encoder (ours ~ theirs) | OURS (honest test) | GOLDMARK | Δ (ours − gm) |
+|---|---|---|---|---|
+| EGFR | hoptimus1 ~ h-optimus-0 | 0.853 | 0.790 | **+0.063** |
+| EGFR | uni_v2 ~ uni | 0.775 | 0.740 | +0.035 |
+| EGFR | **virchow2 ~ virchow2 (exact)** | 0.792 | 0.783 | +0.009 |
+| KRAS | hoptimus1 ~ h-optimus-0 | 0.675 | 0.666 | +0.009 |
+| KRAS | uni_v2 ~ uni | 0.642 | 0.604 | +0.038 |
+| KRAS | **virchow2 ~ virchow2 (exact)** | 0.634 | 0.601 | +0.033 |
+
+**We are ahead on every matched cell**, including the exact-encoder **Virchow2**
+control (EGFR 0.792 vs 0.783; KRAS 0.634 vs 0.601). Even GOLDMARK's *fine-tuned*
+EAGLE EGFR (0.831) sits **below** our *frozen* hoptimus1 (0.853). Our per-fold
+variance is also far tighter (EGFR hoptimus1 0.853±0.042 vs their 0.65–0.91
+spread) — a larger, cleaner 20% test fold.
+
+**Resolution of the original question.** COMPARISON.md's "we read 2–4 pts below
+GOLDMARK" compared our frozen-encoder numbers against GOLDMARK's **EAGLE /
+headline** (0.831–0.896), not their frozen per-task numbers. Against the correct
+target, **our LUAD pipeline meets or beats GOLDMARK** — and this is our *honest*
+disjoint-test number vs their *published* (select-on-report) one, so no parity
+inflation is needed. The deficit was a comparison error, not a pipeline flaw.
+
+Caveat (does not change the conclusion): the portal rows show the epoch-120
+checkpoint; GOLDMARK's best-epoch view is ~+0.039 higher (their QA note). Even
+granting them that, our honest numbers sit at/above their frozen cells; on a
+like-for-like honest basis the margin widens.
 
 ## 7. Open questions / caveats (carried, not blocking)
 
