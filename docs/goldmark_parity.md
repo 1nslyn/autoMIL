@@ -193,10 +193,17 @@ per-split Macro AUCs. This is the comparison COMPARISON.md *should* have used.
 
 **GOLDMARK published, mean over 5 splits (frozen encoders + fine-tuned EAGLE):**
 
-| target | h-optimus-0 | uni | virchow2 | prov-gigapath | **gigapath_ft (EAGLE, fine-tuned)** |
-|---|---|---|---|---|---|
-| EGFR | 0.790 | 0.740 | 0.783 | 0.762 | **0.831** |
-| KRAS | 0.666 | 0.604 | 0.601 | 0.644 | 0.659 |
+| target | h-optimus-0 | uni (v1) | virchow2 | virchow (v1) | prov-gigapath | **gigapath_ft = EAGLE (fine-tuned)** |
+|---|---|---|---|---|---|---|
+| EGFR | 0.790 | 0.740 | 0.783 | 0.649 | 0.762 | **0.831** |
+| KRAS | 0.666 | 0.604 | 0.601 | 0.550 | 0.644 | 0.659 |
+
+Our best clam_mb honest-test (EGFR **0.853** hoptimus1, KRAS **0.675** hoptimus1)
+**exceeds every GOLDMARK encoder on both tasks — including their fine-tuned EAGLE**
+(EGFR 0.831, KRAS 0.659). NB: COMPARISON.md cited EAGLE EGFR = 0.896 (an old
+*validation* snapshot); the actual per-split portal number is **0.831** — already
+below ours. Per-split spread is wide (EGFR 0.65–0.91 off a 20% fold); ours is
+tighter (0.853 ± 0.042 over 5 folds).
 
 **Ours (clam_mb, honest disjoint-TEST, 5-fold) vs GOLDMARK published:**
 
