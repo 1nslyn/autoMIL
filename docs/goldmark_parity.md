@@ -120,34 +120,61 @@ Compare per (encoder, task): `parity_holdout_auc − default_test_auc`.
 
 Results land in `…/goldmark_parity_luad/{parity,default}/benchmark/aggregated/clam/standard.csv`.
 
-## 6a. RESULTS (first-order; job 44355922)
+## 6a. RESULTS — fold-matched (parity job 44355922 + default job 44498742)
 
-Parity mode completed all 12 CLAM experiments (clam_sb + clam_mb × {egfr,kras} ×
-3 encoders, 5-fold). The default-mode arm hit the 12h wall (full-bag CLAM on LUAD
-is slow) — fold-matched default-5fold is being re-run; numbers below compare
-parity-5fold against our **existing default-10fold** held-out-TEST baseline.
+Both arms now complete at **matched 5-fold**, same code / seed / features — the
+*only* difference is the split protocol. (The default arm previously timed out;
+it ran clean in 6h51m after the free-VRAM packer fix, commit `5e5e001`.) clam_mb:
 
-**Parity (val==test holdout AUC, 70/30) vs default-10fold (held-out TEST), clam_mb:**
+| task | encoder | parity (val==test, 70/30) | default test (3-way 70/10/20) | Δ (par−def) | default **val** (selection fold) |
+|---|---|---|---|---|---|
+| egfr | hoptimus1 | 0.836 ± 0.040 | 0.853 ± 0.042 | −0.017 | **0.895** |
+| egfr | uni_v2 | 0.775 ± 0.052 | 0.775 ± 0.082 | +0.001 | **0.886** |
+| egfr | virchow2 | 0.799 ± 0.034 | 0.792 ± 0.094 | +0.008 | **0.903** |
+| kras | hoptimus1 | 0.653 ± 0.049 | 0.675 ± 0.088 | −0.022 | 0.660 |
+| kras | uni_v2 | 0.615 ± 0.066 | 0.642 ± 0.068 | −0.027 | 0.651 |
+| kras | virchow2 | 0.602 ± 0.033 | 0.634 ± 0.075 | −0.032 | 0.618 |
 
-| task | encoder | parity | default(test) | Δ |
-|---|---|---|---|---|
-| egfr | hoptimus1 | 0.836 | 0.809 | +0.027 |
-| egfr | uni_v2 | 0.775 | 0.742 | +0.034 |
-| egfr | virchow2 | 0.799 | 0.802 | −0.003 |
-| kras | hoptimus1 | 0.653 | 0.607 | +0.046 |
-| kras | uni_v2 | 0.615 | 0.592 | +0.023 |
-| kras | virchow2 | 0.602 | 0.585 | +0.017 |
+**Mean Δ(parity − default) = −0.015**, all six within ~1 SE of zero (per-fold
+std 0.04–0.09 ⇒ SE ≈ 0.02–0.04 over 5 folds). `val_auc == test_auc` confirmed in
+every parity row (aliasing works). **At fold-matched 5-fold, our val==test parity
+mode does NOT inflate AUC** over the conservative disjoint-test default.
 
-**Mean Δ ≈ +0.024** (5/6 positive). `val_auc == test_auc` in every parity row
-(aliasing verified). This is in the predicted +0.02–0.06 band and is a
-conservative *lower bound* on GOLDMARK's optimism (we still select the checkpoint
-on val-loss, not best-AUC; GOLDMARK self-reports +0.039 from best-AUC selection
-alone). clam_sb parity (egfr: 0.823/0.756/0.798; kras: 0.635/0.631/0.617) tracks
-clam_mb closely.
+### Correcting the preliminary number
+The earlier "+0.024" compared parity-5fold against the **shared 10-fold** LUAD
+baseline (egfr-hoptimus1 0.809 ± 0.107) — a *different run*. Fold count + run
+variance alone move that same conservative cell to **0.853** at 5-fold (+0.044,
+> the parity effect, with ±0.10 fold std). So the preliminary delta was a
+cross-run artifact, not a clean protocol contrast. This corrects it.
 
-**Conclusion: adopting GOLDMARK's reporting protocol raises our number by ~the
-size of the reported gap — the deficit is a reporting/protocol artifact, not a
-pipeline deficiency.** Fold-matched default-5fold will tighten the per-cell delta.
+### Where the optimism actually lives: val − test, not parity − default
+The select-on-report optimism IS real, but the clean way to see it is the
+**selection-fold vs disjoint-test gap inside the default run** (GOLDMARK reports
+*on* its selection fold, so its analog is our `val`, not our `test`):
+- **egfr, all three encoders:** default val **0.886–0.903** vs test **0.775–0.853**
+  → **+0.04 to +0.11**. This is the real lever, and it is large.
+- **kras:** val ≈ test (≈0). Selection optimism is task/separability-dependent.
+
+Our *parity* mode under-captures this for two reasons: (1) its report fold is 30%
+(low-variance) vs a 10% val (high-variance, more over-selected); and (2) CLAM
+still selects the checkpoint on **val-LOSS**, whereas GOLDMARK selects the
+**best-val-AUC epoch** on the report fold (they self-report **+0.039** from this
+alone) — a lever we deliberately did not replicate.
+
+### Bottom line (rigorous)
+1. Our **conservative** numbers are already strong & competitive at GOLDMARK's
+   fold count: egfr-hoptimus1 **0.853**, virchow2 0.792 (frozen-encoder basis;
+   EAGLE 0.896 is out of scope, §4).
+2. The matched-task "gap" in COMPARISON.md is dominated by **(a) fold count**
+   (our published 10-fold reads ~0.04 lower than 5-fold — pure variance),
+   **(b) reporting fold** (we report disjoint test; GOLDMARK reports its
+   selection fold — the val−test gap, +0.04–0.11 on egfr), and **(c)
+   EAGLE-vs-frozen + best-encoder cherry-pick** (§4). It is **not** a
+   data/training pipeline deficiency.
+3. The one un-pulled protocol lever is **best-val-AUC-epoch checkpoint
+   selection**. If we want to reproduce GOLDMARK's exact number, that is the
+   clean, opt-in, branch-local follow-up. Otherwise the conservative numbers
+   stand on their own.
 
 ## 7. Open questions / caveats (carried, not blocking)
 
