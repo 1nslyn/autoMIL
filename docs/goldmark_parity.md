@@ -222,10 +222,22 @@ target, **our LUAD pipeline meets or beats GOLDMARK** — and this is our *hones
 disjoint-test number vs their *published* (select-on-report) one, so no parity
 inflation is needed. The deficit was a comparison error, not a pipeline flaw.
 
-Caveat (does not change the conclusion): the portal rows show the epoch-120
-checkpoint; GOLDMARK's best-epoch view is ~+0.039 higher (their QA note). Even
-granting them that, our honest numbers sit at/above their frozen cells; on a
-like-for-like honest basis the margin widens.
+Caveat 1 — checkpoint (does not change the conclusion): the portal rows show the
+epoch-120 checkpoint; GOLDMARK's best-epoch view is ~+0.039 higher (their QA
+note). Even granting them that, our honest numbers sit at/above their frozen
+cells; on a like-for-like honest basis the margin widens.
+
+Caveat 2 — **aggregator mismatch (the real one to close).** GOLDMARK's head is
+**GMA** (plain gated-attention MIL; a single unified ABMIL-style baseline). The
+§6b numbers above use **our CLAM_MB** (gated attention **+ instance clustering
+loss + per-class branches**) — a related but more complex, arguably stronger
+head. So part of our margin may be model, not encoder/pipeline. The true
+model-matched control is **our `ab_mil`** (plain gated attention = the direct GMA
+analog) vs their GMA; we have not yet run `ab_mil` on LUAD (shared benchmark =
+`clam_mb` + nnMIL `simple_mil` only). The conclusion is robust to this — `clam_mb`
+beats GMA on all 6 cells incl. the tied Virchow2-EGFR control, and ab_mil would
+have to trail clam_mb by ~0.06 (implausible; usually ≤0.03) to recover
+COMPARISON.md's deficit — but a one-shot `ab_mil` LUAD run would make it airtight.
 
 ## 7. Open questions / caveats (carried, not blocking)
 
