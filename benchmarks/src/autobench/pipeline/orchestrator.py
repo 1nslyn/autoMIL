@@ -568,10 +568,23 @@ def run_benchmark_multigpu(
         )
 
     # Query real GPU VRAM
-    from autobench.pipeline._gpu_worker import _is_cuda_oom, query_gpu_vram, gpu_init, run_single_experiment
+    from autobench.pipeline._gpu_worker import (
+        MAX_WORKERS_PER_GPU,
+        _is_cuda_oom,
+        query_gpu_vram,
+        gpu_init,
+        run_single_experiment,
+    )
 
     gpu_vram = query_gpu_vram(gpu_ids)
     reserve_gb = 2.0  # reserve for OS / display server
+    per_gpu_worker_limit = (
+        cfg.experiments_per_gpu
+        if cfg.experiments_per_gpu is not None
+        else MAX_WORKERS_PER_GPU
+    )
+    if per_gpu_worker_limit < 1:
+        raise ValueError("experiments_per_gpu must be >= 1 when provided.")
 
     gpu_states: dict[int, _GpuState] = {
         g: _GpuState(gpu_id=g, total_gb=max(0.0, gpu_vram[g] - reserve_gb))
@@ -644,7 +657,7 @@ def run_benchmark_multigpu(
     def _try_submit(gs: _GpuState) -> int:
         """Submit as many largest-fit jobs as possible for one GPU."""
         submitted = 0
-        while gs.gpu_id in pools:
+        while gs.gpu_id in pools and len(gs.active) < per_gpu_worker_limit:
             exp = _pop_largest_that_fits(gs.budget_free)
             if exp is None:
                 break
@@ -662,10 +675,10 @@ def run_benchmark_multigpu(
         return submitted
 
     try:
-        # Create one pool per GPU (high max_workers; budget controls concurrency)
+        # Create one pool per GPU; budget and per-GPU worker limit both cap concurrency.
         for g in gpu_ids:
             pools[g] = ProcessPoolExecutor(
-                max_workers=8,
+                max_workers=per_gpu_worker_limit,
                 mp_context=ctx,
                 initializer=gpu_init,
                 initargs=(g,),

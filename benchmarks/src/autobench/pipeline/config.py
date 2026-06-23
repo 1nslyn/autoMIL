@@ -222,7 +222,7 @@ def build_registries(ds: DatasetConfig) -> Registries:
 # .planning/decisions/N4-overrides-removed.md (placeholder; see audit).
 
 NNMIL_RUNTIME_DEFAULTS: dict[str, int] = {
-    "num_workers": 0,
+    "num_workers": 8,
 }
 
 NNMIL_MODEL_RUNTIME_OVERRIDES: dict[str, dict[str, int]] = {}

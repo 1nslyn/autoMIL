@@ -503,6 +503,8 @@ def _patch_multigpu_runtime(
     run_single_impl,
     summaries_by_id: dict[str, dict] | None = None,
     gpu_vram: dict[int, float] | None = None,
+    pool_cls=_InlineProcessPool,
+    wait_impl=_fake_wait,
 ):
     monkeypatch.setattr(
         "autobench.pipeline.orchestrator._prepare_data",
@@ -518,11 +520,11 @@ def _patch_multigpu_runtime(
     )
     monkeypatch.setattr(
         "autobench.pipeline.orchestrator.ProcessPoolExecutor",
-        _InlineProcessPool,
+        pool_cls,
     )
     monkeypatch.setattr(
         "autobench.pipeline.orchestrator.wait",
-        _fake_wait,
+        wait_impl,
     )
     monkeypatch.setattr(
         "autobench.pipeline._gpu_worker.query_gpu_vram",
@@ -554,6 +556,68 @@ def _patch_multigpu_runtime(
 
 
 class TestStrictCompletionScheduler:
+    def test_experiments_per_gpu_caps_submitted_futures(self, tmp_path, monkeypatch):
+        from autobench.pipeline.orchestrator import mark_completed
+
+        experiments = [_make_exp(model_type) for model_type in ("clam_sb", "clam_mb", "mil")]
+        summaries = {exp.experiment_id: {"experiment_id": exp.experiment_id} for exp in experiments}
+        in_flight_counts_seen_by_wait: list[int] = []
+
+        def _recording_wait(futures, return_when=None, timeout=None):
+            in_flight_counts_seen_by_wait.append(len(futures))
+            return _fake_wait(futures, return_when=return_when, timeout=timeout)
+
+        def _run_single(experiment, benchmark_dir, wandb_project):
+            del wandb_project
+            mark_completed(benchmark_dir, experiment.experiment_id)
+            return summaries[experiment.experiment_id]
+
+        _patch_multigpu_runtime(
+            monkeypatch,
+            experiments=experiments,
+            run_single_impl=_run_single,
+            summaries_by_id=summaries,
+            gpu_vram={0: 80.0},
+            wait_impl=_recording_wait,
+        )
+
+        cfg = _make_multigpu_cfg(tmp_path)
+        cfg.experiments_per_gpu = 1
+        run_benchmark_multigpu(cfg, [0], ds=make_test_ds(), registries=build_registries(make_test_ds()))
+
+        assert max(in_flight_counts_seen_by_wait) == 1
+
+    def test_experiments_per_gpu_caps_executor_workers(self, tmp_path, monkeypatch):
+        from autobench.pipeline.orchestrator import mark_completed
+
+        exp = _make_exp("clam_sb")
+        summary = {"experiment_id": exp.experiment_id}
+        created_max_workers: list[int] = []
+
+        class _RecordingInlineProcessPool(_InlineProcessPool):
+            def __init__(self, *args, **kwargs):
+                created_max_workers.append(kwargs["max_workers"])
+                super().__init__(*args, **kwargs)
+
+        def _run_single(experiment, benchmark_dir, wandb_project):
+            del wandb_project
+            mark_completed(benchmark_dir, experiment.experiment_id)
+            return summary
+
+        _patch_multigpu_runtime(
+            monkeypatch,
+            experiments=[exp],
+            run_single_impl=_run_single,
+            summaries_by_id={exp.experiment_id: summary},
+            pool_cls=_RecordingInlineProcessPool,
+        )
+
+        cfg = _make_multigpu_cfg(tmp_path)
+        cfg.experiments_per_gpu = 2
+        run_benchmark_multigpu(cfg, [0, 1], ds=make_test_ds(), registries=build_registries(make_test_ds()))
+
+        assert created_max_workers == [2, 2]
+
     def test_pending_does_not_skip_failed_history(self, tmp_path, monkeypatch):
         from autobench.pipeline.orchestrator import mark_completed
 
