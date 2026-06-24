@@ -87,7 +87,7 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 | **Pluggable backends** | `local` (default), `slurm` (submitit, opt-in via `[slurm]` extra), `ray` (raw `@ray.remote`, opt-in via `[ray]` extra). Same `Backend` ABC; same cap contract. |
 | **Hardware autodetect** | `automil init` probes CUDA / ROCm / CPU via `LocalBackend.healthcheck()` and stamps detected GPU count, VRAM, and concurrency defaults into `config.yaml`. |
 | **Variant registry** | Architectural changes ship as committed variant modules (`automil/variants/<parent>/<name>.py`) selected via config. Registry-only path reproduces a node end-to-end via `automil verify-repro`. |
-| **Configurable per-cell wall-clock cap** | Two-tier state machine (`refusing-new` at T-buffer, `terminating` at T) with per-fold checkpoints and a SIGTERM contract. The framework provides the *mechanism*; the *values* are consumer-supplied via `cap.budget_seconds` and `cap.safety_buffer_seconds` in `automil/config.yaml`, or per-cell via `automil submit --budget-seconds N --safety-buffer-seconds M` (D-134, honored only on the submit that creates the cell). Examples: 21600 (6h, autoMIL-paper campaign default), 60 (sklearn-iris demo). Budget-killed runs reconcile to `executed` with partial composite, never `crash`. |
+| **Configurable per-cell budget cap** | Two-tier state machine (`refusing-new` at T-buffer, `terminating` at T) with per-fold checkpoints and a SIGTERM contract. Budget is set as a duration (`cap.budget: 6h`, also `30m`/`90s`/`2d`; legacy `cap.budget_seconds` still works) — set it with `automil budget set 6h` / inspect with `automil budget show`, or per-cell via `automil submit --budget-seconds N` (D-134, honored only on the submit that creates the cell). **`cap.mode: agent_active`** (default) bills only the time the agent is actually working (a `PostToolUse` hook stamps activity; the clock pauses while experiments run and the agent waits → more proposing per budget); `wall_clock` is the legacy continuous clock. 6h is just the autoMIL-paper default. Budget-killed runs reconcile to `executed` with partial composite, never `crash`. |
 | **Generalization gate** | Pre-registered held-out manifest + paired Wilcoxon + bootstrap CI + Bonferroni, ships a `candidate` node status, manual nomination by default, promotion-rate metric exposed via SSE. |
 | **Trajectory recorder** | Per-submit JSONL using OpenTelemetry `gen_ai.*` keys with secret redaction (`sk-…`, `hf_…`, AWS keys) and bounded rotation (5 MB soft / 50 MB hard). |
 | **Multi-GPU orchestrator** | Background daemon with bin packing, OOM detection, crash recovery, namespaced `running/<backend>/`. |
@@ -184,13 +184,18 @@ scoring:
   formula: ""
 
 cap:
-  # Consumer-supplied. The framework provides the cap mechanism (two-tier
-  # state machine + SIGTERM contract); these values are yours to pick.
-  # Examples: 21600 (6h, autoMIL-paper campaign default), 60 (sklearn-iris),
-  # 1800 (a 30-min lab demo). Override per-cell via
-  # `automil submit --budget-seconds N --safety-buffer-seconds M` (D-134).
-  budget_seconds: 21600
-  safety_buffer_seconds: 1800
+  # Consumer-supplied — 6h is just the autoMIL-paper default. Durations accept
+  # 6h / 30m / 90s / 2d (or a bare number = seconds; legacy *_seconds ints still
+  # work). Set it the easy way: `automil budget set 6h` / `automil budget show`.
+  budget: 6h
+  safety_buffer: 30m
+  # mode: agent_active (default) bills only while the agent is actually working
+  # (PostToolUse activity) — the clock PAUSES while experiments run and the agent
+  # waits, so you get more proposing time per budget. wall_clock = legacy
+  # continuous now-since-creation. idle_grace_seconds: how long after the agent's
+  # last action the clock keeps running (agent_active only).
+  mode: agent_active
+  idle_grace_seconds: 300
 ```
 
 Ensure your training script honors the
@@ -355,7 +360,8 @@ automil submit --node <id> --desc "..." [--files <f>] [--max-time SEC]
 automil cancel <node_id>                          Cancel a running experiment
 automil resubmit <node_id>                        Re-queue a terminal experiment as a new node
 automil rank                                      Show top-ranked proposals (UCB)
-automil propose --parent <id> --desc "..."        Add a brainstormed proposal
+automil propose --parent <id> --kind <k> --desc "..."  Add a proposal (kind: architecture|regularization|hp|data|ensemble)
+automil portfolio [--threshold 0.5]               Architecture-vs-HP mix of pending proposals; exits non-zero below target
 automil reconcile [--recompute-best]              Sync graph with orchestrator state
 automil status                                    Show experiment summary
 

@@ -151,10 +151,10 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
     assert payload["composite"] > 0.0
     assert payload.get("metadata", {}).get("budget_killed") is True
 
-    # 8. Reload result.json from disk — reconcile_budget_kill rewrites it with
-    #    metadata.budget_killed=True stamped.
-    result_after_reconcile = json.loads(result_path.read_text())
-    assert result_after_reconcile.get("metadata", {}).get("budget_killed") is True
+    # 8. D-10 (REC-02): reconcile_budget_kill no longer rewrites result.json —
+    #    terminal_writer is the sole archive result.json writer. Check the payload
+    #    returned has budget_killed=True; the disk file is terminal_writer's responsibility.
+    assert payload.get("metadata", {}).get("budget_killed") is True
 
     # 9. Fragile Invariant #6 defence: real-graph descendant cascade against the
     #    PARTIAL composite (0.82), NOT zero. This is what makes Pitfall-4 single-file

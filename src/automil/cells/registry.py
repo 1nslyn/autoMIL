@@ -33,53 +33,67 @@ def _cells_dir() -> Path:
 def get_or_create_cell(
     dataset: str,
     encoder: str,
-    parent_id: str,
+    mil_model: str,
     budget_seconds: int,
     safety_buffer_seconds: int,
+    idle_grace_seconds: int = 300,
+    mode: str = "agent_active",
 ) -> Cell:
-    """Return existing cell or create a new one (lazy + idempotent, D-116).
+    """Return existing cell or create a new one (lazy + idempotent, D-116, REC-04).
 
-    D-134: budget_seconds and safety_buffer_seconds overrides apply ONLY when
-    this call CREATES the cell. If the cell already exists, the persisted
-    values are kept and the override is logged at INFO. Allowing later
-    submits to extend a cell's budget = sandbagging vector.
+    D-134: all cap parameters (budget_seconds, safety_buffer_seconds,
+    idle_grace_seconds, mode) apply ONLY when this call CREATES the cell. If the
+    cell already exists, the persisted values are kept and any override is logged
+    at INFO. Allowing later submits to extend a cell's budget = sandbagging vector.
 
     Args:
         dataset: e.g. "ccrcc" — from automil/config.yaml.
         encoder: e.g. "uni-v2" — from automil/config.yaml.
-        parent_id: graph node_id of cell-root experiment, or "root" for top-level.
+        mil_model: MIL model identifier for budget cell keying (D-13). Must be
+            pre-normalized via normalize_mil_model() before calling (D-14).
+            Graph parent lineage stays separate — re-parenting does not fork the budget.
         budget_seconds: cap; honored only on creation.
         safety_buffer_seconds: refusing-new lead time; honored only on creation.
+        idle_grace_seconds: agent-active idle grace; honored only on creation.
+        mode: "agent_active" or "wall_clock"; honored only on creation.
     """
     cells_dir = _cells_dir()
-    cell_id = make_cell_id(dataset, encoder, parent_id)
+    cell_id = make_cell_id(dataset, encoder, mil_model)
     path = cells_dir / f"{cell_id}.json"
     if path.exists():
         cell = read_cell(path)
-        if cell.budget_seconds != budget_seconds or cell.safety_buffer_seconds != safety_buffer_seconds:
+        if (cell.budget_seconds != budget_seconds
+                or cell.safety_buffer_seconds != safety_buffer_seconds
+                or cell.idle_grace_seconds != idle_grace_seconds
+                or cell.mode != mode):
             logger.info(
-                "Cell %s already open with budget_seconds=%d safety_buffer_seconds=%d; "
-                "ignoring override (budget_seconds=%d safety_buffer_seconds=%d) per D-134.",
+                "Cell %s already open (budget=%ds buffer=%ds idle_grace=%ds mode=%s); "
+                "ignoring override (budget=%ds buffer=%ds idle_grace=%ds mode=%s) per D-134.",
                 cell_id[:8], cell.budget_seconds, cell.safety_buffer_seconds,
-                budget_seconds, safety_buffer_seconds,
+                cell.idle_grace_seconds, cell.mode,
+                budget_seconds, safety_buffer_seconds, idle_grace_seconds, mode,
             )
         return cell
 
-    # First submit for this (dataset, encoder, parent_id) tuple → open the cell.
+    # First submit for this (dataset, encoder, mil_model) triple → open the cell.
     cell = Cell(
         cell_id=cell_id,
         dataset=dataset,
         encoder=encoder,
-        parent_id=parent_id,
+        mil_model=mil_model,
         started_at=time.time(),  # set ONCE at creation; never updated (D-111)
         budget_seconds=budget_seconds,
         safety_buffer_seconds=safety_buffer_seconds,
         status=CellStatus.ACTIVE,
+        mode=mode,
+        idle_grace_seconds=idle_grace_seconds,
+        consumed_active_seconds=0.0,
+        last_tick_at=None,
     )
     write_cell(cell, cells_dir)
     logger.info(
-        "Opened cell %s: dataset=%s encoder=%s parent=%s budget=%ds buffer=%ds",
-        cell_id[:8], dataset, encoder, parent_id, budget_seconds, safety_buffer_seconds,
+        "Opened cell %s: dataset=%s encoder=%s mil_model=%s budget=%ds buffer=%ds mode=%s",
+        cell_id[:8], dataset, encoder, mil_model, budget_seconds, safety_buffer_seconds, mode,
     )
     return cell
 

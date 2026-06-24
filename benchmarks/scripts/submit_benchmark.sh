@@ -20,7 +20,7 @@
 #   ENCODERS="conch_v15 hibou_l" TASKS="brca" sbatch benchmarks/scripts/submit_benchmark.sh
 
 #SBATCH --job-name=autobench_train
-#SBATCH --account=def-wanglab
+#SBATCH --account=rrg-jma
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -31,6 +31,8 @@
 #SBATCH --error=logs/bench_%x_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=leo.yin@mail.utoronto.ca
+
+set -uo pipefail
 
 # ==================== CONFIG ====================
 DATASET="${DATASET:-clwd}"

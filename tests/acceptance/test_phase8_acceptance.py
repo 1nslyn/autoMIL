@@ -160,7 +160,10 @@ def test_d208_clause_07_framework_purity_grep_gate():
     assert test_file.exists()
     test_src = test_file.read_text()
     assert "_ALLOWLIST" in test_src
-    assert "src/automil/backends/_orchestrator_daemon.py:54" in test_src
+    # Stable-text anchor (DBT-03 / 14-02): file is still tracked in allowlist
+    # and the content anchor string is present. Decoupled from line-number drift.
+    assert "_orchestrator_daemon.py:" in test_src  # file is tracked in allowlist
+    assert "Consumer-specific vars (e.g. AUTOBENCH_*_ROOT)" in test_src  # content anchor
     assert "src/automil/cli/lifecycle/verify_repro.py:84" in test_src
     # Iter-2 / F-01 fix: revert_baseline.py:87 default-help allowlist entry.
     assert "src/automil/cli/lifecycle/revert_baseline.py:87" in test_src
@@ -294,12 +297,20 @@ def test_d208_clause_11_state_roadmap_complete():
 
     # 2. REQUIREMENTS.md DEC-XX rows transitioned Pending -> Complete.
     # After milestone close, REQUIREMENTS.md is archived to milestones/v1.0-REQUIREMENTS.md
-    # per the standard /gsd-complete-milestone workflow. Honor either location.
-    req_path = _REPO_ROOT / ".planning" / "REQUIREMENTS.md"
-    if not req_path.exists():
-        req_path = _REPO_ROOT / ".planning" / "milestones" / "v1.0-REQUIREMENTS.md"
+    # per the standard /gsd-complete-milestone workflow. The archive takes precedence
+    # when it exists (post-v1.0-close state); fall back to live path when absent.
+    archive_path = _REPO_ROOT / ".planning" / "milestones" / "v1.0-REQUIREMENTS.md"
+    live_path = _REPO_ROOT / ".planning" / "REQUIREMENTS.md"
+    # v1.0 acceptance gate must validate the v1.0 record.
+    # Archive takes precedence when it exists (post-v1.0-close state).
+    if archive_path.exists():
+        req_path = archive_path
+    elif live_path.exists():
+        req_path = live_path
+    else:
+        req_path = live_path  # triggers assert below
     assert req_path.exists(), (
-        "Neither .planning/REQUIREMENTS.md nor .planning/milestones/v1.0-REQUIREMENTS.md found"
+        "Neither .planning/milestones/v1.0-REQUIREMENTS.md nor .planning/REQUIREMENTS.md found"
     )
     req_text = req_path.read_text()
 

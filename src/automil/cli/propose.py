@@ -64,16 +64,31 @@ def rank(n: int, max_per_branch: int, include_held_out: bool):
         parent = node.get("parent_id", "root")
         desc = node.get("description", "")
         score = node.get("potential", 0)
-        click.echo(f"  {i}. [{node_id}] (parent: {parent}, score: {score:.4f})")
+        kind = node.get("kind", "unspecified")
+        click.echo(f"  {i}. [{node_id}] [{kind}] (parent: {parent}, score: {score:.4f})")
         click.echo(f"     {desc}")
         click.echo()
+
+
+#: Proposal kinds for the architecture-vs-HP portfolio (P1.2). "architecture"
+#: and "ensemble" are structural; the portfolio gate targets ≥50% structural so
+#: the loop proposes real architectural change, not a pure hyperparameter sweep.
+PROPOSAL_KINDS = ["architecture", "regularization", "hp", "data", "ensemble"]
+STRUCTURAL_KINDS = frozenset({"architecture", "ensemble"})
 
 
 @main.command()
 @click.option("--parent", required=True, help="Parent node ID")
 @click.option("--desc", required=True, help="Proposal description")
 @click.option("--techniques", multiple=True, help="Technique tags")
-def propose(parent: str, desc: str, techniques: tuple):
+@click.option("--kind", type=click.Choice(PROPOSAL_KINDS), default=None,
+              help="Experiment kind for the architecture-vs-HP portfolio "
+                   "(architecture|regularization|hp|data|ensemble). Always set "
+                   "this — `automil portfolio` gates the loop on ≥50% structural.")
+@click.option("--mil-model", default=None,
+              help="MIL model identifier — stored in node metadata so `automil submit` "
+                   "can inherit it as a fallback (D-12, REC-04).")
+def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_model: str | None):
     """Add a new experiment proposal to the graph."""
     adir = _find_automil_dir()
     from automil.graph import ExperimentGraph
@@ -101,7 +116,70 @@ def propose(parent: str, desc: str, techniques: tuple):
         parent_id=parent,
         description=desc,
         techniques=list(techniques),
+        kind=kind or "unspecified",
     )
+    if mil_model:
+        from automil.cells.state import normalize_mil_model
+        gnode = graph.get_node(node_id)
+        gnode.setdefault("metadata", {})["mil_model"] = normalize_mil_model(mil_model)
     graph.recalculate_scores()
     graph.save()
-    click.echo(f"Added proposal {node_id}: {desc}")
+    suffix = "" if kind else "  (no --kind; counts as non-structural in portfolio)"
+    click.echo(f"Added proposal {node_id} [{kind or 'unspecified'}]: {desc}{suffix}")
+
+
+@main.command()
+@click.option("--threshold", default=0.5, show_default=True,
+              help="Minimum structural (architecture+ensemble) fraction of pending proposals.")
+def portfolio(threshold: float):
+    """Report the architecture-vs-HP mix of pending proposals (P1.2 gate).
+
+    Exits non-zero when the structural fraction is below --threshold, so the
+    loop can gate EXECUTE on it: if it fails, propose more architectural
+    experiments before submitting. Structural = architecture + ensemble.
+    """
+    adir = _find_automil_dir()
+    graph_path = adir / "graph.json"
+    if not graph_path.exists():
+        click.echo("No graph.json found. Run some experiments first.")
+        return
+
+    from automil.graph import ExperimentGraph
+    graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
+
+    pending = [n for n in graph.nodes.values()
+               if n.get("type") == "proposed" and n.get("status") == "pending"]
+    executed = [n for n in graph.nodes.values() if n.get("type") == "executed"]
+
+    def _counts(nodes: list[dict]) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for n in nodes:
+            out[n.get("kind", "unspecified")] = out.get(n.get("kind", "unspecified"), 0) + 1
+        return out
+
+    def _render(label: str, nodes: list[dict]) -> float:
+        counts = _counts(nodes)
+        total = len(nodes)
+        structural = sum(c for k, c in counts.items() if k in STRUCTURAL_KINDS)
+        frac = (structural / total) if total else 0.0
+        click.echo(f"{label} ({total}):")
+        for k in PROPOSAL_KINDS + ["unspecified"]:
+            if counts.get(k):
+                tag = " (structural)" if k in STRUCTURAL_KINDS else ""
+                click.echo(f"  {k:<14} {counts[k]}{tag}")
+        click.echo(f"  → structural: {structural}/{total} = {frac:.0%}")
+        return frac
+
+    pending_frac = _render("Pending proposals", pending)
+    if executed:
+        click.echo("")
+        _render("Executed so far", executed)
+
+    if pending and pending_frac < threshold:
+        click.echo("")
+        click.echo(
+            f"PORTFOLIO BELOW TARGET: pending is {pending_frac:.0%} structural "
+            f"(target ≥{threshold:.0%}). Propose more architecture/ensemble "
+            f"experiments before executing — don't let the batch be a pure HP sweep."
+        )
+        raise SystemExit(1)

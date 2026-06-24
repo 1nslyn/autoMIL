@@ -18,6 +18,20 @@ ALLOWLIST rationale:
                                            not been extended; migrating viz daemon PID
                                            lifecycle to a backend would be Phase 7
                                            hardware-autodetect scope creep.)
+  - ``cli/cancel.py``                    — OPS-01 (ISSUE-011, v1.1 Phase 13): the CLI
+                                           cancel command signals a daemon-launched LOCAL
+                                           job's process group DIRECTLY (``os.kill(pid, 0)``
+                                           liveness probe + ``os.killpg`` SIGTERM→grace→
+                                           SIGKILL) reading pid/pgid from the on-disk
+                                           running spec. A fresh CLI process CANNOT route
+                                           through the daemon's ``_kill_experiment`` — that
+                                           reads the daemon's in-memory ``self.running``
+                                           map, which is empty in a separate process — so
+                                           direct signalling is the only correct path.
+                                           Sanctioned LOCAL-backend job-control, PID-reuse-
+                                           guarded by the same ``starttime_ticks`` cross-
+                                           check ``_orchestrator_daemon.py`` uses. Same
+                                           process-control category as the daemon itself.
 
 Usage:
     python scripts/check_backend_isolation.py [src_root]
@@ -56,6 +70,7 @@ ALLOWLIST_PATHS: frozenset[Path] = frozenset({
     Path("backends/local.py"),
     Path("backends/_orchestrator_daemon.py"),
     Path("viz/server.py"),
+    Path("cli/cancel.py"),  # OPS-01 CLI direct-kill of daemon-launched local jobs (see docstring rationale)
 })
 
 

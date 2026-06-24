@@ -10,7 +10,7 @@
 #   sbatch benchmarks/scripts/submit_feature_extraction_mig.sh tcga_luad virchow2 hoptimus1 uni_v2
 
 #SBATCH --job-name=wsi_extract
-#SBATCH --account=def-wanglab
+#SBATCH --account=rrg-jma
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -21,6 +21,8 @@
 #SBATCH --error=logs/extract_%x_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=leo.yin@mail.utoronto.ca
+
+set -uo pipefail
 
 # ==================== ARGS ====================
 DATASET="${1:?Usage: sbatch $0 <dataset> [models...]}"

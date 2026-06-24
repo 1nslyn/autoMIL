@@ -81,13 +81,17 @@ class ExperimentGraph:
             loaded_from_disk = True
         else:
             self._data = {}
+        # Capture the on-disk schema_version BEFORE setdefault fills in the new
+        # default of 2.  Absent key → 1 (legacy); present → whatever was stored.
+        # Used by the DBT-01 migration gate below.
+        _on_disk_schema_version = self._data.get("schema_version", 1)
         # Normalize: fill in missing top-level / meta keys with defaults
         # so legacy schemas and fresh-init paths both work. When loading
         # an existing file that's missing keys, log a warning — partial-
         # write corruption silently filled in with defaults would mask
         # real data loss, and operators need a paper trail.
         defaults = {
-            "schema_version": 1,
+            "schema_version": 2,
             "meta": {
                 "best_composite": 0.0,
                 "best_node_id": None,
@@ -122,6 +126,29 @@ class ExperimentGraph:
                 "write corruption.",
                 self.path, missing_top, missing_meta,
             )
+        # DBT-01: migrate pre-D-200 nodes (flat metric keys) to metrics-dict layout on read.
+        # Gate: on-disk schema_version < 2 AND node lacks "metrics" — idempotent on post-D-200.
+        # Uses _on_disk_schema_version (captured before setdefault filled in the new default of 2)
+        # so that graphs written without a schema_version key are correctly treated as legacy.
+        # Migration is in-memory only; caller decides when to save.
+        if _on_disk_schema_version < 2:
+            _LEGACY_METRIC_KEYS = ("val_auc", "val_bacc", "test_auc", "test_bacc")
+            _migrated = 0
+            for _node in self._data.get("nodes", {}).values():
+                if "metrics" not in _node:
+                    _node["metrics"] = {
+                        k: _node.get(k, 0.0) for k in _LEGACY_METRIC_KEYS
+                    }
+                    _migrated += 1
+            self._data["schema_version"] = 2
+            if loaded_from_disk and _migrated > 0:
+                logger.warning(
+                    "graph.json at %s: legacy schema (pre-D-200) detected; "
+                    "migrated %d node(s) to metrics-dict layout on read. "
+                    "Re-save to persist the migration.",
+                    self.path,
+                    _migrated,
+                )
 
     @staticmethod
     def load(path: str | Path, technique_map: dict[str, str] | None = None) -> ExperimentGraph:
@@ -151,7 +178,11 @@ class ExperimentGraph:
 
     def best_node(self) -> dict | None:
         best_id = self.meta.get("best_node_id")
-        return self.nodes.get(best_id) if best_id else None
+        node = self.nodes.get(best_id) if best_id else None
+        # D-01: partial results are quarantined — excluded from best_node
+        if node and node.get("status") == "partial":
+            return None
+        return node
 
     def children(self, node_id: str) -> list[dict]:
         return [n for n in self.nodes.values() if n.get("parent_id") == node_id]
@@ -246,7 +277,7 @@ class ExperimentGraph:
                      techniques: list[str], rationale: str = "",
                      reference: str | None = None,
                      expected_gain: str = "low", effort: str = "low",
-                     tier: int = 2) -> str:
+                     tier: int = 2, kind: str = "unspecified") -> str:
         nid = self.next_id()
         techniques = self._auto_extract_if_empty(description, techniques)
         node = {
@@ -257,6 +288,11 @@ class ExperimentGraph:
             "description": description,
             "techniques": techniques,
             "tier": tier,
+            # kind classifies the experiment for the architecture-vs-HP portfolio
+            # (P1.2): architecture | regularization | hp | data | ensemble |
+            # unspecified. Drives `automil portfolio` so the loop stays
+            # structurally exploratory, not a pure hyperparameter sweep.
+            "kind": kind,
             "rationale": rationale,
             "reference": reference,
             "expected_gain": expected_gain,
@@ -340,6 +376,8 @@ class ExperimentGraph:
                     continue
                 if child.get("type") != "executed":
                     continue
+                if child.get("status") == "partial":
+                    continue   # D-01: partial nodes are not keep/discard candidates
                 if child.get("status") not in ("keep", "discard"):
                     continue
                 c_comp = child.get("composite", 0)

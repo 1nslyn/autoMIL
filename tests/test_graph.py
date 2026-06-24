@@ -487,3 +487,143 @@ class TestNewFeatures:
     def test_technique_map_defaults(self, tmp_path):
         graph = ExperimentGraph(path=str(tmp_path / "graph.json"))
         assert graph._technique_map == ExperimentGraph.DEFAULT_TECHNIQUE_MAP
+
+
+# ---------------------------------------------------------------------------
+# DBT-01: legacy schema round-trip tests
+# These must be top-level (not inside a class) — pytest collects them directly.
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_schema_round_trip(tmp_path):
+    """DBT-01: pre-D-200 flat-key graph.json migrates on load — no KeyError."""
+    import json
+    from automil.graph import ExperimentGraph
+
+    # Build a real pre-D-200 graph.json fixture (flat metric keys, no metrics dict)
+    legacy_graph = {
+        "schema_version": 1,          # legacy schema version
+        "meta": {
+            "best_composite": 0.87,
+            "best_node_id": "node_0001",
+            "total_executed": 1,
+            "total_proposed": 0,
+            "next_id": 2,
+            "baseline_composite": 0.0,
+        },
+        "nodes": {
+            "node_0001": {
+                "id": "node_0001",
+                "parent_id": None,
+                "type": "executed",
+                "status": "keep",
+                "description": "baseline",
+                "techniques": [],
+                "composite": 0.87,
+                "global_delta": 0.0,
+                "parent_delta": 0.0,
+                # PRE-D-200 flat keys — NO "metrics" dict:
+                "val_auc": 0.85,
+                "val_bacc": 0.80,
+                "test_auc": 0.87,
+                "test_bacc": 0.83,
+                "vram_gb": 4.5,
+                "elapsed_min": 68.3,
+                "gpu": 0,
+            }
+        },
+        "technique_stats": {},
+    }
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(legacy_graph))
+
+    # Load through the REAL ExperimentGraph (not hand-constructed result)
+    g = ExperimentGraph(graph_path)
+
+    # Assert migration happened
+    node = g.nodes["node_0001"]
+    assert "metrics" in node, "migration must add 'metrics' dict to legacy node"
+    assert node["metrics"]["val_auc"] == 0.85
+    assert node["metrics"]["val_bacc"] == 0.80
+    assert node["metrics"]["test_auc"] == 0.87
+    assert node["metrics"]["test_bacc"] == 0.83
+    # Top-level keys preserved (keep-flat strategy)
+    assert node["val_auc"] == 0.85
+    # Schema version bumped in-memory
+    assert g._data["schema_version"] == 2
+
+
+def test_legacy_schema_absent_version(tmp_path):
+    """DBT-01: graph.json with NO schema_version key also migrates."""
+    import json
+    from automil.graph import ExperimentGraph
+
+    legacy_graph = {
+        # NO schema_version key — truly legacy
+        "meta": {
+            "best_composite": 0.0,
+            "best_node_id": None,
+            "total_executed": 1,
+            "total_proposed": 0,
+            "next_id": 2,
+            "baseline_composite": 0.0,
+        },
+        "nodes": {
+            "node_0001": {
+                "id": "node_0001", "parent_id": None, "type": "executed",
+                "status": "keep", "description": "x", "techniques": [],
+                "composite": 0.5, "global_delta": 0.0, "parent_delta": 0.0,
+                "val_auc": 0.5, "val_bacc": 0.5, "test_auc": 0.5, "test_bacc": 0.5,
+                "vram_gb": 1.0, "elapsed_min": 10.0, "gpu": 0,
+            }
+        },
+        "technique_stats": {},
+    }
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(legacy_graph))
+    g = ExperimentGraph(graph_path)
+    assert "metrics" in g.nodes["node_0001"], "absent schema_version must trigger migration"
+    assert g._data["schema_version"] == 2
+
+
+def test_post_d200_graph_not_remigrated(tmp_path):
+    """DBT-01 idempotency: post-D-200 graph (schema_version=2) is not re-migrated."""
+    import json
+    from automil.graph import ExperimentGraph
+
+    post_graph = {
+        "schema_version": 2,
+        "meta": {
+            "best_composite": 0.87,
+            "best_node_id": "node_0001",
+            "total_executed": 1,
+            "total_proposed": 0,
+            "next_id": 2,
+            "baseline_composite": 0.0,
+        },
+        "nodes": {
+            "node_0001": {
+                "id": "node_0001", "parent_id": None, "type": "executed",
+                "status": "keep", "description": "baseline", "techniques": [],
+                "composite": 0.87, "global_delta": 0.0, "parent_delta": 0.0,
+                "metrics": {
+                    "val_auc": 0.85,
+                    "val_bacc": 0.80,
+                    "test_auc": 0.87,
+                    "test_bacc": 0.83,
+                    "composite": 0.87,
+                },
+                "vram_gb": 4.5, "elapsed_min": 68.3, "gpu": 0,
+            }
+        },
+        "technique_stats": {},
+    }
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(post_graph))
+    g = ExperimentGraph(graph_path)
+    # metrics dict unchanged — same object values, no extra keys injected by migration
+    assert g.nodes["node_0001"]["metrics"]["val_auc"] == 0.85
+    assert g._data["schema_version"] == 2
+    # Confirm migration did NOT add spurious keys to the metrics dict
+    expected_keys = {"val_auc", "val_bacc", "test_auc", "test_bacc", "composite"}
+    assert set(g.nodes["node_0001"]["metrics"].keys()) == expected_keys

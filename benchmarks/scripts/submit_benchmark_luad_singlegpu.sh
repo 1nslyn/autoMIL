@@ -17,8 +17,8 @@
 # Usage:  sbatch benchmarks/scripts/submit_benchmark_luad_singlegpu.sh
 
 #SBATCH --job-name=autobench_luad_sgpu
-#SBATCH --account=def-wanglab
-#SBATCH --time=1-00:00:00
+#SBATCH --account=rrg-jma
+#SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
@@ -38,9 +38,9 @@ ENCODERS="hoptimus1 uni_v2 virchow2"
 TASKS="egfr kras"
 CLAM_MODELS="clam_mb"
 NNMIL_MODELS="simple_mil"
-# LUAD uses 5-fold CV (splits_0..4 on disk); the prior completed run used 5.
-# Must match the existing splits or fold-loading fails on splits_<N>.csv.
-N_FOLDS=5
+# LUAD uses 10-fold patient-stratified CV (post-fairness re-run, May 2026).
+# Must match existing splits or fold-loading fails on splits_<N>.csv.
+N_FOLDS=10
 PROJECT_DIR="/scratch/yinshuol/autoMIL/autoMIL"
 SELF="$PROJECT_DIR/benchmarks/scripts/submit_benchmark_luad_singlegpu.sh"
 

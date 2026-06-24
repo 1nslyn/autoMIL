@@ -44,6 +44,7 @@ markers = [
     "requires_slurm: requires SLURM cluster (skip in CI; nightly only)",
     "requires_ray: requires real Ray cluster (skip in CI; nightly only)",
     "requires_ccrcc_data: requires real CCRCC dataset at AUTOBENCH_CCRCC_ROOT (workstation only)",
+    "workstation: requires workstation with data + GPU; skipped in CI",
 ]
 
 [dependency-groups]

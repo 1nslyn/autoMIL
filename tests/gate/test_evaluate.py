@@ -270,7 +270,7 @@ def test_evaluate_skips_refusing_cells(graph, tmp_path, monkeypatch):
         cell_id=refusing_cell_id,
         dataset="ccrcc",
         encoder="uni_v2",
-        parent_id="node_0001",
+        mil_model="node_0001",
         started_at=0.0,
         budget_seconds=3600,
         safety_buffer_seconds=300,

@@ -574,7 +574,9 @@ Logging:
   --no_wandb                Disable W&B logging
 
 Other:
-  --experiments_per_gpu N   Concurrent experiments per GPU (default: auto)
+  --experiments_per_gpu N   Max concurrent worker processes per GPU (default: 12).
+                            VRAM-budget scheduling still gates actual submission;
+                            this only binds for small-VRAM model sweeps.
   --prep_only               Only run data preparation, skip training (used internally by SLURM script)
 ```
 
@@ -679,19 +681,20 @@ print(f'Failed:    {len(failed)}')
 torch.cuda.OutOfMemoryError: CUDA out of memory
 ```
 
-The multi-GPU scheduler handles OOM automatically by retrying with a bumped VRAM estimate (1.5× multiplier, up to 3 retries). If persistent:
+The multi-GPU scheduler handles OOM automatically by retrying with a bumped VRAM estimate (1.5× multiplier, up to 3 retries). A single failed experiment does **not** kill the run — the orchestrator marks it failed in `_failed.json` and continues. If persistent:
 
 - Reduce the model set: skip `vision_transformer` and `rrt` (highest VRAM)
-- Run memory-intensive models separately with fewer concurrent experiments:
+- Run memory-intensive models separately on a single GPU (sequential):
   ```bash
   uv run python benchmarks/scripts/run_benchmark.py \
       --dataset tcga_{code} \
       --gpu 0 \
       --frameworks nnmil \
       --nnmil_models vision_transformer rrt \
-      --experiments_per_gpu 1 \
       --no_wandb
   ```
+
+> **Non-OOM error behavior.** Only `torch.cuda.OutOfMemoryError` is treated as retriable. Any other exception in a worker (CUDA assertion, missing file, dataloader crash, etc.) raises `RuntimeError` inside the orchestrator and **aborts the entire multi-GPU run**. Check `logs/bench_*.err` and `_failed.json` for details, then resubmit (the pipeline is idempotent and resumes from where it left off).
 
 ### Missing Feature Files
 

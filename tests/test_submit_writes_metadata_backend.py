@@ -39,7 +39,7 @@ def _do_submit(tmp_path: Path, cli_runner: CliRunner) -> dict:
     result = cli_runner.invoke(
         main,
         ["submit", "--node", "node_0001", "--desc", "test metadata.backend",
-         "--files", "model.py"],
+         "--files", "model.py", "--mil-model", "test_model"],  # D-12: required
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
