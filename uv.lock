@@ -212,6 +212,7 @@ name = "autobench"
 version = "0.1.0"
 source = { editable = "benchmarks" }
 dependencies = [
+    { name = "automil" },
     { name = "beartype" },
     { name = "datasets" },
     { name = "h5py" },
@@ -229,6 +230,7 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "tensorboard" },
     { name = "tensorboardx" },
+    { name = "torch" },
     { name = "torch-geometric" },
     { name = "tqdm" },
     { name = "transformers" },
@@ -243,6 +245,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "automil", editable = "." },
     { name = "beartype", specifier = ">=0.22.9" },
     { name = "datasets", specifier = ">=2.14,<3.0" },
     { name = "h5py", specifier = ">=3.0" },
@@ -255,10 +258,11 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.10" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "tensorboardx", specifier = ">=2.6.4" },
+    { name = "torch", specifier = ">=2.2" },
     { name = "torch-geometric", specifier = ">=2.7.0" },
     { name = "tqdm", specifier = ">=4.60" },
     { name = "transformers", specifier = ">=4.35,<5" },
-    { name = "trident", directory = "../../../home/yws0322/scratch/autoMIL/benchmarks/lib/TRIDENT" },
+    { name = "trident", editable = "benchmarks/lib/TRIDENT" },
     { name = "wandb", specifier = ">=0.25.0" },
 ]
 
@@ -278,7 +282,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "torch" },
     { name = "watchdog" },
 ]
 
@@ -328,7 +331,6 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.11" },
     { name = "scipy", marker = "extra == 'ml'", specifier = ">=1.11" },
     { name = "submitit", marker = "extra == 'slurm'", specifier = ">=1.5.3" },
-    { name = "torch", specifier = ">=2.10.0" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.0" },
     { name = "watchdog", specifier = ">=4.0" },
 ]
@@ -4583,7 +4585,7 @@ wheels = [
 [[package]]
 name = "trident"
 version = "0.2.3"
-source = { directory = "../../../home/yws0322/scratch/autoMIL/benchmarks/lib/TRIDENT" }
+source = { editable = "benchmarks/lib/TRIDENT" }
 dependencies = [
     { name = "einops-exts" },
     { name = "geopandas" },
