@@ -49,9 +49,14 @@ class StrategyConfig:
 @dataclass
 class TaskConfig:
     name: str
-    label_col: str
-    label_dict: dict[str, int]
+    label_col: str | None
+    label_dict: dict[str, int] | None
     n_classes: int = 2
+    task_type: str = "classification"
+    event_col: str | None = None
+    time_col: str | None = None
+    survival_losses: list[str] = field(default_factory=lambda: ["cox"])
+    nll_bins: int = 4
 
 
 @dataclass
@@ -86,25 +91,37 @@ class ExperimentConfig:
     n_folds: int = 10
     framework: Framework = Framework.CLAM
     strategy: str = "standard"
+    # Survival loss variant (cox/mse/mae/nllsurv). None for classification —
+    # kept None so classification experiment_id / results_subdir are byte-
+    # identical to pre-survival behaviour (no result-dir migration).
+    survival_loss: str | None = None
+
+    @property
+    def is_survival(self) -> bool:
+        return self.task.task_type == "survival"
 
     @property
     def experiment_id(self) -> str:
-        return (
+        base = (
             f"{self.framework.value}__{self.strategy}"
             f"__{self.task.name}__{self.encoder_key}"
             f"__{self.model.model_type}__s{self.train.seed}"
         )
+        return base if self.survival_loss is None else f"{base}__{self.survival_loss}"
 
     @property
     def results_subdir(self) -> str:
-        """Relative results path: framework/strategy/task/encoder/model."""
-        return os.path.join(
+        """Relative results path: framework/strategy/task/encoder/model[/loss]."""
+        parts = [
             self.framework.value,
             self.strategy,
             self.task.name,
             self.encoder_key,
             self.model.model_type,
-        )
+        ]
+        if self.survival_loss is not None:
+            parts.append(self.survival_loss)
+        return os.path.join(*parts)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -175,6 +192,18 @@ def build_registries(ds: DatasetConfig) -> Registries:
     # Tasks
     task_registry: dict[str, TaskConfig] = {}
     for name, tdef in ds.tasks.items():
+        if tdef.task_type == "survival":
+            task_registry[name] = TaskConfig(
+                name=name,
+                label_col=None,
+                label_dict=None,
+                task_type="survival",
+                event_col=tdef.event_col,
+                time_col=tdef.time_col,
+                survival_losses=tdef.survival_losses,
+                nll_bins=tdef.nll_bins,
+            )
+            continue
         # Invert label_map: {0: "neg", 1: "pos"} -> {"neg": 0, "pos": 1}
         label_dict = {v: k for k, v in tdef.label_map.items()}
         task_registry[name] = TaskConfig(
@@ -265,12 +294,26 @@ def generate_all_experiments(
         for strategy in cfg.strategies:
             for task_name in cfg.tasks:
                 task_cfg = registries.task_registry[task_name]
+
+                # Survival is nnMIL-only — CLAM has no survival head/loss.
+                if task_cfg.task_type == "survival" and framework == Framework.CLAM:
+                    continue
+
                 feasible = registries.task_strategy_feasibility.get(task_name, [])
 
                 # Check feasibility (first strategy in the list is always allowed)
                 first_strategy = list(registries.strategy_registry.keys())[0] if registries.strategy_registry else None
                 if strategy not in feasible and strategy != first_strategy:
                     continue
+
+                # Survival tasks fan out over their loss variants (each a
+                # separate experiment); classification yields a single [None]
+                # so the grid is unchanged.
+                loss_values = (
+                    task_cfg.survival_losses
+                    if task_cfg.task_type == "survival"
+                    else [None]
+                )
 
                 for encoder_key in cfg.encoder_keys:
                     for model_type in model_types:
@@ -279,18 +322,20 @@ def generate_all_experiments(
                             if framework == Framework.CLAM
                             else ModelConfig(model_type=model_type)
                         )
-                        exp = ExperimentConfig(
-                            task=task_cfg,
-                            encoder_key=encoder_key,
-                            embed_dim=registries.encoder_dims[encoder_key],
-                            model=model_cfg,
-                            train=cfg.train,
-                            n_folds=cfg.n_folds,
-                            framework=framework,
-                            strategy=strategy,
-                        )
-                        if exp.experiment_id not in seen_ids:
-                            experiments.append(exp)
-                            seen_ids.add(exp.experiment_id)
+                        for survival_loss in loss_values:
+                            exp = ExperimentConfig(
+                                task=task_cfg,
+                                encoder_key=encoder_key,
+                                embed_dim=registries.encoder_dims[encoder_key],
+                                model=model_cfg,
+                                train=cfg.train,
+                                n_folds=cfg.n_folds,
+                                framework=framework,
+                                strategy=strategy,
+                                survival_loss=survival_loss,
+                            )
+                            if exp.experiment_id not in seen_ids:
+                                experiments.append(exp)
+                                seen_ids.add(exp.experiment_id)
 
     return experiments
