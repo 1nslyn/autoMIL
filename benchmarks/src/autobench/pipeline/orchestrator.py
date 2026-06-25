@@ -272,7 +272,11 @@ def _prepare_nnmil_plans(
     for exp in experiments:
         if exp.framework != Framework.NNMIL:
             continue
-        key = f"{exp.task.name}__{exp.encoder_key}__{exp.strategy}"
+        # survival_loss belongs in the dedup key — each loss has its own plan.
+        key = (
+            f"{exp.task.name}__{exp.encoder_key}__{exp.strategy}"
+            f"__{exp.survival_loss}"
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -289,6 +293,11 @@ def _prepare_nnmil_plans(
             dataset_name=dataset_name,
             seed=cfg.train.seed,
             n_splits=cfg.n_folds,
+            task_type=exp.task.task_type,
+            event_col=exp.task.event_col,
+            time_col=exp.task.time_col,
+            survival_loss=exp.survival_loss,
+            nll_bins=exp.task.nll_bins,
         )
 
 
@@ -499,27 +508,26 @@ def collect_all_summaries_on_disk(benchmark_dir: str) -> list[dict]:
         return []
 
     summaries: list[dict] = []
-    seen_keys: set[tuple] = set()
-    # Layout: results/<fw>/<strategy>/<task>/<encoder>/<model>/summary.json
-    pattern = os.path.join(results_root, "*", "*", "*", "*", "*", "summary.json")
-    for path in sorted(glob.glob(pattern)):
+    seen_ids: set[str] = set()
+    # Two layouts coexist:
+    #   classification: results/<fw>/<strategy>/<task>/<encoder>/<model>/summary.json
+    #   survival:       results/<fw>/<strategy>/<task>/<encoder>/<model>/<loss>/summary.json
+    patterns = [
+        os.path.join(results_root, "*", "*", "*", "*", "*", "summary.json"),
+        os.path.join(results_root, "*", "*", "*", "*", "*", "*", "summary.json"),
+    ]
+    paths = sorted({p for pat in patterns for p in glob.glob(pat)})
+    for path in paths:
         try:
             with open(path) as f:
                 s = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
-        # Dedupe by (framework, strategy, task, encoder, model_type) — defensive
-        # in case both the new and legacy result paths happen to coexist.
-        key = (
-            s.get("framework", "clam"),
-            s.get("strategy"),
-            s.get("task"),
-            s.get("encoder"),
-            s.get("model_type"),
-        )
-        if key in seen_keys:
+        # Dedupe by experiment_id — unique across all loss variants and layouts.
+        eid = s.get("experiment_id", path)
+        if eid in seen_ids:
             continue
-        seen_keys.add(key)
+        seen_ids.add(eid)
         summaries.append(s)
     return summaries
 

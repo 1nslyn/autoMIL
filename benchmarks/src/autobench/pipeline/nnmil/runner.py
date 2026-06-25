@@ -8,6 +8,7 @@ import os
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.evaluate import compute_confidence_intervals
+from autobench.pipeline.nnmil.prepare import nnmil_plan_dir
 from autobench.pipeline.nnmil.train import train_nnmil_fold
 
 
@@ -34,11 +35,12 @@ def run_nnmil_experiment(
 
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 
-    # Locate the plan file for this (task, encoder, strategy)
+    # Locate the plan file for this (task, encoder, strategy[, survival_loss])
     plan_path = os.path.join(
-        benchmark_dir, "nnmil",
-        exp_cfg.strategy,
-        f"{exp_cfg.task.name}_{exp_cfg.encoder_key}",
+        nnmil_plan_dir(
+            benchmark_dir, exp_cfg.strategy, exp_cfg.task.name,
+            exp_cfg.encoder_key, survival_loss=exp_cfg.survival_loss,
+        ),
         "dataset_plan.json",
     )
     if not os.path.exists(plan_path):

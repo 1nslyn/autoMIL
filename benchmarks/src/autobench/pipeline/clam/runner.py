@@ -49,13 +49,21 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
 
     test_m = result.get("test_metrics", {}) or {}
     val_m = result.get("val_metrics", {}) or {}
-    metrics = {
-        "val_auc":   _unwrap(val_m.get("auc_roc")),
-        "val_bacc":  _unwrap(val_m.get("balanced_accuracy")),
-        "test_auc":  _unwrap(test_m.get("auc_roc")),
-        "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
-    }
-    composite = (metrics["test_auc"] + metrics["test_bacc"]) / 2.0
+    if "c_index" in test_m:
+        # Survival: composite is the test concordance index.
+        metrics = {
+            "val_c_index":  _unwrap(val_m.get("c_index")),
+            "test_c_index": _unwrap(test_m.get("c_index")),
+        }
+        composite = metrics["test_c_index"]
+    else:
+        metrics = {
+            "val_auc":   _unwrap(val_m.get("auc_roc")),
+            "val_bacc":  _unwrap(val_m.get("balanced_accuracy")),
+            "test_auc":  _unwrap(test_m.get("auc_roc")),
+            "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
+        }
+        composite = (metrics["test_auc"] + metrics["test_bacc"]) / 2.0
 
     payload = {
         "fold_index":      fold_index,
