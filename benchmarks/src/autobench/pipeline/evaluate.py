@@ -86,7 +86,8 @@ def compute_confidence_intervals(
     deliberately use a different statistical object because we report
     K-fold CV summaries, not single-test-set numbers.
     """
-    metric_names = list(fold_metrics[0].keys())
+    # Union of keys across all folds — a key absent in one fold gets NaN there.
+    metric_names = list(dict.fromkeys(k for fm in fold_metrics for k in fm))
     alpha = 1 - confidence
     lo_pct = 100 * (alpha / 2)
     hi_pct = 100 * (1 - alpha / 2)
@@ -94,7 +95,7 @@ def compute_confidence_intervals(
 
     results: dict[str, dict[str, float]] = {}
     for name in metric_names:
-        values = np.array([fm[name] for fm in fold_metrics], dtype=float)
+        values = np.array([fm.get(name, float("nan")) for fm in fold_metrics], dtype=float)
         valid = values[~np.isnan(values)]
 
         if len(valid) < 2:
