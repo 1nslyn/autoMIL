@@ -14,6 +14,8 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from autobench.pipeline.config import resolve_n_folds
+
 
 def nnmil_plan_dir(
     benchmark_dir: str,
@@ -66,6 +68,9 @@ def prepare_nnmil_experiment(
     for nllsurv), and emits per-slide ``status``/``time`` instead of ``label``.
     """
     is_survival = task_type == "survival"
+    # Survival uses 5-fold CV (vs classification's configured n_folds) so the
+    # embedded data_splits and evaluation_setting match the survival split CSVs.
+    n_splits = resolve_n_folds(task_type, n_splits)
     dataset_dir = nnmil_plan_dir(
         benchmark_dir, strategy, task_name, encoder_key,
         survival_loss=survival_loss if is_survival else None,
