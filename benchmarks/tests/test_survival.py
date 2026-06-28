@@ -1,9 +1,11 @@
-"""Tests for nnMIL survival-prediction wiring (cox/mse/mae/nllsurv).
+"""Tests for survival-prediction wiring (cox/mse/mae/nllsurv) across both
+frameworks — nnMIL and CLAM.
 
-Covers the autobench wrapper layer only — config/grid, task-CSV creation,
-status-stratified splits, nnMIL plan generation per loss, trainer selection,
-metric normalization, and the survival composite. The nnMIL survival trainers
-themselves live in lib/nnMIL and are exercised end-to-end elsewhere (gated).
+Covers the autobench wrapper layer — config/grid (per-framework survival
+combos), task-CSV creation, status-stratified splits, nnMIL plan generation per
+loss, trainer selection, metric normalization, the survival composite — plus a
+CPU model+loss+c-index smoke for both frameworks' survival models. Full training
+runs on real features live elsewhere (gated).
 """
 
 import json
@@ -163,7 +165,9 @@ class TestSurvivalConfig:
             assert e.experiment_id.endswith(f"__{e.survival_loss}")
             assert e.is_survival
 
-    def test_survival_excluded_from_clam(self):
+    def test_clam_survival_generates_valid_combos(self):
+        """CLAM survival combos: cox is clam_sb-only (single risk output);
+        nllsurv works for clam_sb and clam_mb. mse/mae and mil are excluded."""
         ds = make_survival_ds()
         cfg = BenchmarkConfig.from_dataset_config(
             ds,
@@ -173,7 +177,16 @@ class TestSurvivalConfig:
             strategies=["standard"],
             n_folds=3,
         )
-        assert generate_all_experiments(cfg, build_registries(ds)) == []
+        exps = generate_all_experiments(cfg, build_registries(ds))
+        combos = sorted((e.model.model_type, e.survival_loss) for e in exps)
+        assert combos == [
+            ("clam_mb", "nllsurv"),
+            ("clam_sb", "cox"),
+            ("clam_sb", "nllsurv"),
+        ]
+        for e in exps:
+            assert e.is_survival
+            assert e.framework == Framework.CLAM
 
 
 # ---------------------------------------------------------------------------
@@ -385,3 +398,83 @@ class TestSurvivalComposite:
         payload = json.loads((tmp_path / "fold_0_result.json").read_text())
         assert payload["composite"] == pytest.approx((0.8 + 0.7) / 2)
         assert payload["metrics"]["test_auc"] == 0.8
+
+
+# ---------------------------------------------------------------------------
+# Model + loss + c-index smoke — both frameworks (CPU, dummy features)
+# ---------------------------------------------------------------------------
+
+
+class TestSurvivalTrainerSmoke:
+    """Forward the survival model, compute the loss, and score the c-index for
+    every valid (framework, model, loss) combo on tiny dummy bags — no GPU, no
+    data. Guards the model/loss/metric contract each survival trainer relies on:
+    nnMIL bags are ``(1, N, dim)`` and return ``{"logits": ...}``; CLAM bags are
+    ``(N, dim)`` with ``instance_eval=False``.
+    """
+
+    COMBOS = [
+        ("nnmil", "ab_mil", "cox"),
+        ("nnmil", "ab_mil", "nllsurv"),
+        ("nnmil", "trans_mil", "cox"),
+        ("nnmil", "trans_mil", "nllsurv"),
+        ("clam", "clam_sb", "cox"),
+        ("clam", "clam_sb", "nllsurv"),
+        ("clam", "clam_mb", "nllsurv"),
+    ]
+
+    def _bag_logits(self, framework, model_type, n_out, embed_dim, feats):
+        """One bag's logits as ``(1, n_out)`` for either framework."""
+        if framework == "clam":
+            from autobench.pipeline.clam._imports import CLAM_SB, CLAM_MB
+
+            cls = CLAM_MB if model_type == "clam_mb" else CLAM_SB
+            model = cls(n_classes=n_out, embed_dim=embed_dim)
+            logits, *_ = model(feats, instance_eval=False)  # CLAM bag: (N, dim)
+            return logits.view(1, -1)
+
+        from nnMIL.network_architecture.model_factory import create_mil_model
+
+        model = create_mil_model(
+            model_type=model_type, input_dim=embed_dim, hidden_dim=64,
+            num_classes=n_out, dropout=0.0,
+        )
+        out = model(feats.unsqueeze(0))  # nnMIL bag: (1, N, dim)
+        logits = out["logits"] if isinstance(out, dict) else out
+        return logits.view(1, -1)
+
+    @pytest.mark.parametrize("framework,model_type,loss", COMBOS)
+    def test_model_loss_cindex(self, framework, model_type, loss):
+        import torch
+
+        # Importing the CLAM survival trainer puts the vendored nnMIL tree on
+        # sys.path so the survival core imports below resolve.
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        from nnMIL.training.losses.survival_loss import SurvivalLoss, survival_c_index
+        from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss
+
+        torch.manual_seed(0)
+        embed_dim, n_bins, batch, n_patches = 64, 4, 4, 20
+        n_out = n_bins if loss == "nllsurv" else 1
+
+        logits = torch.cat([
+            self._bag_logits(framework, model_type, n_out, embed_dim, torch.randn(n_patches, embed_dim))
+            for _ in range(batch)
+        ])  # (batch, n_out)
+        assert logits.shape == (batch, n_out)
+
+        status = torch.tensor([1.0, 0.0, 1.0, 0.0])
+        time = torch.tensor([100.0, 200.0, 300.0, 400.0])
+        if loss == "nllsurv":
+            y = torch.randint(0, n_bins, (batch,))
+            value = NLLSurvLoss()(logits, y, (1 - status).long())
+            risk = -torch.cumprod(1 - torch.sigmoid(logits), dim=1).sum(dim=1)
+        else:
+            value = SurvivalLoss(loss_type="cox")(logits.view(-1), status, time)
+            risk = logits.view(-1)
+        assert torch.isfinite(value)
+
+        ci = survival_c_index(
+            risk.detach(), status, time, [f"p{i}" for i in range(batch)],
+        )
+        assert ci is None or np.isnan(float(ci)) or 0.0 <= float(ci) <= 1.0
