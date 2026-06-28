@@ -37,6 +37,7 @@ def aggregate_cross_framework(
             "task": s["task"],
             "encoder": s["encoder"],
             "model_type": s["model_type"],
+            "survival_loss": s.get("survival_loss", getattr(exp, "survival_loss", None)),
             "embed_dim": s["embed_dim"],
             "n_folds": s["n_folds"],
             "seed": s["seed"],

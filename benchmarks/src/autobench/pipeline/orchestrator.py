@@ -203,6 +203,7 @@ def aggregate_results(summaries: list[dict]) -> pd.DataFrame:
             "task": s["task"],
             "encoder": s["encoder"],
             "model_type": s["model_type"],
+            "survival_loss": s.get("survival_loss"),
             "embed_dim": s["embed_dim"],
             "n_folds": s["n_folds"],
             "seed": s["seed"],

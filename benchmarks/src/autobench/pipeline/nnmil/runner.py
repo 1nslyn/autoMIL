@@ -66,6 +66,7 @@ def run_nnmil_experiment(
         "encoder": exp_cfg.encoder_key,
         "embed_dim": exp_cfg.embed_dim,
         "model_type": exp_cfg.model.model_type,
+        "survival_loss": exp_cfg.survival_loss,
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
