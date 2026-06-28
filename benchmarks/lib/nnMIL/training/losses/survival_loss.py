@@ -119,7 +119,10 @@ class SurvivalLoss(nn.Module):
     
     def _cox_loss(self, logits, status, time, strata=None, eps: float = 1e-12):
         # Check if logits has gradient - if not, raise error (should never happen if called correctly)
-        if not logits.requires_grad:
+        # Only enforce gradient tracking during training (grad enabled). Under
+        # torch.no_grad() — e.g. the val-loss computation used for model
+        # selection — logits legitimately have requires_grad=False.
+        if torch.is_grad_enabled() and not logits.requires_grad:
             raise RuntimeError(f"logits.requires_grad=False in _cox_loss - logits must come from model output with gradient tracking")
         
         if logits.dim() > 1:
@@ -340,12 +343,18 @@ def survival_c_index(logits, status, time, patient_ids=None):
         status = np.array(patient_status)
         time = np.array(patient_time)
     
-    # Use concordance_index_censored
-    result = concordance_index_censored(status, time, risk_scores, tied_tol=1e-08)
+    # Use concordance_index_censored. A split with no comparable pairs (e.g. a
+    # tiny CV fold with zero events) makes concordance undefined — sksurv raises
+    # NoComparablePairException in that case. Return NaN so cross-fold
+    # aggregation drops it instead of averaging in a misleading 0.0/0.5.
+    try:
+        result = concordance_index_censored(status, time, risk_scores, tied_tol=1e-08)
+    except Exception:
+        return float("nan")
     # Handle different return types: sksurv returns tuple, lifelines returns scalar
     if isinstance(result, tuple):
         c_index = result[0]
     else:
         c_index = result
-    
+
     return c_index

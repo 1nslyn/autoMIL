@@ -8,6 +8,7 @@ import os
 import sys
 import time as time_module
 import json
+import functools
 import torch
 import torch.nn as nn
 import numpy as np
@@ -25,6 +26,38 @@ from nnMIL.utilities.plan_loader import create_dataset_from_plan
 from nnMIL.training.samplers.survival_sampler import BalancedSurvivalSampler, StratifiedSurvivalSampler, RiskSetBatchSampler
 from nnMIL.training.losses.survival_loss import SurvivalLoss, survival_c_index
 from nnMIL.training.callbacks.early_stopping import EarlyStoppingSurvival
+
+
+def _surv_worker_init(worker_id, seed):
+    """Picklable DataLoader worker init (spawn-safe): seed numpy per worker."""
+    np.random.seed(seed + worker_id)
+
+
+def _survival_collate_fn(batch):
+    """Module-level collate (picklable under spawn multiprocessing).
+
+    Handles both 6-item (no slide_id) and 7-item dataset outputs.
+    """
+    features_list = [item[0] for item in batch]
+    coords_list = [item[1] for item in batch]
+    bag_sizes = [item[2] for item in batch]
+    status = torch.stack([item[3] for item in batch])
+    time = torch.stack([item[4] for item in batch])
+    patient_ids = [item[5] for item in batch]
+
+    if len(batch[0]) == 7:
+        slide_ids = [item[6] for item in batch]
+    else:
+        slide_ids = None
+
+    batch_features = torch.stack(features_list)
+    batch_coords = torch.stack(coords_list)
+    batch_bag_sizes = torch.stack(bag_sizes)
+
+    if slide_ids is not None:
+        return batch_features, batch_coords, batch_bag_sizes, status, time, patient_ids, slide_ids
+    else:
+        return batch_features, batch_coords, batch_bag_sizes, status, time, patient_ids
 
 
 class SurvivalTrainer(BaseTrainer):
@@ -62,30 +95,7 @@ class SurvivalTrainer(BaseTrainer):
         
         self.logger.info(f"Datasets loaded - Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
         
-        # Default collate function
-        def default_collate_fn(batch):
-            features_list = [item[0] for item in batch]
-            coords_list = [item[1] for item in batch]
-            bag_sizes = [item[2] for item in batch]
-            status = torch.stack([item[3] for item in batch])
-            time = torch.stack([item[4] for item in batch])
-            patient_ids = [item[5] for item in batch]
-            
-            # Check if batch has slide_ids (7 items)
-            if len(batch[0]) == 7:
-                slide_ids = [item[6] for item in batch]
-            else:
-                slide_ids = None
-            
-            batch_features = torch.stack(features_list)
-            batch_coords = torch.stack(coords_list)
-            batch_bag_sizes = torch.stack(bag_sizes)
-            
-            if slide_ids is not None:
-                return batch_features, batch_coords, batch_bag_sizes, status, time, patient_ids, slide_ids
-            else:
-                return batch_features, batch_coords, batch_bag_sizes, status, time, patient_ids
-        
+        # collate_fn is the module-level _survival_collate_fn (picklable under spawn multiprocessing)
         batch_size = self.config.get('batch_size', 32)
         batch_sampler_type = self.config.get('batch_sampler', None)  # Default to None (random sampling)
         
@@ -94,24 +104,24 @@ class SurvivalTrainer(BaseTrainer):
             train_sampler = RiskSetBatchSampler(train_dataset, batch_size, shuffle_within=True, seed=self.seed)
             self.train_loader = DataLoader(
                 train_dataset, batch_sampler=train_sampler, num_workers=4,
-                worker_init_fn=lambda worker_id: np.random.seed(self.seed + worker_id),
-                collate_fn=default_collate_fn
+                worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed),
+                collate_fn=_survival_collate_fn
             )
             self.logger.info("Using RiskSetBatchSampler")
         elif batch_sampler_type == 'balanced_survival' and batch_size > 1:
             train_sampler = BalancedSurvivalSampler(train_dataset, batch_size, shuffle=True, seed=self.seed)
             self.train_loader = DataLoader(
                 train_dataset, batch_sampler=train_sampler, num_workers=4,
-                worker_init_fn=lambda worker_id: np.random.seed(self.seed + worker_id),
-                collate_fn=default_collate_fn
+                worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed),
+                collate_fn=_survival_collate_fn
             )
             self.logger.info("Using BalancedSurvivalSampler")
         elif batch_sampler_type == 'stratified_survival' and batch_size > 1:
             train_sampler = StratifiedSurvivalSampler(train_dataset, batch_size, shuffle=True, seed=self.seed)
             self.train_loader = DataLoader(
                 train_dataset, batch_sampler=train_sampler, num_workers=4,
-                worker_init_fn=lambda worker_id: np.random.seed(self.seed + worker_id),
-                collate_fn=default_collate_fn
+                worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed),
+                collate_fn=_survival_collate_fn
             )
             self.logger.info("Using StratifiedSurvivalSampler")
         else:
@@ -120,22 +130,19 @@ class SurvivalTrainer(BaseTrainer):
             self.train_loader = DataLoader(
                 train_dataset, batch_size=batch_size, shuffle=True,
                 num_workers=4, generator=generator,
-                worker_init_fn=lambda worker_id: np.random.seed(self.seed + worker_id),
-                collate_fn=default_collate_fn
+                worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed),
+                collate_fn=_survival_collate_fn
             )
             self.logger.info("Using random sampling")
         
         # Create val and test loaders
-        def _worker_init_fn(worker_id):
-            np.random.seed(self.seed + worker_id)
-        
         self.val_loader = DataLoader(
             val_dataset, batch_size=1, shuffle=False, num_workers=4,
-            worker_init_fn=_worker_init_fn, collate_fn=default_collate_fn
+            worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed), collate_fn=_survival_collate_fn
         )
         self.test_loader = DataLoader(
             test_dataset, batch_size=1, shuffle=False, num_workers=4,
-            worker_init_fn=_worker_init_fn, collate_fn=default_collate_fn
+            worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed), collate_fn=_survival_collate_fn
         )
         
         self.logger.info(f"Data loaders created - Train: {len(self.train_loader)}, Val: {len(self.val_loader)}, Test: {len(self.test_loader)}")
@@ -195,7 +202,8 @@ class SurvivalTrainer(BaseTrainer):
             metric=metric,
             save_dir=self.save_dir,
             model_type=self.model_type,
-            logger=self.logger
+            logger=self.logger,
+            mode='min',  # select on val loss: val c-index is near-random with few events
         )
         
         # Setup mixed precision
@@ -311,24 +319,23 @@ class SurvivalTrainer(BaseTrainer):
                 self.model.eval()
                 torch.set_grad_enabled(False)
                 val_metrics = self.evaluate('val')
+                # Model selection uses val LOSS, not val c-index: with few events
+                # the val c-index is near-random, so maximizing it over epochs
+                # overfits to noise. Val loss uses every sample and is stable.
+                val_loss = self._compute_val_loss(loss_fn)
                 torch.set_grad_enabled(True)
                 self.model.train()
-                
+
                 # Save latest model after each validation
                 latest_model_path = os.path.join(self.save_dir, f"latest_{self.model_type}.pth")
                 torch.save(self.model.state_dict(), latest_model_path)
                 self.logger.info(f"Saved latest model to {latest_model_path}")
-                
-                # Early stopping
-                metric_value = val_metrics.get(f'val_{metric}', val_metrics.get('val_c_index', 0.0))
-                # Convert to float to ensure it's a number, not a model object
-                if isinstance(metric_value, (torch.Tensor, np.ndarray)):
-                    metric_value = float(metric_value.item() if isinstance(metric_value, torch.Tensor) else metric_value)
-                else:
-                    metric_value = float(metric_value)
-                # EarlyStoppingSurvival.__call__ signature: (val_loss, val_c_index, model)
-                # val_loss is not used but required by signature, pass 0.0
-                early_stopping(0.0, metric_value, self.model)
+
+                # c-index kept for logging/reference only; selection is on val loss
+                val_cidx = val_metrics.get('val_c_index', 0.0)
+                val_cidx = float(val_cidx.item()) if isinstance(val_cidx, torch.Tensor) else float(val_cidx)
+                self.logger.info(f"Val loss: {val_loss:.4f}, Val c-index: {val_cidx:.4f}")
+                early_stopping(val_loss, val_cidx, self.model)
                 if early_stopping.early_stop:
                     self.logger.info(f"Early stopping triggered at epoch {epoch+1}")
                     break
@@ -356,6 +363,35 @@ class SurvivalTrainer(BaseTrainer):
         
         return self.model
     
+    def _compute_val_loss(self, loss_fn):
+        """Survival loss over the full val set — the model-selection signal.
+
+        For cox the whole val set is scored as one risk set (the natural
+        cohort-level partial likelihood); for mse/mae it is the per-sample loss.
+        Robust to the tiny-event val c-index. Returns a float (NaN-safe via the
+        early-stopping callback). Assumes the model is already in eval mode.
+        """
+        all_logits, all_status, all_time = [], [], []
+        with torch.no_grad():
+            for batch in self.val_loader:
+                if len(batch) == 7:
+                    features, coords, bag_sizes, status, time, patient_ids, slide_ids = batch
+                else:
+                    features, coords, bag_sizes, status, time, patient_ids = batch
+                features = features.to(self.device)
+                if hasattr(self.model, 'forward') and 'is_cox' in self.model.forward.__code__.co_varnames:
+                    output = self.model(features, is_cox=True)
+                else:
+                    output = self.model(features)
+                logits = output['logits'] if isinstance(output, dict) else output
+                all_logits.append(logits.float().reshape(-1))
+                all_status.append(status.to(self.device).reshape(-1))
+                all_time.append(time.to(self.device).reshape(-1))
+        logits = torch.cat(all_logits)
+        status = torch.cat(all_status)
+        time = torch.cat(all_time)
+        return float(loss_fn(logits, status, time).item())
+
     def evaluate(self, split='test'):
         """Evaluate on a split"""
         if self.model is None:
@@ -424,7 +460,7 @@ class SurvivalTrainer(BaseTrainer):
         median_time = float(np.median(all_time))
         
         metrics = {
-            f"{split}_c_index": c_index if c_index is not None else 0.0,
+            f"{split}_c_index": c_index if c_index is not None else float("nan"),
             f"{split}_events": num_events,
             f"{split}_censored": num_censored,
             f"{split}_event_rate": event_rate,
