@@ -313,10 +313,6 @@ def generate_all_experiments(
             for task_name in cfg.tasks:
                 task_cfg = registries.task_registry[task_name]
 
-                # Survival is nnMIL-only — CLAM has no survival head/loss.
-                if task_cfg.task_type == "survival" and framework == Framework.CLAM:
-                    continue
-
                 feasible = registries.task_strategy_feasibility.get(task_name, [])
 
                 # Check feasibility (first strategy in the list is always allowed)
@@ -341,6 +337,19 @@ def generate_all_experiments(
                             else ModelConfig(model_type=model_type)
                         )
                         for survival_loss in loss_values:
+                            # CLAM survival: attention models only; cox is
+                            # clam_sb-only (single risk output), nllsurv works
+                            # for clam_sb and clam_mb.
+                            if (
+                                framework == Framework.CLAM
+                                and task_cfg.task_type == "survival"
+                            ):
+                                if model_type not in ("clam_sb", "clam_mb"):
+                                    continue
+                                if survival_loss not in ("cox", "nllsurv"):
+                                    continue
+                                if survival_loss == "cox" and model_type != "clam_sb":
+                                    continue
                             exp = ExperimentConfig(
                                 task=task_cfg,
                                 encoder_key=encoder_key,
