@@ -251,7 +251,13 @@ def build_registries(ds: DatasetConfig) -> Registries:
 # .planning/decisions/N4-overrides-removed.md (placeholder; see audit).
 
 NNMIL_RUNTIME_DEFAULTS: dict[str, int] = {
-    "num_workers": 0,
+    # Default 8 DataLoader subprocess workers; env-overridable via
+    # NNMIL_NUM_WORKERS. Caveat: on TCGA-LUAD job 43324927, num_workers=2 was
+    # observed to cause a ~3.7x per-epoch slowdown vs num_workers=0 (440s vs
+    # 120s per epoch on identically-sized features), likely due to CUDA-aware
+    # fork overhead in the spawn-context orchestrator pool. Set
+    # NNMIL_NUM_WORKERS=0 if that regression reappears.
+    "num_workers": int(os.environ.get("NNMIL_NUM_WORKERS", "8")),
 }
 
 NNMIL_MODEL_RUNTIME_OVERRIDES: dict[str, dict[str, int]] = {}

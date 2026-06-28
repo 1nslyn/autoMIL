@@ -147,7 +147,7 @@ def run_single_experiment(
         log_file.close()
 
 
-MAX_WORKERS_PER_GPU = 8
+MAX_WORKERS_PER_GPU = 12
 
 
 def query_gpu_vram(gpu_ids: list[int]) -> dict[int, float]:
@@ -198,7 +198,7 @@ def detect_experiments_per_gpu(
     minimum across all GPUs.  Each worker process pays ~0.5 GB for its
     CUDA context on top of the experiment memory.
 
-    The result is capped at ``MAX_WORKERS_PER_GPU`` (8) to avoid
+    The result is capped at ``MAX_WORKERS_PER_GPU`` (12) to avoid
     excessive process overhead.  Falls back to 1 if ``nvidia-smi`` is
     unavailable.
     """

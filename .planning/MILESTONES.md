@@ -1,5 +1,18 @@
 # Milestones
 
+## v1.1 Bug Fixing (Shipped: 2026-06-12)
+
+**Phases completed:** 6 phases (9–14), 23 plans. **20/20 requirements satisfied.** Full framework test suite green (**1058 passed, 0 failed, 53 skipped**). Milestone audit PASSED (6/6 cross-phase integration seams wired). Branch: `milestone/v1.1-bug-fixing`.
+
+**Key accomplishments:**
+
+- **State & recovery integrity (Phase 9, REC):** single-writer terminal state (`terminal_writer.py` — graph → completed → archive result.json → results.tsv in fixed order); partial-fold recovery on SIGTERM/timeout (interrupted runs report aggregated composite, not `0.0`); canonical result-status vocabulary + `result.schema.json` (partial/termination_reason); budget cells keyed by `(dataset, encoder, mil_model)` so re-parenting doesn't reopen a 6h budget.
+- **Variant application integrity (Phase 10, APL):** registered variants actually apply to the live model through existing open seams (`active_variant.json` → submit copies to node archive → worktree overlay → iris `train.py` importlib dispatch; CLAM_ARGS translation for autobench); loop-opening variants fail loudly (`requires loop opening — deferred (ISSUE-007/RTA)`) instead of silently no-op'ing.
+- **CLI lifecycle & operability (Phase 13, OPS):** `automil cancel` now direct-kills daemon-launched LOCAL jobs by reading pid/pgid from the on-disk running spec (the empty-in-memory-map no-op fixed), PID-reuse-guarded by starttime; new `automil dequeue`; submit transitions existing pending proposals to running; group-level `--project PATH`; `viz start` port config fallback.
+- **Config/run fidelity + scheduling (Phases 11–12, CFG/SCH):** config/snapshot values drive runs (None argparse defaults stop masking them) + per-node `submit --override`; GPU `scheduling_policy` knob (best_fit | least_loaded | round_robin); opt-in editable-install overlay guard + `automil check` warning (D-199 honored).
+- **Housekeeping (Phase 14, DBT):** pre-D-200 `graph.json` legacy round-trip (migrate-on-read, schema_version-gated, idempotent); the 3 tick_cells tests verified-and-guarded (resolved by Phase 9 CR-01); daemon allowlist anchor switched to stable-text matching (ends line-number brittleness); D-208 `clause_11` fixed → **full suite reaches 100% green**.
+- **Quality discipline:** the code-review hard gate caught + closed ship-stoppers in Phases 9/10/12/13 (e.g. cancel's daemon-race + total_proposed drift; OPS-01 PID-reuse on the kill path; variant-overlay propagation). Cross-phase integration audit verified 6/6 seams wired end-to-end (producer/consumer contracts, counter math, command-launch composition).
+
 ## v1.0 F2-readiness framework refactor (Shipped: 2026-05-08)
 
 **Phases completed:** 9 phases, 92 plans, 54 tasks

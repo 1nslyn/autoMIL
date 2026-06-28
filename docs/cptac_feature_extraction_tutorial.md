@@ -126,7 +126,7 @@ head -3 datasets/{DATASET}/normalized_manifest.csv
 The `slide_id` column is a **filename stem with no extension**. Verify it matches your WSI filenames:
 
 ```bash
-ls datasets/{DATASET}/wsi/ | head -3
+ls datasets/CPTAC-GBM/wsi/ | head -3
 # C3L-00001-21.svs
 # C3L-00002-21.svs
 ```
@@ -160,11 +160,12 @@ echo "WSI count: $(ls datasets/{DATASET}/wsi/*.svs | wc -l)"
 
 Fill in your row in the [TCGA-CPTAC tracking sheet](https://docs.google.com/spreadsheets/d/1DVzgG7EfkQwOw-hjWqI8gwagAzdG9jG-fR8z7-IDbEk/edit?gid=994979686#gid=994979686):
 - Fill in **DOI**, **Radiology** and **Pathology** columns, **License**, other dataset metadata
-- In the **Tasks** cell, list each task with its class distribution. Format: `task_name (total: pos vs neg)`, one per line. Example:
+- In the **Tasks** cell, list each task with its class distribution. Format: `task_name (total: N vs N vs ...)`, one per line. Example:
 
 ```
-BAP1_mutation (103: 20 vs 83)
+BAP1_mutation (103: 83 vs 20)
 VHL_mutation (103: 51 vs 52)
+IMMUNE_CLASS (243: 71 vs 90 vs 82)
 ```
 
 Compute from the manifest:
@@ -177,9 +178,9 @@ for col in df.columns:
     if col.endswith('_binary'):
         task = col.replace('_binary', '')
         total = int(df[col].notna().sum())
-        pos = int((df[col] == 1).sum())
-        neg = int((df[col] == 0).sum())
-        print(f'{task} ({total}: {pos} vs {neg})')
+        counts = df[col].value_counts(dropna=True).sort_index()
+        breakdown = ' vs '.join(f'{c}' for v, c in counts.items())
+        print(f'{task} ({total}: {breakdown})')
 "
 ```
 

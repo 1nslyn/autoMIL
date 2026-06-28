@@ -12,7 +12,7 @@
 #   sbatch benchmarks/scripts/submit_feature_extraction.sh tcga_luad --models virchow2 --skip_seg
 
 #SBATCH --job-name=wsi_extract
-#SBATCH --account=def-wanglab
+#SBATCH --account=rrg-jma
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -24,6 +24,8 @@
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=leo.yin@mail.utoronto.ca
 #SBATCH --exclude=fc10512
+
+set -uo pipefail
 
 # ==================== DATASET ARG ====================
 DATASET="${1:?Usage: sbatch $0 <dataset>  (e.g., clwd, ccrcc, ovarian)}"

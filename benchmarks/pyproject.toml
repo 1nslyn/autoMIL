@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "MIL benchmark suite for computational pathology — demonstrates autoMIL across multiple datasets"
 requires-python = ">=3.10"
 dependencies = [
+    "automil",
     "trident",
+    "torch>=2.2",
     "python-dotenv",
     "transformers>=4.35,<5",
     "scikit-learn>=1.3",
@@ -29,6 +31,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
+automil = { workspace = true }
 trident = { path = "lib/TRIDENT", editable = true }
 
 [tool.hatch.metadata]
@@ -39,6 +42,9 @@ packages = ["src/autobench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "workstation: requires workstation with data + GPU; skipped in CI",
+]
 
 [dependency-groups]
 dev = [

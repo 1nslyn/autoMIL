@@ -158,15 +158,15 @@ class TestNnmilModels:
 
 class TestNnmilRuntimeOverrides:
     def test_default_overrides_include_num_workers(self):
-        assert NNMIL_RUNTIME_DEFAULTS["num_workers"] == 0
+        assert NNMIL_RUNTIME_DEFAULTS["num_workers"] == 8
 
     def test_any_model_gets_defaults_only(self):
         # NNMIL_MODEL_RUNTIME_OVERRIDES is empty post-Level-D revert; every
         # model_type returns just NNMIL_RUNTIME_DEFAULTS.
         cfg = get_nnmil_runtime_overrides("ab_mil")
-        assert cfg == {"num_workers": 0}
+        assert cfg == {"num_workers": 8}
         cfg = get_nnmil_runtime_overrides("vision_transformer")
-        assert cfg == {"num_workers": 0}
+        assert cfg == {"num_workers": 8}
 
     def test_registry_keys_are_valid_nnmil_models(self, registries):
         for model_type in NNMIL_MODEL_RUNTIME_OVERRIDES:

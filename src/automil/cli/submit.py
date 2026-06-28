@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from datetime import datetime
@@ -26,7 +27,7 @@ from automil.cli._helpers import (
 @click.option("--files", multiple=True, help="Files to snapshot (auto-detect if omitted)")
 @click.option("--priority", default=1, help="Priority (lower = higher)")
 @click.option("--vram", default=0.5, help="Estimated VRAM in GB")
-@click.option("--timeout", default=150, help="Timeout in minutes")
+@click.option("--timeout", default=None, type=int, help="Timeout in minutes (default: orchestrator.default_timeout_min from config.yaml)")
 @click.option("--max-time", "max_time_seconds", type=int, default=None,
               help="Override --timeout with seconds-precision (rounded up to 1 min minimum, D-195).")
 @click.option("--parent", default=None, help="Parent node ID")
@@ -35,9 +36,18 @@ from automil.cli._helpers import (
               help="Override cap.budget_seconds for this cell (D-134; honored only on cell creation; ignored on subsequent submits joining an existing cell with logged INFO).")
 @click.option("--safety-buffer-seconds", default=None, type=int,
               help="Override cap.safety_buffer_seconds for this cell (D-134; same scoping as --budget-seconds).")
+@click.option("--mil-model", default=None,
+              help="MIL model identifier for budget cell keying (D-12, REC-04). "
+                   "Resolved: --mil-model flag → run.mil_model in config → "
+                   "propose-time node metadata → ClickException if none found.")
+@click.option("--override", default=None,
+              help="Extra args appended to run.command in the worktree "
+                   "(e.g. '--seed 42 --lr 1e-4'). Suffix-append only — config "
+                   "run.command remains the authoritative base. (D-04, CFG-03)")
 def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
-           timeout: int, max_time_seconds: int | None, parent: str | None, techniques: tuple,
-           budget_seconds: int | None, safety_buffer_seconds: int | None):
+           timeout: int | None, max_time_seconds: int | None, parent: str | None, techniques: tuple,
+           budget_seconds: int | None, safety_buffer_seconds: int | None, mil_model: str | None,
+           override: str | None):
     """Snapshot changed files and queue an experiment.
 
     Variant modules under ``automil/variants/<parent>/<name>.py`` are
@@ -48,12 +58,12 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     """
     # D-195 / RESEARCH.md OQ-5: --max-time SECONDS overrides --timeout MINUTES via ceil-div.
     if max_time_seconds is not None:
-        if max_time_seconds < 0:
+        if max_time_seconds <= 0:
             raise click.ClickException(
-                f"--max-time must be non-negative seconds, got {max_time_seconds}"
+                f"--max-time must be > 0 seconds, got {max_time_seconds}"
             )
         translated = max(1, (max_time_seconds + 59) // 60)
-        if timeout != 150:  # caller passed --timeout explicitly
+        if timeout is not None:  # caller passed --timeout explicitly
             click.echo(
                 f"submit: both --max-time {max_time_seconds}s and --timeout {timeout}m "
                 f"provided; --max-time wins (timeout_min={translated})."
@@ -92,14 +102,30 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                     f"then submit against that new node id."
                 )
     # Also refuse if a spec for this node is already in queue/ or running/.
-    for subdir in ("queue", "running"):
-        conflict = adir / "orchestrator" / subdir / f"{node}.json"
-        if conflict.exists():
-            raise click.ClickException(
-                f"Refusing to submit: {node} is already present in "
-                f"orchestrator/{subdir}/. Wait for it to finish or remove "
-                f"the stale spec file before resubmitting."
-            )
+    # WR-03 fix: since D-169 (Phase 6) running specs are namespaced under
+    # running/<backend>/. The flat path orchestrator/running/<node>.json never
+    # exists, making the running-spec conflict check permanently ineffective for
+    # all experiments and allowing resubmit to silently overwrite completed nodes.
+    # Fix: check queue/ with the flat path (unchanged), then iterate all backend
+    # subdirs under running/ for the running-spec check.
+    queue_conflict = adir / "orchestrator" / "queue" / f"{node}.json"
+    if queue_conflict.exists():
+        raise click.ClickException(
+            f"Refusing to submit: {node} is already present in "
+            f"orchestrator/queue/. Wait for it to finish or remove "
+            f"the stale spec file before resubmitting."
+        )
+    running_root = adir / "orchestrator" / "running"
+    if running_root.exists():
+        for backend_dir in running_root.iterdir():
+            if backend_dir.is_dir():
+                running_conflict = backend_dir / f"{node}.json"
+                if running_conflict.exists():
+                    raise click.ClickException(
+                        f"Refusing to submit: {node} is currently running in "
+                        f"orchestrator/running/{backend_dir.name}/. Wait for it "
+                        f"to finish or remove the stale spec file before resubmitting."
+                    )
 
     # Guard against submitting a child before its parent has completed.
     # If the parent is still a pending/running proposal, the Pareto-dominance
@@ -303,41 +329,109 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     _automil_cfg = yaml.safe_load((adir / "config.yaml").read_text()) if (adir / "config.yaml").exists() else {}
     _backend_name: str = _automil_cfg.get("backend", {}).get("name", "local")
 
-    # D-134: Resolve cap defaults with 3-tier precedence — CLI flag > config > framework fallback.
-    _cap_cfg = _automil_cfg.get("cap", {}) if isinstance(_automil_cfg, dict) else {}
-    _resolved_budget = budget_seconds if budget_seconds is not None else int(_cap_cfg.get("budget_seconds", 21600))
-    _resolved_buffer = safety_buffer_seconds if safety_buffer_seconds is not None else int(_cap_cfg.get("safety_buffer_seconds", 1800))
-    if _resolved_budget <= 0:
-        raise click.ClickException(f"--budget-seconds must be > 0 (got {_resolved_budget})")
-    if not (0 < _resolved_buffer < _resolved_budget):
+    # D-134 + P2.3: Resolve cap config — CLI flag > cap.<key> duration >
+    # legacy cap.<key>_seconds int > framework fallback. Honored only on the
+    # submit that opens the cell.
+    from automil.cells.capconfig import resolve_cap_config  # noqa: E402
+    try:
+        _cap = resolve_cap_config(
+            _automil_cfg,
+            budget_override=budget_seconds,
+            buffer_override=safety_buffer_seconds,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    if _cap.budget_seconds <= 0:
+        raise click.ClickException(f"budget must be > 0 (got {_cap.budget_seconds}s)")
+    if not (0 < _cap.safety_buffer_seconds < _cap.budget_seconds):
         raise click.ClickException(
-            f"--safety-buffer-seconds must satisfy 0 < buffer < budget "
-            f"(got buffer={_resolved_buffer}, budget={_resolved_budget})"
+            f"safety buffer must satisfy 0 < buffer < budget "
+            f"(got buffer={_cap.safety_buffer_seconds}s, budget={_cap.budget_seconds}s)"
         )
 
     # D-116: Cell refusal hook — call get_or_create_cell BEFORE writing the queue spec.
     # metadata.cell_id is the cap-membership tag the daemon reads to count in-cell experiments.
     from automil.cells import get_or_create_cell, is_refusing_new, consumed_seconds  # noqa: E402
 
-    _dataset_name = ((_automil_cfg.get("dataset") or {}).get("name", "unknown")
-                     if isinstance(_automil_cfg, dict) else "unknown")
-    _encoder_name = ((_automil_cfg.get("encoder") or {}).get("name", "unknown")
-                     if isinstance(_automil_cfg, dict) else "unknown")
-    _parent_for_cell = parent if parent else "root"
+    # Cell identity: key the cap-cell by the optimization target. Real configs
+    # expose this via project.name (dataset+task) and encoders.primary — NOT
+    # top-level dataset/encoder, which never existed in any shipped config and
+    # silently collapsed every cell to (unknown, unknown), defeating per-lineage
+    # budget enforcement. Prefer the real schema; keep legacy keys as fallback.
+    def _cfg_path(cfg: object, *keys: str) -> str | None:
+        cur = cfg
+        for k in keys:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(k)
+        return cur if isinstance(cur, str) and cur.strip() else None
+
+    _dataset_name = (
+        _cfg_path(_automil_cfg, "project", "name")
+        or _cfg_path(_automil_cfg, "dataset", "name")  # legacy schema
+        or _cfg_path(_automil_cfg, "task", "name")
+        or "unknown"
+    )
+    _encoder_name = (
+        _cfg_path(_automil_cfg, "encoders", "primary")
+        or _cfg_path(_automil_cfg, "encoder", "name")  # legacy schema
+        or "unknown"
+    )
+    if _dataset_name == "unknown" or _encoder_name == "unknown":
+        click.echo(
+            f"  warning: cell identity falling back to (dataset={_dataset_name}, "
+            f"encoder={_encoder_name}); set project.name and encoders.primary in "
+            f"config.yaml so per-lineage budgets key correctly.",
+            err=True,
+        )
+    # D-12 (REC-04): resolve mil_model — flag → config → propose node metadata → error.
+    _mil_model_raw = (
+        mil_model                                                          # --mil-model flag
+        or (_automil_cfg.get("run") or {}).get("mil_model")               # config fallback
+        or (graph_json.get("nodes", {}).get(node) or {})
+           .get("metadata", {}).get("mil_model")                          # propose-time metadata
+    )
+    if not _mil_model_raw:
+        raise click.ClickException(
+            "--mil-model is required (or set run.mil_model in config.yaml, or pass it "
+            "at propose time with automil propose --mil-model). This pins the budget cell "
+            "to a specific MIL model so re-parenting does not open a fresh budget. (D-12, REC-04)"
+        )
+    from automil.cells.state import normalize_mil_model
+    _mil_model_norm = normalize_mil_model(_mil_model_raw)
 
     _cell = get_or_create_cell(
         dataset=_dataset_name,
         encoder=_encoder_name,
-        parent_id=_parent_for_cell,
-        budget_seconds=_resolved_budget,
-        safety_buffer_seconds=_resolved_buffer,
+        mil_model=_mil_model_norm,
+        budget_seconds=_cap.budget_seconds,
+        safety_buffer_seconds=_cap.safety_buffer_seconds,
+        idle_grace_seconds=_cap.idle_grace_seconds,
+        mode=_cap.mode,
     )
     if is_refusing_new(_cell):
         raise click.ClickException(
             f"Cell {_cell.cell_id[:8]} is {_cell.status.value}: budget exhausted "
             f"({consumed_seconds(_cell):.0f}/{_cell.budget_seconds}s consumed). "
             f"Wait for cell to finalize, or submit with a different "
-            f"(dataset={_dataset_name}, encoder={_encoder_name}, parent_id={_parent_for_cell}) tuple."
+            f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
+        )
+
+    # CR-01 fix: propagate active_variant.json into this node's archive directory
+    # as applied_variant.json so apply_overlay carries it into the worktree.
+    # apply_overlay copies every file from overlay_dir (= archive/<node>/),
+    # excluding only spec.json, run.log, and result.json (runner.py line 70).
+    # active_variant.json is written by `automil apply` BEFORE `automil submit`
+    # runs, so by the time we reach here the file is either present (user ran
+    # `apply` before this submit) or absent (no variant selected — no-op).
+    _active_variant_path = adir / "active_variant.json"
+    if _active_variant_path.exists():
+        import shutil as _shutil
+        _applied_dst = archive / "applied_variant.json"
+        _shutil.copy2(str(_active_variant_path), str(_applied_dst))
+        click.echo(
+            f"  [variant] Copied active_variant.json → archive/{node}/applied_variant.json"
+            f" (will be overlaid into worktree by orchestrator)."
         )
 
     # Write spec to queue
@@ -350,7 +444,6 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         "deletions": deletions,
         "priority": priority,
         "estimated_vram_gb": vram,
-        "timeout_min": timeout,
         "graph_metadata": {
             "parent_id": parent,
             "techniques": list(techniques),
@@ -358,6 +451,22 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         },
         "submitted_at": datetime.now().isoformat(),
     }
+    # D-02: only write timeout_min when explicitly supplied; daemon falls back to
+    # orchestrator.default_timeout_min (config.yaml) when the key is absent.
+    if timeout is not None:
+        spec["timeout_min"] = timeout
+    # D-04 (CFG-03): write per-node run-command override suffix into spec.
+    # WR-01 fix: validate shlex.split() at submit time so malformed quotes
+    # raise a ClickException immediately rather than crashing the daemon at
+    # launch time (after the spec has already been dequeued).
+    if override is not None:
+        try:
+            shlex.split(override)
+        except ValueError as exc:
+            raise click.ClickException(
+                f"--override contains unbalanced quotes and cannot be parsed: {exc}"
+            ) from exc
+        spec["run_command_override"] = override
     spec.setdefault("metadata", {})["backend"] = _backend_name
     # D-97: write metadata.runtime so orchestrator + cancel.py know which
     # runtime made this submission. AUTOMIL_RUNTIME is set by the agent runtime
@@ -408,6 +517,22 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 # Transition to running through the official state-machine
                 # path so the counter math stays consistent.
                 graph.mark_running(allocated)
+            else:
+                # OPS-03 (D-06): existing node that already exists as
+                # type=proposed, status=pending transitions to running here.
+                # Without this else branch, mark_running is never called for
+                # pre-existing pending proposals, leaving the graph stuck in
+                # pending state while the queue spec is already written.
+                # mark_running is already type/status-guarded (graph.py:280) —
+                # it logs a warning and returns False for any other state, so
+                # this branch is safe to call unconditionally on any existing node.
+                existing = graph.get_node(node)
+                if (
+                    existing
+                    and existing.get("type") == "proposed"
+                    and existing.get("status") == "pending"
+                ):
+                    graph.mark_running(node)
 
     n_snap = len(overlay_manifest)
     n_del = len(deletions)

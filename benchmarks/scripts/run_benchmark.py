@@ -24,6 +24,16 @@ uv run python benchmarks/scripts/run_benchmark.py --dataset ovarian --frameworks
 
 from __future__ import annotations
 
+# Pin cuBLAS workspace BEFORE torch imports so CUDA contexts pick it up at
+# creation time. nnMIL's set_random_seeds sets this same value mid-process,
+# but cuBLAS only reads CUBLAS_WORKSPACE_CONFIG at context init — so a CLAM
+# experiment that runs before any nnMIL one in the same process otherwise
+# gets a different workspace and picks different (non-deterministic) kernels.
+# Setting it here makes every experiment in this process see the same value
+# from epoch 0, regardless of framework execution order.
+import os as _os
+_os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import argparse
 import os
 import sys

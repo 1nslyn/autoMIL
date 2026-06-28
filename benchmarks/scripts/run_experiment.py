@@ -29,6 +29,14 @@ import torch
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
+# autoMIL overlay fix (ISSUE-010 / ISSUE-021): prepend THIS checkout's benchmarks/src so the
+# co-located autobench (and its LIB_ROOT -> lib/CLAM) wins over the editable install. Without
+# this, a worktree run imports autobench + CLAM from the MAIN repo and every overlay to
+# benchmarks/src or benchmarks/lib is silently ignored (the orchestrator stopped injecting
+# the worktree PYTHONPATH in D-199).
+import sys as _sys
+_sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+
 from automil.runtime_helpers import register_sigterm_flush
 from autobench.config import load_dataset_config
 from autobench.pipeline.config import (
@@ -57,13 +65,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gpu", type=int, default=None,
                    help="GPU index (default: AUTOMIL_GPU or 0)")
 
-    # Training overrides
-    p.add_argument("--max_epochs", type=int, default=200)
-    p.add_argument("--lr", type=float, default=1e-4)
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--n_folds", type=int, default=5)
-    p.add_argument("--patience", type=int, default=20)
-    p.add_argument("--stop_epoch", type=int, default=50)
+    # Training overrides — default=None so dataclass defaults are honored when not supplied (CFG-01 / D-01)
+    p.add_argument("--max_epochs", type=int, default=None)
+    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--n_folds", type=int, default=None)
+    p.add_argument("--patience", type=int, default=None)
+    p.add_argument("--stop_epoch", type=int, default=None)
     p.add_argument("--no_wandb", action="store_true")
 
     return p.parse_args()
@@ -164,13 +172,16 @@ def main() -> None:
         args.model, ModelConfig(model_type=args.model)
     )
 
-    train_cfg = TrainConfig(
-        max_epochs=args.max_epochs,
-        lr=args.lr,
-        seed=args.seed,
-        patience=args.patience,
-        stop_epoch=args.stop_epoch,
-    )
+    # CFG-01 / D-01: only pass training-override args that were explicitly supplied on the CLI.
+    # When a flag is absent, args.<flag> is None and the TrainConfig dataclass default is honored.
+    _train_overrides = {k: v for k, v in {
+        "max_epochs": args.max_epochs,
+        "lr": args.lr,
+        "seed": args.seed,
+        "patience": args.patience,
+        "stop_epoch": args.stop_epoch,
+    }.items() if v is not None}
+    train_cfg = TrainConfig(**_train_overrides)
 
     # Resolve survival loss for survival tasks (CLI override, else first
     # configured variant). Stays None for classification.
@@ -180,17 +191,40 @@ def main() -> None:
             task_cfg.survival_losses[0] if task_cfg.survival_losses else "cox"
         )
 
+    # CFG-01 / D-01: pass n_folds only when explicitly supplied; otherwise ExperimentConfig.n_folds applies.
+    _exp_kwargs = {}
+    if args.n_folds is not None:
+        _exp_kwargs["n_folds"] = args.n_folds
     exp_cfg = ExperimentConfig(
         task=task_cfg,
         encoder_key=args.encoder,
         embed_dim=embed_dim,
         model=model_cfg,
         train=train_cfg,
-        n_folds=args.n_folds,
         framework=framework,
         strategy=args.strategy,
         survival_loss=survival_loss,
+        **_exp_kwargs,
     )
+
+    # APL-02: apply registered model variant (if any) to exp_cfg before training.
+    # Reads automil/applied_variant.json (written by `automil apply` and propagated
+    # into the worktree by apply_overlay). No-op when no variant is selected or
+    # when running outside autoMIL (applied_variant.json absent).
+    from pathlib import Path as _Path
+    from autobench.pipeline.variant_dispatch import apply_model_variant_to_exp_cfg
+    _automil_dir = _Path("automil")
+    # WR-03: warn when automil/ is absent so the operator knows variant dispatch
+    # is skipped.  This happens on manual invocations from any directory that is
+    # not the worktree root; under the orchestrator the cwd is always the worktree
+    # root so automil/ is always present.
+    if not _automil_dir.exists():
+        print(
+            f"[automil] WARNING: automil/ directory not found in cwd "
+            f"({os.getcwd()}); variant dispatch skipped (running baseline).",
+            flush=True,
+        )
+    apply_model_variant_to_exp_cfg(exp_cfg, _automil_dir)
 
     benchmark_dir = ds.benchmark_dir
 
@@ -214,7 +248,7 @@ def main() -> None:
         encoder_keys=[args.encoder],
         ds=ds,
         seed=train_cfg.seed,
-        n_splits=args.n_folds,
+        n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
     )
 
     # Run the experiment
@@ -239,7 +273,7 @@ def main() -> None:
             features_base_dir=ds.features_base_dir,
             dataset_name=ds.name,
             seed=train_cfg.seed,
-            n_splits=args.n_folds,
+            n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
             task_type=task_cfg.task_type,
             event_col=task_cfg.event_col,
             time_col=task_cfg.time_col,

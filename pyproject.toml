@@ -16,7 +16,8 @@ dependencies = [
     "click>=8.1",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
-    "torch>=2.10.0",
+    # torch is intentionally NOT a core dependency: the framework stays importable
+    # without torch (D-24 / Plan 01-01 invariant). Torch lives in the [ml] extra.
     "scipy>=1.11",      # D-141 GTE-04: paired Wilcoxon + bootstrap CI (gate stats)
     "jsonschema>=4.18",  # D-201 DEC-03: result.json schema validation
 ]
@@ -44,6 +45,7 @@ markers = [
     "requires_slurm: requires SLURM cluster (skip in CI; nightly only)",
     "requires_ray: requires real Ray cluster (skip in CI; nightly only)",
     "requires_ccrcc_data: requires real CCRCC dataset at AUTOBENCH_CCRCC_ROOT (workstation only)",
+    "workstation: requires workstation with data + GPU; skipped in CI",
 ]
 
 [dependency-groups]

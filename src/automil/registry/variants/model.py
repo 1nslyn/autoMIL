@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, ClassVar, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Type-only import — keeps this module loadable without torch installed
@@ -28,6 +28,34 @@ class ModelVariant(ABC):
     framework type. CLAM, for example, returns `(logits, Y_prob, Y_hat,
     instance_dict)`; sklearn-iris (Phase 8 / DEC-02) returns its own shape.
     The parent's wrapper code in `train.py` is responsible for any conversion.
+
+    Optional consumer-specific class attributes
+    -------------------------------------------
+
+    CLAM_ARGS : ClassVar[dict]
+        Optional class-level dict convention for consumers that apply variants
+        via an argument-passing seam (e.g. a ``SimpleNamespace`` of training
+        args).  The consumer-side dispatch layer reads this attribute via
+        ``getattr(cls, "CLAM_ARGS", {})`` and patches the relevant experiment
+        config fields before the training call.
+
+        Example::
+
+            class MyClamVariant(ModelVariant):
+                CLAM_ARGS: ClassVar[dict] = {
+                    "model_size": "big",
+                    "dropout": 0.5,
+                    "bag_weight": 0.8,
+                    "B": 16,
+                }
+
+        Keys that match ``ModelConfig`` fields are applied to the model config;
+        keys that match ``TrainConfig`` fields (e.g. ``"lr"``) are applied to
+        the train config. Unknown keys are logged as warnings and skipped.
+
+        Defaults to ``{}`` when absent — existing subclasses are unaffected.
+        This is NOT an abstract requirement; consumer-side translation is
+        optional and lives outside this framework module (D-206).
     """
 
     @abstractmethod
