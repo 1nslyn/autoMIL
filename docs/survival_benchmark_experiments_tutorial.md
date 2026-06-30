@@ -140,11 +140,11 @@ task_strategy_feasibility:
 
 In the benchmark tracking [sheet](https://docs.google.com/spreadsheets/d/1DVzgG7EfkQwOw-hjWqI8gwagAzdG9jG-fR8z7-IDbEk/edit?gid=0#gid=0), record the **OS** task in the format **`OS (total: event, non-event, not reported)`** — the total number of patients followed by the per-bucket headcounts, always in the order **event, non-event, not reported**:
 
-| Bucket           | Condition         | Meaning                                                |
-| ---------------- | ----------------- | ------------------------------------------------------ |
-| **event**        | `OS_event == 1`   | Death observed (Dead)                                  |
-| **non-event**    | `OS_event == 0`   | Censored — alive at last follow-up                     |
-| **not reported** | `OS_event` is NaN | Missing vital status / follow-up (dropped by the task) |
+| Bucket           | Condition                          | Meaning                                                      |
+| ---------------- | ---------------------------------- | ------------------------------------------------------------ |
+| **event**        | `OS_event == 1` and `OS_time` set  | Death observed (Dead) with a known time                      |
+| **non-event**    | `OS_event == 0` and `OS_time` set  | Censored — alive at a known last follow-up                    |
+| **not reported** | `OS_event` **or** `OS_time` is NaN | Missing vital status or follow-up/death time — dropped by the task |
 
 Count at the **patient (case) level**, not slides — survival is patient-stratified and the c-index is patient-level, so one patient with several slides is one event:
 
@@ -153,9 +153,10 @@ uv run --package autobench python -c "
 import pandas as pd
 df = pd.read_csv('datasets/{DATASET}/normalized_manifest.csv')
 pt  = df.drop_duplicates('case_id')
-ev   = int((pt.OS_event == 1).sum())
-non  = int((pt.OS_event == 0).sum())
-miss = int(pt.OS_event.isna().sum())
+tr   = pt.dropna(subset=['OS_event', 'OS_time'])   # cohort the survival task actually trains on
+ev   = int((tr.OS_event == 1).sum())
+non  = int((tr.OS_event == 0).sum())
+miss = len(pt) - len(tr)                           # dropped by the task: missing event OR time
 print(f'OS (total {len(pt)}: event {ev}, non-event {non}, not reported {miss})')
 "
 ```
@@ -168,7 +169,7 @@ OS (total 103: event 21, non-event 82, not reported 0)
 
 So the sheet's OS cell reads **`OS (total 103: event 21, non-event 82, not reported 0)`**.
 
-> Patient- and slide-level counts differ — CPTAC-CCRCC is `event 21, non-event 82, not reported 0` per patient but `52, 193, 0` per slide (Step 1.2's manifest output is slide-level). **Record the patient-level totals in the sheet.** The not-reported count is patients dropped by the survival task's `dropna` on event/time, so the trained cohort is event + non-event.
+> Patient- and slide-level counts differ — CPTAC-CCRCC is `event 21, non-event 82, not reported 0` per patient but `52, 193, 0` per slide (Step 1.2's manifest output is slide-level). **Record the patient-level totals in the sheet.** **not reported** counts every patient the survival task's `dropna` removes — those missing *either* a vital status (`OS_event` NaN) *or* a follow-up/death time (`OS_time` NaN) — so **event + non-event always equals the trained cohort**. This is why not-reported can exceed the raw "Not Reported" vital-status count: TCGA-LGG records `OS (total 491: event 114, non-event 332, not reported 45)` — only 1 patient has an unknown vital status, but 44 more lack a usable time and are dropped too, leaving 446 trained.
 
 ## Understanding the Pipeline
 
@@ -429,7 +430,7 @@ Expected. Survival has no classification metrics; the c-index lives in the `test
 | Step                 | Command                                                                                                                                                                                                                                                                                                      |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Add OS labels        | `uv run python benchmarks/scripts/add_os_to_manifest.py --manifest datasets/{DATASET}/normalized_manifest.csv --clinical datasets/{DATASET}/clinical.tsv`                                                                                                                                                    |
-| OS counts for sheet  | `uv run --package autobench python -c "import pandas as pd; p=pd.read_csv('datasets/{DATASET}/normalized_manifest.csv').drop_duplicates('case_id'); print(f'OS (total {len(p)}: event {int((p.OS_event==1).sum())}, non-event {int((p.OS_event==0).sum())}, not reported {int(p.OS_event.isna().sum())})')"` |
+| OS counts for sheet  | `uv run --package autobench python -c "import pandas as pd; p=pd.read_csv('datasets/{DATASET}/normalized_manifest.csv').drop_duplicates('case_id'); t=p.dropna(subset=['OS_event','OS_time']); print(f'OS (total {len(p)}: event {int((t.OS_event==1).sum())}, non-event {int((t.OS_event==0).sum())}, not reported {len(p)-len(t)})')"` |
 | Verify survival task | `uv run python -c "from autobench.config import load_dataset_config as L; print(L('{dataset}').tasks['os'].task_type)"`                                                                                                                                                                                      |
 | Single experiment    | `uv run python benchmarks/scripts/run_benchmark.py --dataset {dataset} --tasks os --frameworks clam --encoders uni_v2 --gpu 0 --no_wandb`                                                                                                                                                                    |
 | Full nnMIL run       | `uv run python benchmarks/scripts/run_benchmark.py --dataset {dataset} --tasks os --frameworks nnmil --all_gpus --no_wandb`                                                                                                                                                                                  |
