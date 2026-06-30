@@ -1,8 +1,9 @@
 """Add OS_event / OS_time columns to a GDC-derived normalized_manifest.csv.
 
 Joins overall-survival labels from a GDC clinical export (`clinical.tsv`) onto
-the manifest by `case_id`. Works for any GDC program (CPTAC, TCGA, ...) — the
-GDC clinical schema is shared.
+the manifest by its case-id column (`--case-col`, default `case_id`; TCGA
+manifests key on `sample_names`). Works for any GDC program (CPTAC, TCGA, ...) —
+the GDC clinical schema is shared.
 
 Mapping (per case, from `demographic.vital_status`):
   Dead          -> OS_event=1, OS_time=days_to_death
@@ -64,16 +65,25 @@ def main() -> None:
     parser.add_argument("--manifest", required=True, help="Path to normalized_manifest.csv")
     parser.add_argument("--clinical", required=True, help="Path to GDC clinical.tsv")
     parser.add_argument("--output", default=None, help="Output path (default: overwrite manifest)")
+    parser.add_argument(
+        "--case-col",
+        default="case_id",
+        help="Manifest column holding the GDC case submitter_id to join on "
+        "(default: case_id; TCGA manifests use sample_names)",
+    )
     args = parser.parse_args()
 
     manifest = pd.read_csv(args.manifest)
-    if "case_id" not in manifest.columns:
-        raise ValueError(f"manifest has no 'case_id' column; found {list(manifest.columns)}")
+    case_col = args.case_col
+    if case_col not in manifest.columns:
+        raise ValueError(f"manifest has no {case_col!r} column; found {list(manifest.columns)}")
 
     os_table = build_os_table(args.clinical)
 
     before = len(manifest)
-    merged = manifest.merge(os_table, on="case_id", how="left")
+    merged = manifest.merge(
+        os_table.rename(columns={"case_id": case_col}), on=case_col, how="left"
+    )
     if len(merged) != before:
         raise RuntimeError(
             f"Row count changed after merge ({before} -> {len(merged)}); "
@@ -90,7 +100,7 @@ def main() -> None:
 
     if n_event + n_censored == 0:
         print(
-            "  WARNING: no cases matched — check that the manifest's 'case_id' "
+            f"  WARNING: no cases matched — check that the manifest's {case_col!r} "
             "matches the GDC 'cases.submitter_id' format."
         )
     n_nonpos = int((merged["OS_time"] <= 0).sum())
