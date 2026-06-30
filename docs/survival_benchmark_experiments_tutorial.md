@@ -136,6 +136,40 @@ task_strategy_feasibility:
   os: ["standard"]
 ```
 
+### Step 1.5: Record the OS task counts for the benchmark sheet
+
+In the benchmark tracking [sheet](https://docs.google.com/spreadsheets/d/1DVzgG7EfkQwOw-hjWqI8gwagAzdG9jG-fR8z7-IDbEk/edit?gid=0#gid=0), record the **OS** task in the format **`OS (total <N>: event <e>, non-event <n>, not reported <m>)`** — the total number of patients followed by the per-bucket headcounts, always in the order **event, non-event, not reported**:
+
+| Bucket           | Condition         | Meaning                                                |
+| ---------------- | ----------------- | ------------------------------------------------------ |
+| **event**        | `OS_event == 1`   | Death observed (Dead)                                  |
+| **non-event**    | `OS_event == 0`   | Censored — alive at last follow-up                     |
+| **not reported** | `OS_event` is NaN | Missing vital status / follow-up (dropped by the task) |
+
+Count at the **patient (case) level**, not slides — survival is patient-stratified and the c-index is patient-level, so one patient with several slides is one event:
+
+```bash
+uv run --package autobench python -c "
+import pandas as pd
+df = pd.read_csv('datasets/{DATASET}/normalized_manifest.csv')
+pt  = df.drop_duplicates('case_id')
+ev   = int((pt.OS_event == 1).sum())
+non  = int((pt.OS_event == 0).sum())
+miss = int(pt.OS_event.isna().sum())
+print(f'OS (total {len(pt)}: event {ev}, non-event {non}, not reported {miss})')
+"
+```
+
+Example for CPTAC-CCRCC (103 patients / 245 slides):
+
+```
+OS (total 103: event 21, non-event 82, not reported 0)
+```
+
+So the sheet's OS cell reads **`OS (total 103: event 21, non-event 82, not reported 0)`**.
+
+> Patient- and slide-level counts differ — CPTAC-CCRCC is `event 21, non-event 82, not reported 0` per patient but `52, 193, 0` per slide (Step 1.2's manifest output is slide-level). **Record the patient-level totals in the sheet.** The not-reported count is patients dropped by the survival task's `dropna` on event/time, so the trained cohort is event + non-event.
+
 ## Understanding the Pipeline
 
 The benchmark pipeline has four phases, all handled automatically by the runner:
@@ -395,6 +429,7 @@ Expected. Survival has no classification metrics; the c-index lives in the `test
 | Step                 | Command                                                                                                                                                   |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Add OS labels        | `uv run python benchmarks/scripts/add_os_to_manifest.py --manifest datasets/{DATASET}/normalized_manifest.csv --clinical datasets/{DATASET}/clinical.tsv` |
+| OS counts for sheet  | `uv run --package autobench python -c "import pandas as pd; p=pd.read_csv('datasets/{DATASET}/normalized_manifest.csv').drop_duplicates('case_id'); print(f'OS (total {len(p)}: event {int((p.OS_event==1).sum())}, non-event {int((p.OS_event==0).sum())}, not reported {int(p.OS_event.isna().sum())})')"` |
 | Verify survival task | `uv run python -c "from autobench.config import load_dataset_config as L; print(L('{dataset}').tasks['os'].task_type)"`                                   |
 | Single experiment    | `uv run python benchmarks/scripts/run_benchmark.py --dataset {dataset} --tasks os --frameworks clam --encoders uni_v2 --gpu 0 --no_wandb`                 |
 | Full nnMIL run       | `uv run python benchmarks/scripts/run_benchmark.py --dataset {dataset} --tasks os --frameworks nnmil --all_gpus --no_wandb`                               |
