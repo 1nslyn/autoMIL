@@ -20,48 +20,33 @@ not slide count — `tasks/baseline_summary/REPORT.md`'s 53–1000 slide range
 runtime. SLURM `sacct` history on `fir.alliancecan.ca` would have real
 wall-clock per cohort if useful — say the word and I'll pull it.
 
-### 2. Model roster: expand from 2 to 4 (or 5) MIL aggregators
+### 2. Model roster: expand from 2 to 4 MIL aggregators
 
 Baseline reporting today filters to one canonical head per framework
 (`clam_mb`, `simple_mil` — [`../../tasks/baseline_summary/README.md`](../../tasks/baseline_summary/README.md)
 §Scope). A citation-ranking literature study (PDF not yet in this
 repo) put the top candidates at **DTFD-MIL, DSMIL, AB-MIL, TransMIL**.
 
-**Confirmed: AB-MIL + DTFD-MIL are in**, bringing the roster to
-`clam_mb, simple_mil, ab_mil, dtfd_mil` — the confirmed set of 4.
+**Confirmed: 4 models total** — `clam_mb, simple_mil, ab_mil, dtfd_mil`.
+AB-MIL and DTFD-MIL are the two additions. **DSMIL is out** — the roster is
+held at 4, not expanded to 5.
 
-**Open question: add DSMIL too (making it 5)?** My read:
-
-- **Lean yes, if the compute budget stretches to it.** `ds_mil` is already in
-  the `nnmil_models` list for every dataset (same "already wired in, zero
-  extra integration" situation as ab_mil/dtfd_mil), and it buys something
-  specific: **exact aggregator-parity with the Frontiers embedding-choice
-  paper's trio (ABMIL/DSMIL/TransMIL — §3 below)**, which is the reference
-  paper for the encoder>aggregator point. Matching their aggregator
-  set turns "we also noticed encoder matters more than aggregator" into a
-  directly citable, apples-to-apples replication rather than a parallel
-  anecdote.
-- **If holding the line at exactly 4 matters more than that**, I'd swap
-  **DSMIL in for DTFD-MIL**, not for AB-MIL: AB-MIL is non-negotiable as the
-  literal model-matched control for GOLDMARK's plain-GMA aggregator (see
-  Phase B in the shared background), and DSMIL is the one with a direct
-  citation in the Frontiers comparison — DTFD-MIL, while highly cited
-  generally, doesn't buy a specific comparison point the way AB-MIL and DSMIL
-  do.
-- Either way this is a compute-budget call, not a technical
-  blocker — `ds_mil` needs zero new engineering either way.
-
-**Practically cheap regardless of final count:** all four candidates already
-appear in every dataset's `nnmil_models` list (e.g.
+**Partly cheap, but not uniformly free:** both additions are already wired
+into every dataset's `nnmil_models` list (e.g.
 [`../../benchmarks/datasets/ovarian.yaml`](../../benchmarks/datasets/ovarian.yaml):
-`ab_mil, trans_mil, ds_mil, dtfd_mil, ...`) and the baseline README notes these
-heads "exist on disk for some datasets" already — they were deliberately
-*excluded* from the cross-dataset report for apples-to-apples cleanliness, not
-un-implemented. Expanding the roster is likely mostly a
-**re-aggregation/re-report** job (confirm coverage, fill gaps, re-run
-`scripts/00_aggregate.py`+`01_tables.py` with the wider `KEEP_AND_RENAME` map),
-not new model integration — but this needs verifying per dataset before
-assuming it's free.
+`ab_mil, trans_mil, ds_mil, dtfd_mil, ...`), so neither needs new model
+integration. But "wired in" is not the same as "already run":
+- **`ab_mil`** results already exist on disk — the baseline README lists it
+  among heads "found on disk" that were deliberately *excluded* from the
+  cross-dataset report for apples-to-apples cleanliness. Adding it is just a
+  **re-aggregation/re-report** job (re-run `scripts/00_aggregate.py` +
+  `01_tables.py` with a wider `KEEP_AND_RENAME` map).
+- **`dtfd_mil`** is *not* in that on-disk list, so it likely still needs
+  actual training runs per dataset before it can be aggregated.
+
+So expanding the roster is a mix of free re-reporting (`ab_mil`) and real
+compute (`dtfd_mil`) — needs a per-dataset coverage check before assuming
+it's all free.
 
 ### 3. Competitive positioning: a feature/coverage table vs. two named papers
 
@@ -88,8 +73,6 @@ differentiator. The two benchmarks named:
   target list, see shared background Phase C) and is also the direct
   precedent for the encoder>aggregator claim surfaced in the
   citation-ranking review.
-- A third paper was also shared (arXiv:2512.14640, task-specific) but not yet
-  analyzed for the comparison table.
 
 **The reference table format.** It's the PathBench-MIL paper's own **Table 1**
 (arXiv:2512.17517), comparing itself against **Patho-Bench**
@@ -162,14 +145,11 @@ preprint scope.
 1. **Final 5-dataset list.** Metric confirmed as **runtime** (not slide
    count). Need actual per-cohort wall-clock numbers to pick which 5 — the
    `sacct` history on `fir.alliancecan.ca` can supply this if useful.
-2. **DSMIL — 5th model or swap-in for DTFD-MIL?** See §2 above. Compute-budget
-   call.
-3. **Comparison table sanity check.** The table was transcribed from the source
-   screenshot by eye — worth a quick check against the actual image before this
-   goes in a draft.
-4. **Regression target(s).** Still undecided — needed before the code path
-   can be scoped.
-5. **Unmerged branches block a single source of truth.** Two pieces of
+2. **Regression target(s).** Still undecided — needed before the code path
+   can be scoped. Note this is inherently per-dataset (see §4): there is no
+   continuous label in any config today, so it means choosing which
+   continuous variable to predict, for which cohort(s).
+3. **Unmerged branches block a single source of truth.** Two pieces of
    finished work currently live outside `main`:
    - `feat/goldmark-parity` — the protocol-validation work (shared background
      Phase B). Lives only on the cluster (`wt-goldmark-parity` worktree on
@@ -178,8 +158,6 @@ preprint scope.
      C). Pushed to GitHub, not merged into `main`.
    Not urgent to merge today, but the preprint will eventually need one
    commit/tag as "the" pipeline version, and neither is in `main` yet.
-6. **Third paper** (arXiv:2512.14640, task-specific) — not yet analyzed for
-   the comparison table.
 
 ## Sources (pivot-specific, in addition to shared background)
 
@@ -188,4 +166,4 @@ preprint scope.
 - github.com/mahmoodlab/patho-bench README
 - github.com/kaiko-ai/eva README
 - huggingface.co/MahmoodLab/TITAN model card
-- Table 1 screenshot (PathBench-MIL vs Patho-Bench vs EVA), transcribed by eye — re-verify before reuse
+- Table 1 screenshot (PathBench-MIL vs Patho-Bench vs EVA)

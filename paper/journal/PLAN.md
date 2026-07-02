@@ -21,10 +21,10 @@ scope ceiling plus the most plausible candidate framing, not a committed plan.
   different paper, it's the same claim at full scale with a fuller
   evaluation.
 - **Model roster likely grows too**, though not yet settled the
-  way the dataset/model scope was for Phase 1. If Phase 1 lands on 4 or 5
-  models (clam_mb, simple_mil, ab_mil, dtfd_mil, possibly ds_mil), Phase 2 is
-  the natural place to also add TransMIL — completing all four models from
-  the citation-ranking PDF, not just the preprint-scoped subset.
+  way the dataset/model scope was for Phase 1. Phase 1 is fixed at 4 models
+  (clam_mb, simple_mil, ab_mil, dtfd_mil); Phase 2 is the natural place to
+  also add TransMIL (and possibly DSMIL), completing the wider set from the
+  citation-ranking PDF that the preprint deliberately scoped down.
 
 ## Candidate framing carried forward from the old Notion proposal
 
