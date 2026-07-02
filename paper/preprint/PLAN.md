@@ -87,7 +87,7 @@ from the source image; PathBench-MIL cross-checked against its repo):
 | Patch foundation models | ✓ | ✓ | ✓ | ✓ *(H-Optimus-1, UNI v2, Virchow2)* |
 | Slide-level foundation models | ✓ | ✓ *(via Trident)* | ✗ | ✓ *(TITAN — confirmed, §4)* |
 | Classification | ✓ | ✓ | ✓ | ✓ |
-| Regression | ✓ | ✗ | ✗ | ✗ → **planned (§4)** |
+| Regression | ✓ | ✗ | ✗ | ✗ → **Phase 2 (§4)** |
 | Deep continuous survival | ✓ | ✗ *(Cox linear probe, not deep)* | ✗ | ✓ *(Cox, shared background Phase C)* |
 | Deep discrete survival | ✓ | ✓ | ✗ | ✓ *(discrete-time NLL, shared background Phase C)* |
 | AutoML capabilities | ✓ | ✗ | ✗ | ✓ *(but ours is agentic code-level recipe search, not config/hyperparameter menu search — a different, stronger category; worth its own row in the real table)* |
@@ -112,13 +112,39 @@ format hides them:
   Phase B) is evidence our pipeline reproduces published SOTA numbers under
   identical training logic, not just "runs the models." Worth a row.
 
+**Positioning note — encoder vs. MIL benchmark.** autobench is a *full-pipeline*
+benchmark: it varies both the **encoder** axis (patch + slide foundation models)
+and the **MIL aggregator** axis. That two-axis design isn't optional — the
+headline *encoder > aggregator* finding is a statement about the relative
+variance of those two axes, so a single-axis benchmark couldn't make it. But
+covering both is **table-stakes, not the edge**: PathBench-MIL already spans
+both axes (Patho-Bench and EVA are encoder-centric — the "covers entire MIL
+pipeline" row above), and the Frontiers study does it at small scale. The wedge
+is therefore *not* "first to cover both" — it's **recipe-bias control**:
+PathBench-MIL varies both axes with fixed/menu-configured recipes, whereas we
+give every cell an equal-effort agentic recipe search, so our encoder-vs-
+aggregator comparison is de-biased in a way theirs isn't. Frame the paper on
+that, not on coverage.
+
 ### 4. Two capability gaps — status
 
-Two gaps identified: slide-level PFM coverage and regression. **Both
-confirmed to be added**, and expected to be quick given the reduced 5-dataset
-preprint scope.
+Two gaps identified: slide-level PFM coverage and regression. **Priority split:
+TITAN is in the preprint; regression is deferred to Phase 2.**
 
-- **Slide-level pathology foundation model — confirmed: TITAN**
+The reasoning: TITAN is the higher-value, lower-risk move for a fast preprint —
+it directly serves the headline *encoder > aggregator* claim (it's the encoder
+that won the Frontiers slide-level comparison), it's table-stakes vs. the two
+closest competitors (PathBench-MIL and Patho-Bench both have slide-level PFMs),
+and it reuses the existing task types, metrics, and `result.json` contract.
+Regression is the opposite: it's the actual *differentiator* vs. Patho-Bench /
+EVA (both lack it), but it's a new task type with **no continuous target wired
+into any dataset today**, needs new loss + metrics + a re-thought composite
+contract, and sits off to the side of the core claim. It doesn't earn its
+engineering + validation cost against a ship-fast phase, so it moves to Phase 2
+as a proper task-type axis. (One exception could pull it back in — see the note
+below the two items.)
+
+- **Slide-level pathology foundation model — confirmed for preprint: TITAN**
   (`MahmoodLab/TITAN` on Hugging Face). Emits one embedding per whole slide
   directly — **no patch tiling via TRIDENT, and no separate MIL aggregator**
   for this arm. New code path in `autobench`, not just config: `TRIDENT →
@@ -134,21 +160,31 @@ preprint scope.
   3. License is **CC-BY-NC-ND 4.0** — fine for academic/preprint use, but
      disclose it: no redistribution of derivative model weights, commercial
      use needs Mahmood Lab's approval.
-- **Regression.** A third task-type family alongside classification and
-  survival — e.g. continuous biomarker/score prediction. **Target label(s)
-  still undecided** — needs a regression head + loss (MSE/Huber) + metric
-  (Pearson/Spearman/R²) added to `autobench/src/autobench/pipeline/`
-  alongside the existing classification and survival paths.
+- **Regression — deferred to Phase 2.** A third task-type family alongside
+  classification and survival (continuous biomarker/score prediction). Needs a
+  regression head + loss (MSE/Huber) + metric (Pearson/Spearman/R²) added to
+  `autobench/src/autobench/pipeline/`, plus a re-thought composite score
+  (AUC/BACC don't apply). **No continuous target exists in any dataset config
+  today** — every task is currently classification — so it also needs a target
+  chosen per cohort. Too much new surface for the fast preprint; lands in
+  Phase 2.
+
+  *Exception that would pull it into the preprint:* if one of the 5 chosen
+  datasets already carries a clean, ready continuous target, a single
+  regression arm becomes cheap and genuine. The strongest candidate is
+  **ovarian HRD** — HRD is natively a continuous genomic-scar score that the
+  ovarian config currently binarizes into `HRD_label`. Worth confirming
+  against the manifest before deciding.
 
 ## Open / pending — to confirm
 
 1. **Final 5-dataset list.** Metric confirmed as **runtime** (not slide
    count). Need actual per-cohort wall-clock numbers to pick which 5 — the
    `sacct` history on `fir.alliancecan.ca` can supply this if useful.
-2. **Regression target(s).** Still undecided — needed before the code path
-   can be scoped. Note this is inherently per-dataset (see §4): there is no
-   continuous label in any config today, so it means choosing which
-   continuous variable to predict, for which cohort(s).
+2. **Regression — deferred to Phase 2 (see §4).** Not in the preprint. The
+   only thing that would pull it back in is a clean, ready continuous target
+   in one of the 5 chosen datasets — most likely **ovarian HRD** — which needs
+   confirming against the manifest before deciding.
 3. **Unmerged branches block a single source of truth.** Two pieces of
    finished work currently live outside `main`:
    - `feat/goldmark-parity` — the protocol-validation work (shared background
