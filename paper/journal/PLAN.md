@@ -4,27 +4,31 @@ _Background/shared context: [`../shared/BACKGROUND.md`](../shared/BACKGROUND.md)
 Active preprint plan: [`../preprint/PLAN.md`](../preprint/PLAN.md). Compiled
 2026-07-01._
 
-**This doc is intentionally thin.** The formal journal is meant to cover all
-datasets — but the specifics of "all" haven't been worked out yet, because the
-team's energy is on Phase 1 (the preprint) right now. What's here is the known
-scope ceiling plus the most plausible candidate framing, not a committed plan.
+**This doc is intentionally thin, and the full experiment plan is undecided.**
+The team hasn't discussed Phase 2's experiment design yet — cohorts, model
+roster, task types, grid size, and analysis are all open. Phase 1 (the
+preprint) has the team's attention right now. What's below is context and
+candidate framing carried over as starting points, **not decisions**.
 
-## What's confirmed
+## Context (not a committed experiment plan)
+
+A couple of things carry over from Phase 1 and the shared background. They
+bound the space Phase 2 *could* occupy — but the actual experiment design
+remains undecided (see Open / pending):
 
 - **Scope ceiling: the full cohort inventory.** All 16 TCGA + 10 CPTAC
-  cohorts already extracted on shared cluster storage (see shared
-  background's Data scale section) — vs. the 5 datasets Phase 1 uses. Whether
-  "all 26" literally means all of them, or "all" relative to some other
-  cut, is undecided.
+  cohorts are already extracted on shared cluster storage (see shared
+  background's Data scale section) — so the data ceiling exists — but which
+  cohorts Phase 2 actually uses, and whether "all" means literally all 26 or
+  some other cut, is undecided.
 - **Core claim carries over.** The auto pipeline (autoMIL's agent-driven
-  recipe search) is the contribution in both phases — Phase 2 isn't a
-  different paper, it's the same claim at full scale with a fuller
-  evaluation.
-- **Model roster likely grows too**, though not yet settled the
-  way the dataset/model scope was for Phase 1. Phase 1 is fixed at 4 models
-  (clam_mb, simple_mil, ab_mil, dtfd_mil); Phase 2 is the natural place to
-  also add TransMIL (and possibly DSMIL), completing the wider set from the
-  citation-ranking PDF that the preprint deliberately scoped down.
+  recipe search) stays the contribution in both phases — Phase 2 isn't a
+  different paper, it's the same claim at larger scale. *How* that scale and
+  its evaluation are designed is undecided.
+- **Model roster: undecided.** Phase 1 is fixed at 4 models (clam_mb,
+  simple_mil, ab_mil, dtfd_mil). Phase 2 would plausibly widen it — TransMIL,
+  possibly DSMIL, completing the citation-ranking set the preprint scoped
+  down — but nothing here is settled.
 
 ## Candidate framing carried forward from the old Notion proposal
 
@@ -60,6 +64,8 @@ which comparison axes) don't accidentally foreclose it.
 
 ## Open / pending
 
-Everything, realistically — this phase hasn't been settled yet. Revisit after
-the preprint ships and update this doc then, the same way
+**The entire experiment plan is undecided.** None of Phase 2's design —
+cohorts, model roster, task types, grid size, statistical analysis, or scope
+of "all" — has been discussed or agreed. Revisit after the preprint ships and
+work out the plan then, the same way
 [`../preprint/PLAN.md`](../preprint/PLAN.md) was built from the confirmed pivot.
