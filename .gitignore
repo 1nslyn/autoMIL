@@ -15,7 +15,6 @@ benchmarks/.env
 benchmarks/**/__pycache__/
 datasets/
 logs/
-paper/
 tasks/
 ref/
 .automil_worktrees/
