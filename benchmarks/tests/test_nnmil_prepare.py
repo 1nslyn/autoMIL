@@ -248,6 +248,48 @@ class TestPatchCapKnobs:
         assert tc["use_original_length"] is True
 
 
+class TestGoldmarkRecipeConfig:
+    """GOLDMARK-recipe training-config overrides (protocol parity)."""
+
+    @staticmethod
+    def _stats():
+        # Brain-cohort-like: huge, highly variable bags (median 12882, see
+        # the LGG/idh1 crash: bags ranged 1646..35305 patches).
+        return {"feature_dimension": 1536, "num_patches_per_slide": {"median": 12882}}
+
+    def test_goldmark_recipe_sets_protocol_levers(self):
+        cfg = _generate_training_config(
+            self._stats(), n_samples=300, metric="auc",
+            use_original_length=True, goldmark_recipe=True,
+        )
+        assert cfg["learning_rate"] == 1e-4
+        assert cfg["weight_decay"] == 1e-4
+        assert cfg["num_epochs"] == 120
+        assert cfg["patience"] == 999
+
+    def test_goldmark_recipe_forces_batch_size_1(self):
+        """Regression for the LGG/idh1 crash: keep-all-patches
+        (use_original_length=True) yields variable-length bags, but nnMIL's
+        train collate does torch.stack which needs equal sizes. bs==1 routes the
+        loader past the batch samplers (their `batch_size > 1` guards) so a single
+        bag never gets stacked against another. GOLDMARK uses bs=1 anyway, so this
+        is also the most protocol-faithful choice."""
+        cfg = _generate_training_config(
+            self._stats(), n_samples=300, metric="auc",
+            use_original_length=True, goldmark_recipe=True,
+        )
+        assert cfg["batch_size"] == 1
+
+    def test_native_recipe_stays_batched(self):
+        """Non-goldmark path is unchanged: batched (bs>1), fixed-length bags."""
+        cfg = _generate_training_config(
+            self._stats(), n_samples=300, metric="bacc",
+            use_original_length=False, goldmark_recipe=False,
+        )
+        assert cfg["batch_size"] > 1
+        assert cfg["use_original_length"] is False
+
+
 # ---------------------------------------------------------------------------
 # Splits -> nnMIL format conversion
 # ---------------------------------------------------------------------------

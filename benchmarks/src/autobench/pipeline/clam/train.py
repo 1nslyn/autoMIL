@@ -63,6 +63,11 @@ def _make_clam_args(
     exp_cfg: ExperimentConfig, fold_dir: str, *, log_data: bool = False,
 ) -> SimpleNamespace:
     """Construct the full args namespace expected by clam_train()."""
+    goldmark_recipe = getattr(exp_cfg.train, "goldmark_recipe", False)
+    # Under the GOLDMARK recipe, clam_sb is our GMA-proxy: pure gated-attention
+    # pooling with NO instance-clustering loss (GOLDMARK's GMA has none).
+    # clam_mb keeps its multi-branch instance loss (it is our "better MIL").
+    no_inst_cluster = goldmark_recipe and exp_cfg.model.model_type == "clam_sb"
     return SimpleNamespace(
         # Model
         model_type=exp_cfg.model.model_type,
@@ -73,7 +78,7 @@ def _make_clam_args(
         subtyping=(exp_cfg.task.n_classes > 2),
         B=exp_cfg.model.B,
         inst_loss=None,
-        no_inst_cluster=False,
+        no_inst_cluster=no_inst_cluster,
         bag_weight=exp_cfg.model.bag_weight,
         bag_loss="ce",
         # Training
@@ -85,6 +90,7 @@ def _make_clam_args(
         patience=exp_cfg.train.patience,
         stop_epoch=exp_cfg.train.stop_epoch,
         weighted_sample=exp_cfg.train.weighted_sample,
+        goldmark_recipe=goldmark_recipe,
         # Infrastructure
         results_dir=fold_dir,
         log_data=log_data,

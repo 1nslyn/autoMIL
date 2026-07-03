@@ -29,6 +29,7 @@ def prepare_nnmil_experiment(
     n_splits: int = 5,
     max_seq_multiplier: float = 0.5,
     use_original_length: bool = False,
+    goldmark_recipe: bool = False,
 ) -> str:
     """Prepare nnMIL dataset artifacts for one (task, encoder, strategy) combo.
 
@@ -87,7 +88,9 @@ def prepare_nnmil_experiment(
         "evaluation_setting": f"{n_splits}fold",
         "feature_dir": h5_dir,
         "labels": labels_map,
-        "metric": "bacc",
+        # GOLDMARK selects the best checkpoint by validation ROC-AUC; match it
+        # (nnMIL's EarlyStopping uses this metric for best-model selection too).
+        "metric": "auc" if goldmark_recipe else "bacc",
         "modality": {"0": "Histopathology"},
     }
     with open(os.path.join(dataset_dir, "dataset.json"), "w") as f:
@@ -127,6 +130,7 @@ def prepare_nnmil_experiment(
             min_class_count=int(task_df["label"].value_counts().min()),
             max_seq_multiplier=max_seq_multiplier,
             use_original_length=use_original_length,
+            goldmark_recipe=goldmark_recipe,
         ),
         "random_seed": seed,
     }
@@ -259,12 +263,20 @@ def _generate_training_config(
     min_class_count: int | None = None,
     max_seq_multiplier: float = 0.5,
     use_original_length: bool = False,
+    goldmark_recipe: bool = False,
 ) -> dict:
     """Generate nnMIL training configuration, matching upstream planner.
 
     Replicates ``lib/nnMIL/preprocessing/experiment_planner.py:573-725``
     so the wrapper's plan is bit-identical to what
     ``nnMIL_plan_experiment.py`` would emit.
+
+    When ``goldmark_recipe`` is set, the protocol-level training knobs are
+    overridden to match GOLDMARK's published recipe (AdamW lr=1e-4 wd=1e-4,
+    120 epochs, no early stop, best-val-AUC selection). nnMIL's optimizer is
+    already AdamW; its batch size, cosine+warmup schedule, and padded-bag
+    sampler stay native (architecture-coupled, not GOLDMARK protocol levers),
+    and keep-all-patches is handled via ``use_original_length`` upstream.
     """
     feat_dim = feature_stats["feature_dimension"]
     hidden_dim = max(256, feat_dim // 4)
@@ -321,7 +333,7 @@ def _generate_training_config(
     else:
         batch_sampler = "random"
 
-    return {
+    cfg = {
         "feature_dimension": feat_dim,
         "hidden_dim": hidden_dim,
         "max_seq_length": max_seq_length,
@@ -336,3 +348,22 @@ def _generate_training_config(
         "patience": 10,
         "num_classes": n_classes,
     }
+    if goldmark_recipe:
+        # GOLDMARK protocol levers (configs/train_task_v2_pub.sh): lr=1e-4,
+        # wd=1e-4, 120 epochs, no early stop (large patience -> trains full 120
+        # and keeps the best-val-AUC checkpoint via EarlyStopping's metric).
+        cfg["learning_rate"] = 1e-4
+        cfg["weight_decay"] = 1e-4
+        cfg["num_epochs"] = 120
+        cfg["patience"] = 999
+        # batch_size MUST be 1 for the GOLDMARK recipe. The recipe forces
+        # use_original_length=True (keep-all-patches, matching GOLDMARK), which
+        # yields variable-length bags; nnMIL's train collate calls torch.stack
+        # which requires equal sizes and crashes on a multi-bag batch
+        # ("stack expects each tensor to be equal size, got [1646,D] vs
+        # [29843,D]"). With bs==1 the loader skips the batch samplers (guarded by
+        # `batch_size > 1`) and never stacks two bags. This is also the most
+        # faithful choice: GOLDMARK trains with batch_size=1, CrossEntropyLoss,
+        # and no class sampler. SimpleMIL has no BatchNorm, so bs==1 is safe.
+        cfg["batch_size"] = 1
+    return cfg

@@ -173,32 +173,70 @@ def train(datasets, cur, args):
     test_loader = get_split_loader(test_split, testing = args.testing)
     print('Done!')
 
-    print('\nSetup EarlyStopping...', end=' ')
-    if args.early_stopping:
-        early_stopping = EarlyStopping(patience=getattr(args, 'patience', 20), stop_epoch=getattr(args, 'stop_epoch', 50), verbose=True)
+    ckpt_path = os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))
 
+    if getattr(args, 'goldmark_recipe', False):
+        # --- GOLDMARK exact training logic (github.com/chadvanderbilt/GOLDMARK,
+        # goldmark/training/trainer.py + configs/train_task_v2_pub.sh) ---
+        # AdamW(1e-4, wd 1e-4) [built by get_optim opt='adamw'] +
+        # ReduceLROnPlateau(mode='max', patience=2, factor=0.5) stepped on
+        # val ROC-AUC; train 120 epochs with NO early stop; evaluate val ONLY
+        # at the cadence {2,5,10,20,50,80,120}; keep the MAX-val-AUC checkpoint.
+        from torch.optim.lr_scheduler import ReduceLROnPlateau
+        print('\nSetup GOLDMARK recipe (best-val-AUC @ cadence, ReduceLROnPlateau)...', end=' ')
+        scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=2, factor=0.5)
+        cadence = getattr(args, 'val_cadence', None) or {2, 5, 10, 20, 50, 80, 120}
+        use_inst = args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster
+        best_auc = float('-inf')
+        best_epoch = -1
+        print('Done!')
+        for epoch in range(args.max_epochs):
+            if use_inst:
+                train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
+            else:
+                train_loop(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn)
+            ep1 = epoch + 1  # 1-indexed to match GOLDMARK's cadence/epoch ids
+            if ep1 in cadence or ep1 == args.max_epochs:
+                _, _, val_auc, _ = summary(model, val_loader, args.n_classes)
+                print('GOLDMARK val @ epoch {}: ROC AUC {:.4f}'.format(ep1, val_auc))
+                if writer:
+                    writer.add_scalar('val/goldmark_auc', val_auc, epoch)
+                scheduler.step(val_auc)
+                if val_auc > best_auc:
+                    best_auc = val_auc
+                    best_epoch = ep1
+                    torch.save(model.state_dict(), ckpt_path)
+        if best_epoch < 0:  # safety: nothing saved (shouldn't happen)
+            torch.save(model.state_dict(), ckpt_path)
+        print('GOLDMARK best-val-AUC {:.4f} at epoch {}'.format(best_auc, best_epoch))
+        model.load_state_dict(torch.load(ckpt_path))
     else:
-        early_stopping = None
-    print('Done!')
+        print('\nSetup EarlyStopping...', end=' ')
+        if args.early_stopping:
+            early_stopping = EarlyStopping(patience=getattr(args, 'patience', 20), stop_epoch=getattr(args, 'stop_epoch', 50), verbose=True)
 
-    for epoch in range(args.max_epochs):
-        if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:     
-            train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
-            stop = validate_clam(cur, epoch, model, val_loader, args.n_classes, 
-                early_stopping, writer, loss_fn, args.results_dir)
-        
         else:
-            train_loop(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn)
-            stop = validate(cur, epoch, model, val_loader, args.n_classes, 
-                early_stopping, writer, loss_fn, args.results_dir)
-        
-        if stop:
-            break
+            early_stopping = None
+        print('Done!')
 
-    if args.early_stopping:
-        model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
-    else:
-        torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+        for epoch in range(args.max_epochs):
+            if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:
+                train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
+                stop = validate_clam(cur, epoch, model, val_loader, args.n_classes,
+                    early_stopping, writer, loss_fn, args.results_dir)
+
+            else:
+                train_loop(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn)
+                stop = validate(cur, epoch, model, val_loader, args.n_classes,
+                    early_stopping, writer, loss_fn, args.results_dir)
+
+            if stop:
+                break
+
+        if args.early_stopping:
+            model.load_state_dict(torch.load(ckpt_path))
+        else:
+            torch.save(model.state_dict(), ckpt_path)
 
     _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
     print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))

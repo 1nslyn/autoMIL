@@ -74,6 +74,13 @@ class TrainConfig:
     stop_epoch: int = 50
     weighted_sample: bool = True
     seed: int = 42
+    # GOLDMARK-recipe training mode (opt-in). When True the CLAM trainer
+    # replicates GOLDMARK's exact training logic — AdamW, ReduceLROnPlateau,
+    # 120 epochs, no early stop, best-val-AUC checkpoint at the GOLDMARK eval
+    # cadence — instead of CLAM's native val-loss early stopping. The other
+    # fields above are set to the GOLDMARK values when this is on (see
+    # run_benchmark.py). Independent of holdout_frac (the SPLIT protocol).
+    goldmark_recipe: bool = False
 
 
 @dataclass
@@ -146,6 +153,12 @@ class BenchmarkConfig:
     # GOLDMARK/CLAM keep all patches. Affects nnMIL only; val/test uncapped.
     nnmil_max_seq_multiplier: float = 0.5
     nnmil_use_original_length: bool = False
+    # GOLDMARK-recipe training mode (opt-in). Forwarded to TrainConfig (CLAM)
+    # and to the nnMIL plan generator so both frameworks train with GOLDMARK's
+    # exact recipe (AdamW lr1e-4 wd1e-4, 120 epochs, no early stop,
+    # best-val-AUC selection, keep-all patches). Distinct from holdout_frac
+    # (the val==test SPLIT); the full-GOLDMARK arm sets both.
+    goldmark_recipe: bool = False
 
     @classmethod
     def from_dataset_config(cls, ds: DatasetConfig, **overrides) -> BenchmarkConfig:

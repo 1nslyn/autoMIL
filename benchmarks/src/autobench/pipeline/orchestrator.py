@@ -292,6 +292,7 @@ def _prepare_nnmil_plans(
             n_splits=cfg.n_folds,
             max_seq_multiplier=cfg.nnmil_max_seq_multiplier,
             use_original_length=cfg.nnmil_use_original_length,
+            goldmark_recipe=cfg.goldmark_recipe,
         )
 
 

@@ -108,7 +108,18 @@ def parse_args() -> argparse.Namespace:
                         "splits are cached per dir.")
     p.add_argument("--holdout_frac", type=float, default=0.30,
                    help="Holdout fraction for --goldmark_parity (default 0.30 = "
-                        "GOLDMARK's 70/30). Ignored unless --goldmark_parity is set.")
+                        "GOLDMARK's 70/30). GOLDMARK's code default is 0.33; pass "
+                        "--holdout_frac 0.33 for an exact split match. Ignored "
+                        "unless --goldmark_parity is set.")
+    p.add_argument("--goldmark_recipe", action="store_true",
+                   help="GOLDMARK-recipe TRAINING mode (distinct from the "
+                        "--goldmark_parity SPLIT). Replicates GOLDMARK's exact "
+                        "training logic for every model: AdamW lr=1e-4 wd=1e-4, "
+                        "ReduceLROnPlateau(max,p2,f0.5), CE loss, 120 epochs, NO "
+                        "early stop, best-val-AUC checkpoint at eval cadence "
+                        "{2,5,10,20,50,80,120}; nnMIL keeps all patches & selects "
+                        "on AUC. The full-GOLDMARK arm sets BOTH --goldmark_parity "
+                        "(+ --holdout_frac 0.33) and --goldmark_recipe.")
 
     # nnMIL patch-cap knobs (default reproduces upstream planner exactly)
     p.add_argument("--nnmil_max_seq_multiplier", type=float, default=0.5,
@@ -165,15 +176,36 @@ def main() -> None:
             print(f"Error: unknown strategy '{s}'. Valid: {list(ds.split_strategies.keys())}")
             sys.exit(1)
 
-    train_cfg = TrainConfig(
-        max_epochs=args.max_epochs,
-        lr=args.lr,
-        seed=args.seed,
-        early_stopping=not args.no_early_stopping,
-        patience=args.patience,
-        stop_epoch=args.stop_epoch,
-        weighted_sample=not args.no_weighted_sample,
-    )
+    if args.goldmark_recipe:
+        # Force GOLDMARK's exact published training recipe
+        # (configs/train_task_v2_pub.sh + goldmark/training/trainer.py).
+        # max_epochs/lr/weight_decay/optimizer/early_stopping are overridden
+        # regardless of their CLI values; the trainer reads goldmark_recipe to
+        # enable ReduceLROnPlateau + best-val-AUC selection at the eval cadence.
+        train_cfg = TrainConfig(
+            max_epochs=120,
+            lr=1e-4,
+            weight_decay=1e-4,
+            optimizer="adamw",
+            early_stopping=False,
+            patience=999,
+            stop_epoch=120,
+            weighted_sample=not args.no_weighted_sample,
+            seed=args.seed,
+            goldmark_recipe=True,
+        )
+        print("  GOLDMARK-recipe mode ON: AdamW lr1e-4 wd1e-4, ReduceLROnPlateau, "
+              "120 epochs, no early stop, best-val-AUC @ cadence {2,5,10,20,50,80,120}.")
+    else:
+        train_cfg = TrainConfig(
+            max_epochs=args.max_epochs,
+            lr=args.lr,
+            seed=args.seed,
+            early_stopping=not args.no_early_stopping,
+            patience=args.patience,
+            stop_epoch=args.stop_epoch,
+            weighted_sample=not args.no_weighted_sample,
+        )
 
     wandb_project = args.wandb_project or f"{ds.name}-benchmark"
 
@@ -200,7 +232,9 @@ def main() -> None:
         nnmil_model_types=nnmil_models,
         holdout_frac=holdout_frac,
         nnmil_max_seq_multiplier=args.nnmil_max_seq_multiplier,
-        nnmil_use_original_length=args.nnmil_use_original_length,
+        # GOLDMARK keeps ALL patches; force keep-all for the recipe arm.
+        nnmil_use_original_length=args.nnmil_use_original_length or args.goldmark_recipe,
+        goldmark_recipe=args.goldmark_recipe,
     )
 
     if args.prep_only:
