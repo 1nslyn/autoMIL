@@ -85,8 +85,11 @@ def _splits_standard_cv(
     """
     # One row per case with its label (slides of the same case share a label)
     case_table = df.groupby("case_id", sort=True)["label"].first().reset_index()
-    case_ids = case_table["case_id"].values
-    case_labels = case_table["label"].values
+    # .to_numpy() (not .values): on pandas >= 3.0 string columns are Arrow-backed,
+    # and .values returns an ExtensionArray that sklearn's _safe_indexing cannot
+    # index with an integer array. .to_numpy() yields a plain ndarray on pandas 2 and 3.
+    case_ids = case_table["case_id"].to_numpy()
+    case_labels = case_table["label"].to_numpy()
 
     # Upfront feasibility check: sklearn raises mid-fit with a generic message
     # ("n_splits=N cannot be greater than the number of members in each class")
