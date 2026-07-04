@@ -113,6 +113,12 @@ def run_single_experiment(
             if experiment.framework == Framework.NNMIL:
                 from autobench.pipeline.nnmil.runner import run_nnmil_experiment
                 summary = run_nnmil_experiment(experiment, benchmark_dir, device=str(device))
+            elif experiment.framework == Framework.DTFD:
+                from autobench.pipeline.dtfd import run_dtfd_experiment
+                summary = run_dtfd_experiment(experiment, benchmark_dir, device=str(device))
+            elif experiment.framework == Framework.TITAN:
+                from autobench.pipeline.titan import run_titan_experiment
+                summary = run_titan_experiment(experiment, benchmark_dir, device=str(device))
             else:
                 from autobench.pipeline.clam.runner import run_experiment
                 summary = run_experiment(experiment, benchmark_dir, device, wandb_project)

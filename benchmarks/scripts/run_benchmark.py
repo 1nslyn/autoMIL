@@ -56,6 +56,8 @@ from autobench.pipeline.config import (
 _FRAMEWORK_MAP: dict[str, Framework] = {
     "clam": Framework.CLAM,
     "nnmil": Framework.NNMIL,
+    "dtfd": Framework.DTFD,
+    "titan": Framework.TITAN,
 }
 
 
@@ -87,6 +89,8 @@ def parse_args() -> argparse.Namespace:
                    help="Model frameworks (default: clam)")
     p.add_argument("--nnmil_models", nargs="+", default=None,
                    help="nnMIL model types (default: all from dataset config)")
+    p.add_argument("--dtfd_models", nargs="+", default=None,
+                   help="DTFD model types (default: all from dataset config)")
 
     # Training
     p.add_argument("--max_epochs", type=int, default=200)
@@ -130,6 +134,7 @@ def main() -> None:
     tasks = args.tasks or list(ds.tasks.keys())
     strategies = args.strategies or [list(ds.split_strategies.keys())[0]]
     nnmil_models = args.nnmil_models or ds.nnmil_models
+    dtfd_models = args.dtfd_models or ds.dtfd_models
     frameworks = [_FRAMEWORK_MAP[f] for f in args.frameworks]
 
     # Validate encoder keys
@@ -171,6 +176,7 @@ def main() -> None:
         strategies=strategies,
         frameworks=frameworks,
         nnmil_model_types=nnmil_models,
+        dtfd_model_types=dtfd_models,
     )
 
     if args.prep_only:

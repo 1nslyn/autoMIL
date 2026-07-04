@@ -160,6 +160,7 @@ _MODEL_BASE_VRAM: dict[str, float] = {  # GB at embed_dim=768
     "rrt": 8.0,
     "trans_mil": 12.0,
     "vision_transformer": 16.0,
+    "titan": 2.0,
 }
 
 _CUDA_CONTEXT_GB = 1.8
@@ -259,18 +260,39 @@ def _prepare_data(cfg: BenchmarkConfig, ds: DatasetConfig) -> None:
     )
 
 
+def _prepare_titan_plans(
+    cfg: BenchmarkConfig,
+    experiments: list[ExperimentConfig],
+    registries: Registries | None = None,
+    dataset_name: str = "dataset",
+) -> None:
+    """Validate/stage TITAN slide-level features for the grid.
+
+    Stub: the real slide-feature validation + dimension detection lands with the
+    TITAN arm (design spec §7). Raising here fails fast if a TITAN grid is run
+    before the arm exists, rather than silently skipping prep.
+    """
+    raise NotImplementedError(
+        "TITAN prepare is not yet implemented (stub); the TITAN arm provides it."
+    )
+
+
 def _prepare_nnmil_plans(
     cfg: BenchmarkConfig,
     experiments: list[ExperimentConfig],
     registries: Registries | None = None,
     dataset_name: str = "dataset",
 ) -> None:
-    """Generate nnMIL plan files for all unique (task, encoder, strategy) combos."""
+    """Generate nnMIL-format plan files for all unique (task, encoder, strategy) combos.
+
+    DTFD-MIL consumes the same H5 patch-bag format as nnMIL, so DTFD experiments
+    reuse this prep unchanged (design spec §6).
+    """
     from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
 
     seen: set[str] = set()
     for exp in experiments:
-        if exp.framework != Framework.NNMIL:
+        if exp.framework not in (Framework.NNMIL, Framework.DTFD):
             continue
         key = f"{exp.task.name}__{exp.encoder_key}__{exp.strategy}"
         if key in seen:
@@ -348,11 +370,17 @@ def _run_single_experiment_dispatch(
     device: torch.device,
     wandb_project: str | None = None,
 ) -> dict:
-    """Dispatch to CLAM or nnMIL runner based on framework."""
+    """Dispatch to CLAM, nnMIL, DTFD, or TITAN runner based on framework."""
     with _isolated_torch_state():
         if exp_cfg.framework == Framework.NNMIL:
             from autobench.pipeline.nnmil.runner import run_nnmil_experiment
             return run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+        elif exp_cfg.framework == Framework.DTFD:
+            from autobench.pipeline.dtfd import run_dtfd_experiment
+            return run_dtfd_experiment(exp_cfg, benchmark_dir, device=str(device))
+        elif exp_cfg.framework == Framework.TITAN:
+            from autobench.pipeline.titan import run_titan_experiment
+            return run_titan_experiment(exp_cfg, benchmark_dir, device=str(device))
         else:
             from autobench.pipeline.clam.runner import run_experiment
             return run_experiment(exp_cfg, benchmark_dir, device, wandb_project)
@@ -379,14 +407,18 @@ def run_benchmark(
 
     experiments = generate_all_experiments(cfg, registries) if registries else []
 
-    # Prepare nnMIL plans if needed
-    nnmil_experiments = [e for e in experiments if e.framework == Framework.NNMIL]
-    if nnmil_experiments:
+    # Prepare H5-bag plans (nnMIL + DTFD share the same patch-bag format)
+    dataset_name = ds.name if ds else "dataset"
+    bag_experiments = [e for e in experiments if e.framework in (Framework.NNMIL, Framework.DTFD)]
+    if bag_experiments:
         print("\n" + "=" * 60)
-        print("NNMIL PLAN GENERATION")
+        print("NNMIL/DTFD PLAN GENERATION")
         print("=" * 60)
-        dataset_name = ds.name if ds else "dataset"
-        _prepare_nnmil_plans(cfg, nnmil_experiments, registries=registries, dataset_name=dataset_name)
+        _prepare_nnmil_plans(cfg, bag_experiments, registries=registries, dataset_name=dataset_name)
+
+    titan_experiments = [e for e in experiments if e.framework == Framework.TITAN]
+    if titan_experiments:
+        _prepare_titan_plans(cfg, titan_experiments, registries=registries, dataset_name=dataset_name)
 
     experiments.sort(key=lambda e: (e.encoder_key, e.task.name, e.model.model_type))
     completed = load_completed(cfg.benchmark_dir)
@@ -547,14 +579,18 @@ def run_benchmark_multigpu(
 
     experiments = generate_all_experiments(cfg, registries) if registries else []
 
-    # Prepare nnMIL plans if needed
-    nnmil_experiments = [e for e in experiments if e.framework == Framework.NNMIL]
-    if nnmil_experiments:
+    # Prepare H5-bag plans (nnMIL + DTFD share the same patch-bag format)
+    dataset_name = ds.name if ds else "dataset"
+    bag_experiments = [e for e in experiments if e.framework in (Framework.NNMIL, Framework.DTFD)]
+    if bag_experiments:
         print("\n" + "=" * 60)
-        print("NNMIL PLAN GENERATION")
+        print("NNMIL/DTFD PLAN GENERATION")
         print("=" * 60)
-        dataset_name = ds.name if ds else "dataset"
-        _prepare_nnmil_plans(cfg, nnmil_experiments, registries=registries, dataset_name=dataset_name)
+        _prepare_nnmil_plans(cfg, bag_experiments, registries=registries, dataset_name=dataset_name)
+
+    titan_experiments = [e for e in experiments if e.framework == Framework.TITAN]
+    if titan_experiments:
+        _prepare_titan_plans(cfg, titan_experiments, registries=registries, dataset_name=dataset_name)
 
     expected_experiment_ids = {e.experiment_id for e in experiments}
     completed = load_completed(cfg.benchmark_dir)

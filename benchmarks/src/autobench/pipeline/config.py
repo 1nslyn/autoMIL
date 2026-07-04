@@ -25,6 +25,8 @@ class Framework(str, Enum):
 
     CLAM = "clam"
     NNMIL = "nnmil"
+    DTFD = "dtfd"
+    TITAN = "titan"
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +136,13 @@ class BenchmarkConfig:
     strategies: list[str] = field(default_factory=list)
     frameworks: list[Framework] = field(default_factory=lambda: [Framework.CLAM])
     nnmil_model_types: list[str] = field(default_factory=list)
+    dtfd_model_types: list[str] = field(default_factory=list)
+    # Placeholder embed_dim for the TITAN pseudo-encoder. Per design spec §7
+    # this is only a grid-generation default -- the real dimension is read
+    # from the extracted slide-feature file at prepare time (TRIDENT emits
+    # 768-d); ``_prepare_titan_plans`` is responsible for validating/updating
+    # it against the actual feature file, never hard-coding it downstream.
+    titan_embed_dim: int = 768
 
     @classmethod
     def from_dataset_config(cls, ds: DatasetConfig, **overrides) -> BenchmarkConfig:
@@ -147,6 +156,7 @@ class BenchmarkConfig:
             "tasks": list(ds.tasks.keys()),
             "strategies": list(ds.split_strategies.keys()),
             "nnmil_model_types": ds.nnmil_models,
+            "dtfd_model_types": ds.dtfd_models,
             "wandb_project": f"{ds.name}-benchmark",
         }
         defaults.update(overrides)
@@ -265,8 +275,19 @@ def generate_all_experiments(
     for framework in cfg.frameworks:
         if framework == Framework.CLAM:
             model_types = [m for m in cfg.model_types if m in registries.model_registry]
-        else:
+        elif framework == Framework.DTFD:
+            model_types = cfg.dtfd_model_types
+        elif framework == Framework.TITAN:
+            # TITAN *is* the encoder (a frozen slide embedding) -- there is no
+            # tile-encoder or model_type axis to sweep, so both are pinned to
+            # the pseudo-encoder key "titan" below (see design spec §7).
+            model_types = ["titan"]
+        elif framework == Framework.NNMIL:
             model_types = cfg.nnmil_model_types
+        else:
+            raise ValueError(
+                f"Unknown framework in experiment generation: {framework!r}"
+            )
 
         for strategy in cfg.strategies:
             for task_name in cfg.tasks:
@@ -278,17 +299,24 @@ def generate_all_experiments(
                 if strategy not in feasible and strategy != first_strategy:
                     continue
 
-                for encoder_key in cfg.encoder_keys:
+                encoder_keys = ["titan"] if framework == Framework.TITAN else cfg.encoder_keys
+                for encoder_key in encoder_keys:
                     for model_type in model_types:
-                        model_cfg = (
-                            registries.model_registry[model_type]
-                            if framework == Framework.CLAM
-                            else ModelConfig(model_type=model_type)
+                        if framework == Framework.CLAM:
+                            model_cfg = registries.model_registry[model_type]
+                        elif framework == Framework.TITAN:
+                            model_cfg = ModelConfig(model_type="titan")
+                        else:
+                            model_cfg = ModelConfig(model_type=model_type)
+                        embed_dim = (
+                            cfg.titan_embed_dim
+                            if framework == Framework.TITAN
+                            else registries.encoder_dims[encoder_key]
                         )
                         exp = ExperimentConfig(
                             task=task_cfg,
                             encoder_key=encoder_key,
-                            embed_dim=registries.encoder_dims[encoder_key],
+                            embed_dim=embed_dim,
                             model=model_cfg,
                             train=cfg.train,
                             n_folds=cfg.n_folds,
