@@ -24,11 +24,14 @@ def create_mil_model(model_type, input_dim=2560, hidden_dim=512, num_classes=2, 
         return SimpleMIL(input_dim=input_dim, hidden_dim=hidden_dim, pred_num=num_classes,
                         activation=activation, dropout=True)
     elif model_type == "ab_mil":
-        from .models.ab_mil import AB_MIL
-        hidden_dim = 512
-        return AB_MIL(L=hidden_dim, D=hidden_dim//4, num_classes=num_classes, 
-                     dropout=dropout, in_dim=input_dim)
-    
+        # Faithful port of the original gated attention (Ilse et al., 2018),
+        # from lib/AttentionDeepMIL's GatedAttention. Paper-exact hidden dims:
+        # M=500 (instance embedding), L=128 (attention hidden). See
+        # models/ab_mil_gated.py for the full fidelity notes.
+        from .models.ab_mil_gated import AB_MIL_Gated
+        return AB_MIL_Gated(in_dim=input_dim, M=500, L=128, num_classes=num_classes,
+                           dropout=dropout, K=1)
+
     elif model_type == "ab_mil_fixed_feat":
         from .models.ab_mil_fixed_feat import AB_MIL
         hidden_dim = 512
