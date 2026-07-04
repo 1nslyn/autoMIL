@@ -1,0 +1,2 @@
+# Pretrained Camelyon weight from the upstream repo; unused (we train from WSI features).
+*.pth
