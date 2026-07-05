@@ -119,6 +119,9 @@ def run_single_experiment(
             elif experiment.framework == Framework.TITAN:
                 from autobench.pipeline.titan import run_titan_experiment
                 summary = run_titan_experiment(experiment, benchmark_dir, device=str(device))
+            elif experiment.framework == Framework.ABMIL:
+                from autobench.pipeline.abmil import run_abmil_experiment
+                summary = run_abmil_experiment(experiment, benchmark_dir, device=str(device))
             else:
                 from autobench.pipeline.clam.runner import run_experiment
                 summary = run_experiment(experiment, benchmark_dir, device, wandb_project)

@@ -134,6 +134,7 @@ class DatasetConfig:
     encoder_dims: dict[str, int]  # key -> dimension
     nnmil_models: list[str] = field(default_factory=list)
     dtfd_models: list[str] = field(default_factory=lambda: ["dtfd_mil"])
+    abmil_models: list[str] = field(default_factory=lambda: ["abmil"])
     titan: TitanDef | None = None
 
     # Extraction params
@@ -224,6 +225,7 @@ def load_dataset_config(name_or_path: str) -> DatasetConfig:
     encoder_dims = encoders.get("dims", {})
     nnmil_models = raw.get("nnmil_models", [])
     dtfd_models = raw.get("dtfd_models", ["dtfd_mil"])
+    abmil_models = raw.get("abmil_models", ["abmil"])
     titan_raw = raw.get("titan")
     titan = TitanDef(head=titan_raw.get("head", "linear")) if titan_raw else None
 
@@ -252,6 +254,7 @@ def load_dataset_config(name_or_path: str) -> DatasetConfig:
         encoder_dims=encoder_dims,
         nnmil_models=nnmil_models,
         dtfd_models=dtfd_models,
+        abmil_models=abmil_models,
         titan=titan,
         magnification=extraction.get("magnification", 20),
         patch_size=extraction.get("patch_size", 224),

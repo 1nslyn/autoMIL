@@ -24,7 +24,7 @@ campaign are deferred (previous per-dataset runs are incomplete).
 | Decision | Choice | Rationale |
 |---|---|---|
 | Overall structure | **Hybrid** (per-model home by training-loop shape) | Each model's structure should match its home; forcing uniformity creates giant `if` branches. |
-| **ABMIL** | Faithful port of the **original gated attention** (`lib/AttentionDeepMIL` `GatedAttention`), adapted to precomputed features, run as a `model_type` under the **nnMIL** framework | Uses the citable original directly; ABMIL's loop is the standard `forward→loss→step`, so it needs no new framework. |
+| **ABMIL** | **Its own `Framework.ABMIL` + `pipeline/abmil/`** (updated 2026-07-06), sourced from `lib/AttentionDeepMIL` (both non-gated `Attention` + gated `GatedAttention`), adapted to precomputed features | Standard `forward→loss→step` loop (mirrors nnmil's trainer), but its own package — upstream nnMIL is now `simple_mil`-only, so ABMIL stands on its own for clean provenance. |
 | **DTFD-MIL** | New **`Framework.DTFD`** + `pipeline/dtfd/` package driving `lib/DTFD-MIL` modules directly; **AFS** distillation | Two optimizers + two-tier loss + pseudo-bag split can't honestly run in the standard trainer. AFS is the paper default, robust to variable bag sizes. |
 | **TITAN** | New **`Framework.TITAN`** + `pipeline/titan/` package; **linear probe** on the frozen slide embedding | One vector/slide — no bag, no aggregator. Linear probe is the standard frozen-encoder eval protocol. |
 | TITAN embedding dim | **Read from the feature file at prepare time** (TRIDENT emits **768-d**, not 4096) | `lib/TRIDENT/.../load.py:419` sets 768; never hard-code. |
@@ -51,7 +51,7 @@ Every new arm reuses, unchanged:
 - the fold split CSVs `splits/<strategy>/<task>/splits_<fold>.csv` (identical folds across all arms → fair comparison),
 - the `summary.json` writer shape (`nnmil/runner.py:61-81`) and the autoMIL archive contract (`clam/runner.py:16-70`).
 
-## 5. Component 1 — ABMIL (original gated attention, under nnMIL)
+## 5. Component 1 — ABMIL (its own `pipeline/abmil/` framework)
 
 **Source of truth:** `lib/AttentionDeepMIL/model.py` `GatedAttention` (`:72-128`).
 
@@ -64,12 +64,14 @@ Every new arm reuses, unchanged:
 - Replace the binary `Sigmoid` head with a `Linear(M → num_classes)` softmax head, so multi-class
   tasks (CLWD 6/7-class) work and the loss/metrics path matches the other models (CE + `compute_extended_metrics`).
 
-**Home:** `model_type` under `Framework.NNMIL` — the standard `ClassificationTrainer`
-(`classification_trainer.py:62-90`) already fits (single forward → CE → one optimizer step).
-**Two distinct config keys (updated 2026-07-06, per Leo):** `ab_mil` = the original **non-gated**
-attention (restored to nnMIL's historical meaning + the AttentionDeepMIL repo default), and
-`ab_mil_gated` = the faithful **gated** port (M=500/L=128). No key is overloaded; which variant the
-preprint reports is a roster decision (deferred). Both run on nnMIL's standard trainer.
+**Home (updated 2026-07-06, per Leo):** its **own** `Framework.ABMIL` + `pipeline/abmil/` package,
+sourced directly from `lib/AttentionDeepMIL` — NOT a `model_type` under nnMIL. Rationale: upstream
+nnMIL is now `simple_mil`-only, so ABMIL stands on its own (parallel to `dtfd/` from `lib/DTFD-MIL`
+and `titan/`). ABMIL's loop is still the standard `forward → CE → one optimizer step`, so its
+`abmil/train.py` mirrors `nnmil/train.py` (not dtfd's two-tier loop). Two model types, both from the
+reference repo: **`abmil`** = non-gated `Attention`, **`abmil_gated`** = gated `GatedAttention`
+(M=500/L=128). Which the preprint reports is a roster decision (deferred). ABMIL has been removed
+from the nnMIL factory + `nnmil_models`.
 
 **Methods-note fidelity:** "ABMIL (Ilse et al., 2018), gated-attention variant, from the authors'
 reference implementation; instance feature extractor replaced by a linear projection of precomputed

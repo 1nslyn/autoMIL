@@ -149,7 +149,6 @@ def clear_failed(benchmark_dir: str, experiment_id: str) -> None:
 
 _MODEL_BASE_VRAM: dict[str, float] = {  # GB at embed_dim=768
     "simple_mil": 2.5,
-    "ab_mil": 3.0,
     "ds_mil": 4.0,
     "dtfd_mil": 4.0,
     "wikg_mil": 4.0,
@@ -161,6 +160,8 @@ _MODEL_BASE_VRAM: dict[str, float] = {  # GB at embed_dim=768
     "trans_mil": 12.0,
     "vision_transformer": 16.0,
     "titan": 2.0,
+    "abmil": 3.0,
+    "abmil_gated": 3.0,
 }
 
 _CUDA_CONTEXT_GB = 1.8
@@ -298,14 +299,14 @@ def _prepare_nnmil_plans(
 ) -> None:
     """Generate nnMIL-format plan files for all unique (task, encoder, strategy) combos.
 
-    DTFD-MIL consumes the same H5 patch-bag format as nnMIL, so DTFD experiments
-    reuse this prep unchanged (design spec §6).
+    DTFD-MIL and ABMIL consume the same H5 patch-bag format as nnMIL, so their
+    experiments reuse this prep unchanged (design spec §6).
     """
     from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
 
     seen: set[str] = set()
     for exp in experiments:
-        if exp.framework not in (Framework.NNMIL, Framework.DTFD):
+        if exp.framework not in (Framework.NNMIL, Framework.DTFD, Framework.ABMIL):
             continue
         key = f"{exp.task.name}__{exp.encoder_key}__{exp.strategy}"
         if key in seen:
@@ -383,7 +384,7 @@ def _run_single_experiment_dispatch(
     device: torch.device,
     wandb_project: str | None = None,
 ) -> dict:
-    """Dispatch to CLAM, nnMIL, DTFD, or TITAN runner based on framework."""
+    """Dispatch to CLAM, nnMIL, DTFD, TITAN, or ABMIL runner based on framework."""
     with _isolated_torch_state():
         if exp_cfg.framework == Framework.NNMIL:
             from autobench.pipeline.nnmil.runner import run_nnmil_experiment
@@ -394,6 +395,9 @@ def _run_single_experiment_dispatch(
         elif exp_cfg.framework == Framework.TITAN:
             from autobench.pipeline.titan import run_titan_experiment
             return run_titan_experiment(exp_cfg, benchmark_dir, device=str(device))
+        elif exp_cfg.framework == Framework.ABMIL:
+            from autobench.pipeline.abmil import run_abmil_experiment
+            return run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device))
         else:
             from autobench.pipeline.clam.runner import run_experiment
             return run_experiment(exp_cfg, benchmark_dir, device, wandb_project)
@@ -422,7 +426,7 @@ def run_benchmark(
 
     # Prepare H5-bag plans (nnMIL + DTFD share the same patch-bag format)
     dataset_name = ds.name if ds else "dataset"
-    bag_experiments = [e for e in experiments if e.framework in (Framework.NNMIL, Framework.DTFD)]
+    bag_experiments = [e for e in experiments if e.framework in (Framework.NNMIL, Framework.DTFD, Framework.ABMIL)]
     if bag_experiments:
         print("\n" + "=" * 60)
         print("NNMIL/DTFD PLAN GENERATION")
@@ -594,7 +598,7 @@ def run_benchmark_multigpu(
 
     # Prepare H5-bag plans (nnMIL + DTFD share the same patch-bag format)
     dataset_name = ds.name if ds else "dataset"
-    bag_experiments = [e for e in experiments if e.framework in (Framework.NNMIL, Framework.DTFD)]
+    bag_experiments = [e for e in experiments if e.framework in (Framework.NNMIL, Framework.DTFD, Framework.ABMIL)]
     if bag_experiments:
         print("\n" + "=" * 60)
         print("NNMIL/DTFD PLAN GENERATION")

@@ -45,8 +45,11 @@ class TestFrameworkEnum:
         assert Framework.DTFD.value == "dtfd"
         assert Framework.TITAN.value == "titan"
 
-    def test_exactly_four_frameworks(self):
-        assert {f.value for f in Framework} == {"clam", "nnmil", "dtfd", "titan"}
+    def test_abmil_registered(self):
+        assert Framework.ABMIL.value == "abmil"
+
+    def test_exactly_five_frameworks(self):
+        assert {f.value for f in Framework} == {"clam", "nnmil", "dtfd", "titan", "abmil"}
 
 
 # ---------------------------------------------------------------------------
@@ -122,10 +125,13 @@ class TestTitanGrid:
 # ---------------------------------------------------------------------------
 
 class TestMultiFramework:
-    def test_all_four_frameworks_in_one_grid(self, ds, registries):
+    def test_all_five_frameworks_in_one_grid(self, ds, registries):
         cfg = BenchmarkConfig.from_dataset_config(
             ds,
-            frameworks=[Framework.CLAM, Framework.NNMIL, Framework.DTFD, Framework.TITAN],
+            frameworks=[
+                Framework.CLAM, Framework.NNMIL, Framework.DTFD,
+                Framework.TITAN, Framework.ABMIL,
+            ],
             strategies=["standard"], tasks=["brca"], encoder_keys=["conch_v15"],
         )
         exps = generate_all_experiments(cfg, registries)
@@ -134,9 +140,10 @@ class TestMultiFramework:
             return len([e for e in exps if e.framework == fw])
 
         assert n(Framework.CLAM) == 3    # 3 CLAM heads
-        assert n(Framework.NNMIL) == 9   # 9 nnMIL heads
+        assert n(Framework.NNMIL) == 8   # 8 nnMIL heads
         assert n(Framework.DTFD) == 1    # 1 dtfd head
         assert n(Framework.TITAN) == 1   # single arm
+        assert n(Framework.ABMIL) == 2   # 2 abmil heads (abmil, abmil_gated)
 
     def test_unknown_framework_raises(self, ds, registries):
         cfg = BenchmarkConfig.from_dataset_config(

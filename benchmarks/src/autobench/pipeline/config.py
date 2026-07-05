@@ -27,6 +27,7 @@ class Framework(str, Enum):
     NNMIL = "nnmil"
     DTFD = "dtfd"
     TITAN = "titan"
+    ABMIL = "abmil"
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +138,7 @@ class BenchmarkConfig:
     frameworks: list[Framework] = field(default_factory=lambda: [Framework.CLAM])
     nnmil_model_types: list[str] = field(default_factory=list)
     dtfd_model_types: list[str] = field(default_factory=list)
+    abmil_model_types: list[str] = field(default_factory=list)
     # Placeholder embed_dim for the TITAN pseudo-encoder. Per design spec §7
     # this is only a grid-generation default -- the real dimension is read
     # from the extracted slide-feature file at prepare time (TRIDENT emits
@@ -157,6 +159,7 @@ class BenchmarkConfig:
             "strategies": list(ds.split_strategies.keys()),
             "nnmil_model_types": ds.nnmil_models,
             "dtfd_model_types": ds.dtfd_models,
+            "abmil_model_types": ds.abmil_models,
             "wandb_project": f"{ds.name}-benchmark",
         }
         defaults.update(overrides)
@@ -284,6 +287,8 @@ def generate_all_experiments(
             model_types = ["titan"]
         elif framework == Framework.NNMIL:
             model_types = cfg.nnmil_model_types
+        elif framework == Framework.ABMIL:
+            model_types = cfg.abmil_model_types
         else:
             raise ValueError(
                 f"Unknown framework in experiment generation: {framework!r}"

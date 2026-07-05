@@ -58,6 +58,7 @@ _FRAMEWORK_MAP: dict[str, Framework] = {
     "nnmil": Framework.NNMIL,
     "dtfd": Framework.DTFD,
     "titan": Framework.TITAN,
+    "abmil": Framework.ABMIL,
 }
 
 
@@ -91,6 +92,8 @@ def parse_args() -> argparse.Namespace:
                    help="nnMIL model types (default: all from dataset config)")
     p.add_argument("--dtfd_models", nargs="+", default=None,
                    help="DTFD model types (default: all from dataset config)")
+    p.add_argument("--abmil_models", nargs="+", default=None,
+                   help="ABMIL model types (default: all from dataset config)")
 
     # Training
     p.add_argument("--max_epochs", type=int, default=200)
@@ -135,6 +138,7 @@ def main() -> None:
     strategies = args.strategies or [list(ds.split_strategies.keys())[0]]
     nnmil_models = args.nnmil_models or ds.nnmil_models
     dtfd_models = args.dtfd_models or ds.dtfd_models
+    abmil_models = args.abmil_models or ds.abmil_models
     frameworks = [_FRAMEWORK_MAP[f] for f in args.frameworks]
 
     # Validate encoder keys
@@ -177,6 +181,7 @@ def main() -> None:
         frameworks=frameworks,
         nnmil_model_types=nnmil_models,
         dtfd_model_types=dtfd_models,
+        abmil_model_types=abmil_models,
     )
 
     if args.prep_only:
