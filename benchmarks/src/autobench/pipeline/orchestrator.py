@@ -266,15 +266,28 @@ def _prepare_titan_plans(
     registries: Registries | None = None,
     dataset_name: str = "dataset",
 ) -> None:
-    """Validate/stage TITAN slide-level features for the grid.
+    """Validate TITAN slide-level features for the grid (design spec §7).
 
-    Stub: the real slide-feature validation + dimension detection lands with the
-    TITAN arm (design spec §7). Raising here fails fast if a TITAN grid is run
-    before the arm exists, rather than silently skipping prep.
+    TITAN pins ``encoder_key="titan"``, so unlike nnMIL/DTFD (which key
+    prep by (task, encoder, strategy)) there is nothing to vary except the
+    task -- one manifest per unique task_name covers every TITAN
+    experiment in the grid.
     """
-    raise NotImplementedError(
-        "TITAN prepare is not yet implemented (stub); the TITAN arm provides it."
-    )
+    from autobench.pipeline.titan.prepare import prepare_titan_experiment
+
+    seen: set[str] = set()
+    for exp in experiments:
+        if exp.framework != Framework.TITAN:
+            continue
+        if exp.task.name in seen:
+            continue
+        seen.add(exp.task.name)
+
+        prepare_titan_experiment(
+            benchmark_dir=cfg.benchmark_dir,
+            task_name=exp.task.name,
+            features_base_dir=cfg.features_base_dir,
+        )
 
 
 def _prepare_nnmil_plans(

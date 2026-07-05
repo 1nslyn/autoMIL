@@ -1,7 +1,10 @@
 """Tests for DTFD + TITAN framework registration (design spec §4, §6-8).
 
-Covers the infrastructure that lets the two new arms participate in the grid and
-the multi-GPU dispatch, while their trainers are still stubs (NotImplementedError).
+Covers the infrastructure that lets the two new arms participate in the grid
+and the multi-GPU dispatch. Both trainers are now implemented; full behavioral
+coverage lives in ``test_dtfd_arm.py`` and ``test_titan_arm.py``, so the
+assertions here only check grid generation and that dispatch wiring reaches
+the real runners.
 """
 
 import pytest
@@ -19,10 +22,7 @@ from autobench.pipeline.config import (
 from autobench.pipeline.orchestrator import (
     _MODEL_BASE_VRAM,
     _prepare_titan_plans,
-    _run_single_experiment_dispatch,
 )
-from autobench.pipeline.dtfd import run_dtfd_experiment
-from autobench.pipeline.titan import run_titan_experiment
 from _helpers import make_test_ds
 
 
@@ -148,37 +148,15 @@ class TestMultiFramework:
 
 
 # ---------------------------------------------------------------------------
-# Dispatch routing (stubs raise; proves the wiring reaches them)
+# Dispatch routing
 # ---------------------------------------------------------------------------
-
-class TestDispatchRouting:
-    def _exp(self, registries, framework):
-        is_titan = framework == Framework.TITAN
-        return ExperimentConfig(
-            task=registries.task_registry["brca"],
-            encoder_key="titan" if is_titan else "conch_v15",
-            embed_dim=768,
-            model=ModelConfig(model_type="titan" if is_titan else "dtfd_mil"),
-            train=TrainConfig(seed=42),
-            framework=framework,
-            strategy="standard",
-        )
-
-    def test_stub_runners_raise_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            run_dtfd_experiment(None, "/tmp")
-        with pytest.raises(NotImplementedError):
-            run_titan_experiment(None, "/tmp")
-
-    def test_dispatch_routes_dtfd_to_stub(self, registries, tmp_path):
-        exp = self._exp(registries, Framework.DTFD)
-        with pytest.raises(NotImplementedError):
-            _run_single_experiment_dispatch(exp, str(tmp_path), torch.device("cpu"))
-
-    def test_dispatch_routes_titan_to_stub(self, registries, tmp_path):
-        exp = self._exp(registries, Framework.TITAN)
-        with pytest.raises(NotImplementedError):
-            _run_single_experiment_dispatch(exp, str(tmp_path), torch.device("cpu"))
+#
+# DTFD's and TITAN's dispatch-reaches-the-real-runner behavior (grid wiring +
+# end-to-end fold training) is covered by
+# test_dtfd_arm.py::TestDispatchRunsRealArm and
+# test_titan_arm.py::TestDispatchRoutesToTitan, which supply the H5 feature
+# fixtures and split CSVs needed to actually run a fold. Both arms are now
+# implemented, so there is no NotImplementedError dispatch path left to assert.
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +170,11 @@ class TestVramAndPrepStubs:
     def test_dtfd_vram_present(self):
         assert "dtfd_mil" in _MODEL_BASE_VRAM
 
-    def test_titan_prepare_is_failfast_stub(self):
-        with pytest.raises(NotImplementedError):
-            _prepare_titan_plans(None, [])
+    def test_titan_prepare_noop_on_empty_experiment_list(self):
+        """No TITAN experiments -> no-op, not a crash (cfg is unused in that path)."""
+        _prepare_titan_plans(None, [])
+
+    # Full TITAN prepare behavior (manifest write, dimension detection,
+    # fail-fast on missing features) is covered by
+    # test_titan_arm.py::TestPrepareTitanPlansOrchestrator /
+    # TestPrepareTitanExperiment / TestValidateTitanFeatures.
