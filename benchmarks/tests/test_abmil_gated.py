@@ -232,18 +232,28 @@ class TestGatedAttentionFidelity:
 
 
 class TestPaperExactDims:
-    def test_default_factory_dims_are_paper_exact(self):
-        """Locked decision: M=500, L=128 (matches Ilse et al. 2018), not 512/128."""
-        model = create_mil_model(model_type="ab_mil", input_dim=1024, num_classes=2)
+    def test_gated_factory_key_dims_are_paper_exact(self):
+        """Locked decision: ab_mil_gated -> M=500, L=128 (Ilse et al. 2018 gated)."""
+        model = create_mil_model(model_type="ab_mil_gated", input_dim=1024, num_classes=2)
         assert isinstance(model, AB_MIL_Gated)
         assert model.M == 500
         assert model.L == 128
 
     def test_factory_forward_smoke(self):
-        model = create_mil_model(model_type="ab_mil", input_dim=64, num_classes=4)
+        model = create_mil_model(model_type="ab_mil_gated", input_dim=64, num_classes=4)
         x = torch.randn(2, 10, 64)
         out = model(x)
         assert out["logits"].shape == (2, 4)
+
+    def test_ab_mil_key_is_non_gated_ab_mil_gated_key_is_gated(self):
+        """Clean separation: `ab_mil` = original non-gated, `ab_mil_gated` = gated."""
+        gated = create_mil_model(model_type="ab_mil_gated", input_dim=64, num_classes=2)
+        non_gated = create_mil_model(model_type="ab_mil", input_dim=64, num_classes=2)
+        assert isinstance(gated, AB_MIL_Gated)
+        assert not isinstance(non_gated, AB_MIL_Gated)
+        # gated has the sigmoid gate branch (attention_U); non-gated does not
+        assert hasattr(gated, "attention_U")
+        assert not hasattr(non_gated, "attention_U")
 
 
 class TestInputValidation:

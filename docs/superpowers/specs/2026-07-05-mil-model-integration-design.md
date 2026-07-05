@@ -66,8 +66,10 @@ Every new arm reuses, unchanged:
 
 **Home:** `model_type` under `Framework.NNMIL` — the standard `ClassificationTrainer`
 (`classification_trainer.py:62-90`) already fits (single forward → CE → one optimizer step).
-Config key stays **`ab_mil`** (keeps YAML + the `_MODEL_BASE_VRAM["ab_mil"]` estimate stable);
-its model class now resolves to the faithful gated port instead of the prior non-gated reimplementation.
+**Two distinct config keys (updated 2026-07-06, per Leo):** `ab_mil` = the original **non-gated**
+attention (restored to nnMIL's historical meaning + the AttentionDeepMIL repo default), and
+`ab_mil_gated` = the faithful **gated** port (M=500/L=128). No key is overloaded; which variant the
+preprint reports is a roster decision (deferred). Both run on nnMIL's standard trainer.
 
 **Methods-note fidelity:** "ABMIL (Ilse et al., 2018), gated-attention variant, from the authors'
 reference implementation; instance feature extractor replaced by a linear projection of precomputed
@@ -194,16 +196,17 @@ environment — no model intentionally handicapped.** Resolved accordingly:
 1. **ABMIL hidden dims → paper-exact `M=500, L=128`.** Fidelity to Ilse et al. + the fairness
    principle "each model runs at its authors' canonical config." The 500-vs-512 gap is negligible and
    not a handicap — it *is* ABMIL's designed capacity.
-2. **ABMIL config key → reuse `ab_mil`**, redefined as the gated-original implementation (single
-   canonical name → clean reporting). **Rigor caveat:** the one stale partial result under this key
-   (TGCT, non-gated, 5 folds) must be cleared/re-run before any aggregation so gated and non-gated
-   numbers never mix — flagged on the review list, not auto-deleted (it is Leo's cluster data).
+2. **ABMIL keys → separated (updated 2026-07-06, per Leo).** `ab_mil` = original **non-gated**
+   attention (restored to its historical meaning + the repo default); `ab_mil_gated` = the gated port
+   (M=500/L=128). No key is overloaded, so old non-gated `ab_mil` results (e.g. the TGCT partial) stay
+   valid — the earlier contamination caveat is moot. Which variant the preprint reports is a roster
+   decision, deferred with dataset selection; to report gated, list `ab_mil_gated` in `nnmil_models`.
 3. **Commit** → all work on branch `feat/mil-model-integration` with granular conventional commits;
    **no push, no merge to `main`** (Leo reviews first). Design docs committed on the branch too.
 
 ## 14. Review-list items (surfaced for Leo on wake)
-- Confirm the 3 resolved decisions above (esp. ABMIL 500/128 + `ab_mil` reuse).
-- Clear the stale non-gated `ab_mil` TGCT partial before aggregation.
+- Confirm the resolved decisions above (esp. gated ABMIL as `ab_mil_gated`; `ab_mil` = non-gated original).
+- Roster: pick which ABMIL variant the preprint reports — `ab_mil` (non-gated) vs `ab_mil_gated` (gated) — and list it in the datasets' `nnmil_models` (deferred with dataset selection).
 - Pipeline consolidation/tag (`preprint-pipeline-v1`, goldmark orchestrator fix into `main`) — a git
   decision left for Leo; the engineering branch is cut from current `main`.
 - Any hyperparameters the fixtures can't validate against real data (DTFD `numGroup`/`total_instance`
