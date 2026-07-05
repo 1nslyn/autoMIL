@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -166,6 +167,8 @@ def train_fold(
     args = _make_clam_args(exp_cfg, fold_dir, log_data=bool(wandb_project))
     datasets = (train_split, val_split, test_split)
 
+    _timer_start = time.perf_counter()
+
     test_results_dict, test_auc, val_auc, test_acc, val_acc = clam_train(
         datasets, fold, args,
     )
@@ -204,6 +207,8 @@ def train_fold(
     else:
         val_metrics = {"auc_roc": val_auc, "accuracy": val_acc}
 
+    elapsed_seconds = time.perf_counter() - _timer_start
+
     # --- Log final metrics to wandb ---
     if wb_run is not None:
         import wandb
@@ -225,6 +230,7 @@ def train_fold(
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "fold": fold,
+        "elapsed_seconds": elapsed_seconds,
     }
     with open(metrics_path, "w") as f:
         json.dump(fold_result, f, indent=2)

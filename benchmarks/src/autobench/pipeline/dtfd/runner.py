@@ -109,6 +109,7 @@ def run_dtfd_experiment(
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]
+    elapsed_seconds_total = sum(fr.get("elapsed_seconds", 0) or 0 for fr in fold_results)
 
     exp_summary = {
         "experiment_id": exp_cfg.experiment_id,
@@ -119,6 +120,7 @@ def run_dtfd_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),
         "val": compute_confidence_intervals(val_fold_metrics),
