@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+import pandas as pd
+
 from autobench.pipeline.clam._imports import Generic_MIL_Dataset, Generic_Split
 from autobench.pipeline.config import ExperimentConfig
 
@@ -67,3 +69,45 @@ def load_fold_splits(
         from_id=False, csv_path=split_csv
     )
     return train_split, val_split, test_split
+
+
+def load_survival_fold_splits(
+    exp_cfg: ExperimentConfig,
+    benchmark_dir: str,
+    fold: int,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Load (train, val, test) survival samples for one fold, each a dict
+    ``{slide_id, pt_path, status, time, patient_id}``. Joins the survival task
+    CSV (status/time/case_id) with the fold split CSV; skips slides missing a
+    ``.pt``. Bypasses CLAM's classification dataset (which needs a label_dict).
+    """
+    task_csv = os.path.join(benchmark_dir, "dataset_csv", f"{exp_cfg.task.name}.csv")
+    df = pd.read_csv(task_csv)
+    status_map = dict(zip(df["slide_id"], df["status"]))
+    time_map = dict(zip(df["slide_id"], df["time"]))
+    case_map = dict(zip(df["slide_id"], df["case_id"]))
+
+    pt_dir = os.path.join(benchmark_dir, "features", exp_cfg.encoder_key, "pt_files")
+    split_csv = os.path.join(
+        benchmark_dir, "splits", exp_cfg.strategy, exp_cfg.task.name, f"splits_{fold}.csv"
+    )
+    sdf = pd.read_csv(split_csv)
+
+    def _build(col: str) -> list[dict]:
+        samples: list[dict] = []
+        if col not in sdf.columns:
+            return samples
+        for sid in sdf[col].dropna():
+            pt_path = os.path.join(pt_dir, f"{sid}.pt")
+            if sid not in status_map or not os.path.exists(pt_path):
+                continue
+            samples.append({
+                "slide_id": sid,
+                "pt_path": pt_path,
+                "status": int(status_map[sid]),
+                "time": float(time_map[sid]),
+                "patient_id": str(case_map[sid]),
+            })
+        return samples
+
+    return _build("train"), _build("val"), _build("test")

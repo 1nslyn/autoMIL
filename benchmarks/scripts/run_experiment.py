@@ -56,6 +56,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", required=True, help="Model type (e.g., clam_mb, ab_mil)")
     p.add_argument("--framework", required=True, choices=["clam", "nnmil"])
     p.add_argument("--strategy", default="standard", help="Split strategy")
+    p.add_argument(
+        "--survival_loss", default=None,
+        choices=["cox", "mse", "mae", "nllsurv"],
+        help="Survival loss variant (survival tasks only; defaults to the "
+             "task's first configured survival_losses entry)",
+    )
     p.add_argument("--gpu", type=int, default=None,
                    help="GPU index (default: AUTOMIL_GPU or 0)")
 
@@ -72,16 +78,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def summary_to_result_json(summary: dict, elapsed: float) -> dict:
-    """Convert autobench summary dict to autoMIL result.json format."""
+    """Convert autobench summary dict to autoMIL result.json format.
+
+    Survival summaries (detected by a ``c_index`` entry under ``test``) set
+    the composite to the test concordance index; classification keeps the
+    ``(test_auc + test_bacc) / 2`` composite.
+    """
     test = summary.get("test", {})
     val = summary.get("val", {})
-
-    test_auc = test.get("auc_roc", {}).get("mean", 0.0)
-    test_bacc = test.get("balanced_accuracy", {}).get("mean", 0.0)
-    val_auc = val.get("auc_roc", {}).get("mean", 0.0)
-    val_bacc = val.get("balanced_accuracy", {}).get("mean", 0.0)
-
-    composite = (test_auc + test_bacc) / 2
 
     # Try to get peak VRAM
     peak_vram_mb = 0
@@ -91,14 +95,30 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     except Exception:
         pass
 
-    return {
-        "status": "completed",
-        "metrics": {
+    if "c_index" in test:
+        test_ci = test.get("c_index", {}).get("mean", 0.0)
+        val_ci = val.get("c_index", {}).get("mean", 0.0)
+        composite = test_ci
+        metrics = {
+            "val_c_index": round(val_ci, 4),
+            "test_c_index": round(test_ci, 4),
+        }
+    else:
+        test_auc = test.get("auc_roc", {}).get("mean", 0.0)
+        test_bacc = test.get("balanced_accuracy", {}).get("mean", 0.0)
+        val_auc = val.get("auc_roc", {}).get("mean", 0.0)
+        val_bacc = val.get("balanced_accuracy", {}).get("mean", 0.0)
+        composite = (test_auc + test_bacc) / 2
+        metrics = {
             "val_auc": round(val_auc, 4),
             "val_bacc": round(val_bacc, 4),
             "test_auc": round(test_auc, 4),
             "test_bacc": round(test_bacc, 4),
-        },
+        }
+
+    return {
+        "status": "completed",
+        "metrics": metrics,
         "composite": round(composite, 4),
         "elapsed_seconds": round(elapsed, 1),
         "peak_vram_mb": round(peak_vram_mb),
@@ -163,7 +183,15 @@ def main() -> None:
     }.items() if v is not None}
     train_cfg = TrainConfig(**_train_overrides)
 
-    # CFG-01 / D-01: pass n_folds only when explicitly supplied; otherwise ExperimentConfig.n_folds=10 applies.
+    # Resolve survival loss for survival tasks (CLI override, else first
+    # configured variant). Stays None for classification.
+    survival_loss = None
+    if task_cfg.task_type == "survival":
+        survival_loss = args.survival_loss or (
+            task_cfg.survival_losses[0] if task_cfg.survival_losses else "cox"
+        )
+
+    # CFG-01 / D-01: pass n_folds only when explicitly supplied; otherwise ExperimentConfig.n_folds applies.
     _exp_kwargs = {}
     if args.n_folds is not None:
         _exp_kwargs["n_folds"] = args.n_folds
@@ -175,6 +203,7 @@ def main() -> None:
         train=train_cfg,
         framework=framework,
         strategy=args.strategy,
+        survival_loss=survival_loss,
         **_exp_kwargs,
     )
 
@@ -245,6 +274,11 @@ def main() -> None:
             dataset_name=ds.name,
             seed=train_cfg.seed,
             n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
+            task_type=task_cfg.task_type,
+            event_col=task_cfg.event_col,
+            time_col=task_cfg.time_col,
+            survival_loss=survival_loss,
+            nll_bins=task_cfg.nll_bins,
         )
         summary = run_nnmil_experiment(
             exp_cfg, benchmark_dir, device=str(device),

@@ -238,7 +238,7 @@ class RegressionEarlyStopping:
 
 class EarlyStoppingSurvival:
     """Early stopping for survival analysis using metric from plan file"""
-    def __init__(self, patience=10, verbose=False, delta=0, metric='c_index', save_dir=None, model_type=None, logger=None):
+    def __init__(self, patience=10, verbose=False, delta=0, metric='c_index', save_dir=None, model_type=None, logger=None, mode='max'):
         """
         Args:
             patience: Early stopping patience
@@ -248,6 +248,9 @@ class EarlyStoppingSurvival:
             save_dir: Directory to save best model
             model_type: Model type name for saving
             logger: Optional logger
+            mode: 'max' selects on val c-index (higher is better); 'min' selects
+                on val loss (lower is better). 'min' is preferred when the val
+                set has too few events for a reliable c-index.
         """
         self.patience = patience
         self.verbose = verbose
@@ -258,28 +261,24 @@ class EarlyStoppingSurvival:
         self.save_dir = save_dir
         self.model_type = model_type
         self.logger = logger
-        
-        # Use metric from plan file (usually c_index for survival)
-        metric_lower = metric.lower()
-        if 'c_index' in metric_lower or 'cindex' in metric_lower:
-            self.primary_metric = "C-index"
-        else:
-            # Default to C-index for survival
-            self.primary_metric = "C-index"
-        
-        msg = f"EarlyStopping: Using {self.primary_metric} as primary metric for survival analysis (from plan: {metric})"
+        self.mode = mode
+
+        # Monitored quantity depends on mode: val loss (min) or c-index (max).
+        self.primary_metric = "val_loss" if mode == 'min' else "C-index"
+
+        msg = f"EarlyStopping: Using {self.primary_metric} ({mode}) as selection metric for survival (from plan: {metric})"
         if self.logger:
             self.logger.info(msg)
         else:
             print(msg)
 
     def __call__(self, val_loss, val_c_index, model):
-        score = val_c_index
-        
-        # Handle NaN/inf scores
+        score = val_loss if self.mode == 'min' else val_c_index
+
+        # Handle NaN/inf scores: treat as the worst possible so they never win.
         if np.isnan(score) or np.isinf(score):
-            score = 0.0
-            
+            score = float('inf') if self.mode == 'min' else 0.0
+
         if self.best_score is None:
             self.best_score = score
             self.save_checkpoint(val_loss, val_c_index, model)
@@ -288,10 +287,16 @@ class EarlyStoppingSurvival:
                 self.logger.info(msg)
             elif self.verbose:
                 print(msg)
-        elif score < self.best_score + self.delta:
-            # No improvement (score < best_score + delta) or worse
+            return
+
+        if self.mode == 'min':
+            improved = score < self.best_score - self.delta
+        else:
+            improved = score > self.best_score + self.delta
+
+        if not improved:
             self.counter += 1
-            msg = f'EarlyStopping counter: {self.counter}/{self.patience} ({self.primary_metric}: {score:.4f} < {self.best_score:.4f} + {self.delta:.4f})'
+            msg = f'EarlyStopping counter: {self.counter}/{self.patience} ({self.primary_metric}: {score:.4f} vs best {self.best_score:.4f})'
             if self.logger:
                 self.logger.info(msg)
             elif self.verbose:
@@ -304,20 +309,20 @@ class EarlyStoppingSurvival:
                 elif self.verbose:
                     print(msg)
         else:
-            # Improvement (score > best_score + delta)
-            improvement = score - self.best_score
+            improvement = abs(score - self.best_score)
             old_score = self.best_score
             self.best_score = score
             self.save_checkpoint(val_loss, val_c_index, model)
             self.counter = 0
-            msg = f'EarlyStopping: {self.primary_metric} improved from {old_score:.4f} to {self.best_score:.4f} (+{improvement:.4f}). Reset counter.'
+            msg = f'EarlyStopping: {self.primary_metric} improved from {old_score:.4f} to {self.best_score:.4f} ({improvement:+.4f}). Reset counter.'
             if self.logger:
                 self.logger.info(msg)
             elif self.verbose:
                 print(msg)
 
     def save_checkpoint(self, val_loss, val_c_index, model):
-        msg = f'Validation {self.primary_metric} improved ({val_c_index:.4f}). Saving model...'
+        monitored = val_loss if self.mode == 'min' else val_c_index
+        msg = f'Validation {self.primary_metric} improved ({monitored:.4f}). Saving model...'
         if self.logger:
             self.logger.info(msg)
         elif self.verbose:

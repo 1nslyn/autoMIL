@@ -1,0 +1,83 @@
+# TCGA Dataset Configuration Template
+#
+# How to use:
+# 1. Copy this file: cp tcga_template.yaml tcga_{code}.yaml  (e.g., tcga_brca.yaml)
+# 2. Update name, description, paths.data_root env var name
+# 3. Define tasks using {GENE}_binary columns from your GOLDMARK manifest
+# 4. Add AUTOBENCH_TCGA_{CODE}_ROOT to benchmarks/.env
+# 5. Verify: python -c "from autobench.config import load_dataset_config; print(load_dataset_config('tcga_{code}').wsi_dir)"
+#
+# Reference: See Leo's completed tcga_luad.yaml and the tutorial at docs/tcga_feature_extraction_tutorial.md
+
+name: tcga_hnsc  # e.g., tcga_brca, tcga_gbm (lowercase)
+description: "TCGA-HNSC — Head and Neck SCC (HRAS, PIK3CA mutation prediction)"  # Update with your own description
+
+paths:
+  data_root: "${AUTOBENCH_TCGA_HNSC_ROOT}"           # Set in benchmarks/.env
+  wsi_dir: "${data_root}/wsi"                           # Flat directory of .svs files from GDC
+  mapping_csv: "${data_root}/normalized_manifest.csv"   # GOLDMARK sanitized manifest
+  output_dir: "${data_root}/trident_output"
+  benchmark_dir: "${data_root}/benchmark"
+  features_base_dir: "${output_dir}/20x_224px_0px_overlap"
+
+# Define one task per GOLDMARK biomarker target.
+# Binary classification: mutation present (1) vs absent (0).
+# Use the {GENE}_binary column from the GOLDMARK normalized manifest.
+tasks:
+  # Example for a mutation task:
+  # gene_name:
+  #   label_col: "GENE_binary"     # Column in GOLDMARK manifest
+  #   label_map:
+  #     0: "wildtype"
+  #     1: "mutant"
+  #   n_classes: 2
+  hras:
+    label_col: "HRAS_binary"
+    label_map:
+      0: "wildtype"
+      1: "mutant"
+    n_classes: 2
+  pik3ca:
+    label_col: "PIK3CA_binary"
+    label_map:
+      0: "wildtype"
+      1: "mutant"
+    n_classes: 2
+
+split_strategies:
+  standard:
+    train_cohorts: []
+    test_cohorts: []
+
+task_strategy_feasibility:
+  hras: ["standard"]
+  pik3ca: ["standard"]
+
+# These column names are consistent across all GOLDMARK TCGA manifests.
+# You should NOT need to change these.
+slide_id_column: "slide_name"    # GDC filename — matches .svs files on disk
+slide_id_transform: "strip_svs"
+wsi_extension: null              # slide_name already includes .svs
+case_id_column: "sample_names"   # TCGA patient/case ID
+status_column: null
+status_value: null
+
+# Only the 3 target encoders for this round of extraction.
+encoders:
+  models:
+    "paige-ai/Virchow2": "virchow2"
+    "bioptimus/H-optimus-1": "hoptimus1"
+    "MahmoodLab/UNI2-h": "uni_v2"
+  dims:
+    virchow2: 2560
+    hoptimus1: 1536
+    uni_v2: 1536
+
+nnmil_models:
+  - ab_mil
+  - trans_mil
+
+extraction:
+  magnification: 20
+  patch_size: 224
+  batch_size: 64

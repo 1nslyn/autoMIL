@@ -14,19 +14,46 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from autobench.pipeline.config import resolve_n_folds
+
+
+def nnmil_plan_dir(
+    benchmark_dir: str,
+    strategy: str,
+    task_name: str,
+    encoder_key: str,
+    survival_loss: str | None = None,
+) -> str:
+    """Return the nnMIL plan directory for one experiment.
+
+    Survival experiments get a per-loss suffix so cox/mse/mae/nllsurv don't
+    overwrite each other's plans. Classification (``survival_loss=None``)
+    keeps the original ``{task}_{encoder}`` layout unchanged.
+    """
+    leaf = f"{task_name}_{encoder_key}"
+    if survival_loss is not None:
+        leaf = f"{leaf}_{survival_loss}"
+    return os.path.join(benchmark_dir, "nnmil", strategy, leaf)
+
 
 def prepare_nnmil_experiment(
     benchmark_dir: str,
     task_name: str,
     encoder_key: str,
     strategy: str,
-    label_col: str,
-    label_dict: dict[str, int],
-    embed_dim: int,
-    features_base_dir: str,
+    label_col: str | None = None,
+    label_dict: dict[str, int] | None = None,
+    embed_dim: int = 0,
+    features_base_dir: str = "",
     dataset_name: str = "dataset",
     seed: int = 42,
     n_splits: int = 5,
+    *,
+    task_type: str = "classification",
+    event_col: str | None = None,
+    time_col: str | None = None,
+    survival_loss: str | None = None,
+    nll_bins: int = 4,
 ) -> str:
     """Prepare nnMIL dataset artifacts for one (task, encoder, strategy) combo.
 
@@ -35,9 +62,18 @@ def prepare_nnmil_experiment(
     The generated plan embeds the SAME splits from the shared split CSVs
     into nnMIL's ``data_splits`` format so that CLAM and nnMIL use
     identical patient/slide assignments.
+
+    For ``task_type="survival"`` the plan declares ``task_type: survival``,
+    ``metric: c_index``, carries the chosen ``survival_loss`` (+ ``nll_bins``
+    for nllsurv), and emits per-slide ``status``/``time`` instead of ``label``.
     """
-    dataset_dir = os.path.join(
-        benchmark_dir, "nnmil", strategy, f"{task_name}_{encoder_key}"
+    is_survival = task_type == "survival"
+    # Survival uses 5-fold CV (vs classification's configured n_folds) so the
+    # embedded data_splits and evaluation_setting match the survival split CSVs.
+    n_splits = resolve_n_folds(task_type, n_splits)
+    dataset_dir = nnmil_plan_dir(
+        benchmark_dir, strategy, task_name, encoder_key,
+        survival_loss=survival_loss if is_survival else None,
     )
     plan_path = os.path.join(dataset_dir, "dataset_plan.json")
 
@@ -62,29 +98,55 @@ def prepare_nnmil_experiment(
         task_df = task_df[has_h5].reset_index(drop=True)
 
     # --- dataset.json ---
-    # Invert label_dict: {"neg": 0, "pos": 1} -> {"0": "neg", "1": "pos"}
-    labels_map = {str(v): k for k, v in label_dict.items()}
-    dataset_json = {
-        "name": f"{dataset_name}_{task_name}_{strategy}",
-        "description": f"{dataset_name} {task_name.upper()} classification, strategy {strategy}",
-        "task_type": "classification",
-        "task_name": f"{task_name}_{strategy}_{encoder_key}",
-        "evaluation_setting": f"{n_splits}fold",
-        "feature_dir": h5_dir,
-        "labels": labels_map,
-        "metric": "bacc",
-        "modality": {"0": "Histopathology"},
-    }
+    if is_survival:
+        dataset_json = {
+            "name": f"{dataset_name}_{task_name}_{strategy}",
+            "description": (
+                f"{dataset_name} {task_name.upper()} survival "
+                f"({survival_loss}), strategy {strategy}"
+            ),
+            "task_type": "survival",
+            "task_name": f"{task_name}_{strategy}_{encoder_key}",
+            "evaluation_setting": f"{n_splits}fold",
+            "feature_dir": h5_dir,
+            "metric": "c_index",
+            "modality": {"0": "Histopathology"},
+            "survival_loss": survival_loss,
+            "nll_bins": nll_bins,
+        }
+    else:
+        # Invert label_dict: {"neg": 0, "pos": 1} -> {"0": "neg", "1": "pos"}
+        labels_map = {str(v): k for k, v in label_dict.items()}
+        dataset_json = {
+            "name": f"{dataset_name}_{task_name}_{strategy}",
+            "description": f"{dataset_name} {task_name.upper()} classification, strategy {strategy}",
+            "task_type": "classification",
+            "task_name": f"{task_name}_{strategy}_{encoder_key}",
+            "evaluation_setting": f"{n_splits}fold",
+            "feature_dir": h5_dir,
+            "labels": labels_map,
+            "metric": "bacc",
+            "modality": {"0": "Histopathology"},
+        }
     with open(os.path.join(dataset_dir, "dataset.json"), "w") as f:
         json.dump(dataset_json, f, indent=2)
 
     # --- dataset.csv ---
-    # Map string labels to ints for nnMIL
-    csv_df = pd.DataFrame({
-        "slide_id": task_df["slide_id"],
-        "patient_id": task_df["case_id"],
-        "label": task_df["label"].map(label_dict),
-    })
+    if is_survival:
+        # nnMIL's survival dataset expects columns named exactly status/time.
+        csv_df = pd.DataFrame({
+            "slide_id": task_df["slide_id"],
+            "patient_id": task_df["case_id"],
+            "status": task_df["status"].astype(int),
+            "time": task_df["time"].astype(float),
+        })
+    else:
+        # Map string labels to ints for nnMIL
+        csv_df = pd.DataFrame({
+            "slide_id": task_df["slide_id"],
+            "patient_id": task_df["case_id"],
+            "label": task_df["label"].map(label_dict),
+        })
     csv_df.to_csv(os.path.join(dataset_dir, "dataset.csv"), index=False)
 
     # --- feature statistics (from a sample of H5 files) ---
@@ -93,7 +155,7 @@ def prepare_nnmil_experiment(
     # --- data splits (from shared split CSVs) ---
     splits_dir = os.path.join(benchmark_dir, "splits", strategy, task_name)
     data_splits = _load_splits_as_nnmil_format(
-        splits_dir, task_df, label_dict, n_splits
+        splits_dir, task_df, label_dict, n_splits, task_type=task_type,
     )
 
     # --- dataset_plan.json ---
@@ -104,9 +166,15 @@ def prepare_nnmil_experiment(
         "training_configuration": _generate_training_config(
             feature_stats,
             len(task_df),
-            n_classes=len(label_dict),
+            n_classes=(None if is_survival else len(label_dict)),
             metric=dataset_json["metric"],
-            min_class_count=int(task_df["label"].value_counts().min()),
+            min_class_count=(
+                None if is_survival
+                else int(task_df["label"].value_counts().min())
+            ),
+            task_type=task_type,
+            survival_loss=survival_loss,
+            nll_bins=nll_bins,
         ),
         "random_seed": seed,
     }
@@ -172,8 +240,9 @@ def _analyze_features(
 def _load_splits_as_nnmil_format(
     splits_dir: str,
     task_df: pd.DataFrame,
-    label_dict: dict[str, int],
+    label_dict: dict[str, int] | None,
     n_splits: int,
+    task_type: str = "classification",
 ) -> dict:
     """Convert shared split CSVs to nnMIL's data_splits format.
 
@@ -185,17 +254,33 @@ def _load_splits_as_nnmil_format(
             "test":  {"slide_ids": [...], "slide_info": [...]},
         }
 
-    where each ``slide_info`` entry is::
+    where each ``slide_info`` entry is, for classification::
 
         {"slide_id": "...", "patient_id": "...", "label": 0}
+
+    and for survival (keys nnMIL's ``UnifiedMILDataset`` consumes directly)::
+
+        {"slide_id": "...", "patient_id": "...", "status": 1, "time": 12.5}
     """
-    # Build lookup: slide_id -> (case_id, label_int)
-    lookup: dict[str, tuple[str, int]] = {}
+    is_survival = task_type == "survival"
+
+    # Build lookup: slide_id -> slide_info payload (without the slide_id key)
+    lookup: dict[str, dict] = {}
     for _, row in task_df.iterrows():
-        label_int = label_dict.get(row["label"], row["label"])
-        if isinstance(label_int, str):
-            label_int = int(label_int)
-        lookup[row["slide_id"]] = (row["case_id"], int(label_int))
+        if is_survival:
+            lookup[row["slide_id"]] = {
+                "patient_id": row["case_id"],
+                "status": int(row["status"]),
+                "time": float(row["time"]),
+            }
+        else:
+            label_int = label_dict.get(row["label"], row["label"])
+            if isinstance(label_int, str):
+                label_int = int(label_int)
+            lookup[row["slide_id"]] = {
+                "patient_id": row["case_id"],
+                "label": int(label_int),
+            }
 
     data_splits: dict[str, dict] = {}
 
@@ -214,12 +299,7 @@ def _load_splits_as_nnmil_format(
             slide_info = []
             for sid in sids:
                 if sid in lookup:
-                    case_id, label_int = lookup[sid]
-                    slide_info.append({
-                        "slide_id": sid,
-                        "patient_id": case_id,
-                        "label": label_int,
-                    })
+                    slide_info.append({"slide_id": sid, **lookup[sid]})
             fold_data[split_name] = {
                 "slide_ids": [si["slide_id"] for si in slide_info],
                 "slide_info": slide_info,
@@ -233,16 +313,29 @@ def _load_splits_as_nnmil_format(
 def _generate_training_config(
     feature_stats: dict,
     n_samples: int,
-    n_classes: int = 2,
+    n_classes: int | None = 2,
     metric: str = "bacc",
     min_class_count: int | None = None,
+    task_type: str = "classification",
+    survival_loss: str | None = None,
+    nll_bins: int = 4,
 ) -> dict:
     """Generate nnMIL training configuration, matching upstream planner.
 
     Replicates ``lib/nnMIL/preprocessing/experiment_planner.py:573-725``
     so the wrapper's plan is bit-identical to what
     ``nnMIL_plan_experiment.py`` would emit.
+
+    Survival tasks (``task_type="survival"``) bypass the class-count batch
+    logic, set ``num_classes`` to 1 (cox/mse/mae) or ``nll_bins`` (nllsurv),
+    and inject ``survival_loss``/``nll_bins`` so the survival trainers pick
+    them up via the config fallback.
     """
+    if task_type == "survival":
+        return _generate_survival_training_config(
+            feature_stats, n_samples, survival_loss, nll_bins,
+        )
+
     feat_dim = feature_stats["feature_dimension"]
     hidden_dim = max(256, feat_dim // 4)
 
@@ -311,3 +404,58 @@ def _generate_training_config(
         "patience": 10,
         "num_classes": n_classes,
     }
+
+
+def _generate_survival_training_config(
+    feature_stats: dict,
+    n_samples: int,
+    survival_loss: str | None,
+    nll_bins: int,
+) -> dict:
+    """Training config for a survival experiment.
+
+    Mirrors the classification config's feature/seq sizing but bypasses the
+    class-minority batch logic (survival has no classes). ``num_classes`` is
+    the survival head width: 1 for cox/mse/mae, ``nll_bins`` for nllsurv.
+    ``survival_loss`` (+ ``nll_bins`` for nllsurv) are injected so the
+    survival trainers read them from the plan's config fallback. LR follows
+    nnMIL's survival planner default (1e-4); ``c_index`` metric resolves the
+    batch sampler to ``random`` (accepted by the survival trainers).
+    """
+    feat_dim = feature_stats["feature_dimension"]
+    hidden_dim = max(256, feat_dim // 4)
+    if "recommended_max_seq_length" in feature_stats:
+        max_seq_length = int(feature_stats["recommended_max_seq_length"])
+    else:
+        max_seq_length = int(feature_stats["num_patches_per_slide"]["median"] * 0.5)
+
+    num_train_samples = int(n_samples * 0.8)
+    if num_train_samples < 200:
+        batch_size = 16
+    elif num_train_samples <= 800:
+        batch_size = 24 if num_train_samples < 400 else 32
+    else:
+        batch_size = 32
+    batch_size = max(16, min(48, batch_size))
+
+    num_classes = nll_bins if survival_loss == "nllsurv" else 1
+
+    cfg = {
+        "feature_dimension": feat_dim,
+        "hidden_dim": hidden_dim,
+        "max_seq_length": max_seq_length,
+        "use_original_length": False,
+        "batch_size": batch_size,
+        "batch_sampler": "random",
+        "learning_rate": 1e-4,
+        "weight_decay": 0.01 if hidden_dim >= 512 else 1e-4,
+        "num_epochs": 100,
+        "warmup_epochs": 10 if num_train_samples < 500 else 5,
+        "dropout": 0.25,
+        "patience": 10,
+        "num_classes": num_classes,
+        "survival_loss": survival_loss,
+    }
+    if survival_loss == "nllsurv":
+        cfg["nll_bins"] = nll_bins
+    return cfg

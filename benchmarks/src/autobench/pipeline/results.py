@@ -37,6 +37,7 @@ def aggregate_cross_framework(
             "task": s["task"],
             "encoder": s["encoder"],
             "model_type": s["model_type"],
+            "survival_loss": s.get("survival_loss", getattr(exp, "survival_loss", None)),
             "embed_dim": s["embed_dim"],
             "n_folds": s["n_folds"],
             "seed": s["seed"],
@@ -59,12 +60,20 @@ def generate_comparison_tables(
     """Generate pivot tables: CLAM vs nnMIL for each (task, strategy).
 
     Returns a dict keyed by ``"{task}_{strategy}"`` with DataFrames
-    showing models as rows and encoders as columns, with
-    ``test_auc_roc_mean`` as values.
+    showing models as rows and encoders as columns. Values are
+    ``test_c_index_mean`` for survival results (when present) else
+    ``test_auc_roc_mean``.
     """
     tables: dict[str, pd.DataFrame] = {}
 
-    if results_df.empty or "test_auc_roc_mean" not in results_df.columns:
+    if results_df.empty:
+        return tables
+    value_col = (
+        "test_c_index_mean"
+        if "test_c_index_mean" in results_df.columns
+        else "test_auc_roc_mean"
+    )
+    if value_col not in results_df.columns:
         return tables
 
     for (task, strategy), group in results_df.groupby(["task", "strategy"]):
@@ -72,7 +81,7 @@ def generate_comparison_tables(
         pivot = group.pivot_table(
             index=["framework", "model_type"],
             columns="encoder",
-            values="test_auc_roc_mean",
+            values=value_col,
             aggfunc="first",
         )
         if not pivot.empty:

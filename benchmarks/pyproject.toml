@@ -27,6 +27,7 @@ dependencies = [
     "pyyaml>=6.0",
     "pandas>=2.0",
     "datasets>=2.14,<3.0",
+    "scikit-survival>=0.25.0",
 ]
 
 [tool.uv.sources]

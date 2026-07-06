@@ -158,8 +158,13 @@ class TestNnmilElapsedSeconds:
         )
 
         results_dir = str(tmp_path / "results")
+        # train_nnmil_fold reads the plan file (task_type / survival_loss) to
+        # select the trainer, so it must exist — a classification plan here.
+        plan_path = str(tmp_path / "plan.json")
+        with open(plan_path, "w") as f:
+            json.dump({"task_type": "classification"}, f)
         result = nnmil_train_mod.train_nnmil_fold(
-            exp_cfg, plan_path="/unused/plan.json", fold=0,
+            exp_cfg, plan_path=plan_path, fold=0,
             results_dir=results_dir, device="cpu",
         )
 

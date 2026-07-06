@@ -49,13 +49,21 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
 
     test_m = result.get("test_metrics", {}) or {}
     val_m = result.get("val_metrics", {}) or {}
-    metrics = {
-        "val_auc":   _unwrap(val_m.get("auc_roc")),
-        "val_bacc":  _unwrap(val_m.get("balanced_accuracy")),
-        "test_auc":  _unwrap(test_m.get("auc_roc")),
-        "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
-    }
-    composite = (metrics["test_auc"] + metrics["test_bacc"]) / 2.0
+    if "c_index" in test_m:
+        # Survival: composite is the test concordance index.
+        metrics = {
+            "val_c_index":  _unwrap(val_m.get("c_index")),
+            "test_c_index": _unwrap(test_m.get("c_index")),
+        }
+        composite = metrics["test_c_index"]
+    else:
+        metrics = {
+            "val_auc":   _unwrap(val_m.get("auc_roc")),
+            "val_bacc":  _unwrap(val_m.get("balanced_accuracy")),
+            "test_auc":  _unwrap(test_m.get("auc_roc")),
+            "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
+        }
+        composite = (metrics["test_auc"] + metrics["test_bacc"]) / 2.0
 
     payload = {
         "fold_index":      fold_index,
@@ -84,24 +92,33 @@ def run_experiment(
 
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 
-    task_csv_name = exp_cfg.task.name
-
-    dataset = create_dataset(exp_cfg, benchmark_dir, task_csv_name=task_csv_name)
-
-    # Splits directory: splits/{strategy}/{task}/
-    splits_subdir = os.path.join(exp_cfg.strategy, exp_cfg.task.name)
-
     fold_results: list[dict] = []
-    for fold in range(exp_cfg.n_folds):
-        train_split, val_split, test_split = load_fold_splits(
-            dataset, benchmark_dir, splits_subdir, fold,
+    if exp_cfg.is_survival:
+        # Survival uses an adapter-side trainer over the CLAM model.
+        from autobench.pipeline.clam.survival_train import train_survival_fold
+
+        for fold in range(exp_cfg.n_folds):
+            result = train_survival_fold(
+                exp_cfg, benchmark_dir, fold, results_dir, device,
+            )
+            fold_results.append(result)
+            _write_fold_result_json(fold, result)
+    else:
+        dataset = create_dataset(
+            exp_cfg, benchmark_dir, task_csv_name=exp_cfg.task.name,
         )
-        result = train_fold(
-            exp_cfg, train_split, val_split, test_split,
-            fold, results_dir, device, wandb_project=wandb_project,
-        )
-        fold_results.append(result)
-        _write_fold_result_json(fold, result)
+        # Splits directory: splits/{strategy}/{task}/
+        splits_subdir = os.path.join(exp_cfg.strategy, exp_cfg.task.name)
+        for fold in range(exp_cfg.n_folds):
+            train_split, val_split, test_split = load_fold_splits(
+                dataset, benchmark_dir, splits_subdir, fold,
+            )
+            result = train_fold(
+                exp_cfg, train_split, val_split, test_split,
+                fold, results_dir, device, wandb_project=wandb_project,
+            )
+            fold_results.append(result)
+            _write_fold_result_json(fold, result)
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]
@@ -113,6 +130,7 @@ def run_experiment(
         "encoder": exp_cfg.encoder_key,
         "embed_dim": exp_cfg.embed_dim,
         "model_type": exp_cfg.model.model_type,
+        "survival_loss": exp_cfg.survival_loss,
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,

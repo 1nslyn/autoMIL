@@ -8,6 +8,7 @@ import os
 import sys
 import time as time_module
 import json
+import functools
 import torch
 import numpy as np
 import pandas as pd
@@ -39,6 +40,11 @@ def map_time_to_bins_with_edges(time_tensor: torch.Tensor, edges: np.ndarray) ->
 def bs1_collate(batch):
     """Collate function for batch_size=1"""
     return batch[0]
+
+
+def _surv_worker_init(worker_id, seed):
+    """Picklable DataLoader worker init (spawn-safe): seed numpy per worker."""
+    np.random.seed(seed + worker_id)
 
 
 class SurvivalPorpoiseTrainer(BaseTrainer):
@@ -80,11 +86,33 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         
         self.logger.info(f"Datasets loaded - Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
         
-        # Compute NLL bin edges from training data
-        train_times = [train_dataset[i][4].item() for i in range(len(train_dataset))]
-        train_times = np.array(train_times)
+        # Compute NLL bin edges from EVENT (uncensored) training times only.
+        # This follows the original PORPOISE/MCAT convention: discretizing on
+        # event times keeps censored outliers (including any corrupted/negative
+        # follow-up times) from distorting the quantile boundaries. Falls back
+        # to all training times when a fold has too few events to define bins.
+        all_status, all_times = [], []
+        for i in range(len(train_dataset)):
+            sample = train_dataset[i]
+            s, t = sample[3], sample[4]
+            all_status.append(s.item() if hasattr(s, "item") else float(s))
+            all_times.append(t.item() if hasattr(t, "item") else float(t))
+        all_times = np.array(all_times)
+        event_times = all_times[np.array(all_status) == 1]
+        if len(np.unique(event_times)) >= self.nll_bins:
+            bin_src = event_times
+            self.logger.info(
+                f"NLL bins from {len(event_times)} event (uncensored) train times"
+            )
+        else:
+            bin_src = all_times
+            self.logger.warning(
+                f"Only {len(np.unique(event_times))} unique event times "
+                f"(< nll_bins={self.nll_bins}); falling back to all "
+                f"{len(all_times)} train times for NLL binning"
+            )
         qs = np.linspace(0, 1, self.nll_bins + 1)
-        edges = np.quantile(train_times, qs)
+        edges = np.quantile(bin_src, qs)
         # Ensure strictly increasing
         eps = 1e-6
         for i in range(1, len(edges)):
@@ -94,22 +122,19 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         self.logger.info(f"NLL bin edges computed: {self.nll_bin_edges}")
         
         # Create data loaders with batch_size=1
-        def _worker_init_fn(worker_id):
-            np.random.seed(self.seed + worker_id)
-        
         self.train_loader = DataLoader(
             train_dataset, batch_size=1, shuffle=True,
-            num_workers=4, worker_init_fn=_worker_init_fn,
+            num_workers=4, worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed),
             collate_fn=bs1_collate
         )
         self.val_loader = DataLoader(
             val_dataset, batch_size=1, shuffle=False,
-            num_workers=4, worker_init_fn=_worker_init_fn,
+            num_workers=4, worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed),
             collate_fn=bs1_collate
         )
         self.test_loader = DataLoader(
             test_dataset, batch_size=1, shuffle=False,
-            num_workers=4, worker_init_fn=_worker_init_fn,
+            num_workers=4, worker_init_fn=functools.partial(_surv_worker_init, seed=self.seed),
             collate_fn=bs1_collate
         )
         
@@ -170,7 +195,8 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
             metric=metric,
             save_dir=self.save_dir,
             model_type=self.model_type,
-            logger=self.logger
+            logger=self.logger,
+            mode='min',  # select on val NLL loss: val c-index is near-random with few events
         )
         
         # Setup mixed precision
@@ -198,8 +224,13 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
             
             pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}")
             for batch_idx, batch in enumerate(pbar):
-                features, coords, bag_sizes, status, time, patient_ids = batch
-                
+                # Survival dataset now returns 7 items: features, coords, bag_sizes, status, time, patient_ids, slide_ids
+                if len(batch) == 7:
+                    features, coords, bag_sizes, status, time, patient_ids, slide_ids = batch
+                else:
+                    # Old format with 6 items
+                    features, coords, bag_sizes, status, time, patient_ids = batch
+
                 features = features.to(self.device)
                 if features.dim() == 2:
                     features = features.unsqueeze(0)
@@ -252,19 +283,17 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
             self.model.eval()
             torch.set_grad_enabled(False)
             val_metrics = self.evaluate('val')
+            # Select on val NLL loss, not the tiny-event val c-index (see
+            # SurvivalTrainer._compute_val_loss for rationale).
+            val_loss = self._compute_val_loss(loss_fn)
             torch.set_grad_enabled(True)
             self.model.train()
-            
-            # Early stopping
-            metric_value = val_metrics.get(f'val_{metric}', val_metrics.get('val_c_index', 0.0))
-            # Convert to float to ensure it's a number, not a model object
-            if isinstance(metric_value, (torch.Tensor, np.ndarray)):
-                metric_value = float(metric_value.item() if isinstance(metric_value, torch.Tensor) else metric_value)
-            else:
-                metric_value = float(metric_value)
-            # EarlyStoppingSurvival.__call__ signature: (val_loss, val_c_index, model)
-            # val_loss is not used but required by signature, pass 0.0
-            early_stopping(0.0, metric_value, self.model)
+
+            # c-index kept for logging/reference only; selection is on val loss
+            val_cidx = val_metrics.get('val_c_index', 0.0)
+            val_cidx = float(val_cidx.item()) if isinstance(val_cidx, torch.Tensor) else float(val_cidx)
+            self.logger.info(f"Val loss: {val_loss:.4f}, Val c-index: {val_cidx:.4f}")
+            early_stopping(val_loss, val_cidx, self.model)
             if early_stopping.early_stop:
                 self.logger.info(f"Early stopping triggered at epoch {epoch+1}")
                 break
@@ -284,6 +313,31 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         
         return self.model
     
+    def _compute_val_loss(self, loss_fn):
+        """Mean NLLSurv loss over the val set — the model-selection signal,
+        robust to the tiny-event val c-index. Returns a float. Assumes the
+        model is already in eval mode."""
+        total, n = 0.0, 0
+        with torch.no_grad():
+            for batch in self.val_loader:
+                if len(batch) == 7:
+                    features, coords, bag_sizes, status, time, patient_ids, slide_ids = batch
+                else:
+                    features, coords, bag_sizes, status, time, patient_ids = batch
+                features = features.to(self.device)
+                if features.dim() == 2:
+                    features = features.unsqueeze(0)
+                if hasattr(self.model, 'forward') and 'is_cox' in self.model.forward.__code__.co_varnames:
+                    output = self.model(features, is_cox=True)
+                else:
+                    output = self.model(features)
+                logits = (output['logits'] if isinstance(output, dict) else output).float()
+                y = map_time_to_bins_with_edges(time.to(self.device), self.nll_bin_edges)
+                c = (1 - status.to(self.device)).long()
+                total += float(loss_fn(logits, y, c).item())
+                n += 1
+        return total / max(n, 1)
+
     def evaluate(self, split='test'):
         """Evaluate on a split"""
         if self.model is None:
@@ -302,8 +356,13 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         
         with torch.no_grad():
             for batch in tqdm(loader, desc=f"{prefix} Eval"):
-                features, coords, bag_sizes, status, time, patient_ids = batch
-                
+                # Survival dataset now returns 7 items: features, coords, bag_sizes, status, time, patient_ids, slide_ids
+                if len(batch) == 7:
+                    features, coords, bag_sizes, status, time, patient_ids, slide_ids = batch
+                else:
+                    # Old format with 6 items
+                    features, coords, bag_sizes, status, time, patient_ids = batch
+
                 features = features.to(self.device)
                 if features.dim() == 2:
                     features = features.unsqueeze(0)
@@ -360,7 +419,7 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         if all_preds.shape[0] > 0:
             c_index = survival_c_index(risk_tensor, status_tensor, time_tensor, all_patient_ids)
         else:
-            c_index = 0.5
+            c_index = float("nan")
         
         # Calculate event statistics
         num_events = int(all_status.sum())
@@ -370,7 +429,7 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         median_time = float(np.median(all_time))
         
         metrics = {
-            f"{split}_c_index": c_index if c_index is not None else 0.0,
+            f"{split}_c_index": c_index if c_index is not None else float("nan"),
             f"{split}_events": num_events,
             f"{split}_censored": num_censored,
             f"{split}_event_rate": event_rate,

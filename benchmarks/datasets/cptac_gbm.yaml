@@ -1,8 +1,8 @@
-name: tcga_lgg
-description: "TCGA-LGG — Lower-Grade Glioma (IDH1 mutation prediction)"
+name: cptac_gbm
+description: "CPTAC-GBM — Glioblastoma Multiforme"
 
 paths:
-  data_root: "${AUTOBENCH_TCGA_LGG_ROOT}"
+  data_root: "${AUTOBENCH_CPTAC_GBM_ROOT}"
   wsi_dir: "${data_root}/wsi"
   mapping_csv: "${data_root}/normalized_manifest.csv"
   output_dir: "${data_root}/trident_output"
@@ -10,18 +10,25 @@ paths:
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
 tasks:
-  idh1:
-    label_col: "IDH1_binary"
+  egfr:
+    label_col: "EGFR_binary"
     label_map:
       0: "wildtype"
       1: "mutant"
     n_classes: 2
-  os:
-    task_type: survival
-    event_col: OS_event
-    time_col: OS_time
-    survival_losses: [cox, nllsurv]
-    nll_bins: 4
+  tp53:
+    label_col: "TP53_binary"
+    label_map:
+      0: "wildtype"
+      1: "mutant"
+    n_classes: 2
+  immune_class:
+    label_col: "IMMUNE_CLASS_binary"
+    label_map:
+      0: "low"
+      1: "medium"
+      2: "high"
+    n_classes: 3
 
 split_strategies:
   standard:
@@ -29,13 +36,14 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  idh1: ["standard"]
-  os: ["standard"]
+  egfr: ["standard"]
+  tp53: ["standard"]
+  immune_class: ["standard"]
 
-slide_id_column: "slide_name"
-slide_id_transform: "strip_svs"
-wsi_extension: null
-case_id_column: "sample_names"
+slide_id_column: "slide_id"
+slide_id_transform: null
+wsi_extension: ".svs"
+case_id_column: "case_id"
 status_column: null
 status_value: null
 
@@ -50,11 +58,8 @@ encoders:
     uni_v2: 1536
 
 nnmil_models:
+  - ab_mil
   - trans_mil
-  - simple_mil
-
-abmil_models:
-  - abmil
 
 extraction:
   magnification: 20

@@ -27,6 +27,7 @@ def create_strategy_splits(
     strategy_cfg: StrategyConfig | None = None,
     n_splits: int = 5,
     seed: int = 42,
+    stratify_col: str = "label",
 ) -> list[str]:
     """Create split CSVs using patient-stratified k-fold CV.
 
@@ -66,9 +67,14 @@ def create_strategy_splits(
                 "in-distribution if we let this fall through — implement "
                 "the strategy branch explicitly before using it."
             )
+    if stratify_col not in df.columns:
+        raise ValueError(
+            f"Task CSV {task_csv} is missing the stratification column "
+            f"{stratify_col!r}. Available columns: {list(df.columns)}."
+        )
     os.makedirs(splits_dir, exist_ok=True)
 
-    return _splits_standard_cv(df, splits_dir, n_splits, seed)
+    return _splits_standard_cv(df, splits_dir, n_splits, seed, stratify_col)
 
 
 def _splits_standard_cv(
@@ -76,20 +82,28 @@ def _splits_standard_cv(
     splits_dir: str,
     n_splits: int,
     seed: int,
+    stratify_col: str = "label",
 ) -> list[str]:
     """Patient-stratified k-fold: dedup to cases, split cases, expand to slides.
 
-    Slides from the same ``case_id`` share a label (mutations are case-level)
-    so we can dedup safely and run standard StratifiedKFold on cases.
-    Avoids StratifiedGroupKFold's minimum-stratum-size limitation.
+    Slides from the same ``case_id`` share a stratification key — the class
+    label for classification, or the event indicator (``status``) for
+    survival — so we can dedup safely and run standard StratifiedKFold on
+    cases. Stratifying survival splits on ``status`` keeps every fold from
+    landing zero events (which would make the c-index undefined and collapse
+    nllsurv's quantile bins). Avoids StratifiedGroupKFold's minimum-stratum-
+    size limitation.
     """
-    # One row per case with its label (slides of the same case share a label)
-    case_table = df.groupby("case_id", sort=True)["label"].first().reset_index()
-    # .to_numpy() (not .values): on pandas >= 3.0 string columns are Arrow-backed,
-    # and .values returns an ExtensionArray that sklearn's _safe_indexing cannot
-    # index with an integer array. .to_numpy() yields a plain ndarray on pandas 2 and 3.
-    case_ids = case_table["case_id"].to_numpy()
-    case_labels = case_table["label"].to_numpy()
+    # One row per case with its stratification key (slides of the same case
+    # share it — mutations and survival outcomes are both case-level).
+    case_table = df.groupby("case_id", sort=True)[stratify_col].first().reset_index()
+    case_ids = np.asarray(case_table["case_id"], dtype=object)
+    # Preserve the native dtype: string labels stay object (sklearn reads them
+    # as 'binary'/'multiclass'), but integer survival status must NOT be cast
+    # to object or sklearn's type_of_target rejects it as 'unknown'. .to_numpy()
+    # (not .values) also keeps this pandas-3 safe: on pandas>=3 string columns
+    # are Arrow-backed and .values returns an ExtensionArray sklearn can't index.
+    case_labels = case_table[stratify_col].to_numpy()
 
     # Upfront feasibility check: sklearn raises mid-fit with a generic message
     # ("n_splits=N cannot be greater than the number of members in each class")

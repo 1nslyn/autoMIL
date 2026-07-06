@@ -70,12 +70,28 @@ def _resolve_paths(raw: dict[str, str]) -> dict[str, str]:
 
 @dataclass
 class TaskDef:
-    """Definition of a classification task within a dataset."""
+    """Definition of a task within a dataset.
+
+    Supports two ``task_type`` values:
+
+    - ``"classification"`` (default): uses ``label_col`` / ``label_map`` /
+      ``n_classes``.
+    - ``"survival"``: uses ``event_col`` (0/1 event indicator) and
+      ``time_col`` (continuous survival/follow-up time). The label fields
+      are unused. ``survival_losses`` lists which loss variants form the
+      experiment grid (each runs as a separate experiment); ``nll_bins``
+      is consulted only by the ``nllsurv`` loss.
+    """
 
     name: str
-    label_col: str
-    label_map: dict[int, str]  # raw int -> class name
-    n_classes: int
+    label_col: str | None = None
+    label_map: dict[int, str] | None = None  # raw int -> class name
+    n_classes: int | None = None
+    task_type: str = "classification"
+    event_col: str | None = None
+    time_col: str | None = None
+    survival_losses: list[str] = field(default_factory=lambda: ["cox"])
+    nll_bins: int = 4
 
 
 @dataclass
@@ -161,16 +177,32 @@ class DatasetConfig:
 
 
 def _parse_tasks(raw: dict[str, Any]) -> dict[str, TaskDef]:
-    """Parse task definitions from YAML."""
+    """Parse task definitions from YAML.
+
+    Classification tasks require ``label_col`` / ``label_map``. Survival
+    tasks (``task_type: survival``) require ``event_col`` / ``time_col``
+    and may list ``survival_losses`` (default ``["cox"]``) and ``nll_bins``.
+    """
     tasks = {}
     for name, tdef in raw.items():
-        label_map = {int(k): v for k, v in tdef["label_map"].items()}
-        tasks[name] = TaskDef(
-            name=name,
-            label_col=tdef["label_col"],
-            label_map=label_map,
-            n_classes=tdef.get("n_classes", len(label_map)),
-        )
+        task_type = tdef.get("task_type", "classification")
+        if task_type == "survival":
+            tasks[name] = TaskDef(
+                name=name,
+                task_type="survival",
+                event_col=tdef["event_col"],
+                time_col=tdef["time_col"],
+                survival_losses=tdef.get("survival_losses", ["cox"]),
+                nll_bins=tdef.get("nll_bins", 4),
+            )
+        else:
+            label_map = {int(k): v for k, v in tdef["label_map"].items()}
+            tasks[name] = TaskDef(
+                name=name,
+                label_col=tdef["label_col"],
+                label_map=label_map,
+                n_classes=tdef.get("n_classes", len(label_map)),
+            )
     return tasks
 
 
