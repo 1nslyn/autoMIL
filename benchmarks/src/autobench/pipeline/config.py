@@ -86,7 +86,7 @@ class ExperimentConfig:
     embed_dim: int
     model: ModelConfig
     train: TrainConfig
-    n_folds: int = 10
+    n_folds: int = 5
     framework: Framework = Framework.CLAM
     strategy: str = "standard"
 
@@ -129,7 +129,7 @@ class BenchmarkConfig:
     model_types: list[str] = field(default_factory=list)
     tasks: list[str] = field(default_factory=list)
     train: TrainConfig = field(default_factory=TrainConfig)
-    n_folds: int = 10
+    n_folds: int = 5
     gpu: int = 0
     wandb_project: str | None = None
     experiments_per_gpu: int | None = None
