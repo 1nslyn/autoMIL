@@ -123,13 +123,13 @@ One idempotent multi-GPU job per cohort (skips completed automatically). CLAM (`
 ```bash
 # from benchmarks/scripts/ on the cluster, against the tagged pipeline
 DATASET=tcga_luad FRAMEWORKS=nnmil NNMIL_MODELS="ab_mil dtfd_mil" \
-  ENCODERS="uni_v2 virchow2 hoptimus1" N_FOLDS=10 SEED=42 \
+  ENCODERS="uni_v2 virchow2 hoptimus1" N_FOLDS=5 SEED=42 \
   sbatch submit_benchmark.sh          # 4×H100, 24h, mem=0, self-resubmits on timeout
 # repeat for tcga_lgg, tcga_thca, tcga_hnsc
 # COAD (rerun ALL heads incl. clam_mb + subset tasks):
 DATASET=tcga_coad FRAMEWORKS="clam nnmil" NNMIL_MODELS="ab_mil dtfd_mil simple_mil" \
   MODELS="clam_mb" TASKS="msi braf" ENCODERS="uni_v2 virchow2 hoptimus1" \
-  N_FOLDS=10 SEED=42 sbatch submit_benchmark.sh
+  N_FOLDS=5 SEED=42 sbatch submit_benchmark.sh
 ```
 Idempotency: reruns skip experiments already in `results/_completed.json`, so a timeout-resubmit is safe.
 
