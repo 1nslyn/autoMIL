@@ -115,12 +115,12 @@ class TestCFG01NoneDefaults:
         """RED: args.n_folds must be None when --n_folds is not supplied.
 
         Fails today because parse_args() defaults --n_folds to 5.
-        Fix (D-01): change default to None so ExperimentConfig.n_folds (10) is honored.
+        Fix (D-01): change default to None so ExperimentConfig.n_folds (5) is honored.
         """
         args = _parse(run_experiment_mod, _REQUIRED_ARGS)
         assert args.n_folds is None, (
             f"When --n_folds is not supplied, args.n_folds must be None so the "
-            f"ExperimentConfig dataclass default (10) is honored. "
+            f"ExperimentConfig dataclass default (5) is honored. "
             f"Got args.n_folds={args.n_folds!r}. "
             f"Fix: change parse_args --n_folds default to None (D-01, CFG-01)."
         )

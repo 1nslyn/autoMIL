@@ -1,10 +1,10 @@
 """CLI default-value tests for ``benchmarks/scripts/run_benchmark.py``.
 
-The CLI argparse defaults must match the config.py defaults that already
-align with the CLAM README invocation (commits e446547..6e421c7). A
-CLI-side regression that re-introduces ``--lr 1e-4`` or ``--n_folds 5``
-would silently override the config and produce non-faithful runs while
-all unit tests on TrainConfig still pass. This guards against that.
+The CLI argparse defaults must match the config.py dataclass defaults so a
+CLI-side default never silently overrides the config. ``--lr`` stays at the
+CLAM README's 2e-4; ``--n_folds`` is the lab-standard 5-fold (2026-07) — a
+deliberate deviation from CLAM's ``--k 10``, with CLI and config.py both
+defaulting to 5. This guards against a default drifting apart from the config.
 """
 
 from __future__ import annotations
@@ -53,13 +53,16 @@ def test_default_lr_matches_clam_readme(parser):
     )
 
 
-def test_default_n_folds_matches_clam_readme(parser):
-    """CLAM README: ``--k 10``. CLI default must match."""
-    assert parser.n_folds == 10, (
-        f"CLI --n_folds default {parser.n_folds} drifted from CLAM "
-        "README's 10. Patient-stratified splits also assume the audit's "
-        "10-fold projected-class-count math; reducing this number weakens "
-        "minority-class coverage."
+def test_default_n_folds_is_lab_standard_five(parser):
+    """Lab standard (2026-07): 5-fold patient-stratified CV — a deliberate
+    deviation from CLAM README's ``--k 10``. Larger per-fold test sets are
+    more stable for the imbalanced mutation tasks (paper/shared/BACKGROUND.md:
+    with few events, 10-fold starves per-fold counts). Guards against a silent
+    drift back to 10 and keeps the CLI aligned with config.py's default."""
+    assert parser.n_folds == 5, (
+        f"CLI --n_folds default {parser.n_folds} != 5. The benchmark's lab "
+        "standard is 5-fold (config.py ExperimentConfig/BenchmarkConfig also "
+        "default to 5); keep the CLI default aligned."
     )
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from autobench.pipeline.config import ExperimentConfig, get_nnmil_runtime_overrides
 from autobench.pipeline.nnmil.evaluate import normalize_nnmil_metrics
@@ -103,6 +104,8 @@ def train_nnmil_fold(
         from autobench.pipeline.nnmil._imports import ClassificationTrainer
         trainer = ClassificationTrainer(**common, **extra_kwargs)
 
+    _timer_start = time.perf_counter()
+
     trainer.create_model()
     trainer.create_data_loaders()
     trainer.train()
@@ -115,10 +118,13 @@ def train_nnmil_fold(
     val_raw = trainer.evaluate("val")
     val_metrics = normalize_nnmil_metrics(val_raw, split="val", task_type=task_type)
 
+    elapsed_seconds = time.perf_counter() - _timer_start
+
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "fold": fold,
+        "elapsed_seconds": elapsed_seconds,
     }
 
     with open(metrics_path, "w") as f:

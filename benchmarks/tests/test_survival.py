@@ -150,7 +150,7 @@ class TestSurvivalConfig:
             ds,
             frameworks=[Framework.NNMIL],
             encoder_keys=["conch_v15"],
-            nnmil_model_types=["ab_mil"],
+            nnmil_model_types=["simple_mil"],
             tasks=["os_survival"],
             strategies=["standard"],
             n_folds=3,
@@ -414,8 +414,9 @@ class TestSurvivalTrainerSmoke:
     """
 
     COMBOS = [
-        ("nnmil", "ab_mil", "cox"),
-        ("nnmil", "ab_mil", "nllsurv"),
+        # NB: ab_mil was removed from nnMIL (promoted to Framework.ABMIL in the
+        # MIL-integration work); survival is implemented for nnMIL + CLAM only,
+        # so a survival ABMIL-framework arm is future work, not covered here.
         ("nnmil", "trans_mil", "cox"),
         ("nnmil", "trans_mil", "nllsurv"),
         ("clam", "clam_sb", "cox"),

@@ -100,7 +100,9 @@ def _splits_standard_cv(
     case_ids = np.asarray(case_table["case_id"], dtype=object)
     # Preserve the native dtype: string labels stay object (sklearn reads them
     # as 'binary'/'multiclass'), but integer survival status must NOT be cast
-    # to object or sklearn's type_of_target rejects it as 'unknown'.
+    # to object or sklearn's type_of_target rejects it as 'unknown'. .to_numpy()
+    # (not .values) also keeps this pandas-3 safe: on pandas>=3 string columns
+    # are Arrow-backed and .values returns an ExtensionArray sklearn can't index.
     case_labels = case_table[stratify_col].to_numpy()
 
     # Upfront feasibility check: sklearn raises mid-fit with a generic message

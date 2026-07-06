@@ -68,9 +68,11 @@ def make_test_ds(**kwargs):
             "h0_mini": 768,
         },
         nnmil_models=[
-            "ab_mil", "trans_mil", "simple_mil", "ds_mil", "dtfd_mil",
+            "trans_mil", "simple_mil", "ds_mil", "dtfd_mil",
             "wikg_mil", "ilra_mil", "rrt", "vision_transformer",
         ],
+        dtfd_models=["dtfd_mil"],
+        abmil_models=["abmil", "abmil_gated"],
         magnification=20,
         patch_size=224,
         batch_size=64,

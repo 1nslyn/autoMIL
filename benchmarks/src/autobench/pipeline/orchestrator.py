@@ -149,7 +149,6 @@ def clear_failed(benchmark_dir: str, experiment_id: str) -> None:
 
 _MODEL_BASE_VRAM: dict[str, float] = {  # GB at embed_dim=768
     "simple_mil": 2.5,
-    "ab_mil": 3.0,
     "ds_mil": 4.0,
     "dtfd_mil": 4.0,
     "wikg_mil": 4.0,
@@ -160,6 +159,9 @@ _MODEL_BASE_VRAM: dict[str, float] = {  # GB at embed_dim=768
     "rrt": 8.0,
     "trans_mil": 12.0,
     "vision_transformer": 16.0,
+    "titan": 2.0,
+    "abmil": 3.0,
+    "abmil_gated": 3.0,
 }
 
 _CUDA_CONTEXT_GB = 1.8
@@ -260,18 +262,52 @@ def _prepare_data(cfg: BenchmarkConfig, ds: DatasetConfig) -> None:
     )
 
 
+def _prepare_titan_plans(
+    cfg: BenchmarkConfig,
+    experiments: list[ExperimentConfig],
+    registries: Registries | None = None,
+    dataset_name: str = "dataset",
+) -> None:
+    """Validate TITAN slide-level features for the grid (design spec §7).
+
+    TITAN pins ``encoder_key="titan"``, so unlike nnMIL/DTFD (which key
+    prep by (task, encoder, strategy)) there is nothing to vary except the
+    task -- one manifest per unique task_name covers every TITAN
+    experiment in the grid.
+    """
+    from autobench.pipeline.titan.prepare import prepare_titan_experiment
+
+    seen: set[str] = set()
+    for exp in experiments:
+        if exp.framework != Framework.TITAN:
+            continue
+        if exp.task.name in seen:
+            continue
+        seen.add(exp.task.name)
+
+        prepare_titan_experiment(
+            benchmark_dir=cfg.benchmark_dir,
+            task_name=exp.task.name,
+            features_base_dir=cfg.features_base_dir,
+        )
+
+
 def _prepare_nnmil_plans(
     cfg: BenchmarkConfig,
     experiments: list[ExperimentConfig],
     registries: Registries | None = None,
     dataset_name: str = "dataset",
 ) -> None:
-    """Generate nnMIL plan files for all unique (task, encoder, strategy) combos."""
+    """Generate nnMIL-format plan files for all unique (task, encoder, strategy) combos.
+
+    DTFD-MIL and ABMIL consume the same H5 patch-bag format as nnMIL, so their
+    experiments reuse this prep unchanged (design spec §6).
+    """
     from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
 
     seen: set[str] = set()
     for exp in experiments:
-        if exp.framework != Framework.NNMIL:
+        if exp.framework not in (Framework.NNMIL, Framework.DTFD, Framework.ABMIL):
             continue
         # survival_loss belongs in the dedup key — each loss has its own plan.
         key = (
@@ -358,11 +394,20 @@ def _run_single_experiment_dispatch(
     device: torch.device,
     wandb_project: str | None = None,
 ) -> dict:
-    """Dispatch to CLAM or nnMIL runner based on framework."""
+    """Dispatch to CLAM, nnMIL, DTFD, TITAN, or ABMIL runner based on framework."""
     with _isolated_torch_state():
         if exp_cfg.framework == Framework.NNMIL:
             from autobench.pipeline.nnmil.runner import run_nnmil_experiment
             return run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+        elif exp_cfg.framework == Framework.DTFD:
+            from autobench.pipeline.dtfd import run_dtfd_experiment
+            return run_dtfd_experiment(exp_cfg, benchmark_dir, device=str(device))
+        elif exp_cfg.framework == Framework.TITAN:
+            from autobench.pipeline.titan import run_titan_experiment
+            return run_titan_experiment(exp_cfg, benchmark_dir, device=str(device))
+        elif exp_cfg.framework == Framework.ABMIL:
+            from autobench.pipeline.abmil import run_abmil_experiment
+            return run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device))
         else:
             from autobench.pipeline.clam.runner import run_experiment
             return run_experiment(exp_cfg, benchmark_dir, device, wandb_project)
@@ -389,14 +434,18 @@ def run_benchmark(
 
     experiments = generate_all_experiments(cfg, registries) if registries else []
 
-    # Prepare nnMIL plans if needed
-    nnmil_experiments = [e for e in experiments if e.framework == Framework.NNMIL]
-    if nnmil_experiments:
+    # Prepare H5-bag plans (nnMIL + DTFD share the same patch-bag format)
+    dataset_name = ds.name if ds else "dataset"
+    bag_experiments = [e for e in experiments if e.framework in (Framework.NNMIL, Framework.DTFD, Framework.ABMIL)]
+    if bag_experiments:
         print("\n" + "=" * 60)
-        print("NNMIL PLAN GENERATION")
+        print("NNMIL/DTFD PLAN GENERATION")
         print("=" * 60)
-        dataset_name = ds.name if ds else "dataset"
-        _prepare_nnmil_plans(cfg, nnmil_experiments, registries=registries, dataset_name=dataset_name)
+        _prepare_nnmil_plans(cfg, bag_experiments, registries=registries, dataset_name=dataset_name)
+
+    titan_experiments = [e for e in experiments if e.framework == Framework.TITAN]
+    if titan_experiments:
+        _prepare_titan_plans(cfg, titan_experiments, registries=registries, dataset_name=dataset_name)
 
     experiments.sort(key=lambda e: (e.encoder_key, e.task.name, e.model.model_type))
     completed = load_completed(cfg.benchmark_dir)
@@ -556,14 +605,18 @@ def run_benchmark_multigpu(
 
     experiments = generate_all_experiments(cfg, registries) if registries else []
 
-    # Prepare nnMIL plans if needed
-    nnmil_experiments = [e for e in experiments if e.framework == Framework.NNMIL]
-    if nnmil_experiments:
+    # Prepare H5-bag plans (nnMIL + DTFD share the same patch-bag format)
+    dataset_name = ds.name if ds else "dataset"
+    bag_experiments = [e for e in experiments if e.framework in (Framework.NNMIL, Framework.DTFD, Framework.ABMIL)]
+    if bag_experiments:
         print("\n" + "=" * 60)
-        print("NNMIL PLAN GENERATION")
+        print("NNMIL/DTFD PLAN GENERATION")
         print("=" * 60)
-        dataset_name = ds.name if ds else "dataset"
-        _prepare_nnmil_plans(cfg, nnmil_experiments, registries=registries, dataset_name=dataset_name)
+        _prepare_nnmil_plans(cfg, bag_experiments, registries=registries, dataset_name=dataset_name)
+
+    titan_experiments = [e for e in experiments if e.framework == Framework.TITAN]
+    if titan_experiments:
+        _prepare_titan_plans(cfg, titan_experiments, registries=registries, dataset_name=dataset_name)
 
     expected_experiment_ids = {e.experiment_id for e in experiments}
     completed = load_completed(cfg.benchmark_dir)

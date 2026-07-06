@@ -57,8 +57,10 @@ encoders:
     hoptimus1: 1536
 
 nnmil_models:
-  - ab_mil
   - trans_mil
+
+abmil_models:
+  - abmil
 
 extraction:
   magnification: 20

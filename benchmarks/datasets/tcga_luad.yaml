@@ -50,9 +50,18 @@ encoders:
     uni_v2: 1536
 
 nnmil_models:
-  - ab_mil
   - trans_mil
   - simple_mil
+
+abmil_models:
+  - abmil
+
+# TITAN slide-encoder arm (Framework.TITAN). `head: linear` = frozen linear probe
+# on the 768-d TITAN slide embedding. TITAN *is* the encoder + aggregator (one arm
+# per task; no tile-encoder sweep). Its features (CONCH v1.5 @ 20x/512px -> TITAN
+# pool) are extracted separately and exposed at features_base_dir/features_titan/.
+titan:
+  head: linear
 
 extraction:
   magnification: 20

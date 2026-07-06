@@ -103,6 +103,13 @@ class StrategyDef:
     test_cohorts: list[str]
 
 
+@dataclass
+class TitanDef:
+    """TITAN arm configuration loaded from dataset YAML (optional block)."""
+
+    head: str = "linear"
+
+
 # ---------------------------------------------------------------------------
 # Main DatasetConfig
 # ---------------------------------------------------------------------------
@@ -142,6 +149,9 @@ class DatasetConfig:
     encoder_models: dict[str, str]  # HF repo -> key
     encoder_dims: dict[str, int]  # key -> dimension
     nnmil_models: list[str] = field(default_factory=list)
+    dtfd_models: list[str] = field(default_factory=lambda: ["dtfd_mil"])
+    abmil_models: list[str] = field(default_factory=lambda: ["abmil"])
+    titan: TitanDef | None = None
 
     # Extraction params
     magnification: int = 20
@@ -246,6 +256,10 @@ def load_dataset_config(name_or_path: str) -> DatasetConfig:
     encoder_models = encoders.get("models", {})
     encoder_dims = encoders.get("dims", {})
     nnmil_models = raw.get("nnmil_models", [])
+    dtfd_models = raw.get("dtfd_models", ["dtfd_mil"])
+    abmil_models = raw.get("abmil_models", ["abmil"])
+    titan_raw = raw.get("titan")
+    titan = TitanDef(head=titan_raw.get("head", "linear")) if titan_raw else None
 
     # Parse extraction params
     extraction = raw.get("extraction", {})
@@ -271,6 +285,9 @@ def load_dataset_config(name_or_path: str) -> DatasetConfig:
         encoder_models=encoder_models,
         encoder_dims=encoder_dims,
         nnmil_models=nnmil_models,
+        dtfd_models=dtfd_models,
+        abmil_models=abmil_models,
+        titan=titan,
         magnification=extraction.get("magnification", 20),
         patch_size=extraction.get("patch_size", 224),
         batch_size=extraction.get("batch_size", 64),
