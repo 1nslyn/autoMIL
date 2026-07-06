@@ -1,22 +1,20 @@
 #!/bin/bash
-# SLURM job: extract TITAN slide features for LUAD at TITAN's NATIVE recipe
+# SLURM: extract TCGA-LUAD TITAN slide features at TITAN's NATIVE recipe
 # (CONCH v1.5 tiles @ 20x/512px -> TITAN pool -> 768-d slide embedding + coords).
+# FOLD-INDEPENDENT: run this ONCE; both the 5-fold and 10-fold TITAN arms reuse it.
 #
-# TITAN is a two-stage slide encoder. Via TRIDENT's run_batch_of_slides.py:
+# Two TRIDENT passes (run_batch_of_slides.py):
 #   Pass 1 (--task all, --patch_encoder conch_v15 @512px): seg (skips existing) ->
 #           coords@512 -> conch_v15 tile features.  <-- the heavy pass.
 #   Pass 2 (--task feat, --slide_encoder titan): reads the conch_v15 tiles ->
-#           TITAN 768-d slide features (uses patch coords + patch_size grid).
-# Then symlink 20x_224px_0px_overlap/features_titan -> the new 512px
-# slide_features_titan, so the benchmark's TITAN arm (which reads the default
-# 224px features_base_dir) finds them.
+#           TITAN 768-d slide features.
+# Then symlinks 20x_224px_0px_overlap/features_titan -> the new 512px
+# slide_features_titan so the benchmark TITAN arm (default 224px base) finds them.
 #
-# Output: ${LUAD_ROOT}/trident_output/20x_512px_0px_overlap/
-#           {features_conch_v15/, slide_features_titan/}
-# Resumable: TRIDENT skips already-processed slides. If it times out, resubmit.
-# After it completes: sbatch submit_titan_luad_5fold.sh (the TITAN training arm).
+# Output: ${LUAD_ROOT}/trident_output/20x_512px_0px_overlap/{features_conch_v15, slide_features_titan}
+# Resumable (TRIDENT skips done slides). After it completes: submit_luad_titan.sh.
 #
-# Usage: sbatch benchmarks/scripts/submit_titan_extract_luad.sh
+# Usage: sbatch benchmarks/scripts/submit_luad_titan_extract.sh
 
 #SBATCH --job-name=luad_titan_extract
 #SBATCH --account=rrg-jma
@@ -33,7 +31,6 @@
 
 set -uo pipefail
 PROJECT_DIR="/home/yinshuol/scratch/autoMIL/autoMIL"
-SELF="$PROJECT_DIR/benchmarks/scripts/submit_titan_extract_luad.sh"
 TRIDENT="$PROJECT_DIR/benchmarks/lib/TRIDENT/run_batch_of_slides.py"
 
 echo "================================================"
@@ -51,7 +48,6 @@ WSI_DIR="${AUTOBENCH_TCGA_LUAD_ROOT}/wsi"
 JOB_DIR="${AUTOBENCH_TCGA_LUAD_ROOT}/trident_output"
 echo "WSI dir:  $WSI_DIR"
 echo "Job dir:  $JOB_DIR"
-echo "Python:   $(which python)"
 nvidia-smi --query-gpu=name,memory.total --format=csv 2>/dev/null || true
 
 # HuggingFace login — TITAN is gated (conch_v15 already cached).
@@ -87,7 +83,7 @@ if [ -d "$SLIDE512" ]; then
     echo "TITAN slide features: $n .h5 files in $SLIDE512"
     [ -e "$LINK224" ] || ln -s ../20x_512px_0px_overlap/slide_features_titan "$LINK224"
     echo "symlink: $LINK224 -> $(readlink "$LINK224" 2>/dev/null)"
-    echo "Next: sbatch benchmarks/scripts/submit_titan_luad_5fold.sh"
+    echo "Next: sbatch benchmarks/scripts/submit_luad_titan.sh [n_folds]"
 else
     echo "WARNING: $SLIDE512 not found — TITAN extraction did not produce slide features."
     exit 1
