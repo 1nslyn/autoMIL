@@ -341,6 +341,12 @@ class TestDtfdElapsedSeconds:
 
 def _load_keep_and_rename() -> dict[tuple[str, str], str]:
     script_path = REPO_ROOT / "tasks" / "baseline_summary" / "scripts" / "00_aggregate.py"
+    if not script_path.exists():
+        pytest.skip(
+            "tasks/baseline_summary/scripts/00_aggregate.py is gitignored "
+            "(cluster-only); the KEEP_AND_RENAME check runs only where the "
+            "aggregation script is present."
+        )
     tree = ast.parse(script_path.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and any(

@@ -212,6 +212,47 @@ class TestPrepareTitanExperiment:
         assert on_disk == manifest
 
 
+class TestRunTitanExperimentDimWiring:
+    """M-1 guard: the head is sized from the DETECTED slide-embedding dim, not
+    the grid placeholder (768). If the runner failed to override embed_dim,
+    nn.Linear(768) on 512-d features would raise at the first forward."""
+
+    def test_head_sized_from_manifest_not_placeholder(
+        self, benchmark_dir, task_csv, registries,
+    ):
+        from autobench.pipeline.titan.runner import run_titan_experiment
+
+        # 512-d TITAN features (NOT the 768 placeholder) + manifest.
+        features_dir = os.path.join(benchmark_dir, "features_titan")
+        task_df = pd.read_csv(task_csv)
+        _write_titan_features(features_dir, task_df["slide_id"].tolist(), dim=512)
+        prepare_titan_experiment(
+            benchmark_dir=benchmark_dir, task_name="brca", features_base_dir=benchmark_dir,
+        )
+        strategy_cfg = registries.strategy_registry["standard"]
+        create_strategy_splits(
+            task_csv, os.path.join(benchmark_dir, "splits", "standard", "brca"),
+            strategy_cfg, n_splits=2, seed=42,
+        )
+        # exp_cfg carries the grid PLACEHOLDER embed_dim=768; run_titan_experiment
+        # must override it to the detected 512 from the manifest.
+        exp_cfg = ExperimentConfig(
+            task=TaskConfig(
+                name="brca", label_col="BRCA_predict_label",
+                label_dict={"neg": 0, "pos": 1}, n_classes=2,
+            ),
+            encoder_key="titan", embed_dim=768, model=ModelConfig(model_type="titan"),
+            train=TrainConfig(max_epochs=2, patience=2, seed=42), n_folds=2,
+            framework=Framework.TITAN, strategy="standard",
+        )
+        summary = run_titan_experiment(exp_cfg, benchmark_dir, device="cpu")
+
+        assert summary["embed_dim"] == 512
+        cfg_path = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir, "config.json")
+        with open(cfg_path) as f:
+            assert json.load(f)["embed_dim"] == 512
+
+
 # ---------------------------------------------------------------------------
 # dataset.py
 # ---------------------------------------------------------------------------

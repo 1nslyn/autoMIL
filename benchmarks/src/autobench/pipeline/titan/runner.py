@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
@@ -36,11 +37,6 @@ def run_titan_experiment(
     cap-killed reconcile path would always report ``partial_folds=0`` for
     a cap-killed TITAN node even if several folds had completed.
     """
-    results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
-
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
-
     manifest_path = os.path.join(
         benchmark_dir, "titan", exp_cfg.task.name, "manifest.json",
     )
@@ -52,6 +48,16 @@ def run_titan_experiment(
     with open(manifest_path) as f:
         manifest = json.load(f)
     features_dir = manifest["features_dir"]
+
+    # Size the linear probe from the ACTUAL detected slide-embedding dim
+    # (design spec §7: never hard-code 768). Replace the grid placeholder
+    # embed_dim so train_titan_fold builds nn.Linear(true_dim, n_classes)
+    # and config.json/summary record the real dimension.
+    exp_cfg = replace(exp_cfg, embed_dim=int(manifest["embed_dim"]))
+
+    results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
+    os.makedirs(results_dir, exist_ok=True)
+    exp_cfg.save(os.path.join(results_dir, "config.json"))
 
     task_csv = os.path.join(benchmark_dir, "dataset_csv", f"{exp_cfg.task.name}.csv")
     task_df = pd.read_csv(task_csv)
