@@ -19,11 +19,14 @@ This gives a focused benchmark grid of **tasks × 3 encoders × 2 models**, enou
 
 **Pipeline:** Data preparation → Experiment grid generation → Multi-GPU training → Cross-fold aggregation → Results export
 
-**Output:** Per-experiment `summary.json` with mean/std/95% CI across 10-fold patient-stratified CV, plus aggregated CSV tables.
+**Output:** Per-experiment `summary.json` with mean/std/95% CI across 5-fold patient-stratified CV, plus aggregated CSV tables.
 
-> **Methodology note.** The wrapper's defaults now match the published CLAM
-> README invocation (`--lr 2e-4`, `--k 10`, `--early_stopping`,
-> `--weighted_sample`) and use **patient-level stratified k-fold** on
+> **Methodology note.** The wrapper matches the published CLAM README
+> invocation for `--lr 2e-4`, `--early_stopping`, and `--weighted_sample`.
+> The fold count is the **lab-standard 5-fold** (2026-07) — a deliberate
+> deviation from CLAM's `--k 10` (fewer folds give larger, more stable
+> per-fold test sets for the imbalanced mutation tasks). Splits are
+> **patient-level stratified k-fold** on
 > `case_id`. All slides from one case are forced into the same partition.
 > Earlier campaign artifacts (pre-2026-05) used slide-level splits, which
 > leaks same-patient signal across train/val/test and inflates reported
@@ -408,7 +411,7 @@ This is the key output. Each experiment produces one:
   "model_type": "clam_mb",
   "framework": "clam",
   "strategy": "standard",
-  "n_folds": 10,
+  "n_folds": 5,
   "seed": 42,
   "test": {
     "auc_roc":           {"mean": 0.72, "std": 0.08, "ci_low": 0.62, "ci_high": 0.82},
@@ -563,7 +566,7 @@ Training:
   --max_epochs N            Maximum training epochs (default: 200)
   --lr RATE                 Learning rate (default: 2e-4, matches CLAM README)
   --seed N                  Random seed (default: 42)
-  --n_folds N               Number of CV folds (default: 10, matches CLAM README --k 10)
+  --n_folds N               Number of CV folds (default: 5, lab standard — deviates from CLAM README --k 10)
   --no_early_stopping       Disable early stopping (default: on, matches CLAM README)
   --patience N              Early stopping patience (default: 20)
   --stop_epoch N            Minimum epochs before early stopping (default: 50)

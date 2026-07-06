@@ -58,7 +58,6 @@ encoders:
     h0_mini: 768
 
 nnmil_models:
-  - ab_mil
   - trans_mil
   - ds_mil
   - dtfd_mil
@@ -67,6 +66,9 @@ nnmil_models:
   - simple_mil
   - vision_transformer
   - rrt
+
+abmil_models:
+  - abmil
 
 extraction:
   magnification: 20

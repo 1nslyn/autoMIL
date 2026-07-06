@@ -26,7 +26,11 @@ AUTOBENCH_TECHNIQUE_MAP: dict[str, str] = {
     "dtfd": "dtfd_mil",
     "ilra": "ilra_mil",
     "vit": "vision_transformer",
-    "ab_mil": "ab_mil",
+    # ABMIL arm (Framework.ABMIL): attention-based MIL. Model keys are "abmil"
+    # (non-gated, the default) and "abmil_gated" (gated). Matching is substring,
+    # so "abmil_gated" run descriptions also carry this "abmil" tag — one
+    # ABMIL-family bucket. Add an explicit "abmil_gated" entry to split them out.
+    "abmil": "abmil",
     "clam_sb": "clam_sb",
     "uni_v2": "uni_v2",
     "hibou_l": "hibou_l",

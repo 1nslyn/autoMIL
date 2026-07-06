@@ -12,6 +12,11 @@ except ImportError:
     pass
 
 try:
+    from .ab_mil_gated import AB_MIL_Gated
+except ImportError:
+    pass
+
+try:
     from .trans_mil import TRANS_MIL
 except ImportError:
     pass

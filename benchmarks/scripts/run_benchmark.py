@@ -56,6 +56,9 @@ from autobench.pipeline.config import (
 _FRAMEWORK_MAP: dict[str, Framework] = {
     "clam": Framework.CLAM,
     "nnmil": Framework.NNMIL,
+    "dtfd": Framework.DTFD,
+    "titan": Framework.TITAN,
+    "abmil": Framework.ABMIL,
 }
 
 
@@ -87,12 +90,16 @@ def parse_args() -> argparse.Namespace:
                    help="Model frameworks (default: clam)")
     p.add_argument("--nnmil_models", nargs="+", default=None,
                    help="nnMIL model types (default: all from dataset config)")
+    p.add_argument("--dtfd_models", nargs="+", default=None,
+                   help="DTFD model types (default: all from dataset config)")
+    p.add_argument("--abmil_models", nargs="+", default=None,
+                   help="ABMIL model types (default: all from dataset config)")
 
     # Training
     p.add_argument("--max_epochs", type=int, default=200)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--n_folds", type=int, default=10)
+    p.add_argument("--n_folds", type=int, default=5)
     p.add_argument("--no_early_stopping", action="store_true")
     p.add_argument("--patience", type=int, default=20)
     p.add_argument("--stop_epoch", type=int, default=50)
@@ -130,6 +137,8 @@ def main() -> None:
     tasks = args.tasks or list(ds.tasks.keys())
     strategies = args.strategies or [list(ds.split_strategies.keys())[0]]
     nnmil_models = args.nnmil_models or ds.nnmil_models
+    dtfd_models = args.dtfd_models or ds.dtfd_models
+    abmil_models = args.abmil_models or ds.abmil_models
     frameworks = [_FRAMEWORK_MAP[f] for f in args.frameworks]
 
     # Validate encoder keys
@@ -171,6 +180,8 @@ def main() -> None:
         strategies=strategies,
         frameworks=frameworks,
         nnmil_model_types=nnmil_models,
+        dtfd_model_types=dtfd_models,
+        abmil_model_types=abmil_models,
     )
 
     if args.prep_only:

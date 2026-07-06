@@ -143,13 +143,14 @@ class TestFramework:
 # ---------------------------------------------------------------------------
 
 class TestNnmilModels:
-    def test_nine_models(self, registries):
-        assert len(registries.nnmil_models) == 9
+    def test_eight_models(self, registries):
+        """ab_mil moved to its own Framework.ABMIL arm; 9 - 1 = 8 remain."""
+        assert len(registries.nnmil_models) == 8
 
     def test_known_models(self, registries):
-        assert "ab_mil" in registries.nnmil_models
         assert "trans_mil" in registries.nnmil_models
         assert "simple_mil" in registries.nnmil_models
+        assert "ab_mil" not in registries.nnmil_models
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +164,7 @@ class TestNnmilRuntimeOverrides:
     def test_any_model_gets_defaults_only(self):
         # NNMIL_MODEL_RUNTIME_OVERRIDES is empty post-Level-D revert; every
         # model_type returns just NNMIL_RUNTIME_DEFAULTS.
-        cfg = get_nnmil_runtime_overrides("ab_mil")
+        cfg = get_nnmil_runtime_overrides("trans_mil")
         assert cfg == {"num_workers": 8}
         cfg = get_nnmil_runtime_overrides("vision_transformer")
         assert cfg == {"num_workers": 8}
@@ -206,12 +207,12 @@ class TestExperimentConfig:
             task=registries.task_registry["brca"],
             encoder_key="conch_v15",
             embed_dim=768,
-            model=ModelConfig(model_type="ab_mil"),
+            model=ModelConfig(model_type="trans_mil"),
             train=TrainConfig(seed=42),
             framework=Framework.NNMIL,
             strategy="standard",
         )
-        assert exp.experiment_id == "nnmil__standard__brca__conch_v15__ab_mil__s42"
+        assert exp.experiment_id == "nnmil__standard__brca__conch_v15__trans_mil__s42"
 
     def test_results_subdir(self, registries):
         exp = ExperimentConfig(
@@ -293,7 +294,7 @@ class TestGenerateAllExperiments:
             encoder_keys=["conch_v15"],
         )
         exps = generate_all_experiments(cfg, registries)
-        assert len(exps) == 9  # 1 task x 1 encoder x 9 nnmil models
+        assert len(exps) == 8  # 1 task x 1 encoder x 8 nnmil models
         for exp in exps:
             assert exp.framework == Framework.NNMIL
 
@@ -309,4 +310,4 @@ class TestGenerateAllExperiments:
         clam_exps = [e for e in exps if e.framework == Framework.CLAM]
         nnmil_exps = [e for e in exps if e.framework == Framework.NNMIL]
         assert len(clam_exps) == 3  # 3 CLAM models
-        assert len(nnmil_exps) == 9  # 9 nnMIL models
+        assert len(nnmil_exps) == 8  # 8 nnMIL models

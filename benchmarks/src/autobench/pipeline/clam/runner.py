@@ -32,11 +32,11 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         return  # not running under autoMIL orchestrator
 
     # AUTOMIL_FOLD_COUNT is set by the orchestrator from
-    # `automil/config.yaml: training.fold_count` (default 10 post-Level-D).
-    # The literal "10" fallback here matters only when this helper is
-    # invoked outside the orchestrator (e.g. local debugging without env
-    # vars); production paths always have it set.
-    fold_count = int(os.environ.get("AUTOMIL_FOLD_COUNT", "10"))
+    # `automil/config.yaml: training.fold_count`. The literal fallback here
+    # matters only when this helper is invoked outside the orchestrator
+    # (e.g. local debugging without env vars); it tracks the benchmark's
+    # 5-fold lab standard. Production paths always have the env var set.
+    fold_count = int(os.environ.get("AUTOMIL_FOLD_COUNT", "5"))
 
     def _unwrap(metric):
         # auc_roc may be float OR {"mean": float, ...} (CI-dict shape)
@@ -105,6 +105,7 @@ def run_experiment(
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]
+    elapsed_seconds_total = sum(fr.get("elapsed_seconds", 0) or 0 for fr in fold_results)
 
     exp_summary = {
         "experiment_id": exp_cfg.experiment_id,
@@ -115,6 +116,7 @@ def run_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),
         "val": compute_confidence_intervals(val_fold_metrics),
