@@ -9,6 +9,7 @@ mini-batch of slides, same as CLAM.
 
 from __future__ import annotations
 
+import os
 import random
 import sys
 import time
@@ -191,13 +192,20 @@ def train_abmil_survival_fold(
                     f"    [ABMIL-surv fold] epoch {epoch + 1}: "
                     f"val_loss={v_loss:.4f} val_c_index={v_cidx:.4f}"
                 )
-                if cfg.early_stopping:
-                    early_stopping(v_loss, v_cidx, model)
-                    if early_stopping.early_stop:
-                        break
+                # Always save the best (val-loss) checkpoint; cfg.early_stopping
+                # only gates stopping early (matches classification/DTFD).
+                early_stopping(v_loss, v_cidx, model)
+                if cfg.early_stopping and early_stopping.early_stop:
+                    break
         elapsed_seconds = time.time() - start
 
-        if getattr(early_stopping, "best_model_state", None) is not None:
+        # Restore the best (val-loss) checkpoint from disk before scoring: the
+        # in-memory best_model_state is a shallow copy aliasing the live params,
+        # so it decays to the last epoch's weights. Mirrors CLAM.
+        best_path = os.path.join(fold_dir, f"best_{model_type}.pth")
+        if os.path.exists(best_path):
+            model.load_state_dict(torch.load(best_path, map_location=device))
+        elif getattr(early_stopping, "best_model_state", None) is not None:
             model.load_state_dict(early_stopping.best_model_state)
 
         return {

@@ -195,13 +195,20 @@ def train_titan_survival_fold(
             f"    [TITAN-surv fold {fold}] epoch {epoch + 1}: "
             f"val_loss={v_loss:.4f} val_c_index={v_cidx:.4f}"
         )
-        if exp_cfg.train.early_stopping:
-            early_stopping(v_loss, v_cidx, model)
-            if early_stopping.early_stop:
-                break
+        # Always save the best (val-loss) checkpoint; early_stopping only gates
+        # stopping early (matches classification/DTFD).
+        early_stopping(v_loss, v_cidx, model)
+        if exp_cfg.train.early_stopping and early_stopping.early_stop:
+            break
     elapsed = time.time() - start
 
-    if getattr(early_stopping, "best_model_state", None) is not None:
+    # Restore the best (val-loss) checkpoint from disk before scoring: the
+    # in-memory best_model_state is a shallow copy aliasing the live params,
+    # so it decays to the last epoch's weights. Mirrors CLAM.
+    best_path = os.path.join(fold_dir, "best_titan.pth")
+    if os.path.exists(best_path):
+        model.load_state_dict(torch.load(best_path, map_location=torch_device))
+    elif getattr(early_stopping, "best_model_state", None) is not None:
         model.load_state_dict(early_stopping.best_model_state)
 
     fold_result = {
