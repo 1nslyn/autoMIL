@@ -157,9 +157,8 @@ def _train_one_epoch_survival(
         torch.nn.utils.clip_grad_norm_(bundle.classifier.parameters(), cfg.grad_clip)
         opt0.step()
 
-        # --- tier 2 --- (same detach rationale as classification: opt1 only
-        # ever applies gradients to att_cls, so detaching pseudo_feats from
-        # the tier-1 graph is equivalent in applied updates; see train.py:125-132)
+        # --- tier 2 --- opt1 only updates att_cls, so detaching pseudo_feats
+        # from the tier-1 graph is equivalent (see train.py:125-132).
         slide_pred = bundle.att_cls(pseudo_feats.detach())           # 1 x n_bins
         loss1 = loss_fn(slide_pred, bin_t, censor_t)
         opt1.zero_grad()
@@ -283,13 +282,9 @@ def train_dtfd_survival_fold(
             opt1, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
         )
 
-        # Select on val LOSS, not val c-index: with only a handful of events
-        # per val fold the c-index is near-random, so maximizing it would
-        # overfit to noise (same rationale as CLAM/ABMIL/TITAN's survival
-        # trainers). DTFDBundle bundles 4 separate nn.Modules with no unified
-        # state_dict, so EarlyStoppingSurvival's single-module checkpointing
-        # doesn't apply directly -- reuse DTFD's own manual snapshot/restore
-        # helpers instead, keyed on val loss.
+        # Select on val LOSS, not the noisy few-event val c-index (as CLAM/
+        # ABMIL/TITAN do). DTFDBundle has no unified state_dict, so use DTFD's
+        # own snapshot/restore instead of EarlyStoppingSurvival.
         best_loss = float("inf")
         best_snap: dict | None = None
         epochs_no_improve = 0
