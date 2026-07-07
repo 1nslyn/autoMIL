@@ -385,6 +385,19 @@ def generate_all_experiments(
                                     continue
                                 if survival_loss == "cox" and model_type != "clam_sb":
                                     continue
+                            # ABMIL/TITAN survival: only cox/nllsurv have a
+                            # trainer (adapter-side, mirrors CLAM); mse/mae
+                            # would otherwise silently generate an experiment
+                            # that crashes at runtime. Both ABMIL variants and
+                            # TITAN's single linear-probe head support either
+                            # loss (arbitrary output width), so no per-model
+                            # restriction is needed beyond the loss itself.
+                            if (
+                                framework in (Framework.ABMIL, Framework.TITAN)
+                                and task_cfg.task_type == "survival"
+                                and survival_loss not in ("cox", "nllsurv")
+                            ):
+                                continue
                             exp = ExperimentConfig(
                                 task=task_cfg,
                                 encoder_key=encoder_key,

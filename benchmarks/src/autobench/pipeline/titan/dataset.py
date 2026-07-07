@@ -67,6 +67,83 @@ class TitanSlideDataset(Dataset):
         return embedding, self.labels[idx]
 
 
+class TitanSurvivalDataset(Dataset):
+    """Maps slide_ids from a split column to ``(embedding, status, time, patient_id)``."""
+
+    def __init__(
+        self,
+        slide_ids: list[str],
+        statuses: list[int],
+        times: list[float],
+        patient_ids: list[str],
+        features_dir: str,
+    ) -> None:
+        if not (len(slide_ids) == len(statuses) == len(times) == len(patient_ids)):
+            raise ValueError(
+                f"slide_ids ({len(slide_ids)}), statuses ({len(statuses)}), "
+                f"times ({len(times)}), and patient_ids ({len(patient_ids)}) "
+                "must have the same length."
+            )
+        self.slide_ids = slide_ids
+        self.statuses = statuses
+        self.times = times
+        self.patient_ids = patient_ids
+        self.features_dir = features_dir
+
+    def __len__(self) -> int:
+        return len(self.slide_ids)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, float, str]:
+        sid = self.slide_ids[idx]
+        h5_path = os.path.join(self.features_dir, f"{sid}.h5")
+        if not os.path.exists(h5_path):
+            raise FileNotFoundError(
+                f"Missing TITAN slide feature for {sid!r}: {h5_path}"
+            )
+        embedding = _load_embedding(h5_path)
+        return embedding, self.statuses[idx], self.times[idx], self.patient_ids[idx]
+
+
+def build_survival_split_dataset(
+    split_csv: str,
+    split_name: str,
+    task_df: pd.DataFrame,
+    features_dir: str,
+) -> TitanSurvivalDataset:
+    """Build a ``TitanSurvivalDataset`` for one split column of a fold CSV.
+
+    Mirrors ``build_split_dataset`` but reads the survival task CSV's
+    ``status``/``time``/``case_id`` columns instead of a categorical
+    ``label`` (same contract as
+    ``clam/dataset.py::load_survival_fold_splits``).
+    """
+    split_df = pd.read_csv(split_csv)
+    if split_name not in split_df.columns:
+        raise ValueError(
+            f"Split CSV {split_csv} has no column {split_name!r} "
+            f"(columns: {list(split_df.columns)!r})."
+        )
+    slide_ids = split_df[split_name].dropna().tolist()
+
+    status_lookup = dict(zip(task_df["slide_id"], task_df["status"]))
+    time_lookup = dict(zip(task_df["slide_id"], task_df["time"]))
+    case_lookup = dict(zip(task_df["slide_id"], task_df["case_id"]))
+
+    missing = [sid for sid in slide_ids if sid not in status_lookup]
+    if missing:
+        preview = ", ".join(missing[:5])
+        suffix = f" ... +{len(missing) - 5}" if len(missing) > 5 else ""
+        raise ValueError(
+            f"Split CSV {split_csv} references {len(missing)} slide_ids "
+            f"absent from the survival task CSV: {preview}{suffix}"
+        )
+
+    statuses = [int(status_lookup[sid]) for sid in slide_ids]
+    times = [float(time_lookup[sid]) for sid in slide_ids]
+    patient_ids = [str(case_lookup[sid]) for sid in slide_ids]
+    return TitanSurvivalDataset(slide_ids, statuses, times, patient_ids, features_dir)
+
+
 def build_split_dataset(
     split_csv: str,
     split_name: str,

@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import json
 import os
-import time
 
 import torch
 
 from autobench.pipeline.abmil.config import ABMILConfig
-from autobench.pipeline.abmil.dataset import load_abmil_split
+from autobench.pipeline.abmil.dataset import load_abmil_split, load_abmil_survival_split
+from autobench.pipeline.abmil.survival_train import train_abmil_survival_fold
 from autobench.pipeline.abmil.train import train_abmil_fold
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
@@ -25,10 +25,19 @@ from autobench.pipeline.evaluate import compute_confidence_intervals
 
 
 def _resolve_h5_dir(benchmark_dir: str, exp_cfg: ExperimentConfig) -> str:
-    """Read the H5 feature dir from the nnMIL plan (shared prep artifact)."""
+    """Read the H5 feature dir from the nnMIL plan (shared prep artifact).
+
+    nnMIL's own prep (``nnmil/prepare.py``) appends ``_{survival_loss}`` to
+    the plan leaf for survival tasks (each loss gets its own plan, since
+    ``num_classes``/binning differ) — mirror that suffix here so survival
+    experiments resolve to the correct plan directory instead of falling
+    back to the classification one.
+    """
+    leaf = f"{exp_cfg.task.name}_{exp_cfg.encoder_key}"
+    if exp_cfg.survival_loss is not None:
+        leaf = f"{leaf}_{exp_cfg.survival_loss}"
     plan_path = os.path.join(
-        benchmark_dir, "nnmil", exp_cfg.strategy,
-        f"{exp_cfg.task.name}_{exp_cfg.encoder_key}", "dataset_plan.json",
+        benchmark_dir, "nnmil", exp_cfg.strategy, leaf, "dataset_plan.json",
     )
     if not os.path.exists(plan_path):
         raise FileNotFoundError(
@@ -88,21 +97,31 @@ def run_abmil_experiment(
             continue
 
         split_csv = os.path.join(splits_dir, f"splits_{fold}.csv")
-        train_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "train")
-        val_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "val")
-        test_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "test")
+        if exp_cfg.is_survival:
+            train_samples = load_abmil_survival_split(task_csv, split_csv, h5_dir, "train")
+            val_samples = load_abmil_survival_split(task_csv, split_csv, h5_dir, "val")
+            test_samples = load_abmil_survival_split(task_csv, split_csv, h5_dir, "test")
+            raw = train_abmil_survival_fold(
+                model_type, train_samples, val_samples, test_samples,
+                embed_dim=exp_cfg.embed_dim, survival_loss=exp_cfg.survival_loss,
+                nll_bins=exp_cfg.task.nll_bins, cfg=cfg, device=torch_device,
+                seed=exp_cfg.train.seed + fold, fold_dir=fold_dir,
+            )
+        else:
+            train_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "train")
+            val_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "val")
+            test_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "test")
+            raw = train_abmil_fold(
+                model_type, train_slides, val_slides, test_slides,
+                embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
+                cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+            )
 
-        start = time.time()
-        raw = train_abmil_fold(
-            model_type, train_slides, val_slides, test_slides,
-            embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
-            cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
-        )
         result = {
             "test_metrics": raw["test_metrics"],
             "val_metrics": raw["val_metrics"],
             "fold": fold,
-            "elapsed_seconds": int(time.time() - start),
+            "elapsed_seconds": int(raw.get("elapsed_seconds", 0) or 0),
         }
         with open(metrics_path, "w") as f:
             json.dump(result, f, indent=2)
@@ -120,6 +139,7 @@ def run_abmil_experiment(
         "encoder": exp_cfg.encoder_key,
         "embed_dim": exp_cfg.embed_dim,
         "model_type": exp_cfg.model.model_type,
+        "survival_loss": exp_cfg.survival_loss,
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
