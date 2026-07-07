@@ -188,6 +188,50 @@ class TestSurvivalConfig:
             assert e.is_survival
             assert e.framework == Framework.CLAM
 
+    def test_abmil_survival_generates_valid_combos(self):
+        """ABMIL survival: both abmil/abmil_gated support cox and nllsurv
+        (arbitrary output width, unlike CLAM's clam_sb-only cox restriction);
+        mse/mae are excluded (no trainer support)."""
+        ds = make_survival_ds()
+        cfg = BenchmarkConfig.from_dataset_config(
+            ds,
+            frameworks=[Framework.ABMIL],
+            encoder_keys=["conch_v15"],
+            abmil_model_types=["abmil", "abmil_gated"],
+            tasks=["os_survival"],
+            strategies=["standard"],
+            n_folds=3,
+        )
+        exps = generate_all_experiments(cfg, build_registries(ds))
+        combos = sorted((e.model.model_type, e.survival_loss) for e in exps)
+        assert combos == [
+            ("abmil", "cox"),
+            ("abmil", "nllsurv"),
+            ("abmil_gated", "cox"),
+            ("abmil_gated", "nllsurv"),
+        ]
+        for e in exps:
+            assert e.is_survival
+            assert e.framework == Framework.ABMIL
+
+    def test_titan_survival_generates_valid_combos(self):
+        """TITAN survival: the single linear-probe head supports cox and
+        nllsurv; mse/mae are excluded (no trainer support)."""
+        ds = make_survival_ds()
+        cfg = BenchmarkConfig.from_dataset_config(
+            ds,
+            frameworks=[Framework.TITAN],
+            tasks=["os_survival"],
+            strategies=["standard"],
+            n_folds=3,
+        )
+        exps = generate_all_experiments(cfg, build_registries(ds))
+        combos = sorted((e.model.model_type, e.survival_loss) for e in exps)
+        assert combos == [("titan", "cox"), ("titan", "nllsurv")]
+        for e in exps:
+            assert e.is_survival
+            assert e.framework == Framework.TITAN
+
 
 # ---------------------------------------------------------------------------
 # Task CSV creation
@@ -409,23 +453,27 @@ class TestSurvivalTrainerSmoke:
     """Forward the survival model, compute the loss, and score the c-index for
     every valid (framework, model, loss) combo on tiny dummy bags — no GPU, no
     data. Guards the model/loss/metric contract each survival trainer relies on:
-    nnMIL bags are ``(1, N, dim)`` and return ``{"logits": ...}``; CLAM bags are
-    ``(N, dim)`` with ``instance_eval=False``.
+    nnMIL/ABMIL bags are ``(1, N, dim)`` and return ``{"logits": ...}``; CLAM
+    bags are ``(N, dim)`` with ``instance_eval=False``; TITAN has no bag at
+    all (one frozen embedding per slide).
     """
 
     COMBOS = [
-        # NB: ab_mil was removed from nnMIL (promoted to Framework.ABMIL in the
-        # MIL-integration work); survival is implemented for nnMIL + CLAM only,
-        # so a survival ABMIL-framework arm is future work, not covered here.
+        # DTFD is deferred: its two-tier pseudo-bag structure has no direct
+        # analog for a per-slide time-to-event label (separate design needed).
         ("nnmil", "trans_mil", "cox"),
         ("nnmil", "trans_mil", "nllsurv"),
         ("clam", "clam_sb", "cox"),
         ("clam", "clam_sb", "nllsurv"),
         ("clam", "clam_mb", "nllsurv"),
+        ("abmil", "abmil", "cox"),
+        ("abmil", "abmil_gated", "nllsurv"),
+        ("titan", "titan", "cox"),
+        ("titan", "titan", "nllsurv"),
     ]
 
     def _bag_logits(self, framework, model_type, n_out, embed_dim, feats):
-        """One bag's logits as ``(1, n_out)`` for either framework."""
+        """One bag's logits as ``(1, n_out)`` for any of the four frameworks."""
         if framework == "clam":
             from autobench.pipeline.clam._imports import CLAM_SB, CLAM_MB
 
@@ -433,6 +481,22 @@ class TestSurvivalTrainerSmoke:
             model = cls(n_classes=n_out, embed_dim=embed_dim)
             logits, *_ = model(feats, instance_eval=False)  # CLAM bag: (N, dim)
             return logits.view(1, -1)
+
+        if framework == "abmil":
+            from autobench.pipeline.abmil.model import build_abmil_model
+
+            model = build_abmil_model(model_type, in_dim=embed_dim, num_classes=n_out)
+            out = model(feats.unsqueeze(0))  # ABMIL bag: (1, N, dim) -> {"logits": ...}
+            return out["logits"].view(1, -1)
+
+        if framework == "titan":
+            from autobench.pipeline.titan.model import TitanLinearProbe
+
+            model = TitanLinearProbe(embed_dim, n_out)
+            # TITAN has no bag -- one frozen embedding per slide; collapse the
+            # dummy patch bag to a single vector as a synthetic stand-in.
+            embedding = feats.mean(dim=0, keepdim=True)
+            return model(embedding).view(1, -1)
 
         from nnMIL.network_architecture.model_factory import create_mil_model
 
