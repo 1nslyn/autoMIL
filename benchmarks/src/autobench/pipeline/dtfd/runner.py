@@ -18,16 +18,26 @@ import torch
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.dtfd.config import DTFDConfig
-from autobench.pipeline.dtfd.dataset import load_dtfd_split
+from autobench.pipeline.dtfd.dataset import load_dtfd_split, load_dtfd_survival_split
+from autobench.pipeline.dtfd.survival_train import train_dtfd_survival_fold
 from autobench.pipeline.dtfd.train import train_dtfd_fold
 from autobench.pipeline.evaluate import compute_confidence_intervals
 
 
 def _resolve_h5_dir(benchmark_dir: str, exp_cfg: ExperimentConfig) -> str:
-    """Read the H5 feature dir from the nnMIL plan (shared prep artifact)."""
+    """Read the H5 feature dir from the nnMIL plan (shared prep artifact).
+
+    nnMIL's own prep (``nnmil/prepare.py``) appends ``_{survival_loss}`` to
+    the plan leaf for survival tasks (each loss gets its own plan, since
+    ``num_classes``/binning differ) — mirror that suffix here so survival
+    experiments resolve to the correct plan directory instead of falling
+    back to the classification one.
+    """
+    leaf = f"{exp_cfg.task.name}_{exp_cfg.encoder_key}"
+    if exp_cfg.survival_loss is not None:
+        leaf = f"{leaf}_{exp_cfg.survival_loss}"
     plan_path = os.path.join(
-        benchmark_dir, "nnmil", exp_cfg.strategy,
-        f"{exp_cfg.task.name}_{exp_cfg.encoder_key}", "dataset_plan.json",
+        benchmark_dir, "nnmil", exp_cfg.strategy, leaf, "dataset_plan.json",
     )
     if not os.path.exists(plan_path):
         raise FileNotFoundError(
@@ -63,6 +73,17 @@ def run_dtfd_experiment(
     os.makedirs(results_dir, exist_ok=True)
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 
+    if exp_cfg.is_survival and exp_cfg.survival_loss == "cox":
+        raise ValueError(
+            "DTFD-MIL survival does not support cox: its two-tier pseudo-bag "
+            "distillation supervises each pseudo-bag with the slide's own "
+            "target, but cox's partial-likelihood loss needs a risk set of "
+            "different patients' relative event-time ordering -- there is no "
+            "such comparison within one slide's pseudo-bags. nllsurv (a "
+            "discrete time-bin classification problem) is the only survival "
+            "loss DTFD supports."
+        )
+
     h5_dir = _resolve_h5_dir(benchmark_dir, exp_cfg)
     task_csv = os.path.join(benchmark_dir, "dataset_csv", f"{exp_cfg.task.name}.csv")
     splits_dir = os.path.join(benchmark_dir, "splits", exp_cfg.strategy, exp_cfg.task.name)
@@ -85,21 +106,33 @@ def run_dtfd_experiment(
             continue
 
         split_csv = os.path.join(splits_dir, f"splits_{fold}.csv")
-        train_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "train")
-        val_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "val")
-        test_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "test")
+        if exp_cfg.is_survival:
+            train_samples = load_dtfd_survival_split(task_csv, split_csv, h5_dir, "train")
+            val_samples = load_dtfd_survival_split(task_csv, split_csv, h5_dir, "val")
+            test_samples = load_dtfd_survival_split(task_csv, split_csv, h5_dir, "test")
+            raw = train_dtfd_survival_fold(
+                train_samples, val_samples, test_samples,
+                embed_dim=exp_cfg.embed_dim, nll_bins=exp_cfg.task.nll_bins,
+                cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+            )
+            elapsed_seconds = int(raw.get("elapsed_seconds", 0) or 0)
+        else:
+            train_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "train")
+            val_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "val")
+            test_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "test")
+            start = time.time()
+            raw = train_dtfd_fold(
+                train_slides, val_slides, test_slides,
+                embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
+                cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+            )
+            elapsed_seconds = int(time.time() - start)
 
-        start = time.time()
-        raw = train_dtfd_fold(
-            train_slides, val_slides, test_slides,
-            embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
-            cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
-        )
         result = {
             "test_metrics": raw["test_metrics"],
             "val_metrics": raw["val_metrics"],
             "fold": fold,
-            "elapsed_seconds": int(time.time() - start),
+            "elapsed_seconds": elapsed_seconds,
         }
         with open(metrics_path, "w") as f:
             json.dump(result, f, indent=2)
@@ -117,6 +150,7 @@ def run_dtfd_experiment(
         "encoder": exp_cfg.encoder_key,
         "embed_dim": exp_cfg.embed_dim,
         "model_type": exp_cfg.model.model_type,
+        "survival_loss": exp_cfg.survival_loss,
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,

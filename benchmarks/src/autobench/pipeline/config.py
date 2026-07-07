@@ -398,6 +398,20 @@ def generate_all_experiments(
                                 and survival_loss not in ("cox", "nllsurv")
                             ):
                                 continue
+                            # DTFD survival: nllsurv only. Its two-tier
+                            # pseudo-bag distillation repeats the slide's
+                            # target across pseudo-bags -- a discrete
+                            # (bin_idx, censor) pair works the same way a
+                            # classification label does, but cox's
+                            # partial-likelihood loss needs a cross-patient
+                            # risk set that doesn't exist within one slide's
+                            # own pseudo-bags. See dtfd/survival_train.py.
+                            if (
+                                framework == Framework.DTFD
+                                and task_cfg.task_type == "survival"
+                                and survival_loss != "nllsurv"
+                            ):
+                                continue
                             exp = ExperimentConfig(
                                 task=task_cfg,
                                 encoder_key=encoder_key,
