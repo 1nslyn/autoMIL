@@ -214,6 +214,29 @@ class TestSurvivalConfig:
             assert e.is_survival
             assert e.framework == Framework.ABMIL
 
+    def test_dtfd_survival_generates_valid_combos(self):
+        """DTFD survival: nllsurv only. Its two-tier pseudo-bag distillation
+        can repeat a discrete (bin_idx, censor) target across pseudo-bags the
+        same way it repeats a classification label, but cox's partial-
+        likelihood loss needs a cross-patient risk set that doesn't exist
+        within one slide's own pseudo-bags -- cox must be excluded."""
+        ds = make_survival_ds()
+        cfg = BenchmarkConfig.from_dataset_config(
+            ds,
+            frameworks=[Framework.DTFD],
+            encoder_keys=["conch_v15"],
+            dtfd_model_types=["dtfd_mil"],
+            tasks=["os_survival"],
+            strategies=["standard"],
+            n_folds=3,
+        )
+        exps = generate_all_experiments(cfg, build_registries(ds))
+        combos = sorted((e.model.model_type, e.survival_loss) for e in exps)
+        assert combos == [("dtfd_mil", "nllsurv")]
+        for e in exps:
+            assert e.is_survival
+            assert e.framework == Framework.DTFD
+
     def test_titan_survival_generates_valid_combos(self):
         """TITAN survival: the single linear-probe head supports cox and
         nllsurv; mse/mae are excluded (no trainer support)."""
@@ -459,8 +482,8 @@ class TestSurvivalTrainerSmoke:
     """
 
     COMBOS = [
-        # DTFD is deferred: its two-tier pseudo-bag structure has no direct
-        # analog for a per-slide time-to-event label (separate design needed).
+        # DTFD: nllsurv only -- cox has no per-slide analog in its two-tier
+        # pseudo-bag distillation (see dtfd/survival_train.py module docstring).
         ("nnmil", "trans_mil", "cox"),
         ("nnmil", "trans_mil", "nllsurv"),
         ("clam", "clam_sb", "cox"),
@@ -470,6 +493,7 @@ class TestSurvivalTrainerSmoke:
         ("abmil", "abmil_gated", "nllsurv"),
         ("titan", "titan", "cox"),
         ("titan", "titan", "nllsurv"),
+        ("dtfd", "dtfd_mil", "nllsurv"),
     ]
 
     def _bag_logits(self, framework, model_type, n_out, embed_dim, feats):
@@ -497,6 +521,19 @@ class TestSurvivalTrainerSmoke:
             # dummy patch bag to a single vector as a synthetic stand-in.
             embedding = feats.mean(dim=0, keepdim=True)
             return model(embedding).view(1, -1)
+
+        if framework == "dtfd":
+            import torch
+
+            from autobench.pipeline.dtfd.config import DTFDConfig
+            from autobench.pipeline.dtfd.model import build_dtfd_bundle
+            from autobench.pipeline.dtfd.survival_train import _slide_survival_logits
+
+            dtfd_cfg = DTFDConfig()
+            bundle = build_dtfd_bundle(embed_dim, n_out, dtfd_cfg)
+            rng = np.random.default_rng(0)
+            logits = _slide_survival_logits(bundle, feats, dtfd_cfg, torch.device("cpu"), rng)
+            return logits.view(1, -1)
 
         from nnMIL.network_architecture.model_factory import create_mil_model
 
