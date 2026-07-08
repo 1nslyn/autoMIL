@@ -27,7 +27,7 @@ import torch
 
 from autobench import LIB_ROOT
 from autobench.pipeline.dtfd.config import DTFDConfig
-from autobench.pipeline.dtfd.dataset import DTFDSurvivalSlide, min_bag_size
+from autobench.pipeline.dtfd.dataset import DTFDSurvivalSlide, _read_bag, min_bag_size
 from autobench.pipeline.dtfd.eval import _split_pseudo_bags
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.dtfd.train import _restore, _snapshot
@@ -140,7 +140,7 @@ def _train_one_epoch_survival(
 
     for i in order:
         slide = slides[i]
-        features = slide.features.to(device)
+        features = _read_bag(slide.h5_path).to(device)
         bin_t = torch.LongTensor([_time_to_bin(slide.time, edges)]).to(device)
         censor_t = torch.LongTensor([1 - slide.status]).to(device)  # 1=censored, 0=event
 
@@ -210,7 +210,7 @@ def _val_loss(
     rng = np.random.default_rng(seed)
     losses: list[float] = []
     for slide in slides:
-        logits = _slide_survival_logits(bundle, slide.features, cfg, device, rng)
+        logits = _slide_survival_logits(bundle, _read_bag(slide.h5_path), cfg, device, rng)
         bin_t = torch.LongTensor([_time_to_bin(slide.time, edges)]).to(device)
         censor_t = torch.LongTensor([1 - slide.status]).to(device)
         losses.append(float(loss_fn(logits, bin_t, censor_t).item()))
@@ -228,7 +228,7 @@ def _c_index(
     rng = np.random.default_rng(seed)
     risks, statuses, times, pids = [], [], [], []
     for slide in slides:
-        logits = _slide_survival_logits(bundle, slide.features, cfg, device, rng)
+        logits = _slide_survival_logits(bundle, _read_bag(slide.h5_path), cfg, device, rng)
         risks.append(float(_nllsurv_risk(logits).item()))
         statuses.append(slide.status)
         times.append(slide.time)

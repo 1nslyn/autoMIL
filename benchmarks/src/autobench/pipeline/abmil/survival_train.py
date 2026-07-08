@@ -19,7 +19,7 @@ import torch
 
 from autobench import LIB_ROOT
 from autobench.pipeline.abmil.config import ABMILConfig
-from autobench.pipeline.abmil.dataset import ABMILSurvivalSlide
+from autobench.pipeline.abmil.dataset import ABMILSurvivalSlide, _read_bag
 from autobench.pipeline.abmil.model import build_abmil_model
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -138,7 +138,7 @@ def train_abmil_survival_fold(
         )
 
         def _batch_loss(batch: list[ABMILSurvivalSlide]) -> torch.Tensor:
-            logits_list = [_bag_logits(model, s.features, device) for s in batch]
+            logits_list = [_bag_logits(model, _read_bag(s.h5_path), device) for s in batch]
             logits = torch.stack(logits_list)  # (B, n_out)
             status = torch.tensor([s.status for s in batch], dtype=torch.float32, device=device)
             time_t = torch.tensor([s.time for s in batch], dtype=torch.float32, device=device)
@@ -159,7 +159,7 @@ def train_abmil_survival_fold(
             model.eval()
             risks, statuses, times, pids = [], [], [], []
             for s in samples:
-                lg = _bag_logits(model, s.features, device).unsqueeze(0)
+                lg = _bag_logits(model, _read_bag(s.h5_path), device).unsqueeze(0)
                 r = _nllsurv_risk(lg) if is_nll else lg.view(-1)
                 risks.append(float(r.item()))
                 statuses.append(s.status)
