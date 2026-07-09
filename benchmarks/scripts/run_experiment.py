@@ -21,6 +21,11 @@ python benchmarks/scripts/run_experiment.py \
     --dataset ccrcc --task pbrm1 --encoder uni_v2 \
     --model abmil --framework abmil
 
+# DTFD-MIL experiment (reuses nnMIL's H5-bag prep)
+python benchmarks/scripts/run_experiment.py \
+    --dataset ccrcc --task pbrm1 --encoder uni_v2 \
+    --model dtfd_mil --framework dtfd
+
 # TITAN experiment (frozen slide embedding -- --encoder must be "titan")
 python benchmarks/scripts/run_experiment.py \
     --dataset ccrcc --task pbrm1 --encoder titan \
@@ -64,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--task", required=True, help="Task name (e.g., high_grade, pbrm1)")
     p.add_argument("--encoder", required=True, help="Encoder key (e.g., uni_v2)")
     p.add_argument("--model", required=True, help="Model type (e.g., clam_mb, ab_mil)")
-    p.add_argument("--framework", required=True, choices=["clam", "nnmil", "abmil", "titan"])
+    p.add_argument("--framework", required=True, choices=["clam", "nnmil", "abmil", "dtfd", "titan"])
     p.add_argument("--strategy", default="standard", help="Split strategy")
     p.add_argument(
         "--survival_loss", default=None,
@@ -179,13 +184,12 @@ def main() -> None:
         "clam": Framework.CLAM,
         "nnmil": Framework.NNMIL,
         "abmil": Framework.ABMIL,
+        "dtfd": Framework.DTFD,
         "titan": Framework.TITAN,
     }
     framework = _FRAMEWORK_MAP[args.framework]
-    # TITAN *is* the encoder (a frozen slide embedding, no tile-encoder axis)
-    # -- "titan" is a pseudo-key, not present in registries.encoder_dims.
-    # The placeholder here is overwritten from the detected manifest dim
-    # inside run_titan_experiment (design spec §7: never hard-code 768).
+    # TITAN has no tile-encoder axis: "titan" isn't in encoder_dims, so use a
+    # 768 placeholder -- run_titan_experiment overwrites it from the manifest dim.
     embed_dim = 768 if framework == Framework.TITAN else registries.encoder_dims[args.encoder]
 
     model_cfg = registries.model_registry.get(
@@ -259,11 +263,8 @@ def main() -> None:
         automil_results_dir = os.path.join(automil_results_dir, "results")
         os.makedirs(automil_results_dir, exist_ok=True)
 
-    # Ensure data is prepared. TITAN has no tile-encoder H5->PT step (it's
-    # already a single frozen embedding per slide, validated separately by
-    # prepare_titan_experiment below) -- passing "titan" through here would
-    # make prepare_all's CLAM-specific convert_h5_to_pt crash looking for a
-    # "features" key that TITAN's H5 files don't have.
+    # Ensure data is prepared. TITAN skips the tile-encoder H5->PT step (no
+    # "features" key), so pass no encoder_keys.
     from autobench.pipeline.prepare import prepare_all
     prepare_all(
         benchmark_dir=benchmark_dir,
@@ -284,6 +285,7 @@ def main() -> None:
             results_dir=automil_results_dir,
         )
     elif framework == Framework.TITAN:
+        # TITAN is a frozen per-slide embedding -- its own prep/runner, no H5-bag step.
         from autobench.pipeline.titan.prepare import prepare_titan_experiment
         from autobench.pipeline.titan.runner import run_titan_experiment
         prepare_titan_experiment(
@@ -295,7 +297,6 @@ def main() -> None:
             exp_cfg, benchmark_dir, device=str(device),
         )
     else:
-        # nnMIL and ABMIL share nnMIL's H5-bag prep + plan format.
         from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
         prepare_nnmil_experiment(
             benchmark_dir=benchmark_dir,
@@ -318,6 +319,9 @@ def main() -> None:
         if framework == Framework.ABMIL:
             from autobench.pipeline.abmil.runner import run_abmil_experiment
             summary = run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+        elif framework == Framework.DTFD:
+            from autobench.pipeline.dtfd import run_dtfd_experiment
+            summary = run_dtfd_experiment(exp_cfg, benchmark_dir, device=str(device))
         else:
             from autobench.pipeline.nnmil.runner import run_nnmil_experiment
             summary = run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device))
