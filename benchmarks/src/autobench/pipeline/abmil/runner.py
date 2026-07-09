@@ -25,14 +25,7 @@ from autobench.pipeline.evaluate import compute_confidence_intervals
 
 
 def _resolve_h5_dir(benchmark_dir: str, exp_cfg: ExperimentConfig) -> str:
-    """Read the H5 feature dir from the nnMIL plan (shared prep artifact).
-
-    nnMIL's own prep (``nnmil/prepare.py``) appends ``_{survival_loss}`` to
-    the plan leaf for survival tasks (each loss gets its own plan, since
-    ``num_classes``/binning differ) — mirror that suffix here so survival
-    experiments resolve to the correct plan directory instead of falling
-    back to the classification one.
-    """
+    """Read the H5 feature dir from the nnMIL plan (shared prep artifact)."""
     leaf = f"{exp_cfg.task.name}_{exp_cfg.encoder_key}"
     if exp_cfg.survival_loss is not None:
         leaf = f"{leaf}_{exp_cfg.survival_loss}"

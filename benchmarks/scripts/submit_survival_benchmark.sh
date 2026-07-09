@@ -16,9 +16,6 @@
 #   MODELS="clam_sb"              # CLAM model subset
 #   NNMIL_MODELS="ab_mil"         # nnMIL model subset
 #   SEED=42
-#
-# Note: survival CV uses the configured --n_folds (default 5), same as
-# classification tasks.
 
 #SBATCH --job-name=autobench_surv
 #SBATCH --account=def-jma-ab

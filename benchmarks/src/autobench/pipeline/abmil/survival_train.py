@@ -1,10 +1,7 @@
 """Adapter-side survival training for the ABMIL backbone.
 
 Reuses ABMIL's model classes but trains them with a survival loss in a custom
-loop, mirroring ``clam/survival_train.py``: cox/nllsurv loss, val-loss model
-selection, event-time nllsurv bins, patient-level sksurv c-index. ABMIL
-forwards one slide (batch dim 1) per call, so cox's risk set is formed over a
-mini-batch of slides, same as CLAM.
+loop.
 """
 
 from __future__ import annotations

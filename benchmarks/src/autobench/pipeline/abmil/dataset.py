@@ -31,9 +31,9 @@ class ABMILSlide:
 class ABMILSurvivalSlide:
     """One survival bag: slide id, H5 path, event status, time, patient id.
 
-    Holds the H5 *path*, not the loaded tensor -- features are read on demand
+    Holds the H5 path, not the loaded tensor -- features are read on demand
     (``_read_bag``) in the trainer so a fold never has every bag resident in
-    host RAM at once (mirrors CLAM's lazy ``pt_path`` survival contract).
+    host RAM at once.
     """
 
     slide_id: str
@@ -110,13 +110,7 @@ def load_abmil_survival_split(
     h5_dir: str,
     split: str,
 ) -> list[ABMILSurvivalSlide]:
-    """Load one split (train/val/test) as a list of ``ABMILSurvivalSlide`` bags.
-
-    Mirrors ``load_abmil_split`` but reads the survival task CSV's
-    ``status``/``time``/``case_id`` columns instead of a classification
-    ``label`` column (same contract as
-    ``clam/dataset.py::load_survival_fold_splits``).
-    """
+    """Load one split (train/val/test) as a list of ``ABMILSurvivalSlide`` bags."""
     task_df = pd.read_csv(task_csv, dtype=str)
     status_map = dict(zip(task_df["slide_id"], task_df["status"]))
     time_map = dict(zip(task_df["slide_id"], task_df["time"]))
