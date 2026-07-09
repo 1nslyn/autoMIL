@@ -14,7 +14,6 @@ import pandas as pd
 
 from autobench.config import DatasetConfig
 from autobench.data import load_all_slides
-from autobench.pipeline.config import resolve_n_folds
 from autobench.pipeline.splits import create_strategy_splits
 
 
@@ -179,7 +178,7 @@ def prepare_all(
             stratify_col = "status" if tdef.task_type == "survival" else "label"
             create_strategy_splits(
                 csv_path, splits_dir,
-                n_splits=resolve_n_folds(tdef.task_type, n_splits),
+                n_splits=n_splits,
                 seed=seed, stratify_col=stratify_col,
             )
         else:

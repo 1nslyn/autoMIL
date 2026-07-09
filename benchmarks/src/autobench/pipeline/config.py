@@ -293,18 +293,6 @@ def get_nnmil_runtime_overrides(model_type: str) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-# Survival CV uses fewer folds than classification. With few events, 10-fold
-# leaves only ~2 events per test fold (c-index near chance), so survival follows
-# nnMIL's native 5-fold convention while classification keeps the configured
-# n_folds.
-SURVIVAL_N_FOLDS = 5
-
-
-def resolve_n_folds(task_type: str, n_folds: int) -> int:
-    """Fold count for a task: survival is pinned to SURVIVAL_N_FOLDS; others use n_folds."""
-    return SURVIVAL_N_FOLDS if task_type == "survival" else n_folds
-
-
 def generate_all_experiments(
     cfg: BenchmarkConfig,
     registries: Registries,
@@ -418,7 +406,7 @@ def generate_all_experiments(
                                 embed_dim=embed_dim,
                                 model=model_cfg,
                                 train=cfg.train,
-                                n_folds=resolve_n_folds(task_cfg.task_type, cfg.n_folds),
+                                n_folds=cfg.n_folds,
                                 framework=framework,
                                 strategy=strategy,
                                 survival_loss=survival_loss,
