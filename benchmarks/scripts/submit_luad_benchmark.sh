@@ -21,6 +21,7 @@
 #SBATCH --cpus-per-task=48
 #SBATCH --gpus-per-node=h100:4
 #SBATCH --mem=0
+#SBATCH --signal=B:USR1@300
 #SBATCH --output=/scratch/yinshuol/autoMIL/logs/bench_%x_%j.out
 #SBATCH --error=/scratch/yinshuol/autoMIL/logs/bench_%x_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
@@ -40,6 +41,20 @@ DTFD_MODELS="dtfd_mil"
 ABMIL_MODELS="abmil"
 PROJECT_DIR="/home/yinshuol/scratch/autoMIL/autoMIL"
 SELF="$PROJECT_DIR/benchmarks/scripts/submit_luad_benchmark.sh"
+
+# Resubmit-before-timeout: SLURM sends SIGUSR1 to this batch script 300s before
+# the wall (see --signal=B:USR1@300 above). We resubmit ourselves (idempotent
+# resume) BEFORE the hard kill. The previous exit-code approach never fired,
+# because SIGTERM/SIGKILL at the wall reaped bash before it could resubmit.
+_resubmitted=0
+_resubmit_before_wall() {
+    if [ "$_resubmitted" -eq 0 ]; then
+        _resubmitted=1
+        echo "[signal] Wall limit approaching — resubmitting ${N_FOLDS}-fold to resume..."
+        sbatch --parsable "$SELF" "$N_FOLDS" && echo "  resubmitted" || echo "  ERROR: resubmit failed"
+    fi
+}
+trap _resubmit_before_wall USR1
 
 echo "================================================"
 echo "AutoBench LUAD grid — ${N_FOLDS}-fold, 4x H100"
@@ -79,20 +94,28 @@ echo "===== prep (${N_FOLDS}-fold splits) ====="
 python benchmarks/scripts/run_benchmark.py --dataset "$DATASET" --benchmark_dir "$BENCHMARK_DIR" \
     --prep_only --encoders $ENCODERS --tasks $TASKS --n_folds $N_FOLDS || { echo "ERROR: prep failed"; exit 1; }
 
-# --- train (4x H100) ---
+# --- train (4x H100) — run in background + wait so the USR1 trap can fire ---
+# (bash defers traps until a foreground child returns; backgrounding + wait lets
+#  the resubmit-before-wall handler run while training is still going.)
 echo "===== train (4x H100) ====="
 python benchmarks/scripts/run_benchmark.py --dataset "$DATASET" --benchmark_dir "$BENCHMARK_DIR" \
     --all_gpus --frameworks $FRAMEWORKS --models $CLAM_MODELS --nnmil_models $NNMIL_MODELS \
     --dtfd_models $DTFD_MODELS --abmil_models $ABMIL_MODELS --encoders $ENCODERS --tasks $TASKS \
-    --n_folds $N_FOLDS --no_wandb
-EXIT=$?
+    --n_folds $N_FOLDS --no_wandb &
+TRAIN_PID=$!
+# `wait` returns 128+signum when interrupted by the trapped USR1; loop until the
+# training process itself actually exits so EXIT is its real status.
+while true; do
+    wait "$TRAIN_PID"; EXIT=$?
+    kill -0 "$TRAIN_PID" 2>/dev/null || break
+done
 
-# --- auto-resubmit on timeout (preserves N_FOLDS) ---
+# --- completion (resubmit already handled by the USR1 trap; fallback on hard kill) ---
 if [ $EXIT -eq 0 ]; then
     echo "Benchmark completed."
 elif [ $EXIT -eq 143 ] || [ $EXIT -eq 137 ]; then
-    echo "Time limit — resubmitting ${N_FOLDS}-fold (idempotent resume)..."
-    sbatch --parsable "$SELF" "$N_FOLDS" || echo "ERROR: resubmit failed. Run: sbatch $SELF $N_FOLDS"
+    echo "Time limit (exit $EXIT) — ensuring a resume job is queued (fallback)..."
+    _resubmit_before_wall
 else
     echo "Benchmark exited $EXIT — non-recoverable. Check logs."
 fi
