@@ -40,8 +40,12 @@ def _load_split_ids(split_csv: str, column: str) -> list[str]:
     if column not in df.columns:
         return []
     ids = df[column].dropna().tolist()
-    # A slide_id read as "1234.0" (pandas float coercion) -> "1234".
-    return [str(x).split(".")[0] if "." in str(x) else str(x) for x in ids]
+    # Strip only a trailing ".0" (float-coercion artifact for purely-numeric
+    # ids). Do NOT split on "." — TCGA slide_ids carry a "." before the UUID
+    # suffix (e.g. "TCGA-..-DX1.<uuid>"); splitting drops the UUID so the id
+    # matches no H5 file / label and the split silently empties.
+    return [s[:-2] if s.endswith(".0") and s[:-2].isdigit() else s
+            for s in map(str, ids)]
 
 
 def load_dtfd_split(
