@@ -1,8 +1,8 @@
-name: tcga_coad
-description: "TCGA-COAD — Colon Adenocarcinoma (BRAF mutation prediction)"
+name: tcga_skcm
+description: "TCGA-SKCM — Skin Cutaneous Melanoma (NRAS mutation prediction)"
 
 paths:
-  data_root: "${AUTOBENCH_TCGA_COAD_ROOT}"
+  data_root: "${AUTOBENCH_TCGA_SKCM_ROOT}"
   wsi_dir: "${data_root}/wsi"
   mapping_csv: "${data_root}/normalized_manifest.csv"
   output_dir: "${data_root}/trident_output"
@@ -10,8 +10,11 @@ paths:
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
 tasks:
-  braf:
-    label_col: "BRAF_binary"
+  # NRAS chosen over BRAF (BRAF collides with TCGA-COAD in the slate) and over
+  # MAP2K1/PTEN (rarer). NRAS = 112 positives / 320 wildtype (~22/fold at 5-fold)
+  # — a canonical, well-powered melanoma driver, distinct from every other task.
+  nras:
+    label_col: "NRAS_binary"
     label_map:
       0: "wildtype"
       1: "mutant"
@@ -23,7 +26,7 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  braf: ["standard"]
+  nras: ["standard"]
 
 slide_id_column: "slide_name"
 slide_id_transform: "strip_svs"
