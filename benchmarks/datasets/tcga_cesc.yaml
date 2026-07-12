@@ -1,8 +1,8 @@
-name: tcga_coad
-description: "TCGA-COAD — Colon Adenocarcinoma (BRAF mutation prediction)"
+name: tcga_cesc
+description: "TCGA-CESC — Cervical Squamous Cell Carcinoma (PIK3CA mutation prediction)"
 
 paths:
-  data_root: "${AUTOBENCH_TCGA_COAD_ROOT}"
+  data_root: "${AUTOBENCH_TCGA_CESC_ROOT}"
   wsi_dir: "${data_root}/wsi"
   mapping_csv: "${data_root}/normalized_manifest.csv"
   output_dir: "${data_root}/trident_output"
@@ -10,8 +10,10 @@ paths:
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
 tasks:
-  braf:
-    label_col: "BRAF_binary"
+  # PIK3CA: 82 mutant / 184 wildtype (~16/fold at 5-fold). Matches Ryan's prior
+  # nnMIL run (benchmark/dataset_csv/pik3ca.csv) — now promoted to the full grid.
+  pik3ca:
+    label_col: "PIK3CA_binary"
     label_map:
       0: "wildtype"
       1: "mutant"
@@ -23,7 +25,7 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  braf: ["standard"]
+  pik3ca: ["standard"]
 
 slide_id_column: "slide_name"
 slide_id_transform: "strip_svs"

@@ -16,12 +16,9 @@ tasks:
       0: "wildtype"
       1: "mutant"
     n_classes: 2
-  os:
-    task_type: survival
-    event_col: OS_event
-    time_col: OS_time
-    survival_losses: [cox, nllsurv]
-    nll_bins: 4
+  # NOTE: OS survival task removed — normalized_manifest.csv has no OS_event/
+  # OS_time columns, so the old `os:` block failed at load. Re-add it once TCGA
+  # clinical survival is merged into the manifest.
 
 split_strategies:
   standard:
@@ -30,7 +27,6 @@ split_strategies:
 
 task_strategy_feasibility:
   idh1: ["standard"]
-  os: ["standard"]
 
 slide_id_column: "slide_name"
 slide_id_transform: "strip_svs"
@@ -55,6 +51,9 @@ nnmil_models:
 
 abmil_models:
   - abmil
+
+titan:
+  head: linear
 
 extraction:
   magnification: 20
