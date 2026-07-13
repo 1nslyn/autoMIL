@@ -365,7 +365,7 @@ uv run python benchmarks/scripts/run_benchmark.py --dataset {dataset} --tasks os
   --prep_only                       Only run data preparation (splits/CSV/plans)
 ```
 
-> **n_folds is pinned for survival.** `--n_folds` (default 10) only affects classification; survival is forced to 5 by `resolve_n_folds()` regardless of the flag. The survival loss set and `nll_bins` come from the task's YAML entry, not the CLI.
+> **n_folds for survival.** Survival CV now follows `--n_folds` (default 5), the same as classification — the old `resolve_n_folds()` pin to 5 has been removed. Note that few-event cohorts get sparse test folds at high `--n_folds` (≈2 events/fold at 10-fold can push C-index toward chance), so keep the 5-fold standard unless you have the events to spare. The survival loss set and `nll_bins` come from the task's YAML entry, not the CLI.
 
 ## Timing Estimates
 
