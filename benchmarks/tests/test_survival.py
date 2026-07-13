@@ -655,6 +655,65 @@ class TestSurvivalRiskOrientation:
         # The raw logit (pre-fix behavior) inverts the metric -- documents the bug.
         assert float(survival_c_index(opt_logit.view(-1), status, time, pids)) < 0.01
 
+    def test_unknown_loss_raises(self):
+        """A typo'd/unknown loss must fail loudly, not be silently scored as cox."""
+        import importlib
+
+        import torch
+
+        logits = torch.tensor([-1.0, 0.0, 1.0])
+        for _, module in self.ARMS:
+            m = importlib.import_module(module)
+            with pytest.raises(ValueError, match="unknown survival loss"):
+                m._risk_from_logits(logits, "coxx")
+
+
+class TestNnmilTrainerRiskOrientation:
+    """The nnMIL SurvivalTrainer scores cox/mse/mae from a single-output head
+    (nllsurv routes to SurvivalPorpoiseTrainer). It must orient mse/mae as the
+    NEGATED prediction before the c-index, like the adapter arms -- otherwise
+    the nnmil arm's mse/mae c-index is silently inverted (the same bug, in the
+    one framework whose grid actually generates mse/mae experiments)."""
+
+    def test_risk_from_preds_orientation(self):
+        import numpy as np
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401  (puts nnMIL on path)
+        from nnMIL.training.trainers.survival_trainer import _risk_from_preds
+
+        preds = np.array([-2.0, 0.5, 3.0], dtype=np.float32)
+        np.testing.assert_allclose(_risk_from_preds(preds, "cox"), preds)
+        np.testing.assert_allclose(_risk_from_preds(preds, "mse"), -preds)
+        np.testing.assert_allclose(_risk_from_preds(preds, "mae"), -preds)
+
+    def test_mse_optimal_model_is_concordant(self):
+        """A trainer output that perfectly learned the mse objective
+        (pred == log time) scores c-index ~1.0 after orientation; the raw
+        (pre-fix) prediction inverts it to ~0.0."""
+        import numpy as np
+        import torch
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        from nnMIL.training.losses.survival_loss import survival_c_index
+        from nnMIL.training.trainers.survival_trainer import _risk_from_preds
+
+        time = np.array([1.0, 2.0, 4.0, 8.0], dtype=np.float32)
+        status = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+        pids = [f"p{i}" for i in range(4)]
+        opt_pred = np.log(time + 1e-8)  # the mse loss's optimum
+
+        def _ci(risk_np):
+            return float(survival_c_index(
+                torch.tensor(risk_np, dtype=torch.float32),
+                torch.tensor(status, dtype=torch.float32),
+                torch.tensor(time, dtype=torch.float32),
+                pids,
+            ))
+
+        assert _ci(_risk_from_preds(opt_pred, "mse")) > 0.99
+        # Raw prediction (pre-fix) inverts the metric -- documents the bug.
+        assert _ci(opt_pred) < 0.01
+
 
 class TestSurvivalCIndexDirection:
     """survival_c_index must rank higher risk as shorter survival (a sign flip

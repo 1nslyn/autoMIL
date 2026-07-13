@@ -83,7 +83,11 @@ def _risk_from_logits(logits: torch.Tensor, loss_type: str) -> torch.Tensor:
         return _nllsurv_risk(logits)
     if loss_type in ("mse", "mae"):
         return -logits.view(-1)
-    return logits.view(-1)  # cox
+    if loss_type == "cox":
+        return logits.view(-1)
+    raise ValueError(
+        f"unknown survival loss {loss_type!r}; expected cox/mse/mae/nllsurv"
+    )
 
 
 @torch.no_grad()

@@ -96,7 +96,7 @@ def run_abmil_experiment(
             test_samples = load_abmil_survival_split(task_csv, split_csv, h5_dir, "test")
             raw = train_abmil_survival_fold(
                 model_type, train_samples, val_samples, test_samples,
-                embed_dim=exp_cfg.embed_dim, survival_loss=exp_cfg.survival_loss,
+                embed_dim=exp_cfg.embed_dim, survival_loss=exp_cfg.survival_loss or "cox",
                 nll_bins=exp_cfg.task.nll_bins, cfg=cfg, device=torch_device,
                 seed=exp_cfg.train.seed + fold, fold_dir=fold_dir,
             )

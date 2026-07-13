@@ -60,6 +60,23 @@ def _survival_collate_fn(batch):
         return batch_features, batch_coords, batch_bag_sizes, status, time, patient_ids
 
 
+def _risk_from_preds(preds, survival_loss):
+    """Orient this trainer's raw single-output predictions as a risk score
+    (higher = higher risk = shorter survival) before C-index scoring.
+
+    - cox:      the logit already IS the risk score -> use as-is.
+    - mse/mae:  the head regresses the logit toward ``log(time)`` (higher logit
+                = LONGER survival), so it must be NEGATED — otherwise the
+                c-index is inverted (a perfectly-fit model scores ~0, not ~1).
+
+    nllsurv never reaches this trainer (it routes to ``SurvivalPorpoiseTrainer``
+    with an ``nll_bins``-wide head), so only cox and mse/mae are handled here.
+    """
+    if survival_loss in ("mse", "mae"):
+        return -preds
+    return preds
+
+
 class SurvivalTrainer(BaseTrainer):
     """Trainer for survival tasks (Cox/MSE/MAE loss, batch_size > 1)"""
     
@@ -444,9 +461,14 @@ class SurvivalTrainer(BaseTrainer):
         all_preds = np.concatenate(all_preds)
         all_status = np.concatenate(all_status)
         all_time = np.concatenate(all_time)
-        
+
+        # Orient raw predictions as a risk score (higher = shorter survival) per
+        # loss type before scoring: cox logits already ARE risk; mse/mae regress
+        # toward log(time) and must be negated, else the c-index is inverted.
+        all_risks = _risk_from_preds(all_preds, self.survival_loss)
+
         # Calculate C-index
-        risk_tensor = torch.tensor(all_preds, dtype=torch.float32)
+        risk_tensor = torch.tensor(all_risks, dtype=torch.float32)
         status_tensor = torch.tensor(all_status, dtype=torch.float32)
         time_tensor = torch.tensor(all_time, dtype=torch.float32)
         
@@ -480,7 +502,7 @@ class SurvivalTrainer(BaseTrainer):
                 'patient_id': all_patient_ids,
                 'status': all_status.astype(int),
                 'time': all_time,
-                'risk_score': all_preds
+                'risk_score': all_risks
             })
             results_df.to_csv(save_csv_path, index=False)
             self.logger.info(f"Results saved to {save_csv_path}")
