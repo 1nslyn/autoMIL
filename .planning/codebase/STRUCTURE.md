@@ -72,20 +72,17 @@ autoMIL/                                    # uv workspace root
 │   │           ├── clam/                   # CLAM-specific train/evaluate
 │   │           ├── nnmil/                  # nnMIL-specific
 │   │           └── smmile/                 # SMMILe-specific
-│   ├── datasets/                           # per-dataset YAML configs
-│   │   ├── ccrcc.yaml
-│   │   ├── clwd.yaml
-│   │   ├── hancock.yaml
-│   │   ├── ovarian.yaml
-│   │   ├── placeholder.yaml
-│   │   ├── tcga_luad.yaml
-│   │   └── tcga_template.yaml
+│   ├── datasets/                           # per-dataset YAML configs (grouped by program)
+│   │   ├── tcga/                           # TCGA configs (incl. the preprint roster)
+│   │   ├── cptac/                          # CPTAC configs
+│   │   ├── other/                          # clwd, hancock, ovarian
+│   │   └── templates/                      # tcga_template, cptac_template, placeholder
 │   ├── scripts/                            # CLI entry points for benchmarks
 │   │   ├── run_experiment.py               # single experiment runner (writes result.json)
 │   │   ├── run_benchmark.py                # multi-experiment sweep
 │   │   ├── run_feature_extraction.py
-│   │   ├── generate_hancock_metadata.py
-│   │   └── submit_*.sh                     # SLURM/cluster submit wrappers
+│   │   ├── slurm/                          # SLURM submit wrappers (submit_*.sh)
+│   │   └── manifests/                      # data-prep utilities (add_os_to_manifest, …)
 │   ├── lib/                                # vendored external MIL libraries
 │   │   ├── CLAM/
 │   │   ├── nnMIL/

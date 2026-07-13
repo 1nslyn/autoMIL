@@ -229,7 +229,7 @@ def main() -> None:
     print()
     print("Next steps:")
     print(f"  1. Check slide IDs match your .svs filenames: head -5 {out}")
-    print(f"  2. Create benchmarks/datasets/{args.source}.yaml using cptac_template.yaml")
+    print(f"  2. Create benchmarks/datasets/cptac/{args.source}.yaml using templates/cptac_template.yaml")
     print(f"  3. Add AUTOBENCH_{args.source.upper()}_ROOT={saveto} to benchmarks/.env")
 
 

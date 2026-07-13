@@ -19,7 +19,7 @@ End-to-end guide for extracting pathology features from CPTAC whole-slide images
 
 **Reference:**
 - `benchmarks/datasets/templates/cptac_template.yaml`, template config to copy
-- `benchmarks/datasets/tcga_luad.yaml`, Leo's completed TCGA reference (structure is identical)
+- `benchmarks/datasets/tcga/tcga_luad.yaml`, Leo's completed TCGA reference (structure is identical)
 
 ## Available CPTAC Cohorts
 

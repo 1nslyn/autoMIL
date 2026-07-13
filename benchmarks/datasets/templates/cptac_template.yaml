@@ -1,7 +1,7 @@
 # CPTAC Dataset Configuration Template
 #
 # How to use:
-# 1. Copy this file: cp cptac_template.yaml cptac_{code}.yaml  (e.g., cptac_ccrcc.yaml)
+# 1. Copy this file: cp benchmarks/datasets/templates/cptac_template.yaml benchmarks/datasets/cptac/cptac_{code}.yaml  (e.g., cptac_ccrcc.yaml)
 # 2. Update name, description, paths.data_root env var name
 # 3. Run prepare_cptac_manifest.py to generate normalized_manifest.csv from Patho-Bench
 # 4. Define tasks matching the {GENE}_binary columns the script produces

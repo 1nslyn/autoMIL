@@ -1,7 +1,7 @@
 # TCGA Dataset Configuration Template
 #
 # How to use:
-# 1. Copy this file: cp tcga_template.yaml tcga_{code}.yaml  (e.g., tcga_brca.yaml)
+# 1. Copy this file: cp benchmarks/datasets/templates/tcga_template.yaml benchmarks/datasets/tcga/tcga_{code}.yaml  (e.g., tcga_brca.yaml)
 # 2. Update name, description, paths.data_root env var name
 # 3. Define tasks using {GENE}_binary columns from your GOLDMARK manifest
 # 4. Add AUTOBENCH_TCGA_{CODE}_ROOT to benchmarks/.env
