@@ -33,7 +33,7 @@ held at 4, not expanded to 5.
 
 **Partly cheap, but not uniformly free:** both additions are already wired
 into every dataset's `nnmil_models` list (e.g.
-[`../../benchmarks/datasets/ovarian.yaml`](../../benchmarks/datasets/ovarian.yaml):
+[`../../benchmarks/datasets/other/ovarian.yaml`](../../benchmarks/datasets/other/ovarian.yaml):
 `ab_mil, trans_mil, ds_mil, dtfd_mil, ...`), so neither needs new model
 integration. But "wired in" is not the same as "already run":
 - **`ab_mil`** results already exist on disk — the baseline README lists it

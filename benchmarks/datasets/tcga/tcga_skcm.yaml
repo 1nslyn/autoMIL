@@ -1,0 +1,61 @@
+name: tcga_skcm
+description: "TCGA-SKCM — Skin Cutaneous Melanoma (NRAS mutation prediction)"
+
+paths:
+  data_root: "${AUTOBENCH_TCGA_SKCM_ROOT}"
+  wsi_dir: "${data_root}/wsi"
+  mapping_csv: "${data_root}/normalized_manifest.csv"
+  output_dir: "${data_root}/trident_output"
+  benchmark_dir: "${data_root}/benchmark"
+  features_base_dir: "${output_dir}/20x_224px_0px_overlap"
+
+tasks:
+  # NRAS chosen over BRAF (BRAF collides with TCGA-COAD in the slate) and over
+  # MAP2K1/PTEN (rarer). NRAS = 112 positives / 320 wildtype (~22/fold at 5-fold)
+  # — a canonical, well-powered melanoma driver, distinct from every other task.
+  nras:
+    label_col: "NRAS_binary"
+    label_map:
+      0: "wildtype"
+      1: "mutant"
+    n_classes: 2
+
+split_strategies:
+  standard:
+    train_cohorts: []
+    test_cohorts: []
+
+task_strategy_feasibility:
+  nras: ["standard"]
+
+slide_id_column: "slide_name"
+slide_id_transform: "strip_svs"
+wsi_extension: null
+case_id_column: "sample_names"
+status_column: null
+status_value: null
+
+encoders:
+  models:
+    "paige-ai/Virchow2": "virchow2"
+    "bioptimus/H-optimus-1": "hoptimus1"
+    "MahmoodLab/UNI2-h": "uni_v2"
+  dims:
+    virchow2: 2560
+    hoptimus1: 1536
+    uni_v2: 1536
+
+nnmil_models:
+  - trans_mil
+  - simple_mil
+
+abmil_models:
+  - abmil
+
+titan:
+  head: linear
+
+extraction:
+  magnification: 20
+  patch_size: 224
+  batch_size: 64

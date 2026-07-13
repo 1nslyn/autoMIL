@@ -289,3 +289,25 @@ class TestDispatchRunsRealArm:
         assert summary["framework"] == "dtfd"
         assert summary["model_type"] == "dtfd_mil"
         assert "test" in summary and "val" in summary
+
+
+class TestLoadSplitIdsPreservesUuid:
+    """Regression: TCGA slide_ids carry a '.' before the UUID suffix; the split
+    loader must NOT strip it. The old ``split('.')[0]`` stripped the UUID so the
+    id matched no H5/label and silently emptied the split -> the observed
+    'DTFD train split is empty' failure on TCGA-LUAD."""
+
+    def test_uuid_suffixed_id_preserved(self, tmp_path):
+        from autobench.pipeline.dtfd.dataset import _load_split_ids
+
+        sid = "TCGA-05-4244-01Z-00-DX1.d4ff32cd-38cf-40ea-8213-45c2b100ac01"
+        csv = tmp_path / "splits_0.csv"
+        csv.write_text(f"train,val,test\n{sid},{sid},{sid}\n")
+        assert _load_split_ids(str(csv), "train") == [sid]
+
+    def test_numeric_float_coercion_still_stripped(self, tmp_path):
+        from autobench.pipeline.dtfd.dataset import _load_split_ids
+
+        csv = tmp_path / "splits_0.csv"
+        csv.write_text("train,val,test\n1234.0,5678.0,9012.0\n")
+        assert _load_split_ids(str(csv), "train") == ["1234"]

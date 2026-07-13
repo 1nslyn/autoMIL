@@ -1,8 +1,8 @@
-name: tcga_lgg
-description: "TCGA-LGG — Lower-Grade Glioma (IDH1 mutation prediction)"
+name: tcga_blca
+description: "TCGA-BLCA — Bladder Urothelial Carcinoma (PIK3CA mutation prediction)"
 
 paths:
-  data_root: "${AUTOBENCH_TCGA_LGG_ROOT}"
+  data_root: "${AUTOBENCH_TCGA_BLCA_ROOT}"
   wsi_dir: "${data_root}/wsi"
   mapping_csv: "${data_root}/normalized_manifest.csv"
   output_dir: "${data_root}/trident_output"
@@ -10,18 +10,15 @@ paths:
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
 tasks:
-  idh1:
-    label_col: "IDH1_binary"
+  # PIK3CA (77 positives, ~15/fold) — BLCA's best classification label. Below the
+  # >100 bar, but accepted: BLCA is a survival anchor (175 deaths) and this keeps
+  # every dataset's gene distinct. Other BLCA genes are rarer (FGFR3 34, etc.).
+  pik3ca:
+    label_col: "PIK3CA_binary"
     label_map:
       0: "wildtype"
       1: "mutant"
     n_classes: 2
-  os:
-    task_type: survival
-    event_col: OS_event
-    time_col: OS_time
-    survival_losses: [cox, nllsurv]
-    nll_bins: 4
 
 split_strategies:
   standard:
@@ -29,8 +26,7 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  idh1: ["standard"]
-  os: ["standard"]
+  pik3ca: ["standard"]
 
 slide_id_column: "slide_name"
 slide_id_transform: "strip_svs"
@@ -55,6 +51,9 @@ nnmil_models:
 
 abmil_models:
   - abmil
+
+titan:
+  head: linear
 
 extraction:
   magnification: 20

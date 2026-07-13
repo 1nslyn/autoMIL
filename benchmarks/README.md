@@ -8,9 +8,9 @@ datasets.
 
 | Dataset | Tasks | Classes | Slides | Config |
 |---------|-------|---------|--------|--------|
-| **Ovarian** | BRCA, HRD | 2 (binary) | ~400 | `datasets/ovarian.yaml` |
-| **CLWD** | Subtype (7-class, 6-class) | 6-7 | 408 | `datasets/clwd.yaml` |
-| **Placeholder** | TBD | TBD | TBD | `datasets/placeholder.yaml` |
+| **Ovarian** | BRCA, HRD | 2 (binary) | ~400 | `datasets/other/ovarian.yaml` |
+| **CLWD** | Subtype (7-class, 6-class) | 6-7 | 408 | `datasets/other/clwd.yaml` |
+| **Placeholder** | TBD | TBD | TBD | `datasets/templates/placeholder.yaml` |
 
 ## Setup
 
@@ -84,7 +84,7 @@ automil orchestrator start
 
 ## Adding a New Dataset
 
-1. Copy `datasets/placeholder.yaml` and fill in your dataset's paths, tasks, cohorts, and encoders.
+1. Copy `datasets/templates/placeholder.yaml` and fill in your dataset's paths, tasks, cohorts, and encoders.
 2. Create a new experiment directory: `experiments/your_dataset/automil/config.yaml`.
 3. Run preparation: `python benchmarks/scripts/run_benchmark.py --dataset your_dataset --prep_only`.
 

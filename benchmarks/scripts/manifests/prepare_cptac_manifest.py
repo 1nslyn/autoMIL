@@ -6,7 +6,7 @@ canonical train/test splits for all CPTAC cohorts on HuggingFace; this script
 downloads them and merges multiple tasks into a single autobench-compatible CSV.
 
 Usage:
-    python benchmarks/scripts/prepare_cptac_manifest.py \\
+    python benchmarks/scripts/manifests/prepare_cptac_manifest.py \\
         --source cptac_ccrcc \\
         --tasks BAP1_mutation VHL_mutation \\
         --saveto /path/to/dataset/root
@@ -229,7 +229,7 @@ def main() -> None:
     print()
     print("Next steps:")
     print(f"  1. Check slide IDs match your .svs filenames: head -5 {out}")
-    print(f"  2. Create benchmarks/datasets/{args.source}.yaml using cptac_template.yaml")
+    print(f"  2. Create benchmarks/datasets/cptac/{args.source}.yaml using templates/cptac_template.yaml")
     print(f"  3. Add AUTOBENCH_{args.source.upper()}_ROOT={saveto} to benchmarks/.env")
 
 

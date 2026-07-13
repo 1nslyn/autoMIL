@@ -145,8 +145,10 @@ def create_smmile_split(
     datasets = []
     for col in ("train", "val", "test"):
         ids = splits[col].dropna().tolist()
-        # Handle numeric IDs that may have been read as floats
-        ids = [str(x).split(".")[0] if "." in str(x) else str(x) for x in ids]
+        # Strip only a trailing ".0" (float-coercion for numeric ids); do NOT
+        # split on "." — TCGA slide_ids carry a "." before the UUID suffix.
+        ids = [s[:-2] if s.endswith(".0") and s[:-2].isdigit() else s
+               for s in map(str, ids)]
         mask = slide_data["slide_id"].astype(str).isin(ids)
         df_split = slide_data[mask].reset_index(drop=True)
 

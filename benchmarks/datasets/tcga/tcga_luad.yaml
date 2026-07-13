@@ -1,8 +1,8 @@
-name: tcga_coad
-description: "TCGA-COAD — Colon Adenocarcinoma (BRAF mutation prediction)"
+name: tcga_luad
+description: "TCGA-LUAD — Lung Adenocarcinoma (KRAS mutation prediction)"
 
 paths:
-  data_root: "${AUTOBENCH_TCGA_COAD_ROOT}"
+  data_root: "${AUTOBENCH_TCGA_LUAD_ROOT}"
   wsi_dir: "${data_root}/wsi"
   mapping_csv: "${data_root}/normalized_manifest.csv"
   output_dir: "${data_root}/trident_output"
@@ -10,8 +10,8 @@ paths:
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
 tasks:
-  braf:
-    label_col: "BRAF_binary"
+  kras:
+    label_col: "KRAS_binary"
     label_map:
       0: "wildtype"
       1: "mutant"
@@ -23,7 +23,7 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  braf: ["standard"]
+  kras: ["standard"]
 
 slide_id_column: "slide_name"
 slide_id_transform: "strip_svs"
@@ -48,6 +48,13 @@ nnmil_models:
 
 abmil_models:
   - abmil
+
+# TITAN slide-encoder arm (Framework.TITAN). `head: linear` = frozen linear probe
+# on the 768-d TITAN slide embedding. TITAN *is* the encoder + aggregator (one arm
+# per task; no tile-encoder sweep). Its features (CONCH v1.5 @ 20x/512px -> TITAN
+# pool) are extracted separately and exposed at features_base_dir/features_titan/.
+titan:
+  head: linear
 
 extraction:
   magnification: 20

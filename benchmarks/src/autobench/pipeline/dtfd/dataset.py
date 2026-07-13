@@ -56,14 +56,12 @@ def _load_split_ids(split_csv: str, column: str) -> list[str]:
     if column not in df.columns:
         return []
     ids = df[column].dropna().tolist()
-    # Undo pandas float coercion of purely-numeric ids ("1234.0" -> "1234"),
-    # but keep real ids intact: TCGA slide_ids legitimately contain a dot
-    # ("...-DX1.<uuid>"), so a blanket split(".")[0] truncates them and orphans
-    # every slide against the task CSV.
-    def _bare(x: str) -> str:
-        s = str(x)
-        return s[:-2] if s.endswith(".0") and s[:-2].isdigit() else s
-    return [_bare(x) for x in ids]
+    # Strip only a trailing ".0" (float-coercion artifact for purely-numeric
+    # ids). Do NOT split on "." — TCGA slide_ids carry a "." before the UUID
+    # suffix (e.g. "TCGA-..-DX1.<uuid>"); splitting drops the UUID so the id
+    # matches no H5 file / label and the split silently empties.
+    return [s[:-2] if s.endswith(".0") and s[:-2].isdigit() else s
+            for s in map(str, ids)]
 
 
 def load_dtfd_split(

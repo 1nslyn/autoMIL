@@ -1,26 +1,24 @@
 #!/bin/bash
-# SLURM job: TCGA-COAD BRAF — nnMIL-method approximation of the nnMIL-paper number.
+# SLURM job: TCGA-LGG IDH1 — nnMIL-method approximation of the nnMIL-paper number.
 #
-# Why this exists: the nnMIL paper evaluates colorectal BRAF by training on SURGEN
-# and using TCGA-CRC (COAD+READ) as a WHOLE-cohort external test set. We can't
-# reproduce that protocol (no SURGEN cohort, and we have COAD only — no READ), so
-# this is an APPROXIMATION: in-cohort 5-fold patient-stratified CV using nnMIL's
-# own split recipe (seed 42, val_frac 0.125) on TCGA-COAD.
+# Why this exists: the nnMIL paper evaluates IDH by training on MUV-IDH and using
+# TCGA-LGG as a WHOLE-cohort external test set (no internal split). We can't
+# reproduce that protocol (no MUV cohort), so this is an APPROXIMATION: in-cohort
+# 5-fold patient-stratified CV using nnMIL's own split recipe (seed 42, val_frac
+# 0.125) — i.e. nnMIL's native planner default (5-fold) rather than our 10-fold.
 #
-# BRAF is rare in COAD (~55 positive cases after feature-filtering) so AUC will be
-# high-variance — treat the number as a rough comparator, not a precise match.
-#
-# Outputs go to Leo's scratch; features read from the shared trident H5 store via
-# symlinks under $BENCHMARK_DIR/features (forced CLAM H5->PT step no-ops).
+# Outputs go to Leo's scratch (not the shared TCGA-LGG dir, which is read-only to
+# us); features are read from the shared trident H5 store via symlinks under
+# $BENCHMARK_DIR/features (so the forced CLAM H5->PT step no-ops).
 #
 # Grid: framework {nnmil} x model {simple_mil} x encoders {hoptimus1,uni_v2,virchow2}
-#       x task {braf} x 5 folds = 15 fold-runs.
+#       x task {idh1} x 5 folds = 15 fold-runs.
 #
 # Idempotent: completed folds are skipped, so the time-limit auto-resubmit resumes.
 #
-# Usage:  sbatch benchmarks/scripts/submit_approx_nnmil_coad.sh
+# Usage:  sbatch benchmarks/scripts/slurm/submit_approx_nnmil_lgg.sh
 
-#SBATCH --job-name=approx_nnmil_coad
+#SBATCH --job-name=approx_nnmil_lgg
 #SBATCH --account=rrg-jma
 #SBATCH --time=12:00:00
 #SBATCH --nodes=1
@@ -36,20 +34,20 @@
 set -uo pipefail
 
 # ==================== CONFIG ====================
-DATASET="tcga_coad"
-TASKS="braf"
+DATASET="tcga_lgg"
+TASKS="idh1"
 FRAMEWORKS="nnmil"
 NNMIL_MODELS="simple_mil"
 ENCODERS="hoptimus1 uni_v2 virchow2"
-# nnMIL's native planner default is 5-fold.
+# nnMIL's native planner default is 5-fold (vs our 10-fold standard run).
 N_FOLDS=5
 PROJECT_DIR="/scratch/yinshuol/autoMIL/autoMIL"
-BENCHMARK_DIR="/scratch/yinshuol/autoMIL/approx_nnmil/tcga_coad/benchmark"
-SELF="$PROJECT_DIR/benchmarks/scripts/submit_approx_nnmil_coad.sh"
+BENCHMARK_DIR="/scratch/yinshuol/autoMIL/approx_nnmil/tcga_lgg/benchmark"
+SELF="$PROJECT_DIR/benchmarks/scripts/slurm/submit_approx_nnmil_lgg.sh"
 
 # ==================== JOB INFO ====================
 echo "================================================"
-echo "AutoBench TCGA-COAD BRAF — nnMIL-method approximation (5-fold)"
+echo "AutoBench TCGA-LGG IDH1 — nnMIL-method approximation (5-fold)"
 echo "================================================"
 echo "Job ID:        ${SLURM_JOB_ID:-N/A}"
 echo "Dataset:       $DATASET   Task: $TASKS"

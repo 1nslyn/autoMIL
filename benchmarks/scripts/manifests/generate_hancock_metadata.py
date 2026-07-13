@@ -7,7 +7,7 @@ and produces:
   2. wsi/ directory — flat symlinks to SVS files in site-specific subdirectories
 
 Usage:
-    python benchmarks/scripts/generate_hancock_metadata.py [--data-root PATH]
+    python benchmarks/scripts/manifests/generate_hancock_metadata.py [--data-root PATH]
 """
 
 import argparse

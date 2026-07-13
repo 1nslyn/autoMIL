@@ -16,8 +16,8 @@ End-to-end guide for extracting pathology features from TCGA whole-slide images 
 **Tracking sheet:** `datasets/TCGA-CPTAC-Datasets - TCGA-16.csv`, update your row as you complete each step.
 
 **Reference:**
-- `benchmarks/datasets/tcga_luad.yaml`, Leo's completed config (checked into repo)
-- `benchmarks/datasets/tcga_template.yaml`, template to copy for your dataset
+- `benchmarks/datasets/tcga/tcga_luad.yaml`, Leo's completed config (checked into repo)
+- `benchmarks/datasets/templates/tcga_template.yaml`, template to copy for your dataset
 
 ## Prerequisites
 
@@ -74,15 +74,15 @@ Virchow2, Hoptimus-1 and UNI2-h are **gated models**, you need to request access
 
 ### 5. Configure the SLURM Script
   
-The default SLURM script (`benchmarks/scripts/submit_feature_extraction.sh`) references Leo's project directory and email. Update it for your account:
+The default SLURM script (`benchmarks/scripts/slurm/submit_feature_extraction.sh`) references Leo's project directory and email. Update it for your account:
 
 ```bash
 # Update the project directory path
-sed -i "s|/home/yinshuol/scratch/autoMIL/autoMIL|$HOME/scratch/autoMIL|" benchmarks/scripts/submit_feature_extraction.sh
+sed -i "s|/home/yinshuol/scratch/autoMIL/autoMIL|$HOME/scratch/autoMIL|" benchmarks/scripts/slurm/submit_feature_extraction.sh
 
 # Update the SLURM account and email
-sed -i "s|--account=def-wanglab|--account=YOUR_ACCOUNT|" benchmarks/scripts/submit_feature_extraction.sh
-sed -i "s|--mail-user=leo.yin@mail.utoronto.ca|--mail-user=YOUR_EMAIL|" benchmarks/scripts/submit_feature_extraction.sh
+sed -i "s|--account=def-wanglab|--account=YOUR_ACCOUNT|" benchmarks/scripts/slurm/submit_feature_extraction.sh
+sed -i "s|--mail-user=leo.yin@mail.utoronto.ca|--mail-user=YOUR_EMAIL|" benchmarks/scripts/slurm/submit_feature_extraction.sh
 ```
 
 ## Step-by-Step Guide
@@ -173,7 +173,7 @@ Submit the download as a SLURM job (runs on CPU, no GPU needed):
 
 ```bash
 mkdir -p logs
-sbatch benchmarks/scripts/submit_gdc_download.sh \
+sbatch benchmarks/scripts/slurm/submit_gdc_download.sh \
     datasets/{DATASET} \
     datasets/{DATASET}/gdc_manifest_matched.txt
 ```
@@ -200,8 +200,8 @@ Fill in your row in `https://docs.google.com/spreadsheets/d/1DVzgG7EfkQwOw-hjWqI
 
 ```bash
 # Copy the template
-cp benchmarks/datasets/tcga_template.yaml benchmarks/datasets/tcga_{code}.yaml
-# Example: cp benchmarks/datasets/tcga_template.yaml benchmarks/datasets/tcga_luad.yaml
+cp benchmarks/datasets/templates/tcga_template.yaml benchmarks/datasets/tcga/tcga_{code}.yaml
+# Example: cp benchmarks/datasets/templates/tcga_template.yaml benchmarks/datasets/tcga/tcga_luad.yaml
 ```
 
 Edit the YAML file. The GOLDMARK normalized manifest has standardized column names across all TCGA projects, so the column mappings below work for every dataset. Here is the TCGA-LUAD example:
@@ -310,10 +310,10 @@ The Fir cluster has H100 MIG GPU slices, a **3g.40gb** (40 GB) slice is sufficie
 mkdir -p logs
 
 # Submit using MIG GPU slice (recommended)
-sbatch benchmarks/scripts/submit_feature_extraction_mig.sh tcga_{code} virchow2 hoptimus1 uni_v2
+sbatch benchmarks/scripts/slurm/submit_feature_extraction_mig.sh tcga_{code} virchow2 hoptimus1 uni_v2
 
 # Or submit using full H100 (if MIG queue is busy)
-sbatch benchmarks/scripts/submit_feature_extraction.sh tcga_{code}
+sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh tcga_{code}
 ```
 
 **Monitor the job:**
@@ -324,7 +324,7 @@ tail -f logs/extract_wsi_extract_*.out
 
 For large datasets (>800 slides, e.g., TCGA-BRCA), increase the time limit:
 ```bash
-sbatch --time=2-00:00:00 benchmarks/scripts/submit_feature_extraction_mig.sh tcga_brca virchow2 hoptimus1 uni_v2
+sbatch --time=2-00:00:00 benchmarks/scripts/slurm/submit_feature_extraction_mig.sh tcga_brca virchow2 hoptimus1 uni_v2
 ```
 
 ### Step 8: Verify and Report
@@ -449,7 +449,7 @@ FileNotFoundError: Dataset config not found
 ### Job Timeout on SLURM
 For large datasets (>800 cases), 24 hours may not be enough:
 ```bash
-sbatch --time=2-00:00:00 benchmarks/scripts/submit_feature_extraction.sh tcga_xxx
+sbatch --time=2-00:00:00 benchmarks/scripts/slurm/submit_feature_extraction.sh tcga_xxx
 ```
 
 If a job times out mid-extraction, you can resume by running with `--skip_seg` (if segmentation/patching already completed) and specifying only the incomplete models:
@@ -465,9 +465,9 @@ uv run python benchmarks/scripts/run_feature_extraction.py \
 
 | Step | Command |
 |------|---------|
-| Download slides | `sbatch benchmarks/scripts/submit_gdc_download.sh datasets/{DATASET} datasets/{DATASET}/gdc_manifest_matched.txt` |
-| Extract features (MIG) | `sbatch benchmarks/scripts/submit_feature_extraction_mig.sh tcga_{code} virchow2 hoptimus1 uni_v2` |
-| Extract features (full H100) | `sbatch benchmarks/scripts/submit_feature_extraction.sh tcga_{code}` |
+| Download slides | `sbatch benchmarks/scripts/slurm/submit_gdc_download.sh datasets/{DATASET} datasets/{DATASET}/gdc_manifest_matched.txt` |
+| Extract features (MIG) | `sbatch benchmarks/scripts/slurm/submit_feature_extraction_mig.sh tcga_{code} virchow2 hoptimus1 uni_v2` |
+| Extract features (full H100) | `sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh tcga_{code}` |
 | Check jobs | `squeue -u $USER` |
 | Monitor extraction | `tail -f logs/extract_wsi_extract_*.out` |
 | Verify config | `uv run python -c "from autobench.config import load_dataset_config; print(load_dataset_config('tcga_{code}').wsi_dir)"` |
@@ -484,7 +484,7 @@ Ask me directly :)
 > **TL;DR, when Step 3b returns 0 (or very few) matches, GDC has re-uploaded
 > the slides with new file UUIDs. The patient/slide mapping is still correct;
 > only the file UUIDs are stale. Fix it with
-> `benchmarks/scripts/refresh_goldmark_uuids.py`.**
+> `benchmarks/scripts/manifests/refresh_goldmark_uuids.py`.**
 
 ### Symptom
 
@@ -525,7 +525,7 @@ A helper script handles this end-to-end:
 
 ```bash
 cd ~/scratch/autoMIL
-python benchmarks/scripts/refresh_goldmark_uuids.py datasets/{DATASET}
+python benchmarks/scripts/manifests/refresh_goldmark_uuids.py datasets/{DATASET}
 ```
 
 It expects `datasets/{DATASET}/` to contain:
@@ -551,7 +551,7 @@ When you suspect or confirm UUID rewrites, swap the following:
 
 1. **Replace the inline Python in Step 3b** with a single command:
    ```bash
-   python benchmarks/scripts/refresh_goldmark_uuids.py datasets/{DATASET}
+   python benchmarks/scripts/manifests/refresh_goldmark_uuids.py datasets/{DATASET}
    ```
    (You no longer need to write the matching logic by hand.)
 
