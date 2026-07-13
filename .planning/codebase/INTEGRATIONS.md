@@ -90,7 +90,7 @@
 **Hosting:**
 - Self-hosted only — runs on a workstation or HPC node
 - No deployment target (no Dockerfile, no Kubernetes manifest, no Helm chart in the repo)
-- Slurm-style submission scripts under `benchmarks/scripts/submit_*.sh` for HPC clusters (`submit_benchmark.sh`, `submit_feature_extraction.sh`, `submit_feature_extraction_mig.sh`, `submit_3dataset_benchmark.sh`, `submit_test.sh`, `submit_test_extraction.sh`, `submit_gdc_download.sh`)
+- Slurm-style submission scripts under `benchmarks/scripts/slurm/submit_*.sh` for HPC clusters (`submit_benchmark.sh`, `submit_feature_extraction.sh`, `submit_feature_extraction_mig.sh`, `submit_3dataset_benchmark.sh`, `submit_test.sh`, `submit_test_extraction.sh`, `submit_gdc_download.sh`)
 
 **CI Pipeline:**
 - None — no `.github/workflows/`, no `.gitlab-ci.yml`, no Jenkinsfile detected at repo root.

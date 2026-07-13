@@ -11,7 +11,7 @@ End-to-end guide for extracting pathology features from CPTAC whole-slide images
 
 **Pipeline:** TCIA slide download → Patho-Bench splits → YAML config → TRIDENT feature extraction
 
-**Key difference from TCGA:** Labels and splits come from **Patho-Bench** (HuggingFace), not GOLDMARK. A helper script (`benchmarks/scripts/prepare_cptac_manifest.py`) downloads and converts them. Everything else — TRIDENT extraction, YAML config, SLURM scripts — is identical to the TCGA workflow.
+**Key difference from TCGA:** Labels and splits come from **Patho-Bench** (HuggingFace), not GOLDMARK. A helper script (`benchmarks/scripts/manifests/prepare_cptac_manifest.py`) downloads and converts them. Everything else — TRIDENT extraction, YAML config, SLURM scripts — is identical to the TCGA workflow.
 
 **Output:** Per-slide `.h5` tensors in `{output_dir}/20x_224px_0px_overlap/features_{encoder}/`
 
@@ -83,12 +83,12 @@ mkdir -p datasets/{DATASET}/wsi
 Use `--list-tasks` to see what tasks are available for your cohort:
 
 ```bash
-uv run python benchmarks/scripts/prepare_cptac_manifest.py \
+uv run python benchmarks/scripts/manifests/prepare_cptac_manifest.py \
     --source cptac_{code} \
     --list-tasks
 
 # Example for CCRCC:
-uv run python benchmarks/scripts/prepare_cptac_manifest.py \
+uv run python benchmarks/scripts/manifests/prepare_cptac_manifest.py \
     --source cptac_ccrcc \
     --list-tasks
 ```
@@ -98,13 +98,13 @@ uv run python benchmarks/scripts/prepare_cptac_manifest.py \
 Pass the task names found in the previous step to `--tasks` to download the splits and convert them to an autobench-compatible `normalized_manifest.csv`:
 
 ```bash
-uv run python benchmarks/scripts/prepare_cptac_manifest.py \
+uv run python benchmarks/scripts/manifests/prepare_cptac_manifest.py \
     --source cptac_{code} \
     --tasks TASK1_mutation TASK2_mutation \
     --saveto datasets/{DATASET}
 
 # Example for CCRCC:
-uv run python benchmarks/scripts/prepare_cptac_manifest.py \
+uv run python benchmarks/scripts/manifests/prepare_cptac_manifest.py \
     --source cptac_ccrcc \
     --tasks BAP1_mutation VHL_mutation Immune_class PBRM1_mutation \
     --saveto datasets/CPTAC-CCRCC
@@ -297,10 +297,10 @@ The Fir cluster has H100 MIG GPU slices; a `3g.40gb` slice is sufficient.
 mkdir -p logs
 
 # MIG slice (recommended)
-sbatch benchmarks/scripts/submit_feature_extraction_mig.sh cptac_{code} virchow2 hoptimus1 uni_v2
+sbatch benchmarks/scripts/slurm/submit_feature_extraction_mig.sh cptac_{code} virchow2 hoptimus1 uni_v2
 
 # Full H100 (if MIG queue is busy)
-sbatch benchmarks/scripts/submit_feature_extraction.sh cptac_{code}
+sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh cptac_{code}
 ```
 
 Monitor:
@@ -311,7 +311,7 @@ tail -f logs/extract_wsi_extract_*.out
 
 For larger cohorts (BRCA, LUAD — >200 slides), increase wall time:
 ```bash
-sbatch --time=2-00:00:00 benchmarks/scripts/submit_feature_extraction_mig.sh cptac_{code} virchow2 hoptimus1 uni_v2
+sbatch --time=2-00:00:00 benchmarks/scripts/slurm/submit_feature_extraction_mig.sh cptac_{code} virchow2 hoptimus1 uni_v2
 ```
 
 ### Step 9: Verify and Report

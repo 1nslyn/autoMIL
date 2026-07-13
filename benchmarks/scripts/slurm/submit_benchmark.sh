@@ -9,10 +9,10 @@
 # wall (SIGUSR1). TITAN is a separate arm — see submit_titan_extract.sh + submit_titan.sh.
 #
 # Usage:
-#   sbatch benchmarks/scripts/submit_benchmark.sh <dataset>          # 5-fold (standard)
-#   sbatch benchmarks/scripts/submit_benchmark.sh <dataset> 10       # 10-fold (comparison)
-#   e.g.  sbatch benchmarks/scripts/submit_benchmark.sh tcga_lgg
-# (legacy env form still works: DATASET=tcga_lgg sbatch benchmarks/scripts/submit_benchmark.sh)
+#   sbatch benchmarks/scripts/slurm/submit_benchmark.sh <dataset>          # 5-fold (standard)
+#   sbatch benchmarks/scripts/slurm/submit_benchmark.sh <dataset> 10       # 10-fold (comparison)
+#   e.g.  sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_lgg
+# (legacy env form still works: DATASET=tcga_lgg sbatch benchmarks/scripts/slurm/submit_benchmark.sh)
 # Run it from the repo root so SLURM_SUBMIT_DIR points at your checkout.
 
 #SBATCH --job-name=mil_bench
@@ -37,7 +37,7 @@ FRAMEWORKS="${FRAMEWORKS:-clam nnmil dtfd abmil}"
 
 # Repo root = where you ran sbatch (portable across users); fall back to Leo's.
 PROJECT_DIR="${SLURM_SUBMIT_DIR:-/home/yinshuol/scratch/autoMIL/autoMIL}"
-SELF="$PROJECT_DIR/benchmarks/scripts/submit_benchmark.sh"
+SELF="$PROJECT_DIR/benchmarks/scripts/slurm/submit_benchmark.sh"
 
 # Resubmit-before-timeout: SLURM sends SIGUSR1 300s before the wall (see
 # --signal above); we resubmit ourselves (idempotent resume) BEFORE the hard kill.

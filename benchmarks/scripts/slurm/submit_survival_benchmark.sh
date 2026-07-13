@@ -6,7 +6,7 @@
 # The pipeline is idempotent — resubmitting resumes from where it left off.
 #
 # Usage:
-#   DATASET=cptac_ccrcc sbatch benchmarks/scripts/submit_survival_benchmark.sh
+#   DATASET=cptac_ccrcc sbatch benchmarks/scripts/slurm/submit_survival_benchmark.sh
 #
 # Overrides (env vars):
 #   DATASET=tcga_luad             # dataset config name (default: cptac_ccrcc)
@@ -47,7 +47,7 @@ MODELS="${MODELS:-}"
 NNMIL_MODELS="${NNMIL_MODELS:-}"
 SEED="${SEED:-}"
 
-SCRIPT="benchmarks/scripts/submit_survival_benchmark.sh"
+SCRIPT="benchmarks/scripts/slurm/submit_survival_benchmark.sh"
 
 # ==================== JOB INFO ====================
 echo "================================================"

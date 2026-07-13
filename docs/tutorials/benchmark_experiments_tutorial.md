@@ -194,11 +194,11 @@ For the standard benchmark, use the SLURM submission script. This runs both fram
 
 ```bash
 # Update the project directory path
-sed -i "s|/home/yinshuol/scratch/autoMIL/autoMIL|$HOME/scratch/autoMIL|" benchmarks/scripts/submit_benchmark.sh
+sed -i "s|/home/yinshuol/scratch/autoMIL/autoMIL|$HOME/scratch/autoMIL|" benchmarks/scripts/slurm/submit_benchmark.sh
 
 # Update the SLURM account and email
-sed -i "s|--account=def-wanglab|--account=YOUR_ACCOUNT|" benchmarks/scripts/submit_benchmark.sh
-sed -i "s|--mail-user=leo.yin@mail.utoronto.ca|--mail-user=YOUR_EMAIL|" benchmarks/scripts/submit_benchmark.sh
+sed -i "s|--account=def-wanglab|--account=YOUR_ACCOUNT|" benchmarks/scripts/slurm/submit_benchmark.sh
+sed -i "s|--mail-user=leo.yin@mail.utoronto.ca|--mail-user=YOUR_EMAIL|" benchmarks/scripts/slurm/submit_benchmark.sh
 ```
 
 **Submit the job with recommended settings:**
@@ -212,21 +212,21 @@ DATASET=tcga_{code} \
     ENCODERS="hoptimus1 uni_v2 virchow2" \
     MODELS="clam_mb" \
     NNMIL_MODELS="simple_mil" \
-    sbatch benchmarks/scripts/submit_benchmark.sh
+    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 
 # Or run only CLAM framework
 DATASET=tcga_{code} \
     ENCODERS="hoptimus1 uni_v2 virchow2" \
     MODELS="clam_mb" \
     FRAMEWORKS="clam" \
-    sbatch benchmarks/scripts/submit_benchmark.sh
+    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 
 # Or run only nnMIL framework
 DATASET=tcga_{code} \
     ENCODERS="hoptimus1 uni_v2 virchow2" \
     NNMIL_MODELS="simple_mil" \
     FRAMEWORKS="nnmil" \
-    sbatch benchmarks/scripts/submit_benchmark.sh
+    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 
 # Or run a single task for quick validation
 DATASET=tcga_{code} \
@@ -234,7 +234,7 @@ DATASET=tcga_{code} \
     MODELS="clam_mb" \
     NNMIL_MODELS="simple_mil" \
     TASKS="egfr" \
-    sbatch benchmarks/scripts/submit_benchmark.sh
+    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 ```
 
 **Monitor the job:**
@@ -611,17 +611,17 @@ DATASET=tcga_luad \
     ENCODERS="hoptimus1 uni_v2 virchow2" \
     MODELS="clam_mb" \
     NNMIL_MODELS="simple_mil" \
-    sbatch benchmarks/scripts/submit_benchmark.sh
+    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 
 # CLAM only
 DATASET=tcga_luad \
     ENCODERS="hoptimus1 uni_v2 virchow2" \
     MODELS="clam_mb" \
     FRAMEWORKS="clam" \
-    sbatch benchmarks/scripts/submit_benchmark.sh
+    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 
 # Extended benchmark (all models, longer run time)
-DATASET=tcga_luad sbatch benchmarks/scripts/submit_benchmark.sh
+DATASET=tcga_luad sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 ```
 
 ## Timing Estimates
@@ -642,7 +642,7 @@ These are rough estimates based on a single H100 GPU. Multi-GPU (4× H100) divid
 For large datasets (>800 slides), increase the SLURM time limit:
 
 ```bash
-DATASET=tcga_brca sbatch --time=2-00:00:00 benchmarks/scripts/submit_benchmark.sh
+DATASET=tcga_brca sbatch --time=2-00:00:00 benchmarks/scripts/slurm/submit_benchmark.sh
 ```
 
 ## Resuming Interrupted Runs
@@ -657,7 +657,7 @@ To manually resume:
 
 ```bash
 # Just resubmit, same command, same args
-DATASET=tcga_{code} sbatch benchmarks/scripts/submit_benchmark.sh
+DATASET=tcga_{code} sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 ```
 
 To check progress:
@@ -739,11 +739,11 @@ If 24 hours isn't enough (large dataset + many models):
 
 ```bash
 # Increase wall time
-DATASET=tcga_{code} sbatch --time=2-00:00:00 benchmarks/scripts/submit_benchmark.sh
+DATASET=tcga_{code} sbatch --time=2-00:00:00 benchmarks/scripts/slurm/submit_benchmark.sh
 
 # Or split into two jobs: CLAM first, then nnMIL
-DATASET=tcga_{code} FRAMEWORKS="clam" sbatch benchmarks/scripts/submit_benchmark.sh
-DATASET=tcga_{code} FRAMEWORKS="nnmil" sbatch benchmarks/scripts/submit_benchmark.sh
+DATASET=tcga_{code} FRAMEWORKS="clam" sbatch benchmarks/scripts/slurm/submit_benchmark.sh
+DATASET=tcga_{code} FRAMEWORKS="nnmil" sbatch benchmarks/scripts/slurm/submit_benchmark.sh
 ```
 
 ### W&B Logging Issues
@@ -761,9 +761,9 @@ The SLURM script disables W&B by default. For interactive runs, add `--no_wandb`
 |------|---------|
 | Verify setup | `uv run python -c "from autobench.config import load_dataset_config; print(load_dataset_config('tcga_{code}').name)"` |
 | Single experiment (interactive) | `uv run python benchmarks/scripts/run_benchmark.py --dataset tcga_{code} --gpu 0 --encoders hoptimus1 --models clam_mb --tasks egfr --no_wandb` |
-| Standard benchmark (SLURM) | `DATASET=tcga_{code} ENCODERS="hoptimus1 uni_v2 virchow2" MODELS="clam_mb" NNMIL_MODELS="simple_mil" sbatch benchmarks/scripts/submit_benchmark.sh` |
-| CLAM only (SLURM) | `DATASET=tcga_{code} ENCODERS="hoptimus1 uni_v2 virchow2" MODELS="clam_mb" FRAMEWORKS="clam" sbatch benchmarks/scripts/submit_benchmark.sh` |
-| Extended benchmark (SLURM) | `DATASET=tcga_{code} sbatch benchmarks/scripts/submit_benchmark.sh` |
+| Standard benchmark (SLURM) | `DATASET=tcga_{code} ENCODERS="hoptimus1 uni_v2 virchow2" MODELS="clam_mb" NNMIL_MODELS="simple_mil" sbatch benchmarks/scripts/slurm/submit_benchmark.sh` |
+| CLAM only (SLURM) | `DATASET=tcga_{code} ENCODERS="hoptimus1 uni_v2 virchow2" MODELS="clam_mb" FRAMEWORKS="clam" sbatch benchmarks/scripts/slurm/submit_benchmark.sh` |
+| Extended benchmark (SLURM) | `DATASET=tcga_{code} sbatch benchmarks/scripts/slurm/submit_benchmark.sh` |
 | Check job status | `squeue -u $USER` |
 | Monitor logs | `tail -f logs/bench_autobench_train_*.out` |
 | Resume after timeout | Resubmit the same command (idempotent) |

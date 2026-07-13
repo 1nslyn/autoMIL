@@ -7,7 +7,7 @@
 # 4. Define tasks matching the {GENE}_binary columns the script produces
 # 5. Add AUTOBENCH_CPTAC_{CODE}_ROOT to benchmarks/.env
 #
-# Reference: See docs/cptac_feature_extraction_tutorial.md for the full workflow.
+# Reference: See docs/tutorials/cptac_feature_extraction_tutorial.md for the full workflow.
 # Key difference from TCGA: labels come from Patho-Bench (HuggingFace), not GOLDMARK.
 
 name: cptac_ccrcc  # e.g., cptac_ccrcc, cptac_brca (lowercase, no hyphens)
@@ -23,7 +23,7 @@ paths:
 
 # One entry per Patho-Bench task.
 # label_col must match the {GENE}_binary column in normalized_manifest.csv.
-# To list available tasks for a cohort, see docs/cptac_feature_extraction_tutorial.md
+# To list available tasks for a cohort, see docs/tutorials/cptac_feature_extraction_tutorial.md
 # or check: https://huggingface.co/datasets/MahmoodLab/Patho-Bench
 tasks:
   bap1:

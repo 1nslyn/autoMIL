@@ -7,8 +7,8 @@
 # pass), (2) --task feat --slide_encoder titan. Then symlinks the 224px base's
 # features_titan -> the new 512px slide_features_titan so the benchmark arm finds them.
 #
-# Usage: sbatch benchmarks/scripts/submit_titan_extract.sh <dataset>
-#   e.g. sbatch benchmarks/scripts/submit_titan_extract.sh tcga_lgg
+# Usage: sbatch benchmarks/scripts/slurm/submit_titan_extract.sh <dataset>
+#   e.g. sbatch benchmarks/scripts/slurm/submit_titan_extract.sh tcga_lgg
 # Run from the repo root. After it completes: sbatch submit_titan.sh <dataset> [n_folds]
 
 #SBATCH --job-name=titan_extract
@@ -83,7 +83,7 @@ if [ -d "$SLIDE512" ]; then
     mkdir -p "$JOB_DIR/20x_224px_0px_overlap"
     [ -e "$LINK224" ] || ln -s ../20x_512px_0px_overlap/slide_features_titan "$LINK224"
     echo "symlink: $LINK224 -> $(readlink "$LINK224" 2>/dev/null)"
-    echo "Next: sbatch benchmarks/scripts/submit_titan.sh ${DATASET} [n_folds]"
+    echo "Next: sbatch benchmarks/scripts/slurm/submit_titan.sh ${DATASET} [n_folds]"
 else
     echo "WARNING: $SLIDE512 not found — TITAN extraction did not produce slide features."
     exit 1
