@@ -9,11 +9,11 @@ your dataset name.
 
 | Member | Dataset | Task | `<dataset>` arg |
 |--------|---------|------|-----------------|
-| Leo | TCGA-LUAD | EGFR + KRAS | `tcga_luad` |
+| Leo | TCGA-LUAD | KRAS | `tcga_luad` |
 | Yeonwoo | TCGA-LGG | IDH1 | `tcga_lgg` |
-| Keishi | TCGA-COAD | BRAF | `tcga_coad` |
-| atatc | TCGA-SKCM | NRAS | `tcga_skcm` |
-| Ryan | TCGA-CESC | PIK3CA | `tcga_cesc` |
+| Keishi | TCGA-SKCM | NRAS | `tcga_skcm` |
+| Terry | TCGA-BLCA | PIK3CA | `tcga_blca` |
+| Ryan | TCGA-COAD | BRAF | `tcga_coad` |
 
 Find your row — everywhere below, `<dataset>` is your arg (e.g. `tcga_lgg`).
 
