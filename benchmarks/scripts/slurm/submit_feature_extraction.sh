@@ -1,13 +1,15 @@
 #!/bin/bash
-# SLURM job script: WSI feature extraction on Fir HPC (MIG GPU)
+# SLURM job script: WSI feature extraction on Fir HPC
 #
-# Uses a 3g.40gb MIG slice of H100 instead of a full H100 — sufficient
-# for inference-only feature extraction and more resource-efficient.
+# Extracts patch-level features from whole-slide images using pathology
+# foundation models via TRIDENT. Runs all encoders sequentially on 1 GPU.
 #
 # Usage:
-#   sbatch benchmarks/scripts/submit_feature_extraction_mig.sh <dataset> [models...]
-#   sbatch benchmarks/scripts/submit_feature_extraction_mig.sh tcga_luad
-#   sbatch benchmarks/scripts/submit_feature_extraction_mig.sh tcga_luad virchow2 hoptimus1 uni_v2
+#   sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh <dataset> [extra args...]
+#   sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh clwd
+#   sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh ccrcc
+#   sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh hancock
+#   sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh tcga_luad --models virchow2 --skip_seg
 
 #SBATCH --job-name=wsi_extract
 #SBATCH --account=rrg-jma
@@ -15,19 +17,18 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
-#SBATCH --gpus=nvidia_h100_80gb_hbm3_3g.40gb:1
-#SBATCH --mem=64G
+#SBATCH --gpus=h100:1
+#SBATCH --mem=128G
 #SBATCH --output=logs/extract_%x_%j.out
 #SBATCH --error=logs/extract_%x_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=leo.yin@mail.utoronto.ca
+#SBATCH --exclude=fc10512
 
 set -uo pipefail
 
-# ==================== ARGS ====================
-DATASET="${1:?Usage: sbatch $0 <dataset> [models...]}"
-shift
-MODELS="$@"
+# ==================== DATASET ARG ====================
+DATASET="${1:?Usage: sbatch $0 <dataset>  (e.g., clwd, ccrcc, ovarian)}"
 
 # ==================== CONFIG ====================
 PROJECT_DIR="/home/yinshuol/scratch/autoMIL/autoMIL"
@@ -38,7 +39,6 @@ echo "AutoBench Feature Extraction — ${DATASET}"
 echo "================================================"
 echo "Job ID:    $SLURM_JOB_ID"
 echo "Dataset:   $DATASET"
-echo "Models:    ${MODELS:-all from config}"
 echo "Node:      $(hostname)"
 echo "GPUs:      $SLURM_GPUS_PER_NODE"
 echo "CPUs:      $SLURM_CPUS_PER_TASK"
@@ -75,7 +75,8 @@ if torch.cuda.is_available():
     print(f'  GPU: {torch.cuda.get_device_name(0)}')
     print(f'  Driver: {torch.version.cuda}')
 else:
-    print('  ERROR: CUDA not available!')
+    print('  ERROR: CUDA not available — extraction will be extremely slow on CPU!')
+    print('  Check: module load cuda version vs PyTorch CUDA version')
     import sys; sys.exit(1)
 " || { echo "ERROR: CUDA not available. Aborting."; exit 1; }
 
@@ -84,13 +85,10 @@ echo ""
 echo "Starting feature extraction..."
 echo "================================================"
 
-CMD="python benchmarks/scripts/run_feature_extraction.py --dataset $DATASET --gpu 0"
-if [ -n "$MODELS" ]; then
-    CMD="$CMD --models $MODELS"
-fi
-
-echo "Running: $CMD"
-eval $CMD
+python benchmarks/scripts/run_feature_extraction.py \
+    --dataset "$DATASET" \
+    --gpu 0 \
+    "${@:2}"
 
 EXIT_CODE=$?
 

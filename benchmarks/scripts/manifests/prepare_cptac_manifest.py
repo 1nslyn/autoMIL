@@ -6,7 +6,7 @@ canonical train/test splits for all CPTAC cohorts on HuggingFace; this script
 downloads them and merges multiple tasks into a single autobench-compatible CSV.
 
 Usage:
-    python benchmarks/scripts/prepare_cptac_manifest.py \\
+    python benchmarks/scripts/manifests/prepare_cptac_manifest.py \\
         --source cptac_ccrcc \\
         --tasks BAP1_mutation VHL_mutation \\
         --saveto /path/to/dataset/root

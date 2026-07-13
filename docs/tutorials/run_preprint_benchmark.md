@@ -46,13 +46,13 @@ grep -q AUTOBENCH_TCGA_XXXX_ROOT benchmarks/.env || \
 DS=tcga_lgg    # <-- YOUR dataset from the table
 
 # (a) tile-encoder grid: CLAM + nnMIL + DTFD + ABMIL, 5-fold, 4 GPUs
-sbatch benchmarks/scripts/submit_benchmark.sh $DS
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh $DS
 
 # (b) extract TITAN features — ONCE, fold-independent (~half a day, 1 GPU)
-EXTRACT=$(sbatch --parsable benchmarks/scripts/submit_titan_extract.sh $DS)
+EXTRACT=$(sbatch --parsable benchmarks/scripts/slurm/submit_titan_extract.sh $DS)
 
 # (c) TITAN arm — auto-starts after (b) succeeds
-sbatch --dependency=afterok:$EXTRACT benchmarks/scripts/submit_titan.sh $DS
+sbatch --dependency=afterok:$EXTRACT benchmarks/scripts/slurm/submit_titan.sh $DS
 ```
 
 Jobs are **idempotent** (finished experiments are skipped) and **auto-resubmit**

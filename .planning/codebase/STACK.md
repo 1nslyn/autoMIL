@@ -10,7 +10,7 @@
 **Secondary:**
 - JavaScript (ES) — viz frontend in `src/automil/viz/static/app.js` (vanilla, no build step)
 - HTML/CSS — viz dashboard in `src/automil/viz/static/index.html`, `src/automil/viz/static/style.css`
-- Bash — Slurm submission scripts in `benchmarks/scripts/submit_*.sh`, Claude Code hook in `src/automil/claude_assets/hooks/on_stop.sh`
+- Bash — Slurm submission scripts in `benchmarks/scripts/slurm/submit_*.sh`, Claude Code hook in `src/automil/claude_assets/hooks/on_stop.sh`
 - Jinja2 templates (`.j2`) — `src/automil/templates/{config.yaml.j2, program.md.j2, learnings.md.j2, .gitignore.j2}`
 - YAML — dataset configs in `benchmarks/datasets/*.yaml`, project config in `automil/config.yaml`
 

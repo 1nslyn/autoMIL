@@ -2,7 +2,7 @@
 
 Defaults are the reference values from ``lib/DTFD-MIL/Main_DTFD_MIL.py``
 (argparse block ``:21-50`` and the optimizer/scheduler setup ``:104-108``).
-See docs/superpowers/specs/2026-07-05-mil-model-integration-design.md §6.
+See docs/design/2026-07-05-mil-model-integration-design.md §6.
 """
 
 from __future__ import annotations

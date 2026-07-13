@@ -89,7 +89,7 @@ datasets/TCGA-LUAD/clinical.tsv
 ### Step 1.2: Join OS columns to the manifest
 
 ```bash
-uv run python benchmarks/scripts/add_os_to_manifest.py \
+uv run python benchmarks/scripts/manifests/add_os_to_manifest.py \
     --manifest datasets/{DATASET}/normalized_manifest.csv \
     --clinical datasets/{DATASET}/clinical.tsv
 ```
@@ -269,10 +269,10 @@ On a cluster, use the generic survival submission script `submit_survival_benchm
 ```bash
 mkdir -p logs
 # DATASET defaults to cptac_ccrcc; override per dataset. FRAMEWORKS defaults to "clam nnmil".
-DATASET={dataset} sbatch benchmarks/scripts/submit_survival_benchmark.sh
+DATASET={dataset} sbatch benchmarks/scripts/slurm/submit_survival_benchmark.sh
 
 # Subset overrides (env vars): FRAMEWORKS, ENCODERS, MODELS, NNMIL_MODELS, TASKS, SEED
-DATASET={dataset} FRAMEWORKS="clam" ENCODERS="virchow2" sbatch benchmarks/scripts/submit_survival_benchmark.sh
+DATASET={dataset} FRAMEWORKS="clam" ENCODERS="virchow2" sbatch benchmarks/scripts/slurm/submit_survival_benchmark.sh
 
 squeue -u $USER
 tail -f logs/bench_autobench_surv_*.out
@@ -429,7 +429,7 @@ Expected. Survival has no classification metrics; the c-index lives in the `test
 
 | Step                 | Command                                                                                                                                                                                                                                                                                                      |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Add OS labels        | `uv run python benchmarks/scripts/add_os_to_manifest.py --manifest datasets/{DATASET}/normalized_manifest.csv --clinical datasets/{DATASET}/clinical.tsv`                                                                                                                                                    |
+| Add OS labels        | `uv run python benchmarks/scripts/manifests/add_os_to_manifest.py --manifest datasets/{DATASET}/normalized_manifest.csv --clinical datasets/{DATASET}/clinical.tsv`                                                                                                                                                    |
 | OS counts for sheet  | `uv run --package autobench python -c "import pandas as pd; p=pd.read_csv('datasets/{DATASET}/normalized_manifest.csv').drop_duplicates('case_id'); t=p.dropna(subset=['OS_event','OS_time']); print(f'OS (total {len(p)}: event {int((t.OS_event==1).sum())}, non-event {int((t.OS_event==0).sum())}, not reported {len(p)-len(t)})')"` |
 | Verify survival task | `uv run python -c "from autobench.config import load_dataset_config as L; print(L('{dataset}').tasks['os'].task_type)"`                                                                                                                                                                                      |
 | Single experiment    | `uv run python benchmarks/scripts/run_benchmark.py --dataset {dataset} --tasks os --frameworks clam --encoders uni_v2 --gpu 0 --no_wandb`                                                                                                                                                                    |

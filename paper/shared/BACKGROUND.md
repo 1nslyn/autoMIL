@@ -111,14 +111,14 @@ task family beyond mutation/subtype classification: **overall-survival
   model selection on **validation loss** (not val c-index, which is a coin
   flip with few events).
 - Labels: joined from GDC clinical exports (`OS_event`/`OS_time`) per cohort —
-  tooling in `benchmarks/scripts/add_os_to_manifest.py`.
+  tooling in `benchmarks/scripts/manifests/add_os_to_manifest.py`.
 - Cohorts enabled so far: TCGA‑LGG (first), TCGA‑BLCA/BRCA/GBM/HNSC and
   CPTAC‑CCRCC/GBM configs added — 4 of these (BLCA, BRCA, HNSC, CCRCC) overlap
   directly with the Frontiers embedding-choice paper's 6-cohort survival
   benchmark (see Phase 1 plan), which is likely not a coincidence.
-- Methodology doc: `docs/survival_benchmark_experiments_tutorial.md` (on this
+- Methodology doc: `docs/tutorials/survival_benchmark_experiments_tutorial.md` (on this
   branch — the survival counterpart of
-  [`../../docs/benchmark_experiments_tutorial.md`](../../docs/benchmark_experiments_tutorial.md)).
+  [`../../docs/tutorials/benchmark_experiments_tutorial.md`](../../docs/tutorials/benchmark_experiments_tutorial.md)).
 
 This is a genuine axis expansion for the paper: classification-only →
 classification + survival (+ regression, planned in Phase 1) to cover all
@@ -163,7 +163,7 @@ provisionally.
 **Local repo** (`/Users/leoyin/Development/autoMIL`): `CLAUDE.md`,
 `.planning/PROJECT.md`, `.planning/STATE.md`, `README.md`,
 `benchmarks/README.md`, `benchmarks/datasets/*.yaml`,
-`docs/benchmark_experiments_tutorial.md`, `tasks/baseline_summary/{README,
+`docs/tutorials/benchmark_experiments_tutorial.md`, `tasks/baseline_summary/{README,
 REPORT,COMPARISON}.md`, git log on `main` and diff against
 `origin/feat/nnmil-survival`.
 
