@@ -16,8 +16,8 @@ End-to-end guide for extracting pathology features from TCGA whole-slide images 
 **Tracking sheet:** `datasets/TCGA-CPTAC-Datasets - TCGA-16.csv`, update your row as you complete each step.
 
 **Reference:**
-- `benchmarks/datasets/tcga_luad.yaml`, Leo's completed config (checked into repo)
-- `benchmarks/datasets/tcga_template.yaml`, template to copy for your dataset
+- `benchmarks/datasets/tcga/tcga_luad.yaml`, Leo's completed config (checked into repo)
+- `benchmarks/datasets/templates/tcga_template.yaml`, template to copy for your dataset
 
 ## Prerequisites
 
@@ -200,8 +200,8 @@ Fill in your row in `https://docs.google.com/spreadsheets/d/1DVzgG7EfkQwOw-hjWqI
 
 ```bash
 # Copy the template
-cp benchmarks/datasets/tcga_template.yaml benchmarks/datasets/tcga_{code}.yaml
-# Example: cp benchmarks/datasets/tcga_template.yaml benchmarks/datasets/tcga_luad.yaml
+cp benchmarks/datasets/templates/tcga_template.yaml benchmarks/datasets/tcga/tcga_{code}.yaml
+# Example: cp benchmarks/datasets/templates/tcga_template.yaml benchmarks/datasets/tcga/tcga_luad.yaml
 ```
 
 Edit the YAML file. The GOLDMARK normalized manifest has standardized column names across all TCGA projects, so the column mappings below work for every dataset. Here is the TCGA-LUAD example:

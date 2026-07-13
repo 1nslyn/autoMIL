@@ -35,7 +35,7 @@ Detailed "how" for each is in §3.
 
 **B. Datasets & configs**
 - ☐ **Decide the final 5** (recommendation §2: THCA, LGG, LUAD, HNSC, COAD). _(your call)_
-- ☐ **Build missing YAML configs**: THCA (from `tcga_template.yaml`); HNSC exists on `origin/feat/nnmil-survival`; UCEC/BLCA if swapped in. _(small)_
+- ☐ **Build missing YAML configs**: THCA (from `templates/tcga_template.yaml`); HNSC exists on `origin/feat/nnmil-survival`; UCEC/BLCA if swapped in. _(small)_
 - ☐ **Preflight: confirm patch features survived** for the purged cohorts (THCA/COAD `benchmark/features/*` or `trident_output/`) — if gone, add TRIDENT extraction. _(check)_
 
 **C. TITAN slide-encoder arm** _(longer pole)_
@@ -115,7 +115,7 @@ Rationale: the four 2-task cohorts give five strong, distinct mutation stories (
 ### Phase 0 — preflight (½ day, do first)
 - **Verify patch features exist** for the chosen 5, per encoder. LUAD/LGG have them; **THCA/COAD had their `results/` purged — confirm their `benchmark/features/{uni_v2,virchow2,hoptimus1}/` (or `trident_output/`) survived.** If features are gone, add a TRIDENT extraction step (24 h/cohort/GPU) before training.
 - **Lock a reproducible pipeline commit** (PLAN.md open item #3). The pipeline is currently split across `main`, `origin/feat/goldmark-parity` (orchestrator free-VRAM budgeting fix + parity mode — now backed up), and `origin/feat/nnmil-survival` (+6 dataset configs incl. HNSC). Decide the canonical set, merge/cherry-pick to `main`, and **tag it** (e.g. `preprint-pipeline-v1`). Every submit script should run that tag.
-- **Build the 2 missing configs** (THCA, and HNSC if not pulled from the survival branch) from `benchmarks/datasets/tcga_template.yaml`, mirroring `tcga_luad.yaml` (3 encoders; `nnmil_models: [ab_mil, trans_mil, simple_mil]` — dtfd added via CLI).
+- **Build the 2 missing configs** (THCA, and HNSC if not pulled from the survival branch) from `benchmarks/datasets/templates/tcga_template.yaml`, mirroring `tcga/tcga_luad.yaml` (3 encoders; `nnmil_models: [ab_mil, trans_mil, simple_mil]` — dtfd added via CLI).
 
 ### Phase A — train `ab_mil` + `dtfd_mil` on the 5 (the bulk; ~1 day compute)
 One idempotent multi-GPU job per cohort (skips completed automatically). CLAM (`clam_mb`) is already on disk for LUAD/LGG — only re-run canonical heads where results are missing (THCA, COAD).

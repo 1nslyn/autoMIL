@@ -134,9 +134,9 @@ Grep `${AUTOBENCH_*_ROOT}` across `benchmarks/datasets/*.yaml` yielded:
 - `${AUTOBENCH_CLWD_ROOT}` (clwd.yaml)
 - `${AUTOBENCH_HANCOCK_ROOT}` (hancock.yaml)
 - `${AUTOBENCH_OVARIAN_ROOT}` (ovarian.yaml)
-- `${AUTOBENCH_PLACEHOLDER_ROOT}` (placeholder.yaml)
+- `${AUTOBENCH_PLACEHOLDER_ROOT}` (templates/placeholder.yaml)
 - `${AUTOBENCH_TCGA_LUAD_ROOT}` (tcga_luad.yaml)
-- `${AUTOBENCH_TCGA_{CODE}_ROOT}` (tcga_template.yaml — template placeholder; not real var, omitted)
+- `${AUTOBENCH_TCGA_{CODE}_ROOT}` (templates/tcga_template.yaml — template placeholder; not real var, omitted)
 
 All real vars are in ccrcc's `env.passthrough` plus `AUTOBENCH_ROOT` itself.
 

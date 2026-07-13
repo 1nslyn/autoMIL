@@ -1,7 +1,7 @@
 # TCGA Dataset Configuration Template
 #
 # How to use:
-# 1. Copy this file: cp tcga_template.yaml tcga_{code}.yaml  (e.g., tcga_brca.yaml)
+# 1. Copy this file: cp benchmarks/datasets/templates/tcga_template.yaml benchmarks/datasets/tcga/tcga_{code}.yaml  (e.g., tcga_brca.yaml)
 # 2. Update name, description, paths.data_root env var name
 # 3. Define tasks using {GENE}_binary columns from your GOLDMARK manifest
 # 4. Add AUTOBENCH_TCGA_{CODE}_ROOT to benchmarks/.env
@@ -9,11 +9,11 @@
 #
 # Reference: See Leo's completed tcga_luad.yaml and the tutorial at docs/tutorials/tcga_feature_extraction_tutorial.md
 
-name: tcga_brca  # e.g., tcga_brca, tcga_gbm (lowercase)
-description: "TCGA-BRCA — Breast Carcinoma (PIK3CA)"
+name: tcga_gbm  # e.g., tcga_brca, tcga_gbm (lowercase)
+description: "TCGA-GBM — Glioblastoma Multiforme (PTEN mutation prediction)"
 
 paths:
-  data_root: "${AUTOBENCH_TCGA_BRCA_ROOT}"           # Set in benchmarks/.env
+  data_root: "${AUTOBENCH_TCGA_GBM_ROOT}"           # Set in benchmarks/.env
   wsi_dir: "${data_root}/wsi"                           # Flat directory of .svs files from GDC
   mapping_csv: "${data_root}/normalized_manifest.csv"   # GOLDMARK sanitized manifest
   output_dir: "${data_root}/trident_output"
@@ -31,8 +31,8 @@ tasks:
   #     0: "wildtype"
   #     1: "mutant"
   #   n_classes: 2
-  pik3ca:
-    label_col: "PIK3CA_binary"
+  pten:
+    label_col: "PTEN_binary"
     label_map:
       0: "wildtype"
       1: "mutant"
@@ -44,7 +44,7 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  pik3ca: ["standard"]
+  pten: ["standard"]
 
 # These column names are consistent across all GOLDMARK TCGA manifests.
 # You should NOT need to change these.

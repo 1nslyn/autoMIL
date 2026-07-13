@@ -18,8 +18,8 @@ End-to-end guide for extracting pathology features from CPTAC whole-slide images
 **Tracking sheet:** `datasets/TCGA-CPTAC-Datasets - CPTAC-10.csv`, update your row as you complete each step.
 
 **Reference:**
-- `benchmarks/datasets/cptac_template.yaml`, template config to copy
-- `benchmarks/datasets/tcga_luad.yaml`, Leo's completed TCGA reference (structure is identical)
+- `benchmarks/datasets/templates/cptac_template.yaml`, template config to copy
+- `benchmarks/datasets/tcga/tcga_luad.yaml`, Leo's completed TCGA reference (structure is identical)
 
 ## Available CPTAC Cohorts
 
@@ -187,8 +187,8 @@ for col in df.columns:
 ### Step 6: Create Dataset YAML Config
 
 ```bash
-cp benchmarks/datasets/cptac_template.yaml benchmarks/datasets/cptac_{code}.yaml
-# Example: cp benchmarks/datasets/cptac_template.yaml benchmarks/datasets/cptac_ccrcc.yaml
+cp benchmarks/datasets/templates/cptac_template.yaml benchmarks/datasets/cptac/cptac_{code}.yaml
+# Example: cp benchmarks/datasets/templates/cptac_template.yaml benchmarks/datasets/cptac/cptac_ccrcc.yaml
 ```
 
 Edit the YAML file. Here is a completed example for `cptac_ccrcc`:

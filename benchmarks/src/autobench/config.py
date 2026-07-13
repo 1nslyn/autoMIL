@@ -230,12 +230,21 @@ def load_dataset_config(name_or_path: str) -> DatasetConfig:
     if os.sep in name_or_path or name_or_path.endswith(".yaml"):
         yaml_path = Path(name_or_path)
     else:
+        # Resolve a bare name to a YAML file. Prefer a flat
+        # ``datasets/<name>.yaml`` (backward compatible); if absent, fall back to
+        # any subdirectory (``datasets/<group>/<name>.yaml``) so configs can be
+        # organized by program without changing how callers pass the name.
         yaml_path = DATASETS_DIR / f"{name_or_path}.yaml"
+        if not yaml_path.exists():
+            nested = sorted(DATASETS_DIR.glob(f"**/{name_or_path}.yaml"))
+            if nested:
+                yaml_path = nested[0]
 
     if not yaml_path.exists():
+        available = sorted(p.stem for p in DATASETS_DIR.glob("**/*.yaml"))
         raise FileNotFoundError(
             f"Dataset config not found: {yaml_path}\n"
-            f"Available datasets: {[p.stem for p in DATASETS_DIR.glob('*.yaml')]}"
+            f"Available datasets: {available}"
         )
 
     with open(yaml_path) as f:
