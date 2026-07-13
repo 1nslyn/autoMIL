@@ -95,6 +95,21 @@ def _nllsurv_risk(logits: torch.Tensor) -> torch.Tensor:
     return -survival.sum(dim=1)
 
 
+def _risk_from_logits(logits: torch.Tensor, loss_type: str) -> torch.Tensor:
+    """Orient a model's scalar survival output as a risk score (higher = earlier
+    event) for the c-index, per loss type:
+      - cox:      the logit already IS the risk score.
+      - nllsurv:  ``-sum`` of the predicted survival curve (see ``_nllsurv_risk``).
+      - mse/mae:  the head regresses (log) survival time, so a HIGHER logit means
+                  a LONGER survival — negate it, else the c-index is inverted.
+    """
+    if loss_type == "nllsurv":
+        return _nllsurv_risk(logits)
+    if loss_type in ("mse", "mae"):
+        return -logits.view(-1)
+    return logits.view(-1)  # cox
+
+
 def train_survival_fold(
     exp_cfg: ExperimentConfig,
     benchmark_dir: str,
@@ -177,7 +192,7 @@ def train_survival_fold(
         risks, statuses, times, pids = [], [], [], []
         for s in samples:
             lg = _bag_logits(model, _load_feats(s["pt_path"], device)).unsqueeze(0)
-            r = _nllsurv_risk(lg) if is_nll else lg.view(-1)
+            r = _risk_from_logits(lg, loss_type)
             risks.append(float(r.item()))
             statuses.append(s["status"])
             times.append(s["time"])
