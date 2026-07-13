@@ -17,7 +17,8 @@ from dataclasses import replace
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.evaluate import compute_confidence_intervals
-from autobench.pipeline.titan.dataset import build_split_dataset
+from autobench.pipeline.titan.dataset import build_split_dataset, build_survival_split_dataset
+from autobench.pipeline.titan.survival_train import train_titan_survival_fold
 from autobench.pipeline.titan.train import train_titan_fold
 
 import pandas as pd
@@ -68,19 +69,26 @@ def run_titan_experiment(
             benchmark_dir, "splits", exp_cfg.strategy, exp_cfg.task.name,
             f"splits_{fold}.csv",
         )
-        train_ds = build_split_dataset(
-            split_csv, "train", task_df, exp_cfg.task.label_dict, features_dir,
-        )
-        val_ds = build_split_dataset(
-            split_csv, "val", task_df, exp_cfg.task.label_dict, features_dir,
-        )
-        test_ds = build_split_dataset(
-            split_csv, "test", task_df, exp_cfg.task.label_dict, features_dir,
-        )
-
-        result = train_titan_fold(
-            exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
-        )
+        if exp_cfg.is_survival:
+            train_ds = build_survival_split_dataset(split_csv, "train", task_df, features_dir)
+            val_ds = build_survival_split_dataset(split_csv, "val", task_df, features_dir)
+            test_ds = build_survival_split_dataset(split_csv, "test", task_df, features_dir)
+            result = train_titan_survival_fold(
+                exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
+            )
+        else:
+            train_ds = build_split_dataset(
+                split_csv, "train", task_df, exp_cfg.task.label_dict, features_dir,
+            )
+            val_ds = build_split_dataset(
+                split_csv, "val", task_df, exp_cfg.task.label_dict, features_dir,
+            )
+            test_ds = build_split_dataset(
+                split_csv, "test", task_df, exp_cfg.task.label_dict, features_dir,
+            )
+            result = train_titan_fold(
+                exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
+            )
         fold_results.append(result)
         _write_fold_result_json(fold, result)
 
@@ -94,6 +102,7 @@ def run_titan_experiment(
         "encoder": exp_cfg.encoder_key,
         "embed_dim": exp_cfg.embed_dim,
         "model_type": exp_cfg.model.model_type,
+        "survival_loss": exp_cfg.survival_loss,
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,

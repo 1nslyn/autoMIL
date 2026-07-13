@@ -27,6 +27,22 @@ class ABMILSlide:
     label: int
 
 
+@dataclass(frozen=True)
+class ABMILSurvivalSlide:
+    """One survival bag: slide id, H5 path, event status, time, patient id.
+
+    Holds the H5 path, not the loaded tensor -- features are read on demand
+    (``_read_bag``) in the trainer so a fold never has every bag resident in
+    host RAM at once.
+    """
+
+    slide_id: str
+    h5_path: str
+    status: int  # 1=event, 0=censored
+    time: float
+    patient_id: str
+
+
 def _read_bag(h5_path: str) -> torch.Tensor:
     with h5py.File(h5_path, "r") as f:
         feats = np.asarray(f["features"][:], dtype=np.float32)
@@ -81,6 +97,45 @@ def load_abmil_split(
     if missing:
         print(
             f"  [ABMIL] {split}: dropping {len(missing)} slide(s) missing H5 "
+            f"features (first: {missing[:3]!r})"
+        )
+    return slides
+
+
+def load_abmil_survival_split(
+    task_csv: str,
+    split_csv: str,
+    h5_dir: str,
+    split: str,
+) -> list[ABMILSurvivalSlide]:
+    """Load one split (train/val/test) as a list of ``ABMILSurvivalSlide`` bags."""
+    task_df = pd.read_csv(task_csv, dtype=str)
+    status_map = dict(zip(task_df["slide_id"], task_df["status"]))
+    time_map = dict(zip(task_df["slide_id"], task_df["time"]))
+    case_map = dict(zip(task_df["slide_id"], task_df["case_id"]))
+
+    slides: list[ABMILSurvivalSlide] = []
+    missing: list[str] = []
+    for sid in _load_split_ids(split_csv, split):
+        if sid not in status_map:
+            continue
+        h5_path = os.path.join(h5_dir, f"{sid}.h5")
+        if not os.path.exists(h5_path):
+            missing.append(sid)
+            continue
+        slides.append(
+            ABMILSurvivalSlide(
+                slide_id=sid,
+                h5_path=h5_path,
+                status=int(status_map[sid]),
+                time=float(time_map[sid]),
+                patient_id=str(case_map[sid]),
+            )
+        )
+
+    if missing:
+        print(
+            f"  [ABMIL-surv] {split}: dropping {len(missing)} slide(s) missing H5 "
             f"features (first: {missing[:3]!r})"
         )
     return slides

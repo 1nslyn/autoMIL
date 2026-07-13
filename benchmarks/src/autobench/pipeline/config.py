@@ -293,18 +293,6 @@ def get_nnmil_runtime_overrides(model_type: str) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-# Survival CV uses fewer folds than classification. With few events, 10-fold
-# leaves only ~2 events per test fold (c-index near chance), so survival follows
-# nnMIL's native 5-fold convention while classification keeps the configured
-# n_folds.
-SURVIVAL_N_FOLDS = 5
-
-
-def resolve_n_folds(task_type: str, n_folds: int) -> int:
-    """Fold count for a task: survival is pinned to SURVIVAL_N_FOLDS; others use n_folds."""
-    return SURVIVAL_N_FOLDS if task_type == "survival" else n_folds
-
-
 def generate_all_experiments(
     cfg: BenchmarkConfig,
     registries: Registries,
@@ -385,13 +373,40 @@ def generate_all_experiments(
                                     continue
                                 if survival_loss == "cox" and model_type != "clam_sb":
                                     continue
+                            # ABMIL/TITAN survival: only cox/nllsurv have a
+                            # trainer (adapter-side, mirrors CLAM); mse/mae
+                            # would otherwise silently generate an experiment
+                            # that crashes at runtime. Both ABMIL variants and
+                            # TITAN's single linear-probe head support either
+                            # loss (arbitrary output width), so no per-model
+                            # restriction is needed beyond the loss itself.
+                            if (
+                                framework in (Framework.ABMIL, Framework.TITAN)
+                                and task_cfg.task_type == "survival"
+                                and survival_loss not in ("cox", "nllsurv")
+                            ):
+                                continue
+                            # DTFD survival: nllsurv only. Its two-tier
+                            # pseudo-bag distillation repeats the slide's
+                            # target across pseudo-bags -- a discrete
+                            # (bin_idx, censor) pair works the same way a
+                            # classification label does, but cox's
+                            # partial-likelihood loss needs a cross-patient
+                            # risk set that doesn't exist within one slide's
+                            # own pseudo-bags. See dtfd/survival_train.py.
+                            if (
+                                framework == Framework.DTFD
+                                and task_cfg.task_type == "survival"
+                                and survival_loss != "nllsurv"
+                            ):
+                                continue
                             exp = ExperimentConfig(
                                 task=task_cfg,
                                 encoder_key=encoder_key,
                                 embed_dim=embed_dim,
                                 model=model_cfg,
                                 train=cfg.train,
-                                n_folds=resolve_n_folds(task_cfg.task_type, cfg.n_folds),
+                                n_folds=cfg.n_folds,
                                 framework=framework,
                                 strategy=strategy,
                                 survival_loss=survival_loss,

@@ -15,6 +15,21 @@ python benchmarks/scripts/run_experiment.py \
 python benchmarks/scripts/run_experiment.py \
     --dataset ccrcc --task pbrm1 --encoder uni_v2 \
     --model ab_mil --framework nnmil
+
+# ABMIL experiment (reuses nnMIL's H5-bag prep)
+python benchmarks/scripts/run_experiment.py \
+    --dataset ccrcc --task pbrm1 --encoder uni_v2 \
+    --model abmil --framework abmil
+
+# DTFD-MIL experiment (reuses nnMIL's H5-bag prep)
+python benchmarks/scripts/run_experiment.py \
+    --dataset ccrcc --task pbrm1 --encoder uni_v2 \
+    --model dtfd_mil --framework dtfd
+
+# TITAN experiment (frozen slide embedding -- --encoder must be "titan")
+python benchmarks/scripts/run_experiment.py \
+    --dataset ccrcc --task pbrm1 --encoder titan \
+    --model titan --framework titan
 """
 
 from __future__ import annotations
@@ -54,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--task", required=True, help="Task name (e.g., high_grade, pbrm1)")
     p.add_argument("--encoder", required=True, help="Encoder key (e.g., uni_v2)")
     p.add_argument("--model", required=True, help="Model type (e.g., clam_mb, ab_mil)")
-    p.add_argument("--framework", required=True, choices=["clam", "nnmil"])
+    p.add_argument("--framework", required=True, choices=["clam", "nnmil", "abmil", "dtfd", "titan"])
     p.add_argument("--strategy", default="standard", help="Split strategy")
     p.add_argument(
         "--survival_loss", default=None,
@@ -165,8 +180,17 @@ def main() -> None:
 
     # Build experiment config
     task_cfg = registries.task_registry[args.task]
-    embed_dim = registries.encoder_dims[args.encoder]
-    framework = Framework.CLAM if args.framework == "clam" else Framework.NNMIL
+    _FRAMEWORK_MAP = {
+        "clam": Framework.CLAM,
+        "nnmil": Framework.NNMIL,
+        "abmil": Framework.ABMIL,
+        "dtfd": Framework.DTFD,
+        "titan": Framework.TITAN,
+    }
+    framework = _FRAMEWORK_MAP[args.framework]
+    # TITAN has no tile-encoder axis: "titan" isn't in encoder_dims, so use a
+    # 768 placeholder -- run_titan_experiment overwrites it from the manifest dim.
+    embed_dim = 768 if framework == Framework.TITAN else registries.encoder_dims[args.encoder]
 
     model_cfg = registries.model_registry.get(
         args.model, ModelConfig(model_type=args.model)
@@ -239,13 +263,14 @@ def main() -> None:
         automil_results_dir = os.path.join(automil_results_dir, "results")
         os.makedirs(automil_results_dir, exist_ok=True)
 
-    # Ensure data is prepared
+    # Ensure data is prepared. TITAN skips the tile-encoder H5->PT step (no
+    # "features" key), so pass no encoder_keys.
     from autobench.pipeline.prepare import prepare_all
     prepare_all(
         benchmark_dir=benchmark_dir,
         mapping_csv=ds.mapping_csv,
         features_base_dir=ds.features_base_dir,
-        encoder_keys=[args.encoder],
+        encoder_keys=[] if framework == Framework.TITAN else [args.encoder],
         ds=ds,
         seed=train_cfg.seed,
         n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
@@ -259,8 +284,19 @@ def main() -> None:
             wandb_project=None if args.no_wandb else f"{ds.name}-automil",
             results_dir=automil_results_dir,
         )
+    elif framework == Framework.TITAN:
+        # TITAN is a frozen per-slide embedding -- its own prep/runner, no H5-bag step.
+        from autobench.pipeline.titan.prepare import prepare_titan_experiment
+        from autobench.pipeline.titan.runner import run_titan_experiment
+        prepare_titan_experiment(
+            benchmark_dir=benchmark_dir,
+            task_name=args.task,
+            features_base_dir=ds.features_base_dir,
+        )
+        summary = run_titan_experiment(
+            exp_cfg, benchmark_dir, device=str(device),
+        )
     else:
-        from autobench.pipeline.nnmil.runner import run_nnmil_experiment
         from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
         prepare_nnmil_experiment(
             benchmark_dir=benchmark_dir,
@@ -280,9 +316,15 @@ def main() -> None:
             survival_loss=survival_loss,
             nll_bins=task_cfg.nll_bins,
         )
-        summary = run_nnmil_experiment(
-            exp_cfg, benchmark_dir, device=str(device),
-        )
+        if framework == Framework.ABMIL:
+            from autobench.pipeline.abmil.runner import run_abmil_experiment
+            summary = run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+        elif framework == Framework.DTFD:
+            from autobench.pipeline.dtfd import run_dtfd_experiment
+            summary = run_dtfd_experiment(exp_cfg, benchmark_dir, device=str(device))
+        else:
+            from autobench.pipeline.nnmil.runner import run_nnmil_experiment
+            summary = run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device))
 
     elapsed = time.time() - start_time
 
@@ -292,9 +334,13 @@ def main() -> None:
         json.dump(result, f, indent=2)
 
     print(f"\nExperiment complete in {elapsed:.0f}s")
-    print(f"  test_auc={result['metrics']['test_auc']:.4f}  "
-          f"test_bacc={result['metrics']['test_bacc']:.4f}  "
-          f"composite={result['composite']:.4f}")
+    if "test_c_index" in result["metrics"]:
+        print(f"  test_c_index={result['metrics']['test_c_index']:.4f}  "
+              f"composite={result['composite']:.4f}")
+    else:
+        print(f"  test_auc={result['metrics']['test_auc']:.4f}  "
+              f"test_bacc={result['metrics']['test_bacc']:.4f}  "
+              f"composite={result['composite']:.4f}")
     print(f"  result.json written to {os.path.abspath('result.json')}")
 
 

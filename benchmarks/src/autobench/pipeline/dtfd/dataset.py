@@ -28,6 +28,22 @@ class DTFDSlide:
     label: int
 
 
+@dataclass(frozen=True)
+class DTFDSurvivalSlide:
+    """One survival bag: slide id, H5 path, event status, time, patient id.
+
+    Holds the H5 *path*, not the loaded tensor -- features are read on demand
+    (``_read_bag``) in the trainer so a fold never has every bag resident in
+    host RAM at once (mirrors CLAM's lazy ``pt_path`` survival contract).
+    """
+
+    slide_id: str
+    h5_path: str
+    status: int  # 1=event, 0=censored
+    time: float
+    patient_id: str
+
+
 def _read_bag(h5_path: str) -> torch.Tensor:
     with h5py.File(h5_path, "r") as f:
         feats = np.asarray(f["features"][:], dtype=np.float32)
@@ -87,8 +103,66 @@ def load_dtfd_split(
     return slides
 
 
-def min_bag_size(slides: list[DTFDSlide]) -> int:
-    """Smallest patch count across a split (used to guard ``numGroup``)."""
+def min_bag_size(slides) -> int:
+    """Smallest patch count across a split (used to guard ``numGroup``).
+
+    Handles both eager slides (``.features`` already loaded, classification) and
+    lazy survival slides (``.h5_path`` only): the latter reads just the H5
+    dataset's shape metadata, not its contents, so it stays cheap and RAM-free.
+    """
     if not slides:
         return 0
-    return min(int(s.features.shape[0]) for s in slides)
+
+    def _n(s) -> int:
+        feats = getattr(s, "features", None)
+        if feats is not None:
+            return int(feats.shape[0])
+        with h5py.File(s.h5_path, "r") as f:
+            return int(f["features"].shape[0])
+
+    return min(_n(s) for s in slides)
+
+
+def load_dtfd_survival_split(
+    task_csv: str,
+    split_csv: str,
+    h5_dir: str,
+    split: str,
+) -> list[DTFDSurvivalSlide]:
+    """Load one split (train/val/test) as a list of ``DTFDSurvivalSlide`` bags.
+
+    Mirrors ``load_dtfd_split`` but reads the survival task CSV's
+    ``status``/``time``/``case_id`` columns instead of a classification
+    ``label`` column (same contract as
+    ``clam/dataset.py::load_survival_fold_splits``).
+    """
+    task_df = pd.read_csv(task_csv, dtype=str)
+    status_map = dict(zip(task_df["slide_id"], task_df["status"]))
+    time_map = dict(zip(task_df["slide_id"], task_df["time"]))
+    case_map = dict(zip(task_df["slide_id"], task_df["case_id"]))
+
+    slides: list[DTFDSurvivalSlide] = []
+    missing: list[str] = []
+    for sid in _load_split_ids(split_csv, split):
+        if sid not in status_map:
+            continue
+        h5_path = os.path.join(h5_dir, f"{sid}.h5")
+        if not os.path.exists(h5_path):
+            missing.append(sid)
+            continue
+        slides.append(
+            DTFDSurvivalSlide(
+                slide_id=sid,
+                h5_path=h5_path,
+                status=int(status_map[sid]),
+                time=float(time_map[sid]),
+                patient_id=str(case_map[sid]),
+            )
+        )
+
+    if missing:
+        print(
+            f"  [DTFD-surv] {split}: dropping {len(missing)} slide(s) missing H5 "
+            f"features (first: {missing[:3]!r})"
+        )
+    return slides
