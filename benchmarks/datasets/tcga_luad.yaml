@@ -1,5 +1,5 @@
 name: tcga_luad
-description: "TCGA-LUAD — Lung Adenocarcinoma (EGFR, KRAS mutation prediction)"
+description: "TCGA-LUAD — Lung Adenocarcinoma (KRAS mutation prediction)"
 
 paths:
   data_root: "${AUTOBENCH_TCGA_LUAD_ROOT}"
@@ -10,12 +10,6 @@ paths:
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
 tasks:
-  egfr:
-    label_col: "EGFR_binary"
-    label_map:
-      0: "wildtype"
-      1: "mutant"
-    n_classes: 2
   kras:
     label_col: "KRAS_binary"
     label_map:
@@ -29,7 +23,6 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  egfr: ["standard"]
   kras: ["standard"]
 
 slide_id_column: "slide_name"
