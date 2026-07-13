@@ -580,3 +580,294 @@ class TestSurvivalTrainerSmoke:
             risk.detach(), status, time, [f"p{i}" for i in range(batch)],
         )
         assert ci is None or np.isnan(float(ci)) or 0.0 <= float(ci) <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Risk-score orientation — regression guard for the mse/mae inverted-c-index bug
+# ---------------------------------------------------------------------------
+
+
+class TestSurvivalRiskOrientation:
+    """Every arm must orient its scalar model output as a RISK score before the
+    c-index (higher risk = earlier event). cox/nllsurv are already risk-oriented,
+    but mse/mae regress (log) survival time -- a higher logit means a LONGER
+    survival -- so their risk must be the NEGATED logit. Getting this wrong
+    silently inverts the c-index (a perfect model scores ~0 instead of ~1)."""
+
+    # (label, module) for the arms that score cox/mse/mae via _risk_from_logits.
+    ARMS = [
+        ("abmil", "autobench.pipeline.abmil.survival_train"),
+        ("clam", "autobench.pipeline.clam.survival_train"),
+        ("titan", "autobench.pipeline.titan.survival_train"),
+    ]
+
+    @pytest.mark.parametrize("label,module", ARMS)
+    def test_orientation_per_loss(self, label, module):
+        import importlib
+
+        import torch
+
+        m = importlib.import_module(module)
+        logits = torch.tensor([-2.0, 0.5, 3.0])  # single-output survival head
+        # cox: the logit already IS the risk score.
+        assert torch.allclose(m._risk_from_logits(logits, "cox"), logits.view(-1))
+        # mse/mae: head predicts (log) time -> risk is the negated logit.
+        assert torch.allclose(m._risk_from_logits(logits, "mse"), -logits.view(-1))
+        assert torch.allclose(m._risk_from_logits(logits, "mae"), -logits.view(-1))
+        # nllsurv: matches the dedicated hazard->risk helper.
+        hazards = torch.randn(4, 3)
+        assert torch.allclose(
+            m._risk_from_logits(hazards, "nllsurv"), m._nllsurv_risk(hazards)
+        )
+
+    def test_all_arms_orient_identically(self):
+        """A drift between arms would silently invert one arm's c-index."""
+        import importlib
+
+        import torch
+
+        mods = [importlib.import_module(mod) for _, mod in self.ARMS]
+        logits = torch.tensor([-1.5, 0.0, 2.5])
+        for loss in ("cox", "mse", "mae", "nllsurv"):
+            arg = logits if loss != "nllsurv" else torch.randn(3, 3)
+            refs = [mo._risk_from_logits(arg, loss) for mo in mods]
+            for r in refs[1:]:
+                assert torch.allclose(refs[0], r)
+
+    def test_mse_optimal_model_is_concordant(self):
+        """End-to-end: a model that perfectly learned the mse objective
+        (logit == log time) must score c-index ~1.0 after orientation. The raw
+        un-negated logit -- the bug -- would score the inverted ~0.0."""
+        import importlib
+
+        import torch
+
+        m = importlib.import_module("autobench.pipeline.abmil.survival_train")
+        from nnMIL.training.losses.survival_loss import survival_c_index
+
+        time = torch.tensor([1.0, 2.0, 4.0, 8.0])
+        status = torch.tensor([1.0, 1.0, 1.0, 1.0])
+        pids = [f"p{i}" for i in range(4)]
+        opt_logit = torch.log(time + 1e-8)  # the mse loss's optimum
+
+        oriented = m._risk_from_logits(opt_logit, "mse")
+        assert float(survival_c_index(oriented, status, time, pids)) > 0.99
+        # The raw logit (pre-fix behavior) inverts the metric -- documents the bug.
+        assert float(survival_c_index(opt_logit.view(-1), status, time, pids)) < 0.01
+
+    def test_unknown_loss_raises(self):
+        """A typo'd/unknown loss must fail loudly, not be silently scored as cox."""
+        import importlib
+
+        import torch
+
+        logits = torch.tensor([-1.0, 0.0, 1.0])
+        for _, module in self.ARMS:
+            m = importlib.import_module(module)
+            with pytest.raises(ValueError, match="unknown survival loss"):
+                m._risk_from_logits(logits, "coxx")
+
+
+class TestNnmilTrainerRiskOrientation:
+    """The nnMIL SurvivalTrainer scores cox/mse/mae from a single-output head
+    (nllsurv routes to SurvivalPorpoiseTrainer). It must orient mse/mae as the
+    NEGATED prediction before the c-index, like the adapter arms -- otherwise
+    the nnmil arm's mse/mae c-index is silently inverted (the same bug, in the
+    one framework whose grid actually generates mse/mae experiments)."""
+
+    def test_risk_from_preds_orientation(self):
+        import numpy as np
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401  (puts nnMIL on path)
+        from nnMIL.training.trainers.survival_trainer import _risk_from_preds
+
+        preds = np.array([-2.0, 0.5, 3.0], dtype=np.float32)
+        np.testing.assert_allclose(_risk_from_preds(preds, "cox"), preds)
+        np.testing.assert_allclose(_risk_from_preds(preds, "mse"), -preds)
+        np.testing.assert_allclose(_risk_from_preds(preds, "mae"), -preds)
+
+    def test_mse_optimal_model_is_concordant(self):
+        """A trainer output that perfectly learned the mse objective
+        (pred == log time) scores c-index ~1.0 after orientation; the raw
+        (pre-fix) prediction inverts it to ~0.0."""
+        import numpy as np
+        import torch
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        from nnMIL.training.losses.survival_loss import survival_c_index
+        from nnMIL.training.trainers.survival_trainer import _risk_from_preds
+
+        time = np.array([1.0, 2.0, 4.0, 8.0], dtype=np.float32)
+        status = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+        pids = [f"p{i}" for i in range(4)]
+        opt_pred = np.log(time + 1e-8)  # the mse loss's optimum
+
+        def _ci(risk_np):
+            return float(survival_c_index(
+                torch.tensor(risk_np, dtype=torch.float32),
+                torch.tensor(status, dtype=torch.float32),
+                torch.tensor(time, dtype=torch.float32),
+                pids,
+            ))
+
+        assert _ci(_risk_from_preds(opt_pred, "mse")) > 0.99
+        # Raw prediction (pre-fix) inverts the metric -- documents the bug.
+        assert _ci(opt_pred) < 0.01
+
+    def test_unknown_loss_raises(self):
+        """Mirror the adapters: an unknown/typo'd loss must fail loudly here too,
+        not silently fall through as cox-identity."""
+        import numpy as np
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401  (nnMIL on path)
+        from nnMIL.training.trainers.survival_trainer import _risk_from_preds
+
+        with pytest.raises(ValueError, match="unknown survival loss"):
+            _risk_from_preds(np.array([1.0, 2.0], dtype=np.float32), "coxx")
+
+
+class TestNnmilPredictorRiskOrientation:
+    """The standalone nnMIL SurvivalPredictor (inference tooling) must orient a
+    single-output mse/mae head as NEGATED risk too -- the same bug class as the
+    trainer, on the inference path. A multi-bin output stays nllsurv (survival
+    curve); a single output uses the loss type to tell cox from mse/mae."""
+
+    def test_output_to_risk_orientation(self):
+        import torch
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401  (nnMIL on path)
+        from nnMIL.inference.predictors.survival_predictor import _output_to_risk
+
+        single = torch.tensor([[-2.0], [0.5], [3.0]])  # [N, 1] single-output head
+        assert torch.allclose(_output_to_risk(single, "cox"), single)
+        assert torch.allclose(_output_to_risk(single, "mse"), -single)
+        assert torch.allclose(_output_to_risk(single, "mae"), -single)
+        # Multi-bin output is unambiguously nllsurv (survival-curve risk),
+        # regardless of the survival_loss argument.
+        hz = torch.randn(4, 3)
+        surv = torch.cumprod(1 - torch.sigmoid(hz), dim=1)
+        assert torch.allclose(_output_to_risk(hz, "cox"), -surv.sum(dim=1, keepdim=True))
+
+    def test_mse_optimal_is_concordant(self):
+        import torch
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        from nnMIL.inference.predictors.survival_predictor import _output_to_risk
+        from nnMIL.training.losses.survival_loss import survival_c_index
+
+        time = torch.tensor([1.0, 2.0, 4.0, 8.0])
+        status = torch.tensor([1.0, 1.0, 1.0, 1.0])
+        pids = [f"p{i}" for i in range(4)]
+        opt = torch.log(time + 1e-8).view(-1, 1)  # mse optimum, single-output head
+        risk = _output_to_risk(opt, "mse").view(-1)
+        assert float(survival_c_index(risk, status, time, pids)) > 0.99
+        # Treating it as cox (pre-fix behavior) inverts the metric.
+        raw = _output_to_risk(opt, "cox").view(-1)
+        assert float(survival_c_index(raw, status, time, pids)) < 0.01
+
+    def test_unknown_loss_raises(self):
+        import torch
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        from nnMIL.inference.predictors.survival_predictor import _output_to_risk
+
+        with pytest.raises(ValueError, match="unknown survival loss"):
+            _output_to_risk(torch.tensor([[1.0], [2.0]]), "coxx")
+
+
+class TestSurvivalCIndexDirection:
+    """survival_c_index must rank higher risk as shorter survival (a sign flip
+    here silently inverts every arm at once)."""
+
+    def test_direction(self):
+        import autobench.pipeline.clam.survival_train  # noqa: F401  (puts nnMIL on path)
+        import torch
+        from nnMIL.training.losses.survival_loss import survival_c_index
+
+        risk = torch.tensor([3.0, 2.0, 1.0])  # sample 0 highest risk...
+        time = torch.tensor([1.0, 2.0, 3.0])  # ...and shortest survival (perfect)
+        status = torch.tensor([1.0, 1.0, 1.0])
+        pids = ["a", "b", "c"]
+        assert float(survival_c_index(risk, status, time, pids)) > 0.99
+        assert float(survival_c_index(-risk, status, time, pids)) < 0.01
+
+
+class TestSurvivalLossGoldenValues:
+    """Pin the survival losses to known-correct outputs so a future sign flip or
+    formula change is caught (there is no CI on this repo)."""
+
+    def test_cox_matches_independent_breslow_reference(self):
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        import torch
+        from nnMIL.training.losses.survival_loss import SurvivalLoss
+
+        logits = torch.tensor([0.5, -0.5, 1.0, 0.0], requires_grad=True)  # cox guards on grad
+        status = torch.tensor([1.0, 1.0, 0.0, 1.0])  # sample 2 censored
+        time = torch.tensor([1.0, 2.0, 3.0, 4.0])  # distinct times
+
+        def ref_cox_nll(lg, st, tm):
+            # -mean over events of [x_i - log sum_{t_j >= t_i} exp x_j] (Breslow).
+            terms = []
+            for i in range(len(tm)):
+                if st[i] != 1:  # outer sum ranges over events only
+                    continue
+                risk_set = tm >= tm[i]  # everyone still at risk (event or censored)
+                terms.append(lg[i] - torch.log(torch.exp(lg[risk_set]).sum()))
+            return -torch.stack(terms).mean()
+
+        lib = SurvivalLoss(loss_type="cox")(logits, status, time)
+        ref = ref_cox_nll(logits, status, time)
+        assert torch.allclose(lib, ref, atol=1e-6)
+
+    def test_nllsurv_matches_golden_value(self):
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        import torch
+        from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss
+
+        logits = torch.tensor(
+            [
+                [0.10, -0.20, 0.30],
+                [0.50, 0.00, -0.50],
+                [-0.30, 0.20, 0.10],
+                [0.40, -0.10, 0.20],
+            ],
+            requires_grad=True,
+        )
+        y = torch.tensor([0, 1, 2, 1])
+        c = torch.tensor([0, 1, 0, 0])  # 1=censored
+        # Golden captured from the current (reference-verified) implementation;
+        # regenerate only if the loss definition intentionally changes.
+        value = float(NLLSurvLoss()(logits, y, c).detach())
+        assert value == pytest.approx(1.49148083, abs=1e-5)
+
+
+class TestDtfdCoxGuard:
+    """DTFD survival must reject cox at runtime (nllsurv-only), not just in the
+    grid -- its within-slide pseudo-bags have no cross-patient risk set."""
+
+    def test_run_dtfd_experiment_rejects_cox(self, tmp_path):
+        import dataclasses
+
+        from autobench.pipeline.config import (
+            BenchmarkConfig,
+            Framework,
+            build_registries,
+            generate_all_experiments,
+        )
+        from autobench.pipeline.dtfd.runner import run_dtfd_experiment
+
+        ds = make_survival_ds()
+        cfg = BenchmarkConfig.from_dataset_config(
+            ds,
+            frameworks=[Framework.DTFD],
+            encoder_keys=["conch_v15"],
+            dtfd_model_types=["dtfd_mil"],
+            tasks=["os_survival"],
+            strategies=["standard"],
+            n_folds=1,
+        )
+        # The grid only emits dtfd+nllsurv; force cox to exercise the runtime guard.
+        exp = generate_all_experiments(cfg, build_registries(ds))[0]
+        exp_cox = dataclasses.replace(exp, survival_loss="cox")
+        with pytest.raises(ValueError, match="does not support cox"):
+            run_dtfd_experiment(exp_cox, str(tmp_path), device="cpu")

@@ -19,6 +19,32 @@ from nnMIL.data.dataset import random_length_collate_fn
 from nnMIL.training.losses.survival_loss import survival_c_index
 
 
+def _output_to_risk(logits, survival_loss):
+    """Convert a survival model's raw output to a risk score (higher = higher
+    risk = shorter survival) for the c-index, per loss type.
+
+    - nllsurv (multi-bin hazards): ``-sum`` of the predicted survival curve
+      (area under the curve), matching ``SurvivalPorpoiseTrainer``.
+    - mse/mae (single output regressing ``log(time)``): a HIGHER output means a
+      LONGER survival, so it must be NEGATED — else the c-index is inverted.
+    - cox (single-output risk score): use as-is.
+
+    A multi-bin output is unambiguously nllsurv; a single-output head relies on
+    ``survival_loss`` to distinguish cox (identity) from mse/mae (negate).
+    """
+    if logits.dim() == 2 and logits.shape[1] > 1:
+        hazards = torch.sigmoid(logits)
+        survival = torch.cumprod(1 - hazards, dim=1)
+        return -survival.sum(dim=1, keepdim=True)
+    if survival_loss in ("mse", "mae"):
+        return -logits
+    if survival_loss == "cox":
+        return logits
+    raise ValueError(
+        f"unknown survival loss {survival_loss!r}; expected cox/mse/mae/nllsurv"
+    )
+
+
 class SurvivalPredictor(BasePredictor):
     """Predictor for survival analysis tasks"""
     
@@ -49,6 +75,9 @@ class SurvivalPredictor(BasePredictor):
         model_type = kwargs.get('model_type', 'simple_mil')
         stride_divisor = kwargs.get('stride_divisor', None)
         dataset_name = kwargs.get('dataset_name', None)
+        # Loss type decides risk orientation for single-output heads (cox vs
+        # mse/mae). Defaults to cox (identity) when a caller doesn't pass it.
+        survival_loss = kwargs.get('survival_loss', 'cox')
         save_csv_path = None
         if save_dir:
             save_csv_path = os.path.join(save_dir, f"results_{model_type}.csv")
@@ -143,20 +172,12 @@ class SurvivalPredictor(BasePredictor):
                 
                 logits = logits.float()
                 
-                # For NLLSurv models: logits shape is [batch_size, nll_bins]
-                # We need to convert to risk scores before appending
-                # Check if this is NLLSurv output (logits has 2D shape with >1 column)
-                if logits.dim() == 2 and logits.shape[1] > 1:
-                    # NLLSurv: convert discrete hazards to risk score
-                    # Like in survival_porpoise_trainer.py: lines 348-352
-                    hazards = torch.sigmoid(logits)  # [batch_size, nll_bins]
-                    survival = torch.cumprod(1 - hazards, dim=1)  # [batch_size, nll_bins]
-                    # Risk score = negative expected survival time (area under survival curve)
-                    risk_scores = -survival.sum(dim=1, keepdim=True)  # [batch_size, 1]
-                    preds_all.append(risk_scores.cpu().numpy())
-                else:
-                    # Cox loss: logits is already risk score [batch_size, 1] or [batch_size]
-                    preds_all.append(logits.cpu().numpy())
+                # Orient the raw output as a risk score (higher = shorter
+                # survival) per loss type before the c-index: nllsurv is a
+                # multi-bin survival curve; cox is already a risk; mse/mae
+                # regress log-time and must be negated (else the c-index inverts).
+                risk_scores = _output_to_risk(logits, survival_loss)
+                preds_all.append(risk_scores.cpu().numpy())
                 
                 status_all.append(status.cpu().numpy())
                 time_all.append(time.cpu().numpy())

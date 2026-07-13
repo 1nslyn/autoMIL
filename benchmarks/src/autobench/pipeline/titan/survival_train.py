@@ -71,14 +71,33 @@ def _nllsurv_risk(logits: torch.Tensor) -> torch.Tensor:
     return -survival.sum(dim=1)
 
 
+def _risk_from_logits(logits: torch.Tensor, loss_type: str) -> torch.Tensor:
+    """Orient a model's scalar survival output as a risk score (higher = earlier
+    event) for the c-index, per loss type:
+      - cox:      the logit already IS the risk score.
+      - nllsurv:  ``-sum`` of the predicted survival curve (see ``_nllsurv_risk``).
+      - mse/mae:  the head regresses (log) survival time, so a HIGHER logit means
+                  a LONGER survival — negate it, else the c-index is inverted.
+    """
+    if loss_type == "nllsurv":
+        return _nllsurv_risk(logits)
+    if loss_type in ("mse", "mae"):
+        return -logits.view(-1)
+    if loss_type == "cox":
+        return logits.view(-1)
+    raise ValueError(
+        f"unknown survival loss {loss_type!r}; expected cox/mse/mae/nllsurv"
+    )
+
+
 @torch.no_grad()
-def _predict_risks(model, loader: DataLoader, device: torch.device, is_nll: bool):
+def _predict_risks(model, loader: DataLoader, device: torch.device, loss_type: str):
     model.eval()
     risks, statuses, times, pids = [], [], [], []
     for embeddings, status, time_, pid in loader:
         embeddings = embeddings.to(device)
         logits = model(embeddings)
-        r = _nllsurv_risk(logits) if is_nll else logits.view(-1)
+        r = _risk_from_logits(logits, loss_type)
         risks.extend(float(v) for v in r.cpu().tolist())
         statuses.extend(int(s) for s in status.tolist())
         times.extend(float(t) for t in time_.tolist())
@@ -168,7 +187,7 @@ def train_titan_survival_fold(
         return float("nan")
 
     def _c_index(loader: DataLoader) -> float:
-        risks, statuses, times, pids = _predict_risks(model, loader, torch_device, is_nll)
+        risks, statuses, times, pids = _predict_risks(model, loader, torch_device, survival_loss)
         if not risks:
             return float("nan")
         # survival_c_index aggregates to patient level and is NaN-safe.

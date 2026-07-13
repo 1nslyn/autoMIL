@@ -68,6 +68,25 @@ def _nllsurv_risk(logits: torch.Tensor) -> torch.Tensor:
     return -survival.sum(dim=1)
 
 
+def _risk_from_logits(logits: torch.Tensor, loss_type: str) -> torch.Tensor:
+    """Orient a model's scalar survival output as a risk score (higher = earlier
+    event) for the c-index, per loss type:
+      - cox:      the logit already IS the risk score.
+      - nllsurv:  ``-sum`` of the predicted survival curve (see ``_nllsurv_risk``).
+      - mse/mae:  the head regresses (log) survival time, so a HIGHER logit means
+                  a LONGER survival — negate it, else the c-index is inverted.
+    """
+    if loss_type == "nllsurv":
+        return _nllsurv_risk(logits)
+    if loss_type in ("mse", "mae"):
+        return -logits.view(-1)
+    if loss_type == "cox":
+        return logits.view(-1)
+    raise ValueError(
+        f"unknown survival loss {loss_type!r}; expected cox/mse/mae/nllsurv"
+    )
+
+
 def _bag_logits(model, features: torch.Tensor, device: torch.device) -> torch.Tensor:
     """Bag-level logits ``(n_out,)`` from one slide's full H5 bag.
 
@@ -157,7 +176,7 @@ def train_abmil_survival_fold(
             risks, statuses, times, pids = [], [], [], []
             for s in samples:
                 lg = _bag_logits(model, _read_bag(s.h5_path), device).unsqueeze(0)
-                r = _nllsurv_risk(lg) if is_nll else lg.view(-1)
+                r = _risk_from_logits(lg, survival_loss)
                 risks.append(float(r.item()))
                 statuses.append(s.status)
                 times.append(s.time)
