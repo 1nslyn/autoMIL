@@ -445,6 +445,8 @@ Examples:
         'hidden_dim': config.get('hidden_dim', 512),
         'dropout': config.get('dropout', 0.25),
         'batch_size': 1,
+        # Orient mse/mae risk correctly at inference (else the c-index inverts).
+        'survival_loss': config.get('survival_loss', 'cox'),
     }
     
     if task_type == 'survival':

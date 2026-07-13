@@ -160,6 +160,8 @@ Examples:
             'hidden_dim': args.hidden_dim or config.get('hidden_dim', 512),
             'dropout': args.dropout or config.get('dropout', 0.25),
             'batch_size': args.batch_size,
+            # Orient mse/mae risk correctly at inference (else the c-index inverts).
+            'survival_loss': config.get('survival_loss', 'cox'),
         }
         
         # Log model type inference
@@ -198,6 +200,8 @@ Examples:
             'hidden_dim': args.hidden_dim or config.get('hidden_dim', 512),
             'dropout': args.dropout or config.get('dropout', 0.25),
             'batch_size': args.batch_size,
+            # Orient mse/mae risk correctly at inference (else the c-index inverts).
+            'survival_loss': config.get('survival_loss', 'cox'),
         }
         
         # Log model type inference

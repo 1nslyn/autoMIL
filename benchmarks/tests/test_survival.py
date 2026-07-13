@@ -726,6 +726,55 @@ class TestNnmilTrainerRiskOrientation:
             _risk_from_preds(np.array([1.0, 2.0], dtype=np.float32), "coxx")
 
 
+class TestNnmilPredictorRiskOrientation:
+    """The standalone nnMIL SurvivalPredictor (inference tooling) must orient a
+    single-output mse/mae head as NEGATED risk too -- the same bug class as the
+    trainer, on the inference path. A multi-bin output stays nllsurv (survival
+    curve); a single output uses the loss type to tell cox from mse/mae."""
+
+    def test_output_to_risk_orientation(self):
+        import torch
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401  (nnMIL on path)
+        from nnMIL.inference.predictors.survival_predictor import _output_to_risk
+
+        single = torch.tensor([[-2.0], [0.5], [3.0]])  # [N, 1] single-output head
+        assert torch.allclose(_output_to_risk(single, "cox"), single)
+        assert torch.allclose(_output_to_risk(single, "mse"), -single)
+        assert torch.allclose(_output_to_risk(single, "mae"), -single)
+        # Multi-bin output is unambiguously nllsurv (survival-curve risk),
+        # regardless of the survival_loss argument.
+        hz = torch.randn(4, 3)
+        surv = torch.cumprod(1 - torch.sigmoid(hz), dim=1)
+        assert torch.allclose(_output_to_risk(hz, "cox"), -surv.sum(dim=1, keepdim=True))
+
+    def test_mse_optimal_is_concordant(self):
+        import torch
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        from nnMIL.inference.predictors.survival_predictor import _output_to_risk
+        from nnMIL.training.losses.survival_loss import survival_c_index
+
+        time = torch.tensor([1.0, 2.0, 4.0, 8.0])
+        status = torch.tensor([1.0, 1.0, 1.0, 1.0])
+        pids = [f"p{i}" for i in range(4)]
+        opt = torch.log(time + 1e-8).view(-1, 1)  # mse optimum, single-output head
+        risk = _output_to_risk(opt, "mse").view(-1)
+        assert float(survival_c_index(risk, status, time, pids)) > 0.99
+        # Treating it as cox (pre-fix behavior) inverts the metric.
+        raw = _output_to_risk(opt, "cox").view(-1)
+        assert float(survival_c_index(raw, status, time, pids)) < 0.01
+
+    def test_unknown_loss_raises(self):
+        import torch
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401
+        from nnMIL.inference.predictors.survival_predictor import _output_to_risk
+
+        with pytest.raises(ValueError, match="unknown survival loss"):
+            _output_to_risk(torch.tensor([[1.0], [2.0]]), "coxx")
+
+
 class TestSurvivalCIndexDirection:
     """survival_c_index must rank higher risk as shorter survival (a sign flip
     here silently inverts every arm at once)."""
