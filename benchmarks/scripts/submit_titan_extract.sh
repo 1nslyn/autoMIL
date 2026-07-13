@@ -1,22 +1,17 @@
 #!/bin/bash
-# SLURM: extract TCGA-LUAD TITAN slide features at TITAN's NATIVE recipe
+# SLURM: extract TITAN slide features for ANY dataset at TITAN's NATIVE recipe
 # (CONCH v1.5 tiles @ 20x/512px -> TITAN pool -> 768-d slide embedding + coords).
-# FOLD-INDEPENDENT: run this ONCE; both the 5-fold and 10-fold TITAN arms reuse it.
+# FOLD-INDEPENDENT: run ONCE per dataset; both the 5-fold and 10-fold TITAN arms reuse it.
 #
-# Two TRIDENT passes (run_batch_of_slides.py):
-#   Pass 1 (--task all, --patch_encoder conch_v15 @512px): seg (skips existing) ->
-#           coords@512 -> conch_v15 tile features.  <-- the heavy pass.
-#   Pass 2 (--task feat, --slide_encoder titan): reads the conch_v15 tiles ->
-#           TITAN 768-d slide features.
-# Then symlinks 20x_224px_0px_overlap/features_titan -> the new 512px
-# slide_features_titan so the benchmark TITAN arm (default 224px base) finds them.
+# Two TRIDENT passes: (1) --task all --patch_encoder conch_v15 @512px (the heavy
+# pass), (2) --task feat --slide_encoder titan. Then symlinks the 224px base's
+# features_titan -> the new 512px slide_features_titan so the benchmark arm finds them.
 #
-# Output: ${LUAD_ROOT}/trident_output/20x_512px_0px_overlap/{features_conch_v15, slide_features_titan}
-# Resumable (TRIDENT skips done slides). After it completes: submit_luad_titan.sh.
-#
-# Usage: sbatch benchmarks/scripts/submit_luad_titan_extract.sh
+# Usage: sbatch benchmarks/scripts/submit_titan_extract.sh <dataset>
+#   e.g. sbatch benchmarks/scripts/submit_titan_extract.sh tcga_lgg
+# Run from the repo root. After it completes: sbatch submit_titan.sh <dataset> [n_folds]
 
-#SBATCH --job-name=luad_titan_extract
+#SBATCH --job-name=titan_extract
 #SBATCH --account=rrg-jma
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
@@ -24,28 +19,32 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --gpus-per-node=h100:1
 #SBATCH --mem=128G
-#SBATCH --output=/scratch/yinshuol/autoMIL/logs/titanextract_%x_%j.out
-#SBATCH --error=/scratch/yinshuol/autoMIL/logs/titanextract_%x_%j.err
+#SBATCH --output=logs/titanextract_%x_%j.out
+#SBATCH --error=logs/titanextract_%x_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=leo.yin@mail.utoronto.ca
 
 set -uo pipefail
-PROJECT_DIR="/home/yinshuol/scratch/autoMIL/autoMIL"
+DATASET="${1:-${DATASET:-}}"
+[ -n "$DATASET" ] || { echo "usage: sbatch submit_titan_extract.sh <dataset>"; exit 1; }
+PROJECT_DIR="${SLURM_SUBMIT_DIR:-/home/yinshuol/scratch/autoMIL/autoMIL}"
 TRIDENT="$PROJECT_DIR/benchmarks/lib/TRIDENT/run_batch_of_slides.py"
 
 echo "================================================"
-echo "LUAD TITAN extraction (CONCH v1.5 @20x/512px -> TITAN 768-d)"
+echo "${DATASET} TITAN extraction (CONCH v1.5 @20x/512px -> TITAN 768-d)"
 echo "Job ${SLURM_JOB_ID:-N/A} | $(hostname) | $(date)"
 echo "================================================"
 
 module load cuda/12.2 2>/dev/null || true
-cd "$PROJECT_DIR" || { echo "ERROR: project dir not found"; exit 1; }
+cd "$PROJECT_DIR" || { echo "ERROR: project dir not found: $PROJECT_DIR"; exit 1; }
+mkdir -p logs
 source .venv/bin/activate
 set -a; source benchmarks/.env; set +a
-[ -z "${AUTOBENCH_TCGA_LUAD_ROOT:-}" ] && { echo "ERROR: AUTOBENCH_TCGA_LUAD_ROOT unset"; exit 1; }
 
-WSI_DIR="${AUTOBENCH_TCGA_LUAD_ROOT}/wsi"
-JOB_DIR="${AUTOBENCH_TCGA_LUAD_ROOT}/trident_output"
+# Resolve WSI dir + trident output dir from the dataset config.
+WSI_DIR=$(python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').wsi_dir)") \
+    || { echo "ERROR: cannot load dataset config '${DATASET}' (check name + AUTOBENCH_*_ROOT in benchmarks/.env)"; exit 1; }
+JOB_DIR=$(python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').output_dir)")
+[ -n "$WSI_DIR" ] && [ -n "$JOB_DIR" ] || { echo "ERROR: could not resolve wsi_dir/output_dir for ${DATASET}"; exit 1; }
 echo "WSI dir:  $WSI_DIR"
 echo "Job dir:  $JOB_DIR"
 nvidia-smi --query-gpu=name,memory.total --format=csv 2>/dev/null || true
@@ -81,9 +80,10 @@ LINK224="$JOB_DIR/20x_224px_0px_overlap/features_titan"
 if [ -d "$SLIDE512" ]; then
     n=$(ls "$SLIDE512"/*.h5 2>/dev/null | wc -l | tr -d ' ')
     echo "TITAN slide features: $n .h5 files in $SLIDE512"
+    mkdir -p "$JOB_DIR/20x_224px_0px_overlap"
     [ -e "$LINK224" ] || ln -s ../20x_512px_0px_overlap/slide_features_titan "$LINK224"
     echo "symlink: $LINK224 -> $(readlink "$LINK224" 2>/dev/null)"
-    echo "Next: sbatch benchmarks/scripts/submit_luad_titan.sh [n_folds]"
+    echo "Next: sbatch benchmarks/scripts/submit_titan.sh ${DATASET} [n_folds]"
 else
     echo "WARNING: $SLIDE512 not found — TITAN extraction did not produce slide features."
     exit 1
