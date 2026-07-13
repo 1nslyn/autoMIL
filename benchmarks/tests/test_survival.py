@@ -714,6 +714,17 @@ class TestNnmilTrainerRiskOrientation:
         # Raw prediction (pre-fix) inverts the metric -- documents the bug.
         assert _ci(opt_pred) < 0.01
 
+    def test_unknown_loss_raises(self):
+        """Mirror the adapters: an unknown/typo'd loss must fail loudly here too,
+        not silently fall through as cox-identity."""
+        import numpy as np
+
+        import autobench.pipeline.clam.survival_train  # noqa: F401  (nnMIL on path)
+        from nnMIL.training.trainers.survival_trainer import _risk_from_preds
+
+        with pytest.raises(ValueError, match="unknown survival loss"):
+            _risk_from_preds(np.array([1.0, 2.0], dtype=np.float32), "coxx")
+
 
 class TestSurvivalCIndexDirection:
     """survival_c_index must rank higher risk as shorter survival (a sign flip

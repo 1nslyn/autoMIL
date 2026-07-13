@@ -74,7 +74,11 @@ def _risk_from_preds(preds, survival_loss):
     """
     if survival_loss in ("mse", "mae"):
         return -preds
-    return preds
+    if survival_loss == "cox":
+        return preds
+    raise ValueError(
+        f"unknown survival loss {survival_loss!r}; expected cox/mse/mae"
+    )
 
 
 class SurvivalTrainer(BaseTrainer):
