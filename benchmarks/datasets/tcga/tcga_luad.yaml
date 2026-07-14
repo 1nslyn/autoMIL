@@ -42,12 +42,17 @@ encoders:
     hoptimus1: 1536
     uni_v2: 1536
 
+clam_models:
+  - clam_mb
+
 nnmil_models:
-  - trans_mil
   - simple_mil
 
 abmil_models:
   - abmil
+
+dtfd_models:
+  - dtfd_mil
 
 # TITAN slide-encoder arm (Framework.TITAN). `head: linear` = frozen linear probe
 # on the 768-d TITAN slide embedding. TITAN *is* the encoder + aggregator (one arm
