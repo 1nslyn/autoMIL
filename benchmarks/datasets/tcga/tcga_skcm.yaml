@@ -19,6 +19,12 @@ tasks:
       0: "wildtype"
       1: "mutant"
     n_classes: 2
+  os:
+    task_type: survival
+    event_col: OS_event
+    time_col: OS_time
+    survival_losses: [cox, nllsurv]
+    nll_bins: 4
 
 split_strategies:
   standard:
@@ -27,6 +33,7 @@ split_strategies:
 
 task_strategy_feasibility:
   nras: ["standard"]
+  os: ["standard"]
 
 slide_id_column: "slide_name"
 slide_id_transform: "strip_svs"
