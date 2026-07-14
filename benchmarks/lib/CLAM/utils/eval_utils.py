@@ -51,8 +51,9 @@ def eval(dataset, args, ckpt_path):
     print('Init Loaders')
     loader = get_simple_loader(dataset)
     patient_results, test_error, auc, df, _ = summary(model, loader, args)
-    print('test_error: ', test_error)
-    print('auc: ', auc)
+    if os.environ.get("AUTOMIL_CERTIFY"):  # val-firewall: seal test from run.log during search
+        print('test_error: ', test_error)
+        print('auc: ', auc)
     return model, patient_results, test_error, auc, df
 
 def summary(model, loader, args):

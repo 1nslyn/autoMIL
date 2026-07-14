@@ -31,8 +31,9 @@ def _accept_margin(meta: dict | None) -> float:
     improvements over a long agentic search.
     """
     try:
-        return float((meta or {}).get("scoring", {}).get("accept_margin", 0.0) or 0.0)
-    except (TypeError, ValueError):
+        raw = ((meta or {}).get("scoring") or {}).get("accept_margin", 0.0)
+        return max(0.0, float(raw or 0.0))   # clamp: a negative δ would invert the gate
+    except (TypeError, ValueError, AttributeError):
         return 0.0
 
 
@@ -62,7 +63,7 @@ def _config_accept_margin(graph_path) -> float | None:
         import yaml
         cfg = yaml.safe_load(config_path.read_text()) or {}
         raw = (cfg.get("scoring") or {}).get("accept_margin")
-        return float(raw) if raw is not None else None
+        return max(0.0, float(raw)) if raw is not None else None   # clamp negative δ
     except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
         logger.warning("Could not read scoring.accept_margin from %s: %s", config_path, exc)
         return None
@@ -173,6 +174,8 @@ class ExperimentGraph:
             self._data["meta"].setdefault(mk, mv if not isinstance(mv, dict) else dict(mv))
         # Backfill accept_margin into a pre-existing scoring block (legacy graphs
         # that predate the Ladder gate) so a predeclared config δ still applies.
+        if not isinstance(self._data["meta"].get("scoring"), dict):
+            self._data["meta"]["scoring"] = dict(defaults["meta"]["scoring"])
         self._data["meta"]["scoring"].setdefault("accept_margin", _default_margin)
         if loaded_from_disk and (missing_top or missing_meta):
             # Top-level missing keys are the more alarming signal (file
@@ -730,7 +733,7 @@ class ExperimentGraph:
                         keep = _accept(composite, p_comp, _accept_margin(self.meta))
                         graph_status = "keep" if keep else "discard"
                     else:
-                        graph_status = "keep" if _accept(composite, 0.0, _accept_margin(self.meta)) else "discard"
+                        graph_status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
                 else:
                     graph_status = "discard"
 
@@ -849,7 +852,7 @@ class ExperimentGraph:
                                 keep = _accept(composite, p_comp, _accept_margin(self.meta))
                                 status = "keep" if keep else "discard"
                             else:
-                                status = "keep" if _accept(composite, 0.0, _accept_margin(self.meta)) else "discard"
+                                status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
                         else:
                             status = raw_status
 

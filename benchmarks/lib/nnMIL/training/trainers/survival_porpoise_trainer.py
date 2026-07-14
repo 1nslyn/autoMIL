@@ -437,9 +437,10 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
             f"{split}_median_time": median_time,
         }
         
-        # Log metrics
-        for key, value in metrics.items():
-            self.logger.info(f"{key}: {value:.4f}" if isinstance(value, float) else f"{key}: {value}")
+        # Log metrics (val-firewall: seal test metrics from run.log during search)
+        if split != 'test' or os.environ.get("AUTOMIL_CERTIFY"):
+            for key, value in metrics.items():
+                self.logger.info(f"{key}: {value:.4f}" if isinstance(value, float) else f"{key}: {value}")
         
         # Save results to CSV if test split (like train_surv_porpoise.py: lines 591-592)
         if split == 'test':

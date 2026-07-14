@@ -91,3 +91,30 @@ def test_persisted_margin_wins_over_config(tmp_path):
     }))
     g = ExperimentGraph(tmp_path / "graph.json")
     assert g.meta["scoring"]["accept_margin"] == 0.09
+
+
+# --- robustness: negative / null margin (review M2, M3) ---------------------
+
+def test_accept_margin_clamps_negative_and_handles_null_scoring():
+    # M2: a negative margin would invert the gate (keep a worse child); clamp to 0.0.
+    assert _accept_margin({"scoring": {"accept_margin": -0.05}}) == 0.0
+    # M3: scoring present-but-null, or accept_margin null, must not crash.
+    assert _accept_margin({"scoring": None}) == 0.0
+    assert _accept_margin({"scoring": {"accept_margin": None}}) == 0.0
+
+
+def test_graph_survives_null_scoring(tmp_path):
+    """M3: a hand-corrupted meta.scoring=null must not crash __init__."""
+    import json
+    (tmp_path / "graph.json").write_text(json.dumps({
+        "schema_version": 2, "meta": {"scoring": None}, "nodes": {}, "technique_stats": {},
+    }))
+    g = ExperimentGraph(tmp_path / "graph.json")   # must not raise
+    assert g.meta["scoring"]["accept_margin"] == 0.0
+
+
+def test_negative_config_margin_clamped(tmp_path):
+    """M2: a negative scoring.accept_margin in config is clamped, never persisted negative."""
+    (tmp_path / "config.yaml").write_text("scoring:\n  accept_margin: -0.1\n")
+    g = ExperimentGraph(tmp_path / "graph.json")
+    assert g.meta["scoring"]["accept_margin"] == 0.0

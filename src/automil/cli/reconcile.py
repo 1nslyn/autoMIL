@@ -106,7 +106,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                         parent = g.get_node(parent_id) if parent_id else None
                         p_comp = parent.get("composite", 0.0) if parent else 0.0
                         composite = gnode["composite"]  # already updated above
-                        gnode["status"] = "keep" if _accept(composite, p_comp, _accept_margin(g.meta)) else "discard"
+                        gnode["status"] = "keep" if _accept(composite, p_comp, _accept_margin(g.meta) if parent else 0.0) else "discard"
                     # else: unknown status value — leave gnode["status"] unchanged
                     # Preserve raw result status for traceability (operator-visible).
                     gnode.setdefault("metadata", {})["result_status"] = raw_result_status

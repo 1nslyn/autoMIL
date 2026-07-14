@@ -34,7 +34,7 @@ def _setup(tmp_path):
         "technique_stats": {},
     }
     (adir / "graph.json").write_text(json.dumps(graph))
-    node_arch = adir / "orchestrator" / "archive" / "node_0001"
+    node_arch = adir / "orchestrator" / "archive" / "node_0001" / "certify"
     node_arch.mkdir(parents=True)
     (node_arch / "certify.json").write_text(
         json.dumps({"held_out": {"test_auc": 0.83, "test_bacc": 0.80}})
@@ -55,8 +55,35 @@ def test_certify_reveals_sealed_held_out_test(tmp_path, monkeypatch):
 
 def test_certify_missing_sidecar_is_graceful(tmp_path, monkeypatch):
     adir = _setup(tmp_path)
-    (adir / "orchestrator" / "archive" / "node_0001" / "certify.json").unlink()
+    (adir / "orchestrator" / "archive" / "node_0001" / "certify" / "certify.json").unlink()
     monkeypatch.chdir(adir.parent)
     result = CliRunner().invoke(main, ["certify"])
     assert result.exit_code == 0, result.output
     assert "no certify.json" in result.output
+
+
+def test_certify_default_matches_canonical_best_on_tie(tmp_path, monkeypatch):
+    """M1: on tied composites, certify's default node matches best_node (D-12: smaller id)."""
+    adir = tmp_path / "automil"
+    adir.mkdir()
+    (adir / "config.yaml").write_text("run:\n  script: train.py\n")
+    (adir / "graph.json").write_text(json.dumps({
+        "schema_version": 2,
+        "meta": {"best_node_id": "node_0001", "scoring": {"accept_margin": 0.0}},
+        "nodes": {
+            "node_0005": {"id": "node_0005", "type": "executed", "status": "keep",
+                          "composite": 0.87, "metrics": {"val_auc": 0.9}},
+            "node_0001": {"id": "node_0001", "type": "executed", "status": "keep",
+                          "composite": 0.87, "metrics": {"val_auc": 0.9}},
+        },
+        "technique_stats": {},
+    }))
+    for nid in ("node_0001", "node_0005"):
+        na = adir / "orchestrator" / "archive" / nid / "certify"
+        na.mkdir(parents=True)
+        (na / "certify.json").write_text(json.dumps({"held_out": {"test_auc": 0.8}}))
+    monkeypatch.chdir(adir.parent)
+    result = CliRunner().invoke(main, ["certify"])   # default: top-1
+    assert result.exit_code == 0, result.output
+    assert "node_0001" in result.output          # D-12: smaller id wins the tie
+    assert "node_0005" not in result.output

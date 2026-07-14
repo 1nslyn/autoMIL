@@ -204,20 +204,23 @@ def train(datasets, cur, args):
     print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))
 
     results_dict, test_error, test_auc, acc_logger = summary(model, test_loader, args.n_classes)
-    print('Test error: {:.4f}, ROC AUC: {:.4f}'.format(test_error, test_auc))
+    if os.environ.get("AUTOMIL_CERTIFY"):  # val-firewall: seal test from run.log during search
+        print('Test error: {:.4f}, ROC AUC: {:.4f}'.format(test_error, test_auc))
 
+    _certify = bool(os.environ.get("AUTOMIL_CERTIFY"))  # val-firewall gate
     for i in range(args.n_classes):
         acc, correct, count = acc_logger.get_summary(i)
-        print('class {}: acc {}, correct {}/{}'.format(i, acc, correct, count))
-
-        if writer:
-            writer.add_scalar('final/test_class_{}_acc'.format(i), acc, 0)
+        if _certify:  # per-class summary is over the TEST loader — seal from run.log
+            print('class {}: acc {}, correct {}/{}'.format(i, acc, correct, count))
+            if writer:
+                writer.add_scalar('final/test_class_{}_acc'.format(i), acc, 0)
 
     if writer:
         writer.add_scalar('final/val_error', val_error, 0)
         writer.add_scalar('final/val_auc', val_auc, 0)
-        writer.add_scalar('final/test_error', test_error, 0)
-        writer.add_scalar('final/test_auc', test_auc, 0)
+        if _certify:
+            writer.add_scalar('final/test_error', test_error, 0)
+            writer.add_scalar('final/test_auc', test_auc, 0)
         writer.close()
     return results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
 

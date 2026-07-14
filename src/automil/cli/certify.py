@@ -1,7 +1,7 @@
 """certify command: reveal the sealed held-out TEST performance ONCE (val-firewall).
 
 During search the experiment tree selects on the VALIDATION composite and test
-metrics are quarantined in a sealed ``archive/<node>/certify.json`` (written by
+metrics are quarantined in a sealed ``archive/<node>/certify/`` subdir (written by
 terminal_writer). ``certify`` is the single, deliberate end-of-run read of that
 test performance for the val-selected winner (or an explicit ``--node`` / top-K)
 — the honest generalization number that must never feed back into the search.
@@ -27,7 +27,9 @@ def _sorted_keep_nodes(graph) -> list[dict]:
         and n.get("type") == "executed"
         and n.get("status") == "keep"
     ]
-    keeps.sort(key=lambda n: (n.get("composite", 0.0), n.get("id", "")), reverse=True)
+    # D-12 tie-break: highest composite first, lexicographically smaller id wins ties
+    # (matches recompute_best / meta.best_node_id so `certify` reports the canonical winner).
+    keeps.sort(key=lambda n: (-float(n.get("composite", 0.0)), n.get("id", "")))
     return keeps
 
 
@@ -77,7 +79,7 @@ def certify(node_id: str | None, top_k: int):
             click.echo(f"  [{nid}] not found in graph.")
             continue
         val_comp = node.get("composite", 0.0)
-        certify_path = archive / nid / "certify.json"
+        certify_path = archive / nid / "certify" / "certify.json"
         if not certify_path.exists():
             click.echo(
                 f"  [{nid}] val_composite={val_comp:.4f}  —  "

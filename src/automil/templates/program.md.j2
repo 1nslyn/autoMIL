@@ -158,3 +158,7 @@ to `result.json`.
 - Orchestrator log: `automil/orchestrator/orchestrator.log`
 - Completion notifications: `automil/orchestrator/completed/<node_id>.json`
 - Graph state: `automil/graph.json`
+- OFF-LIMITS: `automil/orchestrator/archive/<node_id>/certify/` holds the sealed
+  held-out TEST results. Do NOT read it during the loop; doing so reintroduces
+  the selection leak the val-firewall prevents. It is read once, at the end, by
+  `automil certify`.

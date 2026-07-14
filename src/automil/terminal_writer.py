@@ -56,6 +56,37 @@ def _canonicalize(result: dict, termination_reason: str | None = None) -> dict:
     return result
 
 
+def _seal_node_archive(archive_dir: Path, sealed: dict) -> None:
+    """Move every test-bearing artifact into ``archive/<node>/certify/`` (val-firewall).
+
+    Called after result.json is written (val-only) and after fold aggregation has
+    already consumed the per-fold files (the daemon aggregates BEFORE
+    write_terminal_state in both completion paths), so nothing reads them
+    afterward. The ``certify/`` subdir is documented off-limits to the agent and
+    read only by ``automil certify``. Best-effort: a seal failure is logged, never
+    raised, so it cannot break a completion.
+    """
+    sealed_dir = archive_dir / "certify"
+    sealed_dir.mkdir(parents=True, exist_ok=True)
+    if sealed:
+        _atomic_write_json(sealed_dir / "certify.json", sealed)
+    # Per-fold detritus that still carries test: the D-118 fold_*_result.json
+    # (their held_out block) and the detailed results/ tree (predictions.csv,
+    # metrics.json, summary.json). Relocated wholesale so no test copy is left
+    # in the agent-visible node archive.
+    for ff in archive_dir.glob("fold_*_result.json"):
+        try:
+            ff.replace(sealed_dir / ff.name)
+        except OSError as exc:
+            logger.warning("terminal_writer: could not seal %s: %s", ff, exc)
+    results_tree = archive_dir / "results"
+    if results_tree.is_dir():
+        try:
+            results_tree.replace(sealed_dir / "results")
+        except OSError as exc:
+            logger.warning("terminal_writer: could not seal %s: %s", results_tree, exc)
+
+
 def write_terminal_state(
     *,
     node_id: str,
@@ -146,7 +177,7 @@ def write_terminal_state(
                     # completed, budget_killed, cancelled — Ladder-gated dominance
                     graph_status = (
                         "keep"
-                        if _accept(composite, p_comp, _accept_margin(g.meta))
+                        if _accept(composite, p_comp, _accept_margin(g.meta) if parent else 0.0)
                         else "discard"
                     )
 
@@ -204,15 +235,16 @@ def write_terminal_state(
             "terminal_writer: failed to write archive result.json for %s", node_id
         )
 
-    # Step 5b — sealed certify.json sidecar (test metrics + summary; val-firewall).
-    # Not surfaced during search; consumed once by ``automil certify``.
-    if sealed:
-        try:
-            _atomic_write_json(archive_dir / "certify.json", sealed)
-        except Exception:
-            logger.exception(
-                "terminal_writer: failed to write certify.json for %s", node_id
-            )
+    # Step 5b — val-firewall: seal ALL test-bearing artifacts (certify.json +
+    # the per-fold fold_*_result.json / results/ detritus) under the off-limits
+    # archive/<node>/certify/ subdir. The agent-visible node archive is left with
+    # only result.json (val) + run.log. Read once by ``automil certify``.
+    try:
+        _seal_node_archive(archive_dir, sealed)
+    except Exception:
+        logger.exception(
+            "terminal_writer: failed to seal test artifacts for %s", node_id
+        )
 
     # Step 6 — results.tsv (delegated, D-08: partial rows ARE written)
     try:
