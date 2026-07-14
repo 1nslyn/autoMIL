@@ -23,7 +23,8 @@ autoMIL overlays an `automil/` subdirectory onto an existing git repo. It does N
 - Experiments are tracked as a directed tree in `graph.json`, not a flat log
 - Each experiment stores only its changed files (overlay), not the full repo
 - The orchestrator runs experiments in git worktrees, overlaying modified files on a base commit
-- Keep/discard is decided by the framework via single-axis composite-score comparison (child kept iff `child.composite > parent.composite`); the training script reports the composite scalar via `result.json` (see D-200)
+- Keep/discard is decided by the framework via single-axis composite-score comparison, gated by a predeclared Ladder keep-margin (child kept iff `child.composite > parent.composite + accept_margin`; δ defaults to 0.0 in `meta.scoring`, seeded from `config.yaml`'s `scoring.accept_margin`); the composite is the **validation** selection signal (the val-firewall: test never drives selection), reported by the training script via `result.json` (see D-200)
+- Val-firewall: `result.json` `metrics` is validation-only; test metrics go in a sealed `held_out` block that the orchestrator writes to `archive/<node>/certify.json`, quarantined from every agent-facing surface during search and revealed once at the end via `automil certify`
 - `results.tsv` is written solely by the orchestrator from `result.json`, never by train.py
 - `_recover_orphans()` only runs in the daemon loop (`run()`), never on construction (to prevent `status`/`stop` from corrupting live runs)
 - Viz dashboard binds 127.0.0.1 by default; opt in to LAN access via `viz.host` in config.yaml (no auth on the SSE stream)
@@ -86,12 +87,17 @@ uv run automil viz start
 
 ## Result Contract
 
-Training scripts must write `result.json` to their working directory:
+Training scripts must write `result.json` to their working directory. `metrics`
+is the agent-facing **validation** block and `composite` is computed from it (the
+selection signal); test metrics go in a sealed `held_out` block that the
+orchestrator quarantines to `archive/<node>/certify.json` (read once via
+`automil certify`):
 ```json
 {
   "status": "completed",
-  "metrics": {"val_auc": 0.87, "val_bacc": 0.81, "test_auc": 0.87, "test_bacc": 0.83},
-  "composite": 0.85,
+  "metrics": {"val_auc": 0.87, "val_bacc": 0.81},
+  "held_out": {"test_auc": 0.87, "test_bacc": 0.83},
+  "composite": 0.84,
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500
 }

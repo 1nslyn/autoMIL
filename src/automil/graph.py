@@ -46,6 +46,28 @@ def _accept(child_composite: float, parent_composite: float, margin: float = 0.0
     return child_composite > parent_composite + margin
 
 
+def _config_accept_margin(graph_path) -> float | None:
+    """Best-effort read of ``scoring.accept_margin`` from the sibling config.yaml.
+
+    Lets an operator predeclare the Ladder keep-margin δ per-dataset in
+    ``automil/config.yaml`` (``scoring.accept_margin``); a fresh graph seeds its
+    ``meta.scoring.accept_margin`` from it. Returns None when there is no config,
+    the key is absent, or it cannot be parsed as a number (callers fall back to
+    0.0). The graph stays config-agnostic everywhere else.
+    """
+    config_path = Path(graph_path).parent / "config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        import yaml
+        cfg = yaml.safe_load(config_path.read_text()) or {}
+        raw = (cfg.get("scoring") or {}).get("accept_margin")
+        return float(raw) if raw is not None else None
+    except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
+        logger.warning("Could not read scoring.accept_margin from %s: %s", config_path, exc)
+        return None
+
+
 @contextlib.contextmanager
 def locked_update(graph_path: str | Path, *, technique_map: dict[str, str] | None = None):
     """Read-modify-write context manager for graph.json under a fcntl lock.
@@ -114,6 +136,17 @@ class ExperimentGraph:
         # an existing file that's missing keys, log a warning — partial-
         # write corruption silently filled in with defaults would mask
         # real data loss, and operators need a paper trail.
+        # Ladder keep-margin δ: a fresh (or legacy) graph seeds accept_margin from
+        # the sibling config.yaml so an operator can predeclare it per-dataset.
+        # Once persisted in graph.json, the stored value wins over config.
+        _meta = self._data.get("meta")
+        _has_margin = (
+            isinstance(_meta, dict)
+            and isinstance(_meta.get("scoring"), dict)
+            and "accept_margin" in _meta["scoring"]
+        )
+        _cfg_margin = None if _has_margin else _config_accept_margin(self.path)
+        _default_margin = _cfg_margin if _cfg_margin is not None else 0.0
         defaults = {
             "schema_version": 2,
             "meta": {
@@ -126,7 +159,7 @@ class ExperimentGraph:
                 "scoring": {
                     "exploration_weight": 0.005,
                     "novelty_weight": 0.003,
-                    "accept_margin": 0.0,
+                    "accept_margin": _default_margin,
                 },
             },
             "nodes": {},
@@ -138,6 +171,9 @@ class ExperimentGraph:
         missing_meta = [k for k in defaults["meta"] if k not in self._data["meta"]]
         for mk, mv in defaults["meta"].items():
             self._data["meta"].setdefault(mk, mv if not isinstance(mv, dict) else dict(mv))
+        # Backfill accept_margin into a pre-existing scoring block (legacy graphs
+        # that predate the Ladder gate) so a predeclared config δ still applies.
+        self._data["meta"]["scoring"].setdefault("accept_margin", _default_margin)
         if loaded_from_disk and (missing_top or missing_meta):
             # Top-level missing keys are the more alarming signal (file
             # exists but is structurally incomplete). Meta-only gaps are

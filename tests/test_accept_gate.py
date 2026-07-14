@@ -63,3 +63,31 @@ def test_margin_discards_within_noise_child(graph):
                                status="keep", metrics={"composite": 0.82})
     graph._reevaluate_descendants(parent)
     assert graph.get_node(child)["status"] == "discard"   # +0.02 < δ=0.05 → discard
+
+
+# --- config wiring: predeclare δ in config.yaml -----------------------------
+
+def test_accept_margin_seeded_from_sibling_config(tmp_path):
+    """A predeclared scoring.accept_margin in config.yaml seeds a fresh graph."""
+    (tmp_path / "config.yaml").write_text("scoring:\n  accept_margin: 0.03\n")
+    g = ExperimentGraph(tmp_path / "graph.json")
+    assert g.meta["scoring"]["accept_margin"] == 0.03
+
+
+def test_accept_margin_defaults_zero_without_config(tmp_path):
+    g = ExperimentGraph(tmp_path / "graph.json")   # no sibling config.yaml
+    assert g.meta["scoring"]["accept_margin"] == 0.0
+
+
+def test_persisted_margin_wins_over_config(tmp_path):
+    """Once persisted in graph.json, meta.scoring.accept_margin is fixed."""
+    import json
+    (tmp_path / "config.yaml").write_text("scoring:\n  accept_margin: 0.03\n")
+    (tmp_path / "graph.json").write_text(json.dumps({
+        "schema_version": 2,
+        "meta": {"scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003,
+                             "accept_margin": 0.09}},
+        "nodes": {}, "technique_stats": {},
+    }))
+    g = ExperimentGraph(tmp_path / "graph.json")
+    assert g.meta["scoring"]["accept_margin"] == 0.09
