@@ -71,9 +71,17 @@ encoders:
     hoptimus1: 1536
     uni_v2: 1536
 
+clam_models:
+  - clam_mb
+
 nnmil_models:
-  - ab_mil
-  - trans_mil
+  - simple_mil
+
+abmil_models:
+  - abmil
+
+dtfd_models:
+  - dtfd_mil
 
 extraction:
   magnification: 20
