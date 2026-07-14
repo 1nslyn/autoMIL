@@ -393,9 +393,10 @@ class ClassificationTrainer(BaseTrainer):
         # Add prefix
         prefixed_metrics = {f"{split}_{k}": v for k, v in metrics.items()}
         
-        # Log metrics
-        for key, value in prefixed_metrics.items():
-            self.logger.info(f"{key}: {value:.4f}")
+        # Log metrics (val-firewall: seal test metrics from run.log during search)
+        if split != 'test' or os.environ.get("AUTOMIL_CERTIFY"):
+            for key, value in prefixed_metrics.items():
+                self.logger.info(f"{key}: {value:.4f}")
         
         # Save results to CSV if test split
         if split == 'test':

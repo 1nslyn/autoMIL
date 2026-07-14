@@ -25,8 +25,8 @@ from autobench.pipeline.clam.runner import _write_fold_result_json
 def _minimal_result(
     test_auc: float = 0.85,
     test_bacc: float = 0.82,
-    val_auc: float = 0.86,
-    val_bacc: float = 0.81,
+    val_auc: float = 0.90,
+    val_bacc: float = 0.84,
     elapsed: int = 100,
     vram: int = 4500,
 ) -> dict:
@@ -55,11 +55,15 @@ def test_writes_fold_file_when_results_dir_set(tmp_path, monkeypatch):
     payload = json.loads(fold_file.read_text())
     assert payload["fold_index"] == 2
     assert payload["status"] == "completed"
-    assert payload["metrics"]["test_auc"] == pytest.approx(0.85)
-    assert payload["metrics"]["test_bacc"] == pytest.approx(0.82)
-    assert payload["metrics"]["val_auc"] == pytest.approx(0.86)
-    assert payload["metrics"]["val_bacc"] == pytest.approx(0.81)
-    assert payload["composite"] == pytest.approx((0.85 + 0.82) / 2.0)
+    # val-firewall: metrics is val-only (agent-facing); test lives in sealed held_out
+    assert payload["metrics"]["val_auc"] == pytest.approx(0.90)
+    assert payload["metrics"]["val_bacc"] == pytest.approx(0.84)
+    assert "test_auc" not in payload["metrics"]
+    assert "test_bacc" not in payload["metrics"]
+    assert payload["held_out"]["test_auc"] == pytest.approx(0.85)
+    assert payload["held_out"]["test_bacc"] == pytest.approx(0.82)
+    # composite is the VALIDATION selection signal (val sum 1.74 != test sum 1.67)
+    assert payload["composite"] == pytest.approx((0.90 + 0.84) / 2.0)
     assert payload["elapsed_seconds"] == 100
     assert payload["peak_vram_mb"] == 4500
 
@@ -99,10 +103,11 @@ def test_metric_keys_mapped_correctly_from_dict_shape(tmp_path, monkeypatch):
     _write_fold_result_json(1, result)
 
     payload = json.loads((tmp_path / "fold_1_result.json").read_text())
-    assert payload["metrics"]["test_auc"] == pytest.approx(0.91)
-    assert payload["metrics"]["test_bacc"] == pytest.approx(0.88)
+    assert payload["held_out"]["test_auc"] == pytest.approx(0.91)
+    assert payload["held_out"]["test_bacc"] == pytest.approx(0.88)
     assert payload["metrics"]["val_auc"] == pytest.approx(0.89)
     assert payload["metrics"]["val_bacc"] == pytest.approx(0.85)
+    assert "test_auc" not in payload["metrics"]
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +153,7 @@ def test_handles_missing_metrics_gracefully(tmp_path, monkeypatch):
     _write_fold_result_json(0, result)  # should not raise
 
     payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-    assert payload["metrics"]["test_auc"] == pytest.approx(0.0)
-    assert payload["metrics"]["test_bacc"] == pytest.approx(0.0)
+    assert payload["held_out"]["test_auc"] == pytest.approx(0.0)
+    assert payload["held_out"]["test_bacc"] == pytest.approx(0.0)
     assert payload["metrics"]["val_auc"] == pytest.approx(0.0)
     assert payload["metrics"]["val_bacc"] == pytest.approx(0.0)

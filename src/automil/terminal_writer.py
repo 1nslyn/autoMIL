@@ -56,6 +56,37 @@ def _canonicalize(result: dict, termination_reason: str | None = None) -> dict:
     return result
 
 
+def _seal_node_archive(archive_dir: Path, sealed: dict) -> None:
+    """Move every test-bearing artifact into ``archive/<node>/certify/`` (val-firewall).
+
+    Called after result.json is written (val-only) and after fold aggregation has
+    already consumed the per-fold files (the daemon aggregates BEFORE
+    write_terminal_state in both completion paths), so nothing reads them
+    afterward. The ``certify/`` subdir is documented off-limits to the agent and
+    read only by ``automil certify``. Best-effort: a seal failure is logged, never
+    raised, so it cannot break a completion.
+    """
+    sealed_dir = archive_dir / "certify"
+    sealed_dir.mkdir(parents=True, exist_ok=True)
+    if sealed:
+        _atomic_write_json(sealed_dir / "certify.json", sealed)
+    # Per-fold detritus that still carries test: the D-118 fold_*_result.json
+    # (their held_out block) and the detailed results/ tree (predictions.csv,
+    # metrics.json, summary.json). Relocated wholesale so no test copy is left
+    # in the agent-visible node archive.
+    for ff in archive_dir.glob("fold_*_result.json"):
+        try:
+            ff.replace(sealed_dir / ff.name)
+        except OSError as exc:
+            logger.warning("terminal_writer: could not seal %s: %s", ff, exc)
+    results_tree = archive_dir / "results"
+    if results_tree.is_dir():
+        try:
+            results_tree.replace(sealed_dir / "results")
+        except OSError as exc:
+            logger.warning("terminal_writer: could not seal %s: %s", results_tree, exc)
+
+
 def write_terminal_state(
     *,
     node_id: str,
@@ -109,10 +140,17 @@ def write_terminal_state(
             "error": f"result.json failed schema validation: {msg}",
         }
 
+    # Val-firewall: quarantine test. ``held_out`` (test metrics) and the full
+    # ``summary`` (which embeds test) are split into a sealed certify.json sidecar
+    # and stripped from every agent-facing artifact (graph node, completed/,
+    # results.tsv, archive/result.json). Read once by ``automil certify``.
+    sealed = {k: result[k] for k in ("held_out", "summary") if k in result}
+    result = {k: v for k, v in result.items() if k not in ("held_out", "summary")}
+
     raw_status = result.get("status", "crash")
 
     # Step 3 — Graph node update via locked_update (D-10, D-01)
-    from automil.graph import locked_update
+    from automil.graph import locked_update, _accept, _accept_margin
     try:
         # _technique_map is the internal attribute on ExperimentGraph
         _tm = getattr(graph, "_technique_map", None)
@@ -136,8 +174,12 @@ def write_terminal_state(
                 elif raw_status == "crash":
                     graph_status = "crash"    # failure — not a keep/discard candidate
                 else:
-                    # completed, budget_killed, cancelled — compare composite
-                    graph_status = "keep" if composite > p_comp else "discard"
+                    # completed, budget_killed, cancelled — Ladder-gated dominance
+                    graph_status = (
+                        "keep"
+                        if _accept(composite, p_comp, _accept_margin(g.meta) if parent else 0.0)
+                        else "discard"
+                    )
 
                 gnode["type"] = "executed"
                 gnode["status"] = graph_status
@@ -191,6 +233,17 @@ def write_terminal_state(
     except Exception:
         logger.exception(
             "terminal_writer: failed to write archive result.json for %s", node_id
+        )
+
+    # Step 5b — val-firewall: seal ALL test-bearing artifacts (certify.json +
+    # the per-fold fold_*_result.json / results/ detritus) under the off-limits
+    # archive/<node>/certify/ subdir. The agent-visible node archive is left with
+    # only result.json (val) + run.log. Read once by ``automil certify``.
+    try:
+        _seal_node_archive(archive_dir, sealed)
+    except Exception:
+        logger.exception(
+            "terminal_writer: failed to seal test artifacts for %s", node_id
         )
 
     # Step 6 — results.tsv (delegated, D-08: partial rows ARE written)

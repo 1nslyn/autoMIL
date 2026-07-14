@@ -53,7 +53,9 @@ Required fields:
   "status": "completed",
   "metrics": {
     "val_auc": 0.870,
-    "val_bacc": 0.810,
+    "val_bacc": 0.810
+  },
+  "held_out": {
     "test_auc": 0.872,
     "test_bacc": 0.830
   },
@@ -124,10 +126,16 @@ The orchestrator provides these to your training script:
 
 ## Keep/Discard Rules
 
-The framework computes keep/discard via Pareto dominance:
-- **Keep**: composite is strictly better than parent AND no regression on
-  test_auc or test_bacc compared to parent
-- **Discard**: equal or worse on any metric
+The framework decides keep/discard on the single **validation** composite , 
+never test:
+- **Keep**: child's composite beats the parent's by more than the
+  predeclared `accept_margin` δ (`graph.json` `meta.scoring.accept_margin`,
+  default 0.0 = strict dominance)
+- **Discard**: composite is within the margin of, or worse than, the parent
+
+Optimize the **validation** composite only. Test is sealed into a
+`held_out` block and must NOT be referenced, inspected, or optimized during
+the loop, it is revealed exactly once, at the end, via `automil certify`.
 
 The training script does not make this decision. It only writes raw metrics
 to `result.json`.

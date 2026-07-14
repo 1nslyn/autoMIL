@@ -22,6 +22,53 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _accept_margin(meta: dict | None) -> float:
+    """Predeclared Ladder keep-margin δ from ``meta.scoring.accept_margin``.
+
+    δ=0.0 (the default) reproduces plain composite dominance. A δ>0 requires a
+    child to beat its parent's validation composite by more than the margin
+    before it is kept — a Ladder-style gate against promoting within-noise
+    improvements over a long agentic search.
+    """
+    try:
+        raw = ((meta or {}).get("scoring") or {}).get("accept_margin", 0.0)
+        return max(0.0, float(raw or 0.0))   # clamp: a negative δ would invert the gate
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+
+
+def _accept(child_composite: float, parent_composite: float, margin: float = 0.0) -> bool:
+    """Keep a child iff its composite beats the parent's by more than ``margin``.
+
+    The single keep/discard predicate, shared by every decision site (the live
+    terminal writer, descendant re-evaluation, and both reconcile paths) so the
+    Ladder margin is applied uniformly. margin=0.0 → strict dominance.
+    """
+    return child_composite > parent_composite + margin
+
+
+def _config_accept_margin(graph_path) -> float | None:
+    """Best-effort read of ``scoring.accept_margin`` from the sibling config.yaml.
+
+    Lets an operator predeclare the Ladder keep-margin δ per-dataset in
+    ``automil/config.yaml`` (``scoring.accept_margin``); a fresh graph seeds its
+    ``meta.scoring.accept_margin`` from it. Returns None when there is no config,
+    the key is absent, or it cannot be parsed as a number (callers fall back to
+    0.0). The graph stays config-agnostic everywhere else.
+    """
+    config_path = Path(graph_path).parent / "config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        import yaml
+        cfg = yaml.safe_load(config_path.read_text()) or {}
+        raw = (cfg.get("scoring") or {}).get("accept_margin")
+        return max(0.0, float(raw)) if raw is not None else None   # clamp negative δ
+    except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
+        logger.warning("Could not read scoring.accept_margin from %s: %s", config_path, exc)
+        return None
+
+
 @contextlib.contextmanager
 def locked_update(graph_path: str | Path, *, technique_map: dict[str, str] | None = None):
     """Read-modify-write context manager for graph.json under a fcntl lock.
@@ -90,6 +137,17 @@ class ExperimentGraph:
         # an existing file that's missing keys, log a warning — partial-
         # write corruption silently filled in with defaults would mask
         # real data loss, and operators need a paper trail.
+        # Ladder keep-margin δ: a fresh (or legacy) graph seeds accept_margin from
+        # the sibling config.yaml so an operator can predeclare it per-dataset.
+        # Once persisted in graph.json, the stored value wins over config.
+        _meta = self._data.get("meta")
+        _has_margin = (
+            isinstance(_meta, dict)
+            and isinstance(_meta.get("scoring"), dict)
+            and "accept_margin" in _meta["scoring"]
+        )
+        _cfg_margin = None if _has_margin else _config_accept_margin(self.path)
+        _default_margin = _cfg_margin if _cfg_margin is not None else 0.0
         defaults = {
             "schema_version": 2,
             "meta": {
@@ -102,6 +160,7 @@ class ExperimentGraph:
                 "scoring": {
                     "exploration_weight": 0.005,
                     "novelty_weight": 0.003,
+                    "accept_margin": _default_margin,
                 },
             },
             "nodes": {},
@@ -113,6 +172,11 @@ class ExperimentGraph:
         missing_meta = [k for k in defaults["meta"] if k not in self._data["meta"]]
         for mk, mv in defaults["meta"].items():
             self._data["meta"].setdefault(mk, mv if not isinstance(mv, dict) else dict(mv))
+        # Backfill accept_margin into a pre-existing scoring block (legacy graphs
+        # that predate the Ladder gate) so a predeclared config δ still applies.
+        if not isinstance(self._data["meta"].get("scoring"), dict):
+            self._data["meta"]["scoring"] = dict(defaults["meta"]["scoring"])
+        self._data["meta"]["scoring"].setdefault("accept_margin", _default_margin)
         if loaded_from_disk and (missing_top or missing_meta):
             # Top-level missing keys are the more alarming signal (file
             # exists but is structurally incomplete). Meta-only gaps are
@@ -381,10 +445,10 @@ class ExperimentGraph:
                 if child.get("status") not in ("keep", "discard"):
                     continue
                 c_comp = child.get("composite", 0)
-                # D-200 Option B: composite-only dominance. Framework no longer
-                # encodes a named-key monotonicity guard; the composite is
-                # consumer-computed and is the single dominance signal.
-                keep = c_comp > p_comp
+                # D-200 Option B: composite-only dominance, gated by the Ladder
+                # keep-margin (δ=0.0 → strict dominance). The composite is the
+                # consumer-computed validation selection signal (val-firewall).
+                keep = _accept(c_comp, p_comp, _accept_margin(self.meta))
                 child["status"] = "keep" if keep else "discard"
                 child["parent_delta"] = c_comp - p_comp
                 stack.append(child["id"])
@@ -665,11 +729,11 @@ class ExperimentGraph:
                     parent_node = self.get_node(parent_id_check) if parent_id_check else None
                     if parent_node:
                         p_comp = parent_node.get("composite", 0)
-                        # D-200 Option B: composite-only dominance.
-                        keep = composite > p_comp
+                        # D-200 Option B: composite-only dominance + Ladder margin.
+                        keep = _accept(composite, p_comp, _accept_margin(self.meta))
                         graph_status = "keep" if keep else "discard"
                     else:
-                        graph_status = "keep" if composite > 0 else "discard"
+                        graph_status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
                 else:
                     graph_status = "discard"
 
@@ -784,11 +848,11 @@ class ExperimentGraph:
                         if raw_status == "completed":
                             if parent:
                                 p_comp = parent.get("composite", 0)
-                                # D-200 Option B: composite-only dominance.
-                                keep = composite > p_comp
+                                # D-200 Option B: composite-only dominance + Ladder margin.
+                                keep = _accept(composite, p_comp, _accept_margin(self.meta))
                                 status = "keep" if keep else "discard"
                             else:
-                                status = "keep" if composite > 0 else "discard"
+                                status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
                         else:
                             status = raw_status
 

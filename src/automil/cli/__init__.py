@@ -48,6 +48,7 @@ from automil.cli import cancel  # noqa: E402,F401
 from automil.cli import dequeue  # noqa: E402,F401  (OPS-02 / D-04)
 from automil.cli import cell    # noqa: E402,F401  (CAP-06 / D-125)
 from automil.cli import cells   # noqa: E402,F401  (REC-04 / D-15)
+from automil.cli import certify  # noqa: E402,F401  (val-firewall — one-time held-out test read)
 from automil.cli import check  # noqa: E402,F401
 from automil.cli import control  # noqa: E402,F401
 from automil.cli import gate    # noqa: E402,F401  (GTE-01..06 / D-145)

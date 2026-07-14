@@ -1,4 +1,4 @@
-# autoMIL Configuration — Ovarian Cancer HRD Prediction
+# autoMIL Configuration, Ovarian Cancer HRD Prediction
 # This overlay configures autoMIL to improve MIL models on the ovarian HRD task.
 
 project:
@@ -27,13 +27,13 @@ encoders:
 baseline:
   model: "clam_mb"
   framework: "CLAM"
-  test_auc: 0.0
+  val_auc: 0.0
   composite: 0.814
 
 metrics:
   primary: "composite"
-  composite_formula: "(test_auc + test_bacc) / 2"
-  track: ["val_auc", "val_bacc", "test_auc", "test_bacc"]
+  composite_formula: "(val_auc + val_bacc) / 2"
+  track: ["val_auc", "val_bacc"]
 
 training:
   learning_rate: 3e-4

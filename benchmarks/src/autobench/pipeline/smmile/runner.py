@@ -127,9 +127,10 @@ def run_smmile_experiment(
         json.dump(summary, f, indent=2)
 
     print(f"\n  Summary: {summary_path}")
-    for metric in ("auc_roc", "balanced_accuracy"):
-        if metric in summary["test"]:
-            m = summary["test"][metric]
-            print(f"    test_{metric}: {m['mean']:.3f} [{m['ci_low']:.3f}, {m['ci_high']:.3f}]")
+    if os.environ.get("AUTOMIL_CERTIFY"):  # val-firewall: seal test from stdout during search
+        for metric in ("auc_roc", "balanced_accuracy"):
+            if metric in summary["test"]:
+                m = summary["test"][metric]
+                print(f"    test_{metric}: {m['mean']:.3f} [{m['ci_low']:.3f}, {m['ci_high']:.3f}]")
 
     return summary

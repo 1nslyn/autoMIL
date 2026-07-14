@@ -38,7 +38,9 @@ Required fields:
   "status": "completed",
   "metrics": {
     "val_auc": 0.870,
-    "val_bacc": 0.810,
+    "val_bacc": 0.810
+  },
+  "held_out": {
     "test_auc": 0.872,
     "test_bacc": 0.830
   },
@@ -69,14 +71,14 @@ Run `automil check` to verify everything is configured correctly.
 
 **Prerequisites:** `automil orchestrator start`
 
-The loop is **Research → Diagnose → Plan → Execute** — propose real
+The loop is **Research → Diagnose → Plan → Execute**, propose real
 architectural change grounded in a named failure mode and recent literature,
 NOT a hyperparameter sweep.
 
-**LOOP FOREVER — one batch =**
+**LOOP FOREVER, one batch =**
 
 1. **RESEARCH.** Delegate a research sub-agent (WebSearch + WebFetch) for
-   current-year methods on this model class + the current bottleneck. Pick 1–2
+   current-year methods on this model class + the current bottleneck. Pick 1-2
    tractable drop-ins (no full rewrites / data-format changes). Log title +
    arXiv id in `learnings.md`.
 2. **DIAGNOSE.** Read `graph.json` + recent results + `learnings.md`; name the
@@ -88,17 +90,17 @@ NOT a hyperparameter sweep.
    architecture · regularization · hp · data · ensemble). Aim **≥50% structural**
    (architecture/ensemble); run `automil portfolio` and rebalance if it reports
    BELOW TARGET before executing.
-4. **EXECUTE.** `automil rank`, then implement and submit — **prefer the
+4. **EXECUTE.** `automil rank`, then implement and submit, **prefer the
    variant-registry path**:
    a. Variant of a registered parent: add `automil/variants/<parent>/<name>.py`,
       select it in `config.yaml`, then `automil submit` (committed code, no cleanup).
    b. Free-mode edit: edit files, `automil submit --node <id> --desc "..." --files
       <changed files>`, then selectively restore ONLY those files
       (`git restore --source=HEAD -- <each-file>`). Never bulk-restore.
-   **Saturate every GPU** — submit until the VRAM bin-packer is full, not one run
+   **Saturate every GPU**, submit until the VRAM bin-packer is full, not one run
    per GPU.
 5. **WAIT** for completion events (Monitor; do not poll). The activity-gated
-   budget bills only the time you are acting — keep researching the next batch
+   budget bills only the time you are acting, keep researching the next batch
    while this one trains.
 6. **RECONCILE + LEARN.** `automil reconcile`; read results; update
    `learnings.md`; commit winners. Loop back to RESEARCH.
@@ -108,7 +110,7 @@ NOT a hyperparameter sweep.
 ### Architecture modifications are encouraged
 
 Beyond hyperparameter tuning and loss/augmentation changes, actively look for
-deficiencies in the model architecture and improve them — modifying attention
+deficiencies in the model architecture and improve them, modifying attention
 mechanisms, adding layers, changing pooling strategies, or building custom
 architectures inline in the training script. **Architecture improvements are
 preferred over pure hyperparameter tuning when possible.** The portfolio gate
@@ -136,10 +138,16 @@ The orchestrator provides these to your training script:
 
 ## Keep/Discard Rules
 
-The framework computes keep/discard via Pareto dominance:
-- **Keep**: composite is strictly better than parent AND no regression on
-  test_auc or test_bacc compared to parent
-- **Discard**: equal or worse on any metric
+The framework decides keep/discard on the single **validation** composite , 
+never test:
+- **Keep**: child's composite beats the parent's by more than the
+  predeclared `accept_margin` δ (`graph.json` `meta.scoring.accept_margin`,
+  default 0.0 = strict dominance)
+- **Discard**: composite is within the margin of, or worse than, the parent
+
+Optimize the **validation** composite only. Test is sealed into a
+`held_out` block and must NOT be referenced, inspected, or optimized during
+the loop, it is revealed exactly once, at the end, via `automil certify`.
 
 The training script does not make this decision. It only writes raw metrics
 to `result.json`.
@@ -150,3 +158,7 @@ to `result.json`.
 - Orchestrator log: `automil/orchestrator/orchestrator.log`
 - Completion notifications: `automil/orchestrator/completed/<node_id>.json`
 - Graph state: `automil/graph.json`
+- OFF-LIMITS: `automil/orchestrator/archive/<node_id>/certify/` holds the sealed
+  held-out TEST results. Do NOT read it during the loop; doing so reintroduces
+  the selection leak the val-firewall prevents. It is read once, at the end, by
+  `automil certify`.

@@ -50,26 +50,29 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
     test_m = result.get("test_metrics", {}) or {}
     val_m = result.get("val_metrics", {}) or {}
     if "c_index" in test_m:
-        # Survival: composite is the test concordance index.
-        metrics = {
-            "val_c_index":  _unwrap(val_m.get("c_index")),
-            "test_c_index": _unwrap(test_m.get("c_index")),
-        }
-        composite = metrics["test_c_index"]
+        # Survival: composite is the VALIDATION concordance index (selection signal).
+        # Test lives in a sealed ``held_out`` block — never surfaced to the agent
+        # during search; read once by ``automil certify`` (val-firewall).
+        metrics = {"val_c_index": _unwrap(val_m.get("c_index"))}
+        held_out = {"test_c_index": _unwrap(test_m.get("c_index"))}
+        composite = metrics["val_c_index"]
     else:
         metrics = {
-            "val_auc":   _unwrap(val_m.get("auc_roc")),
-            "val_bacc":  _unwrap(val_m.get("balanced_accuracy")),
+            "val_auc":  _unwrap(val_m.get("auc_roc")),
+            "val_bacc": _unwrap(val_m.get("balanced_accuracy")),
+        }
+        held_out = {
             "test_auc":  _unwrap(test_m.get("auc_roc")),
             "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
         }
-        composite = (metrics["test_auc"] + metrics["test_bacc"]) / 2.0
+        composite = (metrics["val_auc"] + metrics["val_bacc"]) / 2.0
 
     payload = {
         "fold_index":      fold_index,
         "fold_count":      fold_count,
         "status":          "completed",
         "metrics":         metrics,
+        "held_out":        held_out,
         "composite":       composite,
         "elapsed_seconds": int(result.get("elapsed_seconds", 0) or 0),
         "peak_vram_mb":    int(result.get("peak_vram_mb", 0) or 0),
