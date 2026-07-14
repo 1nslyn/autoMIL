@@ -95,9 +95,11 @@ def parse_args() -> argparse.Namespace:
 def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     """Convert autobench summary dict to autoMIL result.json format.
 
-    Survival summaries (detected by a ``c_index`` entry under ``test``) set
-    the composite to the test concordance index; classification keeps the
-    ``(test_auc + test_bacc) / 2`` composite.
+    The composite is the VALIDATION selection signal (autoMIL keep/discard and
+    UCB select on it): survival summaries (``c_index`` entry) use the validation
+    concordance index; classification uses ``(val_auc + val_bacc) / 2``. Test
+    metrics stay in ``metrics`` for now (quarantined in a later step) and are
+    never the selection signal.
     """
     test = summary.get("test", {})
     val = summary.get("val", {})
@@ -113,27 +115,30 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     if "c_index" in test:
         test_ci = test.get("c_index", {}).get("mean", 0.0)
         val_ci = val.get("c_index", {}).get("mean", 0.0)
-        composite = test_ci
-        metrics = {
-            "val_c_index": round(val_ci, 4),
-            "test_c_index": round(test_ci, 4),
-        }
+        composite = val_ci
+        metrics = {"val_c_index": round(val_ci, 4)}
+        held_out = {"test_c_index": round(test_ci, 4)}
     else:
         test_auc = test.get("auc_roc", {}).get("mean", 0.0)
         test_bacc = test.get("balanced_accuracy", {}).get("mean", 0.0)
         val_auc = val.get("auc_roc", {}).get("mean", 0.0)
         val_bacc = val.get("balanced_accuracy", {}).get("mean", 0.0)
-        composite = (test_auc + test_bacc) / 2
+        composite = (val_auc + val_bacc) / 2
         metrics = {
             "val_auc": round(val_auc, 4),
             "val_bacc": round(val_bacc, 4),
+        }
+        held_out = {
             "test_auc": round(test_auc, 4),
             "test_bacc": round(test_bacc, 4),
         }
 
+    # ``metrics`` is agent-facing (val only); ``held_out`` (test) + ``summary``
+    # are sealed into certify.json by terminal_writer — never seen during search.
     return {
         "status": "completed",
         "metrics": metrics,
+        "held_out": held_out,
         "composite": round(composite, 4),
         "elapsed_seconds": round(elapsed, 1),
         "peak_vram_mb": round(peak_vram_mb),
@@ -334,12 +339,14 @@ def main() -> None:
         json.dump(result, f, indent=2)
 
     print(f"\nExperiment complete in {elapsed:.0f}s")
-    if "test_c_index" in result["metrics"]:
-        print(f"  test_c_index={result['metrics']['test_c_index']:.4f}  "
+    # val-firewall: surface only the validation selection signal to stdout/run.log;
+    # test lives in the sealed held_out block (result['held_out']).
+    if "val_c_index" in result["metrics"]:
+        print(f"  val_c_index={result['metrics']['val_c_index']:.4f}  "
               f"composite={result['composite']:.4f}")
     else:
-        print(f"  test_auc={result['metrics']['test_auc']:.4f}  "
-              f"test_bacc={result['metrics']['test_bacc']:.4f}  "
+        print(f"  val_auc={result['metrics']['val_auc']:.4f}  "
+              f"val_bacc={result['metrics']['val_bacc']:.4f}  "
               f"composite={result['composite']:.4f}")
     print(f"  result.json written to {os.path.abspath('result.json')}")
 

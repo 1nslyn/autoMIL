@@ -51,6 +51,7 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
 
     composites: list[float] = []
     metrics_by_key: dict[str, list[float]] = {}
+    held_out_by_key: dict[str, list[float]] = {}
     elapsed_total = 0
     peak_vram = 0
 
@@ -67,6 +68,14 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
             except (TypeError, ValueError):
                 logger.warning("Skipping non-numeric metric %s=%r in %s", k, v, ff)
                 continue
+        # held_out (test) aggregated in parallel but kept sealed — terminal_writer
+        # routes it to certify.json, never into agent-facing artifacts (val-firewall).
+        for k, v in data.get("held_out", {}).items():
+            try:
+                held_out_by_key.setdefault(k, []).append(float(v))
+            except (TypeError, ValueError):
+                logger.warning("Skipping non-numeric held_out %s=%r in %s", k, v, ff)
+                continue
         elapsed_total += int(data.get("elapsed_seconds", 0) or 0)
         peak_vram = max(peak_vram, int(data.get("peak_vram_mb", 0) or 0))
 
@@ -78,6 +87,7 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         "status": "completed" if n == expected_fold_count else "partial",
         "composite": sum(composites) / n,
         "metrics": {k: sum(v) / len(v) for k, v in metrics_by_key.items()},
+        "held_out": {k: sum(v) / len(v) for k, v in held_out_by_key.items()},
         "partial_folds": n,
         "expected_folds": expected_fold_count,
         "elapsed_seconds": elapsed_total,
@@ -90,6 +100,7 @@ def _crashed_payload(expected_fold_count: int) -> dict:
         "status": "crash",  # D-06: canonical value (was "crashed")
         "composite": 0.0,
         "metrics": {},
+        "held_out": {},
         "partial_folds": 0,
         "expected_folds": expected_fold_count,
         "elapsed_seconds": 0,

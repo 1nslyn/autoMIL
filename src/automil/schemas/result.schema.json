@@ -9,6 +9,12 @@
     "composite": {"type": "number"},
     "metrics": {
       "type": "object",
+      "description": "Agent-facing metrics (validation only under the val-firewall).",
+      "additionalProperties": {"type": "number"}
+    },
+    "held_out": {
+      "type": "object",
+      "description": "Sealed test metrics — quarantined from search, read once by certify. Never surfaced to the agent (val-firewall).",
       "additionalProperties": {"type": "number"}
     },
     "status": {

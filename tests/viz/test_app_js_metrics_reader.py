@@ -46,18 +46,22 @@ def test_app_js_pre_d200_pattern_absent(app_js_text: str):
     )
 
 
-def test_app_js_metric_fields_array_unchanged(app_js_text: str):
-    """CONTEXT D-200 deferred: metricFields stays autobench-shaped for v1."""
-    # All four autobench-shaped entries present.
+def test_app_js_metric_fields_val_only(app_js_text: str):
+    """Val-firewall: the dashboard surfaces validation metrics only; test is
+    sealed (certify.json) and must never appear in the viz during search."""
+    # Validation metrics ARE shown (the selection signal the tree optimizes).
     for label_pair in (
-        "['test_auc', 'Test AUC']",
-        "['test_bacc', 'Test BACC']",
         "['val_auc', 'Val AUC']",
         "['val_bacc', 'Val BACC']",
     ):
         assert label_pair in app_js_text, (
-            f"metricFields entry {label_pair!r} missing from app.js. "
-            "Per CONTEXT.md D-200 deferred section, the metricFields array "
-            "stays autobench-shaped for v1; full generic-metric rendering "
-            "is deferred to post-v1."
+            f"metricFields entry {label_pair!r} missing from app.js. The viz "
+            "must surface the validation metrics that drive keep/discard."
+        )
+    # Test metrics must NOT be surfaced (val-firewall quarantine).
+    for forbidden in ("'Test AUC'", "'Test BACC'", "['test_auc'", "['test_bacc'"):
+        assert forbidden not in app_js_text, (
+            f"Found test metric {forbidden!r} in app.js metricFields. Under the "
+            "val-firewall, test is sealed in certify.json and must not appear "
+            "in the dashboard during search."
         )

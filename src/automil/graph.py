@@ -22,6 +22,30 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _accept_margin(meta: dict | None) -> float:
+    """Predeclared Ladder keep-margin δ from ``meta.scoring.accept_margin``.
+
+    δ=0.0 (the default) reproduces plain composite dominance. A δ>0 requires a
+    child to beat its parent's validation composite by more than the margin
+    before it is kept — a Ladder-style gate against promoting within-noise
+    improvements over a long agentic search.
+    """
+    try:
+        return float((meta or {}).get("scoring", {}).get("accept_margin", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _accept(child_composite: float, parent_composite: float, margin: float = 0.0) -> bool:
+    """Keep a child iff its composite beats the parent's by more than ``margin``.
+
+    The single keep/discard predicate, shared by every decision site (the live
+    terminal writer, descendant re-evaluation, and both reconcile paths) so the
+    Ladder margin is applied uniformly. margin=0.0 → strict dominance.
+    """
+    return child_composite > parent_composite + margin
+
+
 @contextlib.contextmanager
 def locked_update(graph_path: str | Path, *, technique_map: dict[str, str] | None = None):
     """Read-modify-write context manager for graph.json under a fcntl lock.
@@ -102,6 +126,7 @@ class ExperimentGraph:
                 "scoring": {
                     "exploration_weight": 0.005,
                     "novelty_weight": 0.003,
+                    "accept_margin": 0.0,
                 },
             },
             "nodes": {},
@@ -381,10 +406,10 @@ class ExperimentGraph:
                 if child.get("status") not in ("keep", "discard"):
                     continue
                 c_comp = child.get("composite", 0)
-                # D-200 Option B: composite-only dominance. Framework no longer
-                # encodes a named-key monotonicity guard; the composite is
-                # consumer-computed and is the single dominance signal.
-                keep = c_comp > p_comp
+                # D-200 Option B: composite-only dominance, gated by the Ladder
+                # keep-margin (δ=0.0 → strict dominance). The composite is the
+                # consumer-computed validation selection signal (val-firewall).
+                keep = _accept(c_comp, p_comp, _accept_margin(self.meta))
                 child["status"] = "keep" if keep else "discard"
                 child["parent_delta"] = c_comp - p_comp
                 stack.append(child["id"])
@@ -665,11 +690,11 @@ class ExperimentGraph:
                     parent_node = self.get_node(parent_id_check) if parent_id_check else None
                     if parent_node:
                         p_comp = parent_node.get("composite", 0)
-                        # D-200 Option B: composite-only dominance.
-                        keep = composite > p_comp
+                        # D-200 Option B: composite-only dominance + Ladder margin.
+                        keep = _accept(composite, p_comp, _accept_margin(self.meta))
                         graph_status = "keep" if keep else "discard"
                     else:
-                        graph_status = "keep" if composite > 0 else "discard"
+                        graph_status = "keep" if _accept(composite, 0.0, _accept_margin(self.meta)) else "discard"
                 else:
                     graph_status = "discard"
 
@@ -784,11 +809,11 @@ class ExperimentGraph:
                         if raw_status == "completed":
                             if parent:
                                 p_comp = parent.get("composite", 0)
-                                # D-200 Option B: composite-only dominance.
-                                keep = composite > p_comp
+                                # D-200 Option B: composite-only dominance + Ladder margin.
+                                keep = _accept(composite, p_comp, _accept_margin(self.meta))
                                 status = "keep" if keep else "discard"
                             else:
-                                status = "keep" if composite > 0 else "discard"
+                                status = "keep" if _accept(composite, 0.0, _accept_margin(self.meta)) else "discard"
                         else:
                             status = raw_status
 

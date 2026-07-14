@@ -213,7 +213,10 @@ def train_fold(
     if wb_run is not None:
         import wandb
 
-        wandb.log({f"final_test/{k}": v for k, v in test_metrics.items()})
+        # Val-firewall: test metrics are sealed during search. Only surface
+        # them on the wandb dashboard for an explicit certify pass.
+        if os.environ.get("AUTOMIL_CERTIFY"):
+            wandb.log({f"final_test/{k}": v for k, v in test_metrics.items()})
         wandb.log({f"final_val/{k}": v for k, v in val_metrics.items()})
         wandb.finish()
 

@@ -224,9 +224,11 @@ function renderDetailPanel() {
 
     // Metrics
     var metricsHtml = '';
+    // val-firewall: the dashboard shows only validation metrics (the selection
+    // signal). Test is sealed in certify.json and never surfaced during search.
     var metricFields = [
-        ['test_auc', 'Test AUC'], ['test_bacc', 'Test BACC'],
-        ['val_auc', 'Val AUC'], ['val_bacc', 'Val BACC']
+        ['val_auc', 'Val AUC'], ['val_bacc', 'Val BACC'],
+        ['val_c_index', 'Val C-index']
     ];
     metricFields.forEach(function (pair) {
         // D-200 / DEC-04: metrics live under node.metrics post-Phase-8; defensive fallback for legacy graph.json returns {}.

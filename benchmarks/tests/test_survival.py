@@ -450,9 +450,10 @@ class TestSurvivalComposite:
         }
         _write_fold_result_json(0, result)
         payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-        assert payload["composite"] == 0.7
-        assert payload["metrics"]["test_c_index"] == 0.7
+        assert payload["composite"] == 0.6  # val_c_index (selection signal), not test's 0.7
+        assert payload["held_out"]["test_c_index"] == 0.7  # sealed (val-firewall)
         assert payload["metrics"]["val_c_index"] == 0.6
+        assert "test_c_index" not in payload["metrics"]
 
     def test_fold_result_classification_unchanged(self, tmp_path, monkeypatch):
         monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
@@ -463,8 +464,8 @@ class TestSurvivalComposite:
         }
         _write_fold_result_json(0, result)
         payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-        assert payload["composite"] == pytest.approx((0.8 + 0.7) / 2)
-        assert payload["metrics"]["test_auc"] == 0.8
+        assert payload["composite"] == pytest.approx((0.75 + 0.65) / 2)  # val (selection signal)
+        assert payload["held_out"]["test_auc"] == 0.8  # sealed (val-firewall)
 
 
 # ---------------------------------------------------------------------------

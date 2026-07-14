@@ -153,8 +153,10 @@ Regardless of pattern, the handler must:
 
 The contract is `automil/schemas/result.schema.json` (Draft 2020-12).
 Required: `composite` (number). Optional: `metrics` (dict of
-str -> number), `status` (one of completed, crash, budget_killed, cancelled),
-`elapsed_seconds`, `peak_vram_mb`, `fold_results`, `partial`.
+str -> number; validation-only under the val-firewall), `held_out` (dict of
+str -> number; sealed test metrics, quarantined from search and revealed only
+via `automil certify`), `status` (one of completed, crash, budget_killed,
+cancelled), `elapsed_seconds`, `peak_vram_mb`, `fold_results`, `partial`.
 `additionalProperties: true` means consumers may extend.
 
 Minimum valid payload:
@@ -170,7 +172,9 @@ Full payload example (autobench / CCRCC consumer):
   "composite": 0.845,
   "metrics": {
     "val_auc": 0.87,
-    "val_bacc": 0.81,
+    "val_bacc": 0.81
+  },
+  "held_out": {
     "test_auc": 0.87,
     "test_bacc": 0.83
   },
@@ -186,8 +190,12 @@ references this schema's location. Schema path in the error:
 `see automil/schemas/result.schema.json`.
 
 The `composite` field is the single scalar used by the experiment tree for
-ranking (UCB scoring, Pareto dominance). Higher is always better. For loss
-minimization, negate: `"composite": -val_loss`.
+ranking and keep/discard (UCB scoring, Ladder margin). It is the
+**validation** selection signal, never test. The framework trusts it as an
+opaque number and never recomputes or inspects it; test metrics belong in
+`held_out` instead, sealed away from search and revealed once via
+`automil certify`. Higher is always better. For loss minimization, negate:
+`"composite": -val_loss`.
 
 ## Required env vars
 

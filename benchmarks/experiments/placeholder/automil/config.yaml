@@ -1,9 +1,9 @@
-# autoMIL Configuration — Placeholder Dataset
+# autoMIL Configuration, Placeholder Dataset
 # Copy this template and fill in the values for your third dataset.
 
 project:
   name: "placeholder"
-  description: "Third dataset — TBD"
+  description: "Third dataset, TBD"
 
 task:
   name: "example_task"
@@ -27,13 +27,13 @@ encoders:
 baseline:
   model: "clam_mb"
   framework: "CLAM"
-  test_auc: 0.0
+  val_auc: 0.0
   composite: 0.0
 
 metrics:
   primary: "composite"
-  composite_formula: "(test_auc + test_bacc) / 2"
-  track: ["val_auc", "val_bacc", "test_auc", "test_bacc"]
+  composite_formula: "(val_auc + val_bacc) / 2"
+  track: ["val_auc", "val_bacc"]
 
 training:
   learning_rate: 3e-4
