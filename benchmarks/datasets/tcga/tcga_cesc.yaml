@@ -44,12 +44,17 @@ encoders:
     hoptimus1: 1536
     uni_v2: 1536
 
+clam_models:
+  - clam_mb
+
 nnmil_models:
-  - trans_mil
   - simple_mil
 
 abmil_models:
   - abmil
+
+dtfd_models:
+  - dtfd_mil
 
 titan:
   head: linear
