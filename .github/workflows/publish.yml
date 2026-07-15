@@ -1,0 +1,65 @@
+name: Publish to PyPI
+
+# Tokenless publishing via PyPI Trusted Publishing (OpenID Connect).
+# No API tokens or secrets are stored in the repo: PyPI verifies the run's
+# short-lived OIDC identity against the publisher you register at
+# https://pypi.org/manage/account/publishing/
+#
+# Register the pending publisher with these values:
+#   PyPI Project Name : automil
+#   Owner             : leoyin1127
+#   Repository name   : autoMIL
+#   Workflow name     : publish.yml
+#   Environment name  : pypi
+#
+# Then cut a GitHub Release to publish.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags so hatch-vcs can derive the version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Validate distribution metadata
+        run: uvx twine check dist/*
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/automil
+    permissions:
+      id-token: write # REQUIRED for OIDC Trusted Publishing (no token needed)
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,0 +1,44 @@
+cff-version: 1.2.0
+title: "autoMIL: Autonomous Agent-Driven Multiple Instance Learning for Computational Pathology"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Shuolin
+    family-names: Yin
+    email: leo.yin@mail.utoronto.ca
+  - given-names: Yeonwoo
+    family-names: Seo
+  - given-names: Jun
+    family-names: Ma
+    # corresponding author
+repository-code: "https://github.com/leoyin1127/autoMIL"
+url: "https://automil.org"
+abstract: >-
+  autoMIL is an autonomous experiment framework for Multiple Instance Learning
+  in computational pathology. It overlays onto existing ML project repositories,
+  enabling coding agents to iteratively improve models through persistent
+  experimentation, knowledge accumulation, and multi-branch exploration.
+keywords:
+  - multiple-instance-learning
+  - computational-pathology
+  - whole-slide-imaging
+  - automl
+  - autonomous-agents
+  - experiment-tracking
+license: Apache-2.0
+version: 0.1.0
+# Once the preprint is on arXiv, uncomment and fill in to make the paper the
+# preferred citation (GitHub will surface it in the "Cite this repository" box):
+# preferred-citation:
+#   type: article
+#   title: "autoMIL: <final paper title>"
+#   authors:
+#     - given-names: Shuolin
+#       family-names: Yin
+#     - given-names: Yeonwoo
+#       family-names: Seo
+#     - given-names: Jun
+#       family-names: Ma
+#   year: 2026
+#   doi: 10.48550/arXiv.XXXXX.XXXXX
+#   url: "https://arxiv.org/abs/XXXXX.XXXXX"
