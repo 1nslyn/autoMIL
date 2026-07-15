@@ -82,6 +82,11 @@ class Runner:
             rel = src_file.relative_to(overlay_dir)
             if rel in metadata_files:
                 continue
+            # Val-firewall (Scope B): never copy the sealed test vault into a
+            # worktree. certify/ is born in the archive dir, and a resubmit
+            # overlays the parent node's archive, so exclude its whole subtree.
+            if rel.parts and rel.parts[0] == "certify":
+                continue
             dst = (worktree_path / rel).resolve()
             try:
                 dst.relative_to(wt_resolved)

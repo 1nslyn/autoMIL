@@ -91,6 +91,31 @@ class TestWorktreeLifecycle:
         assert (wt_path / "configs" / "result.json").read_text() == '{"config": true}\n'
         runner.cleanup_worktree(wt_path)
 
+    def test_overlay_excludes_certify_vault(self, runner, project_repo):
+        """Val-firewall (Scope B): apply_overlay must never copy the sealed
+        certify/ vault (held-out test) into a worktree. A resubmit overlays the
+        parent node's archive dir, which now holds a born-sealed certify/."""
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        overlay_dir = project_repo / "orchestrator" / "archive" / "node_certify"
+        certify = overlay_dir / "certify"
+        (certify / "results").mkdir(parents=True)
+        (certify / "certify.json").write_text('{"held_out": {"test_auc": 0.9}}')
+        (certify / "results" / "summary.json").write_text('{"test": {"auc": 0.9}}')
+        (certify / "fold_0_result.json").write_text('{"held_out": {"test_auc": 0.9}}')
+        (overlay_dir / "train.py").write_text("print('real overlay')\n")
+        wt_path = runner.create_worktree(base_commit=base, node_id="node_certify")
+        runner.apply_overlay(wt_path, overlay_dir)
+        # Non-certify overlay files are still applied.
+        assert (wt_path / "train.py").read_text() == "print('real overlay')\n"
+        # The sealed test vault is NOT copied into the worktree.
+        assert not (wt_path / "certify").exists(), (
+            "sealed certify/ (held-out test) must never be copied into a worktree"
+        )
+        runner.cleanup_worktree(wt_path)
+
     def test_prune_stale_worktrees(self, runner, project_repo):
         base = subprocess.run(
             ["git", "rev-parse", "HEAD"],
