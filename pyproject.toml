@@ -9,11 +9,15 @@ description = "Autonomous agent-driven MIL model improvement for computational p
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
+# All authors listed name-only so they share the single `Author` field, in order
+# (mixing name+email would split them across Author / Author-email). Contact goes
+# in `maintainers` below.
 authors = [
-    { name = "Shuolin Yin", email = "leo.yin@mail.utoronto.ca" },
+    { name = "Shuolin Yin" },
     { name = "Yeonwoo Seo" },
     { name = "Jun Ma" },
 ]
+maintainers = [{ name = "Shuolin Yin", email = "leo.yin@mail.utoronto.ca" }]
 keywords = [
     "multiple-instance-learning",
     "computational-pathology",
