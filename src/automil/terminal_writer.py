@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -56,35 +57,71 @@ def _canonicalize(result: dict, termination_reason: str | None = None) -> dict:
     return result
 
 
-def _seal_node_archive(archive_dir: Path, sealed: dict) -> None:
-    """Move every test-bearing artifact into ``archive/<node>/certify/`` (val-firewall).
+def _seal_stray(src: Path, dest: Path) -> None:
+    """Relocate a stray test artifact from the node-archive root into certify/.
 
-    Called after result.json is written (val-only) and after fold aggregation has
-    already consumed the per-fold files (the daemon aggregates BEFORE
-    write_terminal_state in both completion paths), so nothing reads them
-    afterward. The ``certify/`` subdir is documented off-limits to the agent and
-    read only by ``automil certify``. Best-effort: a seal failure is logged, never
-    raised, so it cannot break a completion.
+    The invariant this must restore: nothing test-bearing is left at the
+    agent-visible node-archive root. ``Path.replace`` cannot rename onto a
+    non-empty directory (ENOTEMPTY), and under born-sealing ``certify/`` usually
+    already holds the born-sealed copy (e.g. ``certify/results`` always exists for
+    the CLAM detail tree). So: if certify/ has no copy yet, move the stray in;
+    otherwise the root stray is a bypass duplicate and is removed (certify/ is
+    authoritative under born-sealing). Best-effort: logs, never raises.
+    """
+    if not dest.exists():
+        try:
+            src.replace(dest)  # atomic move into certify/ (file or directory)
+            return
+        except OSError as exc:
+            # Leave the stray rather than destroy the only copy; the caller's
+            # ERROR log already flags the (should-never-happen) bypass.
+            logger.warning("terminal_writer: could not relocate stray %s: %s", src, exc)
+            return
+    # certify/ already holds the born-sealed copy → the root stray is a duplicate.
+    try:
+        if src.is_dir():
+            shutil.rmtree(src, ignore_errors=True)
+        elif src.exists():
+            src.unlink()
+    except OSError as exc:
+        logger.warning("terminal_writer: could not remove stray duplicate %s: %s", src, exc)
+
+
+def _seal_node_archive(archive_dir: Path, sealed: dict) -> None:
+    """Write the sealed test sidecar (certify.json) into ``archive/<node>/certify/``.
+
+    Val-firewall (Scope B): test-bearing artifacts are **born-sealed** — the
+    orchestrator points AUTOMIL_RESULTS_DIR at ``archive/<node>/certify/`` so the
+    per-fold writer, the ``results/`` detail tree, and the raw result.json write
+    there directly, and ``collect_result`` copies its raw result.json there too.
+    This writer therefore only has to drop ``certify.json`` (the held_out + summary
+    sidecar) alongside them. The ``certify/`` subdir is documented off-limits to
+    the agent and read only by ``automil certify``. Best-effort: a seal failure is
+    logged, never raised, so it cannot break a completion.
+
+    The stray sweep below is a regression backstop: under born-sealing the
+    node-archive root holds no test artifact, so a non-empty sweep means a writer
+    bypassed AUTOMIL_RESULTS_DIR during the run — an integrity problem that
+    completion-time cleanup cannot retroactively undo, hence logged at ERROR. It
+    still restores the invariant that matters: nothing test-bearing is left at the
+    agent-visible root (see _seal_stray). Best-effort: never raises.
     """
     sealed_dir = archive_dir / "certify"
     sealed_dir.mkdir(parents=True, exist_ok=True)
     if sealed:
         _atomic_write_json(sealed_dir / "certify.json", sealed)
-    # Per-fold detritus that still carries test: the D-118 fold_*_result.json
-    # (their held_out block) and the detailed results/ tree (predictions.csv,
-    # metrics.json, summary.json). Relocated wholesale so no test copy is left
-    # in the agent-visible node archive.
-    for ff in archive_dir.glob("fold_*_result.json"):
-        try:
-            ff.replace(sealed_dir / ff.name)
-        except OSError as exc:
-            logger.warning("terminal_writer: could not seal %s: %s", ff, exc)
-    results_tree = archive_dir / "results"
-    if results_tree.is_dir():
-        try:
-            results_tree.replace(sealed_dir / "results")
-        except OSError as exc:
-            logger.warning("terminal_writer: could not seal %s: %s", results_tree, exc)
+
+    strays: list[Path] = list(archive_dir.glob("fold_*_result.json"))
+    if (archive_dir / "results").is_dir():
+        strays.append(archive_dir / "results")
+    if strays:
+        logger.error(
+            "terminal_writer: born-sealing bypassed for %s — test artifact(s) at "
+            "node-archive root: %s (a writer ignored AUTOMIL_RESULTS_DIR); sealing",
+            archive_dir.name, [s.name for s in strays],
+        )
+        for s in strays:
+            _seal_stray(s, sealed_dir / s.name)
 
 
 def write_terminal_state(

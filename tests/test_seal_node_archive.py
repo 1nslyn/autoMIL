@@ -3,6 +3,8 @@ per-fold test subtree into archive/<node>/certify/, leaving the agent-visible
 node archive test-free."""
 from __future__ import annotations
 
+import json
+
 from automil.terminal_writer import _seal_node_archive
 
 
@@ -40,3 +42,30 @@ def test_seal_handles_no_test_gracefully(tmp_path):
     _seal_node_archive(tmp_path, {})
     assert (tmp_path / "certify").is_dir()
     assert not (tmp_path / "certify" / "certify.json").exists()  # nothing to seal
+
+
+def test_seal_backstop_leaves_root_test_free_when_certify_already_born_sealed(tmp_path):
+    """F1 regression: under born-sealing, certify/results already exists (the CLAM
+    detail tree is born there). If a bypassing writer ALSO leaks results/ + a fold
+    file to the agent-visible node-archive ROOT, the backstop must still leave the
+    root test-free — Path.replace onto the non-empty certify/results raises
+    ENOTEMPTY, so the naive move silently failed and the leak survived."""
+    node = tmp_path
+    # Born-sealed reality: certify/ already holds the real per-fold + results tree.
+    sealed = node / "certify"
+    (sealed / "results").mkdir(parents=True)
+    (sealed / "results" / "summary.json").write_text('{"test": {"auc": 0.9}}')   # born-sealed
+    (sealed / "fold_0_result.json").write_text('{"held_out": {"test_auc": 0.9}}')  # born-sealed
+    # A bypassing/legacy writer leaks test-bearing artifacts to the AGENT-VISIBLE root.
+    (node / "results").mkdir()
+    (node / "results" / "summary.json").write_text('{"test": {"auc": 0.8}}')       # LEAK
+    (node / "fold_0_result.json").write_text('{"held_out": {"test_auc": 0.8}}')     # LEAK
+
+    _seal_node_archive(node, {"held_out": {"test_auc": 0.9}})
+
+    # The agent-visible root is left test-free — no stray survives.
+    assert not (node / "results").exists(), "stray results/ leaked at the agent-visible root"
+    assert not list(node.glob("fold_*_result.json")), "stray fold file leaked at the root"
+    # The born-sealed certify/ copies are preserved (not clobbered by the strays).
+    assert json.loads((sealed / "results" / "summary.json").read_text())["test"]["auc"] == 0.9
+    assert json.loads((sealed / "fold_0_result.json").read_text())["held_out"]["test_auc"] == 0.9

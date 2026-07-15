@@ -844,7 +844,15 @@ class ExperimentOrchestrator:
         env["AUTOMIL_GPU"] = "0"
         env["AUTOMIL_DESC"] = spec.get("description", "")
         env["AUTOMIL_NODE_ID"] = node_id
-        env["AUTOMIL_RESULTS_DIR"] = str(archive.resolve())
+        # Val-firewall (Scope B): born-seal every test-bearing training artifact.
+        # AUTOMIL_RESULTS_DIR is the sealed subdir, so fold_*_result.json (the
+        # per-fold writer), results/ (framework detail tree), and the SIGTERM
+        # flush all write directly into archive/<node>/certify/ — never the
+        # agent-visible node-archive root. Daemon-side readers repoint to
+        # certify/ in step. Off-limits to the agent; read once by `automil certify`.
+        _sealed = (archive / "certify").resolve()
+        _sealed.mkdir(parents=True, exist_ok=True)
+        env["AUTOMIL_RESULTS_DIR"] = str(_sealed)
 
         # Phase 4 (D-120): inject fold count so SIGTERM handler in the training
         # script can read it via automil.runtime_helpers.get_fold_count().
@@ -1479,26 +1487,31 @@ class ExperimentOrchestrator:
                 }
 
         if result is None:
-            # D-03 (REC-01): try fold aggregation from archive BEFORE synthesising
-            # from log heuristics. If the process was SIGKILLed before the flush
-            # handler could run, fold files may still exist in the archive even
-            # without a result.json.
-            fold_files = list(archive.glob("fold_*_result.json"))
+            # D-03 (REC-01): try fold aggregation BEFORE synthesising from log
+            # heuristics. If the process was SIGKILLed before the flush handler
+            # could run, fold files may still exist even without a result.json.
+            # Val-firewall (Scope B): fold_*_result.json are born-sealed under
+            # archive/<node>/certify/ (AUTOMIL_RESULTS_DIR), so recovery both
+            # reads and re-writes there — the raw aggregated result.json (which
+            # carries held_out) never lands in the agent-visible node-archive root.
+            sealed = archive / "certify"
+            fold_files = list(sealed.glob("fold_*_result.json"))
             if fold_files:
                 from automil.cells.reconcile import aggregate_folds
                 expected = self._read_fold_count_for_node(node_id)
-                result = aggregate_folds(archive, expected)
+                result = aggregate_folds(sealed, expected)
                 reason = "timeout" if self._timed_out.get(node_id) else "sigkill"
                 result["termination_reason"] = reason   # D-05 (REC-03)
-                # Write atomically to archive so _collect_result finds it on retry.
+                # Write atomically into certify/ (sealed) so a retry finds it.
                 import tempfile as _tempfile
+                sealed.mkdir(parents=True, exist_ok=True)
                 _tmp_fd, _tmp_path = _tempfile.mkstemp(
-                    dir=str(archive), suffix=".tmp"
+                    dir=str(sealed), suffix=".tmp"
                 )
                 try:
                     with os.fdopen(_tmp_fd, "w") as _fh:
                         _fh.write(json.dumps(result, indent=2) + "\n")
-                    os.replace(_tmp_path, str(archive / "result.json"))
+                    os.replace(_tmp_path, str(sealed / "result.json"))
                 except Exception:
                     try:
                         os.unlink(_tmp_path)

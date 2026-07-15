@@ -140,18 +140,22 @@ def reconcile_budget_kill(
 
     Args:
         node_id:              Graph node id of the budget-killed experiment.
-        archive_dir:          Parent directory; fold files at archive_dir/node_id/.
+        archive_dir:          Parent directory; fold files born-sealed at
+                              archive_dir/node_id/certify/ (Scope B val-firewall).
         graph:                ExperimentGraph instance (unused in stub — Plan 04-08).
         expected_fold_count:  K from AUTOMIL_FOLD_COUNT env / config (D-120).
 
     Returns:
         result.json payload dict with metadata.budget_killed=True.
     """
-    node_archive = archive_dir / node_id
+    # Val-firewall (Scope B): fold_*_result.json are born-sealed under
+    # archive/<node>/certify/ (AUTOMIL_RESULTS_DIR), so budget-kill reconciliation
+    # aggregates from there — never the agent-visible node-archive root.
+    node_archive = archive_dir / node_id / "certify"
     payload = aggregate_folds(node_archive, expected_fold_count)
     payload.setdefault("metadata", {})["budget_killed"] = True
     # D-10 (REC-02): archive result.json is written solely by terminal_writer._atomic_write_json.
-    # The mkdir call stays — archive dirs must exist before terminal_writer writes into them.
+    # The mkdir call stays — the sealed dir must exist before aggregation/terminal_writer.
     node_archive.mkdir(parents=True, exist_ok=True)
     logger.info(
         "reconcile_budget_kill %s: status=%s partial_folds=%d/%d composite=%.4f",

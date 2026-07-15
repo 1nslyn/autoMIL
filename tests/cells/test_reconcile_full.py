@@ -40,7 +40,11 @@ def _write_fold(
     composite: float = 0.80,
     fold_count: int = 5,
 ) -> None:
-    """Write a well-formed fold_<idx>_result.json into node_archive."""
+    """Write a well-formed fold_<idx>_result.json into node_archive/certify/ (Scope B).
+
+    Born-sealed: reconcile_budget_kill aggregates from archive/<node>/certify/."""
+    sealed = node_archive / "certify"
+    sealed.mkdir(parents=True, exist_ok=True)
     payload = {
         "fold_index": idx,
         "fold_count": fold_count,
@@ -55,7 +59,7 @@ def _write_fold(
         "elapsed_seconds": 1,
         "peak_vram_mb": 1000,
     }
-    (node_archive / f"fold_{idx}_result.json").write_text(json.dumps(payload))
+    (sealed / f"fold_{idx}_result.json").write_text(json.dumps(payload))
 
 
 # ---------------------------------------------------------------------------
