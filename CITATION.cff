@@ -3,10 +3,14 @@ title: "autoMIL: Autonomous Agent-Driven Multiple Instance Learning for Computat
 message: "If you use this software, please cite it as below."
 type: software
 authors:
-  - given-names: Leo
+  - given-names: Shuolin
     family-names: Yin
-    email: leo.yin1127@gmail.com
-  # TODO(leo): add co-authors here before publishing the preprint
+    email: leo.yin@mail.utoronto.ca
+  - given-names: Yeonwoo
+    family-names: Seo
+  - given-names: Jun
+    family-names: Ma
+    # corresponding author
 repository-code: "https://github.com/leoyin1127/autoMIL"
 url: "https://automil.org"
 abstract: >-
@@ -29,8 +33,12 @@ version: 0.1.0
 #   type: article
 #   title: "autoMIL: <final paper title>"
 #   authors:
-#     - given-names: Leo
+#     - given-names: Shuolin
 #       family-names: Yin
+#     - given-names: Yeonwoo
+#       family-names: Seo
+#     - given-names: Jun
+#       family-names: Ma
 #   year: 2026
 #   doi: 10.48550/arXiv.XXXXX.XXXXX
 #   url: "https://arxiv.org/abs/XXXXX.XXXXX"

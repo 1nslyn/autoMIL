@@ -9,7 +9,11 @@ description = "Autonomous agent-driven MIL model improvement for computational p
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
-authors = [{ name = "Leo Yin", email = "leo.yin1127@gmail.com" }]
+authors = [
+    { name = "Shuolin Yin", email = "leo.yin@mail.utoronto.ca" },
+    { name = "Yeonwoo Seo" },
+    { name = "Jun Ma" },
+]
 keywords = [
     "multiple-instance-learning",
     "computational-pathology",
