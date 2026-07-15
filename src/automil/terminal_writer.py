@@ -57,34 +57,42 @@ def _canonicalize(result: dict, termination_reason: str | None = None) -> dict:
 
 
 def _seal_node_archive(archive_dir: Path, sealed: dict) -> None:
-    """Move every test-bearing artifact into ``archive/<node>/certify/`` (val-firewall).
+    """Write the sealed test sidecar (certify.json) into ``archive/<node>/certify/``.
 
-    Called after result.json is written (val-only) and after fold aggregation has
-    already consumed the per-fold files (the daemon aggregates BEFORE
-    write_terminal_state in both completion paths), so nothing reads them
-    afterward. The ``certify/`` subdir is documented off-limits to the agent and
-    read only by ``automil certify``. Best-effort: a seal failure is logged, never
-    raised, so it cannot break a completion.
+    Val-firewall (Scope B): test-bearing artifacts are **born-sealed** — the
+    orchestrator points AUTOMIL_RESULTS_DIR at ``archive/<node>/certify/`` so the
+    per-fold writer, the ``results/`` detail tree, and the raw result.json write
+    there directly, and ``collect_result`` copies its raw result.json there too.
+    This writer therefore only has to drop ``certify.json`` (the held_out + summary
+    sidecar) alongside them. The ``certify/`` subdir is documented off-limits to
+    the agent and read only by ``automil certify``. Best-effort: a seal failure is
+    logged, never raised, so it cannot break a completion.
+
+    The stray sweep below is a regression backstop: under born-sealing the
+    node-archive root holds no test artifact, so a non-empty sweep means a writer
+    bypassed AUTOMIL_RESULTS_DIR. It is logged at WARNING (completion-time
+    relocation cannot close the during-run window it implies — treat it as a
+    signal, not a fix) and relocated as best-effort cleanup.
     """
     sealed_dir = archive_dir / "certify"
     sealed_dir.mkdir(parents=True, exist_ok=True)
     if sealed:
         _atomic_write_json(sealed_dir / "certify.json", sealed)
-    # Per-fold detritus that still carries test: the D-118 fold_*_result.json
-    # (their held_out block) and the detailed results/ tree (predictions.csv,
-    # metrics.json, summary.json). Relocated wholesale so no test copy is left
-    # in the agent-visible node archive.
-    for ff in archive_dir.glob("fold_*_result.json"):
-        try:
-            ff.replace(sealed_dir / ff.name)
-        except OSError as exc:
-            logger.warning("terminal_writer: could not seal %s: %s", ff, exc)
-    results_tree = archive_dir / "results"
-    if results_tree.is_dir():
-        try:
-            results_tree.replace(sealed_dir / "results")
-        except OSError as exc:
-            logger.warning("terminal_writer: could not seal %s: %s", results_tree, exc)
+
+    strays: list[Path] = list(archive_dir.glob("fold_*_result.json"))
+    if (archive_dir / "results").is_dir():
+        strays.append(archive_dir / "results")
+    if strays:
+        logger.warning(
+            "terminal_writer: born-sealing bypassed for %s — test artifact(s) at "
+            "node-archive root: %s (a writer ignored AUTOMIL_RESULTS_DIR); relocating",
+            archive_dir.name, [s.name for s in strays],
+        )
+        for s in strays:
+            try:
+                s.replace(sealed_dir / s.name)
+            except OSError as exc:
+                logger.warning("terminal_writer: could not seal %s: %s", s, exc)
 
 
 def write_terminal_state(

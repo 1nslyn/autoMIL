@@ -113,14 +113,22 @@ class Runner:
                     target.unlink()
 
     def collect_result(self, worktree_path: Path, archive_dir: Path) -> dict | None:
-        """Copy result.json from worktree to archive. Returns parsed result or None."""
+        """Persist the worktree result.json and return the parsed payload (or None).
+
+        Val-firewall (Scope B): the raw result.json carries the sealed ``held_out``
+        (test) block, so the durable copy is written into the off-limits
+        ``archive/<node>/certify/`` subdir, never the agent-visible node-archive
+        root. terminal_writer is the sole writer of the root ``result.json`` and
+        strips test before writing it. The raw dict is still returned (held_out
+        intact) so terminal_writer can route held_out into certify.json.
+        """
         result_file = worktree_path / "result.json"
         if not result_file.exists():
             return None
 
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        dst = archive_dir / "result.json"
-        shutil.copy2(result_file, dst)
+        sealed_dir = archive_dir / "certify"
+        sealed_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(result_file, sealed_dir / "result.json")
 
         return json.loads(result_file.read_text())
 

@@ -297,7 +297,10 @@ def test_handle_completion_with_cap_cancel_reason_calls_reconcile(tmp_path: Path
     # Also write archive/<node>/spec.json (for fallback path)
     (node_archive / "spec.json").write_text(json.dumps(spec_data, indent=2))
 
-    # Write 2 fold files (partial 2-of-5)
+    # Write 2 fold files (partial 2-of-5) — born-sealed under certify/ (Scope B):
+    # the cap reconcile path aggregates fold files from archive/<node>/certify/.
+    sealed = node_archive / "certify"
+    sealed.mkdir(parents=True, exist_ok=True)
     for i in range(2):
         fold_data = {
             "fold_index": i,
@@ -308,7 +311,7 @@ def test_handle_completion_with_cap_cancel_reason_calls_reconcile(tmp_path: Path
             "elapsed_seconds": 400,
             "peak_vram_mb": 4500,
         }
-        (node_archive / f"fold_{i}_result.json").write_text(json.dumps(fold_data, indent=2))
+        (sealed / f"fold_{i}_result.json").write_text(json.dumps(fold_data, indent=2))
 
     # Set up a real graph with the node in running state
     graph_path = tmp_path / "automil" / "graph.json"

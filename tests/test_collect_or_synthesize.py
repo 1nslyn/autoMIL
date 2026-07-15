@@ -15,7 +15,13 @@ import pytest
 
 
 def _write_fold(archive: Path, idx: int, composite: float = 0.80) -> None:
-    """Write a well-formed fold result JSON into archive/."""
+    """Write a well-formed fold result JSON into archive/certify/ (born-sealed, Scope B).
+
+    The orchestrator points AUTOMIL_RESULTS_DIR at archive/<node>/certify/, so
+    per-fold artifacts live there and _collect_or_synthesize_result reads them from
+    certify/ (never the agent-visible node-archive root)."""
+    sealed = archive / "certify"
+    sealed.mkdir(parents=True, exist_ok=True)
     payload = {
         "fold_index": idx,
         "fold_count": 5,
@@ -25,7 +31,7 @@ def _write_fold(archive: Path, idx: int, composite: float = 0.80) -> None:
         "elapsed_seconds": 100,
         "peak_vram_mb": 4000,
     }
-    (archive / f"fold_{idx}_result.json").write_text(json.dumps(payload))
+    (sealed / f"fold_{idx}_result.json").write_text(json.dumps(payload))
 
 
 def _make_daemon_stub(tmp_path: Path, timed_out: dict | None = None):

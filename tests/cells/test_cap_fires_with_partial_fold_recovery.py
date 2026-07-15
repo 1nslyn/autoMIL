@@ -46,19 +46,23 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
 
     # 2. Write a synthetic training script that:
     #    a. registers the SIGTERM handler (from automil.runtime_helpers)
-    #    b. writes 3 fold files (fold_0, fold_1, fold_2) in its CWD
+    #    b. writes 3 fold files (fold_0, fold_1, fold_2) into AUTOMIL_RESULTS_DIR
     #    c. writes a _ready marker after the 3 folds
     #    d. sleeps 30s to give the parent time to SIGTERM it
     #
-    # IMPORTANT: The SIGTERM handler reads fold files from Path.cwd() and
-    # writes result.json to Path.cwd(). We set cwd=node_archive so that
-    # the handler aggregates the fold files the script writes there.
+    # IMPORTANT (Scope B born-sealed): the SIGTERM handler reads fold files from
+    # and writes result.json to AUTOMIL_RESULTS_DIR, which the orchestrator points
+    # at archive/<node>/certify/. We set it here so the handler aggregates the
+    # sealed fold files the script writes there — never the node-archive root.
     script = textwrap.dedent("""
         import json, os, time, sys
         from pathlib import Path
         from automil.runtime_helpers import register_sigterm_flush
         register_sigterm_flush()
-        cwd = Path.cwd()
+        # Born-sealed (Scope B): fold artifacts + the SIGTERM flush target
+        # AUTOMIL_RESULTS_DIR (= archive/<node>/certify/), never the node root.
+        sealed = Path(os.environ["AUTOMIL_RESULTS_DIR"])
+        sealed.mkdir(parents=True, exist_ok=True)
         for i, comp in enumerate([0.80, 0.82, 0.84]):
             payload = {
                 "fold_index": i, "fold_count": 5, "status": "completed",
@@ -66,17 +70,21 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
                             "test_auc": comp, "test_bacc": comp},
                 "composite": comp, "elapsed_seconds": 1, "peak_vram_mb": 1000,
             }
-            (cwd / f"fold_{i}_result.json").write_text(json.dumps(payload))
+            (sealed / f"fold_{i}_result.json").write_text(json.dumps(payload))
             sys.stdout.flush()
             time.sleep(0.05)
-        # Signal readiness — parent waits for this marker
-        (cwd / "_ready").write_text("ready")
+        # Signal readiness in the node root (non-test marker the parent polls).
+        (Path.cwd() / "_ready").write_text("ready")
         # Now sleep to give parent time to SIGTERM us
         time.sleep(30)
     """)
 
     env = os.environ.copy()
     env["AUTOMIL_FOLD_COUNT"] = "5"
+    # Born-sealed (Scope B): point AUTOMIL_RESULTS_DIR at certify/, exactly as the
+    # orchestrator does — the fold writer and the SIGTERM flush both target it, so
+    # test-bearing artifacts never touch the agent-visible node-archive root.
+    env["AUTOMIL_RESULTS_DIR"] = str(node_archive / "certify")
 
     proc = subprocess.Popen(
         [sys.executable, "-c", script],
@@ -99,11 +107,14 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
             )
         time.sleep(0.1)
 
-    assert (node_archive / "fold_0_result.json").exists()
-    assert (node_archive / "fold_1_result.json").exists()
-    assert (node_archive / "fold_2_result.json").exists()
-    assert not (node_archive / "fold_3_result.json").exists()
-    assert not (node_archive / "fold_4_result.json").exists()
+    sealed = node_archive / "certify"
+    assert (sealed / "fold_0_result.json").exists()
+    assert (sealed / "fold_1_result.json").exists()
+    assert (sealed / "fold_2_result.json").exists()
+    assert not (sealed / "fold_3_result.json").exists()
+    assert not (sealed / "fold_4_result.json").exists()
+    # Born-sealed: no test-bearing fold artifact leaked to the agent-visible root.
+    assert not (node_archive / "fold_0_result.json").exists()
 
     # 4. Send SIGTERM (cap fire equivalent) — handler must flush partial result.json
     cap_fire_time = time.time()
@@ -120,9 +131,9 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
         f"got {proc.returncode}; stderr={stderr.decode(errors='replace')}"
     )
 
-    # 6. Assert SIGTERM handler wrote result.json with partial status
-    result_path = node_archive / "result.json"
-    assert result_path.exists(), "SIGTERM handler did not write result.json"
+    # 6. Assert SIGTERM handler wrote result.json (into certify/) with partial status
+    result_path = node_archive / "certify" / "result.json"
+    assert result_path.exists(), "SIGTERM handler did not write result.json to certify/"
     result = json.loads(result_path.read_text())
     assert result["status"] == "partial", f"expected partial, got {result['status']}"
     assert result["partial_folds"] == 3

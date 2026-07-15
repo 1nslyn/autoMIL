@@ -120,7 +120,10 @@ class TestResultCollection:
         collected = runner.collect_result(wt_path, archive_dir)
         assert collected is not None
         assert collected["status"] == "completed"
-        assert (archive_dir / "result.json").exists()
+        # Scope B val-firewall: the raw result.json (carries held_out) is copied
+        # into the sealed certify/ subdir, never the agent-visible node-archive root.
+        assert (archive_dir / "certify" / "result.json").exists()
+        assert not (archive_dir / "result.json").exists()
         runner.cleanup_worktree(wt_path)
 
     def test_missing_result_returns_none(self, runner, project_repo):
