@@ -107,22 +107,24 @@
 | `AUTOBENCH_CLWD_ROOT` | CLWD lung adeno dataset root | Per-dataset |
 | `AUTOBENCH_CCRCC_ROOT` | CPTAC CCRCC dataset root | Per-dataset |
 | `AUTOBENCH_HANCOCK_ROOT` | Hancock dataset root | Per-dataset |
-| `AUTOBENCH_TCGA_LUAD_ROOT` | TCGA-LUAD root | Per-dataset |
-| `AUTOBENCH_TCGA_GBM_ROOT` | TCGA-GBM root (Yeonwoo) | Per-dataset |
-| `AUTOBENCH_TCGA_LGG_ROOT` | TCGA-LGG root (Yeonwoo) | Per-dataset |
-| `AUTOBENCH_TCGA_BRCA_ROOT` | TCGA-BRCA root (Yeonwoo) | Per-dataset |
-| `AUTOBENCH_TCGA_HNSC_ROOT` | TCGA-HNSC root (Yeonwoo) | Per-dataset |
-| `AUTOBENCH_TCGA_BLCA_ROOT` | TCGA-BLCA root (Yeonwoo) | Per-dataset |
-| `AUTOBENCH_TCGA_COAD_ROOT` | TCGA-COAD root (Keishi) | Per-dataset |
-| `AUTOBENCH_TCGA_UCEC_ROOT` | TCGA-UCEC root (Keishi) | Per-dataset |
-| `AUTOBENCH_TCGA_SKCM_ROOT` | TCGA-SKCM root (Keishi) | Per-dataset |
-| `AUTOBENCH_TCGA_THCA_ROOT` | TCGA-THCA root (Keishi) | Per-dataset |
-| `AUTOBENCH_TCGA_STAD_ROOT` | TCGA-STAD root (Keishi) | Per-dataset |
-| `AUTOBENCH_TCGA_CESC_ROOT` | TCGA-CESC root (Ryan) | Per-dataset |
-| `AUTOBENCH_TCGA_TGCT_ROOT` | TCGA-TGCT root (Ryan) | Per-dataset |
-| `AUTOBENCH_TCGA_PAAD_ROOT` | TCGA-PAAD root (Ryan) | Per-dataset |
-| `AUTOBENCH_TCGA_PCPG_ROOT` | TCGA-PCPG root (Ryan) | Per-dataset |
-| `AUTOBENCH_TCGA_UCS_ROOT` | TCGA-UCS root (Ryan) | Per-dataset |
+| `AUTOBENCH_TCGA_LUAD_ROOT` | TCGA-LUAD root (preprint roster — KRAS, binary) | Per-dataset |
+| `AUTOBENCH_TCGA_LGG_ROOT` | TCGA-LGG root (preprint roster — IDH1, binary) | Per-dataset |
+| `AUTOBENCH_TCGA_HNSC_ROOT` | TCGA-HNSC root (preprint roster — tumor grade, 3-class) | Per-dataset |
+| `AUTOBENCH_CPTAC_GBM_ROOT` | CPTAC-GBM root (preprint roster — TP53, binary) | Per-dataset |
+| `AUTOBENCH_CPTAC_PDAC_ROOT` | CPTAC-PDAC root (preprint roster — immune_class, 3-class) | Per-dataset |
+| `AUTOBENCH_TCGA_GBM_ROOT` | TCGA-GBM root (Yeonwoo; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_BRCA_ROOT` | TCGA-BRCA root (Yeonwoo; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_BLCA_ROOT` | TCGA-BLCA root (Yeonwoo; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_COAD_ROOT` | TCGA-COAD root (Keishi; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_UCEC_ROOT` | TCGA-UCEC root (Keishi; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_SKCM_ROOT` | TCGA-SKCM root (Keishi; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_THCA_ROOT` | TCGA-THCA root (Keishi; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_STAD_ROOT` | TCGA-STAD root (Keishi; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_CESC_ROOT` | TCGA-CESC root (Ryan; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_TGCT_ROOT` | TCGA-TGCT root (Ryan; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_PAAD_ROOT` | TCGA-PAAD root (Ryan; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_PCPG_ROOT` | TCGA-PCPG root (Ryan; catalog, not preprint roster) | Per-dataset |
+| `AUTOBENCH_TCGA_UCS_ROOT` | TCGA-UCS root (Ryan; catalog, not preprint roster) | Per-dataset |
 
 **Loading order:**
 1. `benchmarks/scripts/run_experiment.py:30` — `dotenv.load_dotenv("../.env")` at script start

@@ -113,7 +113,7 @@
 - `.env` loading:
   - `benchmarks/.env` (gitignored, present locally) loaded by `python-dotenv` in `benchmarks/scripts/run_experiment.py:30` and `benchmarks/scripts/run_feature_extraction.py`
   - Also loaded by the orchestrator daemon's `_load_dotenv()` at `src/automil/orchestrator.py:222` (handles `<project_root>/.env` and `<project_root>/benchmarks/.env`) — necessary because git worktrees don't inherit `.env`
-- Example env vars in `benchmarks/.env.example`: `HF_TOKEN`, `WANDB_API_KEY`, `AUTOBENCH_OVARIAN_ROOT`, `AUTOBENCH_CLWD_ROOT`, `AUTOBENCH_CCRCC_ROOT`, `AUTOBENCH_HANCOCK_ROOT`, `AUTOBENCH_TCGA_LUAD_ROOT`, plus 14 other `AUTOBENCH_TCGA_*_ROOT` vars
+- Example env vars in `benchmarks/.env.example`: `HF_TOKEN`, `WANDB_API_KEY`, `AUTOBENCH_OVARIAN_ROOT`, `AUTOBENCH_CLWD_ROOT`, `AUTOBENCH_CCRCC_ROOT`, `AUTOBENCH_HANCOCK_ROOT`, plus 13 total `AUTOBENCH_TCGA_*_ROOT` vars (3 preprint roster — luad/lgg/hnsc — + 10 additional TCGA catalog: blca/coad/skcm/ucec/thca/stad/tgct/paad/pcpg/ucs) and 2 `AUTOBENCH_CPTAC_*_ROOT` preprint roster vars (gbm/pdac)
 
 **Build:**
 - Root `pyproject.toml` declares the workspace and the `automil` package

@@ -1,24 +1,28 @@
-name: tcga_blca
-description: "TCGA-BLCA — Bladder Urothelial Carcinoma (PIK3CA mutation prediction)"
+name: cptac_pdac
+description: "CPTAC-PDAC — Pancreatic Ductal Adenocarcinoma (immune subtype, 3-class low/medium/high)"
 
 paths:
-  data_root: "${AUTOBENCH_TCGA_BLCA_ROOT}"
+  data_root: "${AUTOBENCH_CPTAC_PDAC_ROOT}"
   wsi_dir: "${data_root}/wsi"
   mapping_csv: "${data_root}/normalized_manifest.csv"
   output_dir: "${data_root}/trident_output"
   benchmark_dir: "${data_root}/benchmark"
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
+# immune_class is a 3-class subtype task (low / medium / high tumour-immune
+# infiltration). Prepared via scripts/manifests/prepare_cptac_manifest.py, which
+# names the label column {TASK}_binary regardless of class count — so
+# IMMUNE_CLASS_binary carries three integer classes (0/1/2), matching the
+# existing cptac_ccrcc.yaml convention. OS survival is joined from the GDC
+# clinical export (add_os_to_manifest.py works for CPTAC as well as TCGA).
 tasks:
-  # PIK3CA (77 positives, ~15/fold) — BLCA's best classification label. Below the
-  # >100 bar, but accepted: BLCA is a survival anchor (175 deaths) and this keeps
-  # every dataset's gene distinct. Other BLCA genes are rarer (FGFR3 34, etc.).
-  pik3ca:
-    label_col: "PIK3CA_binary"
+  immune_class:
+    label_col: "IMMUNE_CLASS_binary"
     label_map:
-      0: "wildtype"
-      1: "mutant"
-    n_classes: 2
+      0: "low"
+      1: "medium"
+      2: "high"
+    n_classes: 3
   os:
     task_type: survival
     event_col: OS_event
@@ -32,13 +36,13 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  pik3ca: ["standard"]
+  immune_class: ["standard"]
   os: ["standard"]
 
-slide_id_column: "slide_name"
-slide_id_transform: "strip_svs"
-wsi_extension: null
-case_id_column: "sample_names"
+slide_id_column: "slide_id"
+slide_id_transform: null
+wsi_extension: ".svs"
+case_id_column: "case_id"
 status_column: null
 status_value: null
 

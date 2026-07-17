@@ -133,9 +133,10 @@ three standard MIL task types.
 - **CPTAC — 10 cohorts extracted:** BRCA, CCRCC, COAD, GBM, HNSC, LSCC, LUAD,
   OV, PDAC, UCEC.
 
-Only a subset of these (ovarian, CLWD, CCRCC, HANCOCK, TCGA‑COAD/LGG/LUAD, plus
-the in-progress survival cohorts) have `autobench/datasets/*.yaml` configs on
-GitHub today. **Phase 1 (preprint) uses 5 of these; Phase 2 (journal) is
+Only a subset of these (ovarian, CLWD, CCRCC, HANCOCK, TCGA‑LGG/LUAD/HNSC,
+CPTAC‑GBM/PDAC, plus the in-progress survival cohorts) have
+`autobench/datasets/*.yaml` configs on GitHub today. **Phase 1 (preprint) uses
+the 5-cohort roster (TCGA‑LUAD/LGG/HNSC + CPTAC‑GBM/PDAC); Phase 2 (journal) is
 scoped to the full 26-cohort inventory** — see the respective phase plans.
 
 ## Prior framing — superseded, kept for reference

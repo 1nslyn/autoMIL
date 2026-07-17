@@ -2,19 +2,19 @@
 
 Every member runs the **full MIL grid on their own dataset** and writes to the
 lab-shared results tree. **5-fold** patient-stratified CV (the lab standard),
-**two tasks per dataset** — the mutation task below, plus a shared `os`
-(overall survival) task. The commands are identical for everyone — you just
-pass your dataset name.
+**two tasks per dataset** — the classification task below (binary mutation or
+multi-class), plus a shared `os` (overall survival) task. The commands are
+identical for everyone — you just pass your dataset name.
 
 ## Your assignment
 
-| Member | Dataset | Mutation Task | `<dataset>` arg |
-|--------|---------|----------------|-----------------|
-| Leo | TCGA-LUAD | KRAS | `tcga_luad` |
-| Yeonwoo | TCGA-LGG | IDH1 | `tcga_lgg` |
-| Keishi | TCGA-SKCM | NRAS | `tcga_skcm` |
-| Terry | TCGA-BLCA | PIK3CA | `tcga_blca` |
-| Ryan | TCGA-COAD | BRAF | `tcga_coad` |
+| Member | Dataset | Classification Task | `<dataset>` arg |
+|--------|---------|----------------------|-----------------|
+| Leo | TCGA-LUAD | KRAS (binary) | `tcga_luad` |
+| Yeonwoo | TCGA-LGG | IDH1 (binary) | `tcga_lgg` |
+| TBD | TCGA-HNSC | tumor grade (3-class) | `tcga_hnsc` |
+| TBD | CPTAC-GBM | TP53 (binary) | `cptac_gbm` |
+| TBD | CPTAC-PDAC | immune_class (3-class) | `cptac_pdac` |
 
 Find your row — everywhere below, `<dataset>` is your arg (e.g. `tcga_lgg`).
 Every dataset also runs a shared `os` (overall survival) task, so each of the
@@ -34,7 +34,7 @@ git checkout main && git pull --ff-only   # get the latest configs + launchers
 source .venv/bin/activate
 
 # Make sure YOUR dataset root is in benchmarks/.env (already there if you
-# extracted the dataset). Replace XXXX with your code, e.g. SKCM:
+# extracted the dataset). Replace XXXX with your code, e.g. HNSC:
 grep -q AUTOBENCH_TCGA_XXXX_ROOT benchmarks/.env || \
   echo 'AUTOBENCH_TCGA_XXXX_ROOT=/project/6114359/shared/Pathology/TCGA/TCGA-XXXX' >> benchmarks/.env
 ```

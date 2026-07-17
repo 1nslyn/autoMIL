@@ -6,6 +6,16 @@ autoMIL: F2-readiness framework refactor.
 > milestone). Post-v1.0 releases follow semver and map to git tags `v1.1.0`,
 > `v1.2.0`, and `v1.2.1`.
 
+## Unreleased
+
+- **Preprint dataset roster pivot.** Dropped TCGA-SKCM (NRAS), TCGA-BLCA
+  (PIK3CA), and TCGA-COAD (BRAF); added CPTAC-GBM (TP53, binary),
+  CPTAC-PDAC (immune_class, 3-class), and TCGA-HNSC (tumor grade, 3-class).
+  The roster now spans binary mutation, 3-class immune subtype, and 3-class
+  tumor grade tasks across two data sources (TCGA + CPTAC), prioritizing
+  classification-task diversity over the old ≥100-OS-deaths hard gate. Grid
+  math is unchanged: 165 experiments (33/dataset), 825 fold-trainings.
+
 ## v1.2.1 (2026-07-15, `git tag v1.2.1`)
 
 - **fix(packaging):** list all three authors (Shuolin Yin, Yeonwoo Seo, Jun Ma)
