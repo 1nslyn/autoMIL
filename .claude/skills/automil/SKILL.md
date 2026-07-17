@@ -114,7 +114,7 @@ source; then `uv run automil reconcile`.
       `automil/variants/<parent>/<name>.py`, select it in `config.yaml`, and
       `uv run automil submit`. No working-tree cleanup — the variant is committed.
    b. Free-mode edit: edit project files, then
-      `uv run automil submit --node <id> --desc "..." --files <changed files>`,
+      `uv run automil submit --node <id> --desc "..." --mil-model <model> --files <changed files>`,
       then **selectively** restore ONLY those files:
       `git restore --source=HEAD -- <each-file>`. Never bulk-restore
       (`git checkout .`, `git restore .`, `git stash -k`) — it discards unrelated work.

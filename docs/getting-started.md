@@ -285,7 +285,7 @@ automil orchestrator status # daemon health
 ## How Experiments Run
 
 1. The agent edits files in your repo (any files, not just one).
-2. Runs `automil submit --node node_0001 --desc "try focal loss" --files train.py models/clam.py`.
+2. Runs `automil submit --node node_0001 --desc "try focal loss" --mil-model clam_mb --files train.py models/clam.py`.
    Optional: `--max-time 60` for seconds-precision timeout, `--budget-seconds N`
    to override the cell budget on cell creation.
 3. The CLI snapshots only the changed files into `automil/orchestrator/archive/node_0001/`
@@ -372,7 +372,7 @@ test-selection bias — the rigor the framework exists to provide.
 | `automil init [--runtime <r>] [--no-healthcheck]` | Add autoMIL to current git repo |
 | `automil check` | Validate setup (protected files, env.required, backend, registry) |
 | `automil show-skill --runtime <r>` | Render merged per-runtime skill file to stdout |
-| `automil submit --node <id> --desc "..." [--files <f>] [--max-time SEC]` | Snapshot changed files, queue experiment |
+| `automil submit --node <id> --desc "..." --mil-model <m> [--files <f>] [--max-time SEC]` | Snapshot changed files, queue experiment. `--mil-model` is required unless `run.mil_model` is set in `config.yaml` |
 | `automil cancel <node_id>` | Cancel a running experiment |
 | `automil resubmit <node_id>` | Re-queue a terminal experiment as a new node |
 | `automil rank` | Show top-ranked proposals (UCB) |

@@ -219,10 +219,12 @@ each issue and rerun the gate.
 ### Stage 2: 1-minute dry-run experiment
 
 ```bash
-automil submit --node node_setup_validation --desc "setup-validation" --files <minimal-edit-set> --max-time 60
+automil submit --node node_setup_validation --desc "setup-validation" --files <minimal-edit-set> --max-time 60 --mil-model <model_name>
 ```
 
-The `--max-time 60` flag (added in plan 07-02) caps the experiment at 60 seconds
+`--mil-model` is required: it keys the budget cell (D-12). Pass any short
+identifier here, or set `run.mil_model` in `config.yaml` so every submit resolves
+it automatically. The `--max-time 60` flag (added in plan 07-02) caps the experiment at 60 seconds
 wall-clock; the local backend rounds up to the 1-minute floor. Honouring the cap
 is the training script's responsibility; if it cannot, this gate emits a warning
 before submit.

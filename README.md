@@ -353,9 +353,10 @@ automil check                                     Validate setup (protected file
 automil show-skill --runtime <r>                  Render merged per-runtime skill file to stdout
 
 # Experiment lifecycle
-automil submit --node <id> --desc "..." [--files <f>] [--max-time SEC]
+automil submit --node <id> --desc "..." --mil-model <m> [--files <f>] [--max-time SEC]
                [--budget-seconds N] [--safety-buffer-seconds M]
-                                                  Snapshot changed files and queue.
+                                                  Snapshot changed files and queue. --mil-model is
+                                                  required unless run.mil_model is set in config.yaml.
                                                   --budget-seconds / --safety-buffer-seconds override
                                                   cap.* for the cell this submit creates (D-134;
                                                   ignored on subsequent submits joining the same cell).
