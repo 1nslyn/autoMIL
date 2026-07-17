@@ -1,5 +1,5 @@
 name: cptac_gbm
-description: "CPTAC-GBM — Glioblastoma Multiforme"
+description: "CPTAC-GBM — Glioblastoma Multiforme (TP53 mutation prediction)"
 
 paths:
   data_root: "${AUTOBENCH_CPTAC_GBM_ROOT}"
@@ -10,25 +10,18 @@ paths:
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
 tasks:
-  egfr:
-    label_col: "EGFR_binary"
-    label_map:
-      0: "wildtype"
-      1: "mutant"
-    n_classes: 2
   tp53:
     label_col: "TP53_binary"
     label_map:
       0: "wildtype"
       1: "mutant"
     n_classes: 2
-  immune_class:
-    label_col: "IMMUNE_CLASS_binary"
-    label_map:
-      0: "low"
-      1: "medium"
-      2: "high"
-    n_classes: 3
+  os:
+    task_type: survival
+    event_col: OS_event
+    time_col: OS_time
+    survival_losses: [cox, nllsurv]
+    nll_bins: 4
 
 split_strategies:
   standard:
@@ -36,9 +29,8 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  egfr: ["standard"]
   tp53: ["standard"]
-  immune_class: ["standard"]
+  os: ["standard"]
 
 slide_id_column: "slide_id"
 slide_id_transform: null
@@ -68,6 +60,9 @@ abmil_models:
 
 dtfd_models:
   - dtfd_mil
+
+titan:
+  head: linear
 
 extraction:
   magnification: 20

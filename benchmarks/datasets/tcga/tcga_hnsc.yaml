@@ -1,21 +1,27 @@
-name: tcga_coad
-description: "TCGA-COAD — Colon Adenocarcinoma (BRAF mutation prediction)"
+name: tcga_hnsc
+description: "TCGA-HNSC — Head & Neck Squamous Cell Carcinoma (tumor grade, 3-class G1/G2/G3)"
 
 paths:
-  data_root: "${AUTOBENCH_TCGA_COAD_ROOT}"
+  data_root: "${AUTOBENCH_TCGA_HNSC_ROOT}"
   wsi_dir: "${data_root}/wsi"
   mapping_csv: "${data_root}/normalized_manifest.csv"
   output_dir: "${data_root}/trident_output"
   benchmark_dir: "${data_root}/benchmark"
   features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
+# Tumor grade is a 3-class ORDINAL task (G1 < G2 < G3), not a GOLDMARK mutation.
+# The GRADE column (0/1/2) is joined onto the manifest from the GDC clinical
+# export (diagnoses.tumor_grade → G1/G2/G3), the same clinical.tsv that
+# scripts/manifests/add_os_to_manifest.py uses for the OS labels below. Cases
+# with grade GX / not-reported get no label and are dropped from the grade task.
 tasks:
-  braf:
-    label_col: "BRAF_binary"
+  grade:
+    label_col: "GRADE"
     label_map:
-      0: "wildtype"
-      1: "mutant"
-    n_classes: 2
+      0: "g1"
+      1: "g2"
+      2: "g3"
+    n_classes: 3
   os:
     task_type: survival
     event_col: OS_event
@@ -29,7 +35,7 @@ split_strategies:
     test_cohorts: []
 
 task_strategy_feasibility:
-  braf: ["standard"]
+  grade: ["standard"]
   os: ["standard"]
 
 slide_id_column: "slide_name"
