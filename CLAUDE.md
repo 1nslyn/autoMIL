@@ -60,20 +60,23 @@ uv run automil viz start
 
 | File | Lines | Role |
 |------|-------|------|
-| `src/automil/graph.py` | ~680 | Experiment tree, scoring, reconciliation |
-| `src/automil/orchestrator.py` | ~750 | GPU scheduler daemon |
-| `src/automil/cli.py` | ~400 | CLI commands |
-| `src/automil/runner.py` | ~80 | Git worktree overlay |
-| `src/automil/viz/server.py` | ~270 | SSE dashboard server |
-| `src/automil/viz/static/app.js` | ~630 | 3D force graph frontend |
+| `src/automil/graph.py` | ~1090 | Experiment tree, scoring, reconciliation |
+| `src/automil/backends/_orchestrator_daemon.py` | ~2090 | GPU scheduler daemon (thin entrypoint: `orchestrator.py`) |
+| `src/automil/cli/` | package, ~30 commands | Click CLI (one module per command + `lifecycle/`) |
+| `src/automil/runner.py` | ~160 | Git worktree overlay |
+| `src/automil/viz/server.py` | ~440 | SSE dashboard server |
+| `src/automil/viz/static/app.js` | ~670 | 3D force graph frontend |
 
 ## Testing
 
-48 tests across 4 files:
-- `test_graph.py` (26) - graph API, scoring, reconciliation, migration
-- `test_runner.py` (7) - worktree create/cleanup, overlay, result collection
-- `test_cli.py` (5) - init, submit, rank
-- `test_integration.py` (10) - end-to-end flows, path sanitization, deletions, scoring
+~600 tests across ~130 files under `tests/` (plus ~420 in `benchmarks/tests/`;
+`uv run pytest tests/ --collect-only` reports ~1130 collected once parametrized).
+Grouped by area: `test_graph*.py` (graph API, scoring, reconciliation),
+`backends/` (orchestrator daemon, SLURM/Ray contracts, result-schema validation),
+`cells/` (budget-cap state machine), `gate/` (two-stage generalization gate),
+`test_born_sealed_firewall.py` + `test_seal_node_archive.py` + `test_rank_held_out_filter.py`
+(val-firewall / born-sealed test), `trajectory/`, `skills/`, and
+`test_integration.py` (end-to-end flows).
 
 ## Conventions
 
@@ -118,7 +121,7 @@ autoMIL/
 ├── tests/                # autoMIL tests
 ├── benchmarks/           # autobench package
 │   ├── src/autobench/    # Benchmark code (dataset-agnostic)
-│   ├── datasets/         # Per-dataset YAML configs (ovarian, clwd, placeholder)
+│   ├── datasets/         # Per-dataset YAML configs, grouped: tcga/ cptac/ other/ templates/
 │   ├── scripts/          # CLI: run_benchmark.py --dataset <name>
 │   ├── experiments/      # autoMIL overlays per dataset
 │   ├── lib/              # External deps (CLAM, nnMIL, SMMILe, TRIDENT)

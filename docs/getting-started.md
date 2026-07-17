@@ -1,6 +1,11 @@
 # Getting Started with autoMIL
 
-autoMIL is the framework. Your training code is the consumer. The seam
+autoMIL automates the **research iteration**, not the hyperparameter: a coding
+agent reads your codebase, implements **source-level** changes (architecture +
+training recipe), and runs each as an isolated reproducible experiment in a
+persistent tree that informs later proposals — a different level of automation
+from grid/menu AutoML, which only searches configurations within a fixed
+pipeline. autoMIL is the framework; your training code is the consumer. The seam
 between them is the [training-script contract](training-script-contract.md):
 write a `result.json`, honor `SIGTERM`, declare your env vars. Anything
 beyond that is up to you.
@@ -189,16 +194,19 @@ The minimum valid `result.json` is:
 
 `composite` is the single scalar the experiment tree uses for ranking
 (higher is always better; for loss minimization, negate). All other
-fields are optional. A full example payload from the autobench consumer:
+fields are optional. Under the **val-firewall**, `metrics` is
+validation-only and is what `composite` is computed from; any test metrics go
+in a sealed `held_out` block that the orchestrator quarantines under
+`archive/<node>/certify/` and reveals once via `automil certify` — the agent
+never sees test during search. A full example payload from the autobench
+consumer:
 
 ```json
 {
   "status": "completed",
-  "metrics": {
-    "val_auc": 0.870, "val_bacc": 0.810,
-    "test_auc": 0.872, "test_bacc": 0.830
-  },
-  "composite": 0.851,
+  "metrics": {"val_auc": 0.870, "val_bacc": 0.810},
+  "held_out": {"test_auc": 0.872, "test_bacc": 0.830},
+  "composite": 0.840,
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500,
   "fold_results": [...],
@@ -213,8 +221,8 @@ hardcoded metric keys.
 The orchestrator validates this at ingest via JSON Schema. Malformed payloads
 transition the node to `crashed` with a schema-location pointer. The
 `composite` scalar is the single field the experiment tree uses for ranking
-(UCB scoring, Pareto dominance, higher is always better; for loss
-minimization, negate).
+(UCB scoring, composite-dominance gated by the Ladder keep-margin, higher is
+always better; for loss minimization, negate).
 
 ## Running the Loop
 
@@ -277,7 +285,7 @@ automil orchestrator status # daemon health
 ## How Experiments Run
 
 1. The agent edits files in your repo (any files, not just one).
-2. Runs `automil submit --node node_0001 --desc "try focal loss" --files train.py models/clam.py`.
+2. Runs `automil submit --node node_0001 --desc "try focal loss" --mil-model clam_mb --files train.py models/clam.py`.
    Optional: `--max-time 60` for seconds-precision timeout, `--budget-seconds N`
    to override the cell budget on cell creation.
 3. The CLI snapshots only the changed files into `automil/orchestrator/archive/node_0001/`
@@ -319,7 +327,7 @@ pre-registered held-out manifest:
 
 ```bash
 automil nominate <node_id>               # mark as candidate
-automil gate manifest                    # write & git-commit the held-out manifest BEFORE search
+automil gate register-manifest           # write & git-commit the held-out manifest BEFORE search
 automil promote <candidate_id>           # paired Wilcoxon + bootstrap CI + Bonferroni alpha/K
 ```
 
@@ -331,13 +339,31 @@ Promotion-rate is exposed in viz `/api/promotion-rate` SSE and
 
 Per-submit JSONL trajectories using OpenTelemetry `gen_ai.*` keys are
 written to `archive/<node_id>/trajectory.jsonl`. Secrets (`sk-…`, `hf_…`,
-`ghp_…`, AWS keys, `*_API_KEY=…`) are redacted on capture; per-event 8 KB
+`ghp_…`, AWS keys, `*_API_KEY=…`, `*_TOKEN=…`) are redacted on capture; per-event 8 KB
 cap, per-file 5 MB soft / 50 MB hard rotate. Trajectories are gitignored
 by default. Export a redacted, schema-validated bundle:
 
 ```bash
 automil trajectory export <node_id> --out trajectory_bundle.tgz
 ```
+
+## Revealing Held-Out Test Metrics (the val-firewall)
+
+Selection runs entirely on the **validation** composite. Test metrics are sealed
+at ingest into a `held_out` block that the orchestrator quarantines under
+`archive/<node>/certify/`, out of every agent-facing surface during search. Once
+search is done, reveal them exactly once:
+
+```bash
+automil certify                 # sealed held-out test for the val-selected best node
+automil certify --top-k 3       # or the top-K keep nodes by validation composite
+automil certify --node node_0042
+```
+
+This is the only sanctioned read of test: the val→test gap is the honest cost of
+search, and it must never feed back into selection. Reporting the certified
+held-out numbers is what keeps an encoder-vs-aggregator comparison free of
+test-selection bias — the rigor the framework exists to provide.
 
 ## CLI Reference
 
@@ -346,7 +372,7 @@ automil trajectory export <node_id> --out trajectory_bundle.tgz
 | `automil init [--runtime <r>] [--no-healthcheck]` | Add autoMIL to current git repo |
 | `automil check` | Validate setup (protected files, env.required, backend, registry) |
 | `automil show-skill --runtime <r>` | Render merged per-runtime skill file to stdout |
-| `automil submit --node <id> --desc "..." [--files <f>] [--max-time SEC]` | Snapshot changed files, queue experiment |
+| `automil submit --node <id> --desc "..." --mil-model <m> [--files <f>] [--max-time SEC]` | Snapshot changed files, queue experiment. `--mil-model` is required unless `run.mil_model` is set in `config.yaml` |
 | `automil cancel <node_id>` | Cancel a running experiment |
 | `automil resubmit <node_id>` | Re-queue a terminal experiment as a new node |
 | `automil rank` | Show top-ranked proposals (UCB) |
@@ -359,11 +385,12 @@ automil trajectory export <node_id> --out trajectory_bundle.tgz
 | `automil apply <node_id>` | Apply a node's variant selection to config.yaml |
 | `automil revert-baseline` | Reset registry.protected paths to base_commit |
 | `automil verify-repro <node_id>` | Reproduce a node via the registry path |
-| `automil cell list / status / show <id>` | Cell budget commands |
+| `automil cell status [<id>] / list` | Inspect cell budget state and consumed seconds |
 | `automil nominate <node_id>` | Mark keep-status node as gate candidate |
 | `automil promote <candidate_id>` | Run Stage B gate |
-| `automil gate manifest / status` | Manage / inspect gate manifest |
-| `automil trajectory record / export / status` | Trajectory commands |
+| `automil certify [--node <id>] [--top-k N]` | Reveal sealed held-out TEST metrics for val-selected node(s) — once, post-search |
+| `automil gate register-manifest / retire-manifest / status / stats` | Manage / inspect the gate manifest |
+| `automil trajectory record / export` | JSONL trajectory capture + redacted export bundle |
 | `automil start-loop` / `automil stop-loop` | Control agent loop flag |
 | `automil orchestrator start / stop / status` | Manage GPU scheduler daemon |
 | `automil viz start / stop / status` | Manage 3D dashboard |

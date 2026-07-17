@@ -8,26 +8,27 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
-[![Milestone v1.0](https://img.shields.io/badge/milestone-v1.0%20shipped-brightgreen.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-950%20collected-brightgreen.svg)](#)
-
----
-
-**autoMIL** is a plug-and-play experiment framework for autonomous
-agent-driven model discovery. It overlays onto your existing ML project,
-in any language with any ML library, and lets any coding agent
-autonomously design, run, and learn from experiments under a configurable
-per-cell wall-clock budget, with discovered variants reproducible,
-attributable to their parents, and portable across machines and LLM
-runtimes. The original motivation was Multiple Instance Learning in
-computational pathology (see [`examples/ovarian_hrd`](examples/ovarian_hrd/)
-for a 189-experiment autonomous run); the framework itself is generic and
-runs sklearn-iris end-to-end via the same contract (see
-[`examples/sklearn-iris`](examples/sklearn-iris/)).
+[![Release v1.2.1](https://img.shields.io/badge/release-v1.2.1-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-1100%2B%20collected-brightgreen.svg)](#)
 
 [Getting Started](#quick-start) | [How It Works](#how-it-works) | [Training-Script Contract](docs/training-script-contract.md) | [Documentation](docs/getting-started.md)
 
 </div>
+
+**autoMIL** is a plug-and-play experiment framework that automates the
+**research iteration**, not the hyperparameter. It overlays onto your existing
+ML project, in any language with any ML library, and lets any coding agent read
+the codebase, propose and implement **source-level** changes (architecture +
+training recipe), run each as an isolated reproducible experiment, and learn from
+the results across a persistent experiment tree — under a configurable per-cell
+budget, with every variant reproducible, attributable to its parent, and portable
+across machines and LLM runtimes. Unlike grid/menu AutoML (Optuna-style search
+within a fixed pipeline), the unit of automation is the research iteration
+itself. The original motivation was Multiple Instance Learning in computational
+pathology (see [`examples/ovarian_hrd`](examples/ovarian_hrd/) for a
+189-experiment autonomous run); the framework itself is generic and runs
+sklearn-iris end-to-end via the same contract (see
+[`examples/sklearn-iris`](examples/sklearn-iris/)).
 
 ---
 
@@ -62,7 +63,7 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 - Parallel execution (git worktree isolation)
 - Experiment tracking (directed tree, not flat log)
 - Knowledge persistence (learnings.md)
-- Result evaluation (Pareto-dominance keep/discard)
+- Result evaluation (val-firewall + Ladder keep/discard)
 - 3D visualization (live dashboard)
 
 </td>
@@ -78,23 +79,24 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 
 ## Key Features
 
-| Feature | Description |
-|---------|-------------|
-| **Plug-and-play** | Overlays onto any existing ML project. No restructuring needed. |
-| **Multi-runtime agents** | First-class skills for Claude Code, Codex, OpenCode, and DeepSeek (routed via opencode/codex). `automil init --runtime` auto-detects or installs explicitly. |
-| **Full-codebase scope** | Agent edits any file: architectures, losses, augmentations, optimizers. |
-| **Git worktree isolation** | Each experiment runs in a snapshot. Only changed files stored. |
-| **Pluggable backends** | `local` (default), `slurm` (submitit, opt-in via `[slurm]` extra), `ray` (raw `@ray.remote`, opt-in via `[ray]` extra). Same `Backend` ABC; same cap contract. |
-| **Hardware autodetect** | `automil init` probes CUDA / ROCm / CPU via `LocalBackend.healthcheck()` and stamps detected GPU count, VRAM, and concurrency defaults into `config.yaml`. |
-| **Variant registry** | Architectural changes ship as committed variant modules (`automil/variants/<parent>/<name>.py`) selected via config. Registry-only path reproduces a node end-to-end via `automil verify-repro`. |
+| Feature                              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Plug-and-play**                    | Overlays onto any existing ML project. No restructuring needed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Multi-runtime agents**             | First-class skills for Claude Code, Codex, OpenCode, and DeepSeek (routed via opencode/codex). `automil init --runtime` auto-detects or installs explicitly.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Full-codebase scope**              | Agent edits any file: architectures, losses, augmentations, optimizers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Git worktree isolation**           | Each experiment runs in a snapshot. Only changed files stored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Pluggable backends**               | `local` (default), `slurm` (submitit, opt-in via `[slurm]` extra), `ray` (raw `@ray.remote`, opt-in via `[ray]` extra). Same `Backend` ABC; same cap contract.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Hardware autodetect**              | `automil init` probes CUDA / ROCm / CPU via `LocalBackend.healthcheck()` and stamps detected GPU count, VRAM, and concurrency defaults into `config.yaml`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Variant registry**                 | Architectural changes ship as committed variant modules (`automil/variants/<parent>/<name>.py`) selected via config. Registry-only path reproduces a node end-to-end via `automil verify-repro`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **Configurable per-cell budget cap** | Two-tier state machine (`refusing-new` at T-buffer, `terminating` at T) with per-fold checkpoints and a SIGTERM contract. Budget is set as a duration (`cap.budget: 6h`, also `30m`/`90s`/`2d`; legacy `cap.budget_seconds` still works) — set it with `automil budget set 6h` / inspect with `automil budget show`, or per-cell via `automil submit --budget-seconds N` (D-134, honored only on the submit that creates the cell). **`cap.mode: agent_active`** (default) bills only the time the agent is actually working (a `PostToolUse` hook stamps activity; the clock pauses while experiments run and the agent waits → more proposing per budget); `wall_clock` is the legacy continuous clock. 6h is just the autoMIL-paper default. Budget-killed runs reconcile to `executed` with partial composite, never `crash`. |
-| **Generalization gate** | Pre-registered held-out manifest + paired Wilcoxon + bootstrap CI + Bonferroni, ships a `candidate` node status, manual nomination by default, promotion-rate metric exposed via SSE. |
-| **Trajectory recorder** | Per-submit JSONL using OpenTelemetry `gen_ai.*` keys with secret redaction (`sk-…`, `hf_…`, AWS keys) and bounded rotation (5 MB soft / 50 MB hard). |
-| **Multi-GPU orchestrator** | Background daemon with bin packing, OOM detection, crash recovery, namespaced `running/<backend>/`. |
-| **Experiment tree** | UCB-inspired scoring balances exploitation and exploration across branches; Pareto-dominance keep/discard via consumer-supplied `composite` scalar. |
-| **3D dashboard** | Interactive Three.js visualization with live SSE updates (`localhost:8420`). |
-| **Persistent learnings** | Knowledge accumulates across sessions. Agents don't repeat mistakes. |
-| **Setup validation** | `automil check` validates protected files, registry purity, backend directives, and `env.required` before experiments run. |
+| **Validation-firewall**              | Keep/discard selects on **validation** only; test metrics are sealed at ingest into a quarantined `held_out` block and revealed exactly once via `automil certify`. Test never drives search, so final numbers aren't selected on test.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Generalization gate**              | Pre-registered held-out manifest + paired Wilcoxon + bootstrap CI + Bonferroni, ships a `candidate` node status, manual nomination by default, promotion-rate metric exposed via SSE.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **Trajectory recorder**              | Per-submit JSONL using OpenTelemetry `gen_ai.*` keys with secret redaction (`sk-…`, `hf_…`, AWS keys) and bounded rotation (5 MB soft / 50 MB hard).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| **Multi-GPU orchestrator**           | Background daemon with bin packing, OOM detection, crash recovery, namespaced `running/<backend>/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Experiment tree**                  | UCB-inspired scoring balances exploitation and exploration across branches; composite-dominance keep/discard gated by the Ladder keep-margin, on a **validation-only** composite scalar (the val-firewall).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **3D dashboard**                     | Interactive Three.js visualization with live SSE updates (`localhost:8420`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Persistent learnings**             | Knowledge accumulates across sessions. Agents don't repeat mistakes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| **Setup validation**                 | `automil check` validates protected files, registry purity, backend directives, and `env.required` before experiments run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ---
 
@@ -270,7 +272,7 @@ Runs on GPU in isolation
     |  (CUDA_VISIBLE_DEVICES masked)
     v
 Collects result.json
-    |  (Pareto dominance: keep or discard?)
+    |  (Ladder keep-margin on the val composite: keep or discard?)
     v
 Updates experiment graph
     |  (UCB scoring across branches)
@@ -299,18 +301,18 @@ The minimum valid payload is:
 
 `composite` is the single scalar the experiment tree uses for ranking
 (higher is always better; for loss minimization, negate). Everything else
-is optional. A full example payload from the autobench consumer:
+is optional. Under the **val-firewall**, `metrics` is validation-only and is
+what `composite` is computed from; any test metrics go in a sealed `held_out`
+block that the orchestrator quarantines under `archive/<node>/certify/` and
+reveals once via `automil certify`, so test never drives search. A full example
+payload from the autobench consumer:
 
 ```json
 {
   "status": "completed",
-  "metrics": {
-    "val_auc": 0.870,
-    "val_bacc": 0.810,
-    "test_auc": 0.872,
-    "test_bacc": 0.830
-  },
-  "composite": 0.851,
+  "metrics": {"val_auc": 0.870, "val_bacc": 0.810},
+  "held_out": {"test_auc": 0.872, "test_bacc": 0.830},
+  "composite": 0.840,
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500
 }
@@ -326,13 +328,13 @@ schema-location pointer.
 <details>
 <summary><b>Environment variables available to your script</b></summary>
 
-| Variable | Value | Description |
-|----------|-------|-------------|
-| `CUDA_VISIBLE_DEVICES` | Physical GPU ID | Masked by orchestrator. |
-| `AUTOMIL_GPU` | `0` | Logical device, always 0 because masking is already applied. |
-| `AUTOMIL_NODE_ID` | `node_0042` | Experiment identifier. |
-| `AUTOMIL_DESC` | `"try focal loss"` | Experiment description. |
-| `AUTOMIL_RUNTIME` | `claude` / `codex` / ... | Runtime declared by the agent for trajectory tagging. |
+| Variable               | Value                    | Description                                                  |
+| ---------------------- | ------------------------ | ------------------------------------------------------------ |
+| `CUDA_VISIBLE_DEVICES` | Physical GPU ID          | Masked by orchestrator.                                      |
+| `AUTOMIL_GPU`          | `0`                      | Logical device, always 0 because masking is already applied. |
+| `AUTOMIL_NODE_ID`      | `node_0042`              | Experiment identifier.                                       |
+| `AUTOMIL_DESC`         | `"try focal loss"`       | Experiment description.                                      |
+| `AUTOMIL_RUNTIME`      | `claude` / `codex` / ... | Runtime declared by the agent for trajectory tagging.        |
 
 Vars listed under `env.passthrough` in `config.yaml` are forwarded from the
 orchestrator process to each experiment subprocess. `AUTOBENCH_ROOT`-style
@@ -351,9 +353,10 @@ automil check                                     Validate setup (protected file
 automil show-skill --runtime <r>                  Render merged per-runtime skill file to stdout
 
 # Experiment lifecycle
-automil submit --node <id> --desc "..." [--files <f>] [--max-time SEC]
+automil submit --node <id> --desc "..." --mil-model <m> [--files <f>] [--max-time SEC]
                [--budget-seconds N] [--safety-buffer-seconds M]
-                                                  Snapshot changed files and queue.
+                                                  Snapshot changed files and queue. --mil-model is
+                                                  required unless run.mil_model is set in config.yaml.
                                                   --budget-seconds / --safety-buffer-seconds override
                                                   cap.* for the cell this submit creates (D-134;
                                                   ignored on subsequent submits joining the same cell).
@@ -374,15 +377,19 @@ automil revert-baseline                           Reset registry.protected paths
 automil verify-repro <node_id>                    Reproduce a node via the registry path; assert |actual - expected| < tolerance
 
 # Cell budget cap (Phase 4)
-automil cell list / status / show <id>            Inspect cell budget state and consumed seconds
+automil cell status [<id>] / list                 Inspect cell budget state and consumed seconds
 
 # Generalization gate (Phase 5)
 automil nominate <node_id>                        Mark keep-status node as a gate candidate
 automil promote <candidate_id>                    Run Stage B gate (paired Wilcoxon + bootstrap CI + Bonferroni)
-automil gate manifest / status                    Manage / inspect the gate manifest
+automil gate register-manifest / retire-manifest / status / stats
+                                                  Manage / inspect the gate manifest
+
+# Held-out certification (val-firewall)
+automil certify [--node <id>] [--top-k N]         Reveal sealed held-out TEST metrics for val-selected node(s); once, post-search
 
 # Trajectory recorder (Phase 3)
-automil trajectory record / export / status       JSONL trajectory capture and redacted export bundle
+automil trajectory record / export                JSONL trajectory capture and redacted export bundle
 
 # Loop + daemons
 automil start-loop / stop-loop                    Control agent loop flag
@@ -429,13 +436,13 @@ your-project/                    # your repo (untouched)
 
 ## Agent Compatibility
 
-| Runtime | Support Level | How to Start |
-|---------|:------------:|-------------|
-| **Claude Code** | First-class | `automil init --runtime claude` then `/automil-setup`, then `/automil` |
-| **Codex** | First-class | `automil init --runtime codex`; per-runtime SKILL/AGENTS overlay shipped |
-| **OpenCode** | First-class | `automil init --runtime opencode`; per-runtime SKILL/AGENTS overlay shipped |
-| **DeepSeek** | First-class (routed) | `automil init --runtime deepseek-via-opencode` (or `deepseek-via-codex`); DeepSeek is a model accessed through a host runtime |
-| **Cursor / Aider / Windsurf** | Compatible | Point the agent at `automil/program.md` and the [contract](docs/training-script-contract.md), any agent that can read files, edit code, and run shell commands works |
+| Runtime                       |    Support Level     | How to Start                                                                                                                                                         |
+| ----------------------------- | :------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Claude Code**               |     First-class      | `automil init --runtime claude` then `/automil-setup`, then `/automil`                                                                                               |
+| **Codex**                     |     First-class      | `automil init --runtime codex`; per-runtime SKILL/AGENTS overlay shipped                                                                                             |
+| **OpenCode**                  |     First-class      | `automil init --runtime opencode`; per-runtime SKILL/AGENTS overlay shipped                                                                                          |
+| **DeepSeek**                  | First-class (routed) | `automil init --runtime deepseek-via-opencode` (or `deepseek-via-codex`); DeepSeek is a model accessed through a host runtime                                        |
+| **Cursor / Aider / Windsurf** |      Compatible      | Point the agent at `automil/program.md` and the [contract](docs/training-script-contract.md), any agent that can read files, edit code, and run shell commands works |
 
 The canonical skill content lives under `_shared/`; per-runtime directories
 ship only diffs/overlays. `automil show-skill --runtime <r>` renders the
@@ -445,12 +452,12 @@ merged result to stdout. See the [Agent Compatibility Guide](docs/agent-compatib
 
 ## Examples
 
-| Example | Task | Library | Notes | Result |
-|---------|------|---------|-------|--------|
-| [`sklearn-iris`](examples/sklearn-iris/) | 3-class iris classification | scikit-learn | Reference second-consumer (~80 LOC, no `automil.*` imports) demonstrating the [training-script contract](docs/training-script-contract.md) | composite ≈ 0.95 |
-| [`ovarian_hrd`](examples/ovarian_hrd/) | Binary HRD classification | CLAM-MB / H-optimus-1 | Pre-v1.0 autonomous run | 0.814 → 0.851 (+4.5%, 189 experiments) |
-| [`clwd`](examples/clwd/) | 7-class lung subtype classification | autobench | Skeleton | - |
-| [`placeholder`](examples/placeholder/) | - | - | Template emitted by `automil init` | - |
+| Example                                  | Task                                | Library               | Notes                                                                                                                                      | Result                                 |
+| ---------------------------------------- | ----------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| [`sklearn-iris`](examples/sklearn-iris/) | 3-class iris classification         | scikit-learn          | Reference second-consumer (~80 LOC, no `automil.*` imports) demonstrating the [training-script contract](docs/training-script-contract.md) | composite ≈ 0.95                       |
+| [`ovarian_hrd`](examples/ovarian_hrd/)   | Binary HRD classification           | CLAM-MB / H-optimus-1 | Pre-v1.0 autonomous run                                                                                                                    | 0.814 → 0.851 (+4.5%, 189 experiments) |
+| [`clwd`](examples/clwd/)                 | 7-class lung subtype classification | autobench             | Skeleton                                                                                                                                   | -                                      |
+| [`placeholder`](examples/placeholder/)   | -                                   | -                     | Template emitted by `automil init`                                                                                                         | -                                      |
 
 ---
 
@@ -459,8 +466,8 @@ merged result to stdout. See the [Agent Compatibility Guide](docs/agent-compatib
 - **[Getting Started](docs/getting-started.md)**, full setup, configuration, and usage
 - **[Training-Script Contract](docs/training-script-contract.md)**, the seam between framework and consumer (6 contract items + SIGTERM patterns)
 - **[Agent Compatibility](docs/agent-compatibility.md)**, per-runtime setup, overlay merge model, multi-runtime asset layout
-- **[Implementation Report](docs/implementation-report.md)**, v1.0 architecture, design decisions, and the 9-phase refactor that produced it
-- **[CHANGELOG](CHANGELOG.md)**, v1.0 milestone release notes (BREAKING migration paths included)
+- **[Implementation Report](docs/implementation-report.md)**, v1.0 architecture, design decisions, and the 9-phase refactor that produced it (point-in-time; the Ladder gate + val-firewall came later — see the contract doc and CHANGELOG)
+- **[CHANGELOG](CHANGELOG.md)**, release notes through v1.2 (val-firewall, survival task, preprint roster; BREAKING migration paths included)
 
 ---
 

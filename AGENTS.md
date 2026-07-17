@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-autoMIL is an autonomous experiment framework for Multiple Instance Learning in computational pathology. It overlays onto existing ML project repos, enabling coding agents to iteratively improve models through persistent experimentation, knowledge accumulation, and multi-branch exploration.
+autoMIL is an autonomous experiment framework that automates the **research iteration** rather than the hyperparameter: a coding agent reads an existing ML codebase, proposes and implements **source-level** changes (architecture + training recipe), runs each as an isolated reproducible experiment in a git worktree, and accumulates knowledge across a persistent experiment tree that informs later proposals. This is a different level of automation from grid/menu AutoML (Optuna-style pipeline search), which searches configurations within a fixed pipeline. It overlays onto existing ML project repos; discovered variants are reproducible, attributable to their parents, and portable across machines and LLM runtimes. The origin domain is Multiple Instance Learning in computational pathology, but the framework is generic.
 
 **Package:** `src/automil/` installed as `automil` via `pip install -e .`
 **CLI entry point:** `automil` (defined in `pyproject.toml` as `automil.cli:main`)
@@ -12,7 +12,7 @@ autoMIL is an autonomous experiment framework for Multiple Instance Learning in 
 autoMIL overlays an `automil/` subdirectory onto an existing git repo. It does NOT create train.py or prepare.py. The agent scopes the full codebase and determines what to edit.
 
 **Core modules:**
-- `graph.py` - Experiment tree tracking with UCB-inspired scoring and composite-score dominance for keep/discard
+- `graph.py` - Experiment tree tracking with UCB-inspired scoring and composite-score dominance (Ladder keep-margin) for keep/discard; the composite is validation-only (val-firewall)
 - `runner.py` - Git worktree overlay for isolated parallel experiment execution
 - `backends/_orchestrator_daemon.py` - GPU scheduler daemon with best-fit bin packing (entrypoint at `orchestrator.py`)
 - `cli/` - Click-based CLI wrapping all operations
@@ -23,7 +23,7 @@ autoMIL overlays an `automil/` subdirectory onto an existing git repo. It does N
 - Experiments are tracked as a directed tree in `graph.json`, not a flat log
 - Each experiment stores only its changed files (overlay), not the full repo
 - The orchestrator runs experiments in git worktrees, overlaying modified files on a base commit
-- Keep/discard is decided by the framework via single-axis composite-score comparison (child kept iff `child.composite > parent.composite`); the training script reports the composite scalar via `result.json` (see D-200)
+- Keep/discard is decided by the framework via single-axis composite-score comparison, gated by a predeclared Ladder keep-margin (child kept iff `child.composite > parent.composite + accept_margin`; δ defaults to 0.0 in `meta.scoring`, seeded from `config.yaml`'s `scoring.accept_margin`). The composite is the **validation** selection signal (the val-firewall: test never drives selection), reported by the training script via `result.json` (see D-200)
 - `results.tsv` is written solely by the orchestrator from `result.json`, never by train.py
 - `_recover_orphans()` only runs in the daemon loop (`run()`), never on construction (to prevent `status`/`stop` from corrupting live runs)
 - Viz dashboard binds 127.0.0.1 by default; opt in to LAN access via `viz.host` in config.yaml (no auth on the SSE stream)
@@ -59,20 +59,22 @@ uv run automil viz start
 
 | File | Lines | Role |
 |------|-------|------|
-| `src/automil/graph.py` | ~680 | Experiment tree, scoring, reconciliation |
-| `src/automil/orchestrator.py` | ~750 | GPU scheduler daemon |
-| `src/automil/cli.py` | ~400 | CLI commands |
-| `src/automil/runner.py` | ~80 | Git worktree overlay |
-| `src/automil/viz/server.py` | ~270 | SSE dashboard server |
-| `src/automil/viz/static/app.js` | ~630 | 3D force graph frontend |
+| `src/automil/graph.py` | ~1090 | Experiment tree, scoring, reconciliation |
+| `src/automil/backends/_orchestrator_daemon.py` | ~2090 | GPU scheduler daemon (thin entrypoint: `orchestrator.py`) |
+| `src/automil/cli/` | package, ~30 commands | Click CLI (one module per command + `lifecycle/`) |
+| `src/automil/runner.py` | ~160 | Git worktree overlay |
+| `src/automil/viz/server.py` | ~440 | SSE dashboard server |
+| `src/automil/viz/static/app.js` | ~670 | 3D force graph frontend |
 
 ## Testing
 
-48 tests across 4 files:
-- `test_graph.py` (26) - graph API, scoring, reconciliation, migration
-- `test_runner.py` (7) - worktree create/cleanup, overlay, result collection
-- `test_cli.py` (5) - init, submit, rank
-- `test_integration.py` (10) - end-to-end flows, path sanitization, deletions, scoring
+~600 tests across ~130 files under `tests/` (plus ~420 in `benchmarks/tests/`).
+Grouped by area: `test_graph*.py` (graph API, scoring, reconciliation),
+`backends/` (orchestrator daemon, SLURM/Ray contracts, result-schema validation),
+`cells/` (budget-cap state machine), `gate/` (two-stage generalization gate),
+`test_born_sealed_firewall.py` + `test_seal_node_archive.py` + `test_rank_held_out_filter.py`
+(val-firewall / born-sealed test), `trajectory/`, `skills/`, and
+`test_integration.py` (end-to-end flows). Run `uv run pytest tests/ -q`.
 
 ## Conventions
 
@@ -86,12 +88,17 @@ uv run automil viz start
 
 ## Result Contract
 
-Training scripts must write `result.json` to their working directory:
+Training scripts must write `result.json` to their working directory. `metrics`
+is the agent-facing **validation** block and `composite` is computed from it (the
+selection signal); test metrics go in a sealed `held_out` block that the
+orchestrator quarantines to `archive/<node>/certify.json` and reveals once via
+`automil certify` — never surfaced to any agent during search (the val-firewall):
 ```json
 {
   "status": "completed",
-  "metrics": {"val_auc": 0.87, "val_bacc": 0.81, "test_auc": 0.87, "test_bacc": 0.83},
-  "composite": 0.85,
+  "metrics": {"val_auc": 0.87, "val_bacc": 0.81},
+  "held_out": {"test_auc": 0.87, "test_bacc": 0.83},
+  "composite": 0.84,
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500
 }
@@ -112,7 +119,7 @@ autoMIL/
 ├── tests/                # autoMIL tests
 ├── benchmarks/           # autobench package
 │   ├── src/autobench/    # Benchmark code (dataset-agnostic)
-│   ├── datasets/         # Per-dataset YAML configs (ovarian, clwd, placeholder)
+│   ├── datasets/         # Per-dataset YAML configs, grouped: tcga/ cptac/ other/ templates/
 │   ├── scripts/          # CLI: run_benchmark.py --dataset <name>
 │   ├── experiments/      # autoMIL overlays per dataset
 │   ├── lib/              # External deps (CLAM, nnMIL, SMMILe, TRIDENT)
@@ -212,5 +219,3 @@ This project is managed via GSD (`get-shit-done`). Live planning lives under `.p
 **Current phase:** check `STATE.md`. Drive phase-by-phase via `/gsd-discuss-phase <N>` → `/gsd-plan-phase <N>` → `/gsd-execute-phase <N>` → `/gsd-verify-work`.
 
 When working in this project, treat the planning docs as authoritative for *what* and the codebase map as the reference for *where*. Standing directives above (address-as-Leo, plan-first, subagents, self-improvement loop, verification-before-done, task management, core principles) override anything GSD agents suggest.
-
-## Imported Claude Cowork project instructions

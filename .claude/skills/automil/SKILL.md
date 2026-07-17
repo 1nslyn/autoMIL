@@ -114,7 +114,7 @@ source; then `uv run automil reconcile`.
       `automil/variants/<parent>/<name>.py`, select it in `config.yaml`, and
       `uv run automil submit`. No working-tree cleanup — the variant is committed.
    b. Free-mode edit: edit project files, then
-      `uv run automil submit --node <id> --desc "..." --files <changed files>`,
+      `uv run automil submit --node <id> --desc "..." --mil-model <model> --files <changed files>`,
       then **selectively** restore ONLY those files:
       `git restore --source=HEAD -- <each-file>`. Never bulk-restore
       (`git checkout .`, `git restore .`, `git stash -k`) — it discards unrelated work.
@@ -136,6 +136,22 @@ source; then `uv run automil reconcile`.
    `learnings.md` (what worked / failed / near-miss, with paper ids). Commit
    winning changes. Then loop back to RESEARCH for the next batch.
 
+## The val-firewall — select on validation, never test
+
+Every `result.json` `metrics` block is **validation-only**, and `composite` is
+computed from it — that is the sole selection signal. Any test metrics the
+consumer emits are sealed into a `held_out` block that the orchestrator
+quarantines under `archive/<node>/certify/`; they are never surfaced to you
+during search. Do **not** try to read, reconstruct, or optimize against test.
+When the whole search is finished, reveal the held-out number exactly once:
+
+```bash
+uv run automil certify        # honest held-out test for the val-selected winner
+```
+
+The val→test gap is the honest cost of search; reporting the certified number
+(not a test-selected one) is what keeps the comparison trustworthy.
+
 ## Rules
 
 - NEVER STOP while `.automil_active` exists
@@ -143,6 +159,7 @@ source; then `uv run automil reconcile`.
 - Always pass `--kind` to `automil propose`; keep the pending mix ≥50% structural
   (`automil portfolio` must not report BELOW TARGET before you execute)
 - Prefer real architectural change over hyperparameter tuning
+- NEVER read or optimize against test: `metrics`/`composite` are validation-only and test is sealed (val-firewall). Reveal held-out test once at the very end with `uv run automil certify`, never inside the loop
 - Use `uv run automil submit` for every experiment (not manual runs)
 - Use `uv run automil rank` to pick experiments (not random)
 - Update `automil/learnings.md` after every result (paper title + arXiv id when from a paper)
