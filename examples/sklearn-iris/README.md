@@ -29,7 +29,7 @@ Expected: `composite` between 0.93 and 0.98 with `random_state=42`.
 ```
 cd examples/sklearn-iris
 automil init                        # already initialised; this is idempotent
-automil submit --node iris_001 --files train.py --max-time 60
+automil submit --node iris_001 --desc "baseline" --files train.py --max-time 60
 automil orchestrator start
 automil status
 ```

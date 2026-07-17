@@ -2,6 +2,59 @@
 
 autoMIL: F2-readiness framework refactor.
 
+> Releases through v1.0 use the phase-based numbering below (`8.0.0` = the v1.0
+> milestone). Post-v1.0 releases follow semver and map to git tags `v1.1.0`,
+> `v1.2.0`, and `v1.2.1`.
+
+## v1.2.1 (2026-07-15, `git tag v1.2.1`)
+
+- **fix(packaging):** list all three authors (Shuolin Yin, Yeonwoo Seo, Jun Ma)
+  in the package `Author` field.
+
+## v1.2.0 (2026-07-15, `git tag v1.2.0`)
+
+**Theme: the validation-firewall, the survival task family, and the preprint
+dataset roster.**
+
+- **Validation-selection firewall + Ladder keep-margin.** Keep/discard now
+  selects on the **validation** composite only — a child is kept iff
+  `child.composite > parent.composite + accept_margin` (δ, seeded from
+  `config.yaml`'s `scoring.accept_margin`, default 0.0). Test metrics never
+  drive search.
+- **Born-sealed test artifacts (val-firewall).** Test metrics are sealed at
+  ingest into a quarantined `archive/<node>/certify/` block, kept out of every
+  agent-facing surface (results, `run.log`, trajectories) during search, and
+  revealed exactly once via the new `automil certify` command. `result.json`
+  now carries validation metrics in `metrics` and test in a separate `held_out`
+  block.
+- **Overall-survival task.** A second task family beyond classification:
+  time-to-event OS prediction for TCGA-LUAD/LGG/SKCM/BLCA/COAD, with Cox and
+  discrete-time-NLL losses, patient-level concordance index via
+  `scikit-survival`, 5-fold CV, and val-loss checkpoint selection. Survival is
+  wired through CLAM, nnMIL, ABMIL, DTFD-MIL, and TITAN.
+- **Preprint dataset roster.** TCGA trimmed to the 5-member preprint slate
+  (LUAD/LGG/SKCM/BLCA/COAD); the MIL roster pinned to 4 aggregators per
+  framework (`clam_mb`, `simple_mil`, `ab_mil`, `dtfd_mil`); a TITAN
+  slide-encoder arm added (CONCH v1.5 @512px -> TITAN 768-d); ABMIL promoted to
+  its own framework; `benchmarks/datasets/` reorganized by program into
+  `tcga/ cptac/ other/ templates/`. CV defaults to 5-fold globally.
+- **Packaging: publish-ready.** PyPI trusted-publishing via tokenless OIDC,
+  dynamic versioning, and a citation file.
+
+## v1.1.0 — Bug Fixing (2026-06-24, `git tag v1.1.0`)
+
+Hardening milestone (20 requirements, 6 phases).
+
+- **New commands / knobs:** `automil dequeue` (remove a queued or pending node);
+  a `--project` group option for driving a repo from outside its root; a
+  `scheduling_policy` knob with best-GPU dispatch; an editable-overlay guard in
+  the daemon and `automil check`; migrate-on-read for older `graph.json` files.
+- **Orchestrator:** `--experiments_per_gpu` wired through with a raised default
+  concurrency cap; viz port fallback (explicit > config > default).
+- **Safety fixes:** starttime-validated PID/PGID kills, dequeue state guards,
+  cancel graph-mutation routed through the locked-update path, and
+  `CUBLAS_WORKSPACE_CONFIG` pinned before the torch import.
+
 ## 8.0.0 — v1.0 milestone (shipped 2026-05-08, `git tag v1.0`)
 
 The F2-readiness framework refactor. Nine phases (Phase 0 cleanup through

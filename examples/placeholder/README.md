@@ -23,8 +23,9 @@ automil orchestrator start
 
 Ensure your training script honors the
 [training-script contract](../../docs/training-script-contract.md): write
-`result.json` matching `automil/schemas/result.schema.json`, exit cleanly
-on SIGTERM with a partial result, declare env vars under `env.required`.
+`result.json` matching the autoMIL result schema (`result.schema.json`, shipped
+with the package; `automil init` does not scaffold a project-local copy), exit
+cleanly on SIGTERM with a partial result, declare env vars under `env.required`.
 
 For a worked minimal reference (~80 LOC, no `automil.*` imports), see
 [`examples/sklearn-iris/`](../sklearn-iris/).

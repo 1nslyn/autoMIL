@@ -1,16 +1,37 @@
 # AutoBench, MIL Benchmark Suite
 
 Benchmark suite for evaluating and improving Multiple Instance Learning (MIL)
-models in computational pathology. Demonstrates **autoMIL** across multiple
-datasets.
+models in computational pathology, and the empirical layer that demonstrates
+**autoMIL**. autobench varies both benchmark axes — the **encoder** (patch and
+slide foundation models) and the **MIL aggregator** — and gives every
+(encoder × aggregator) cell an equal-effort, agentic recipe search on a **frozen
+data substrate**: splits, folds, and extracted features are held constant, and
+the agent may change only architecture and training recipe. That recipe-bias
+control, together with a validation-firewall so test never drives selection, is
+what lets the encoder-vs-aggregator comparison be read cleanly instead of being
+confounded by uneven per-cell tuning effort.
 
 ## Datasets
 
-| Dataset | Tasks | Classes | Slides | Config |
-|---------|-------|---------|--------|--------|
-| **Ovarian** | BRCA, HRD | 2 (binary) | ~400 | `datasets/other/ovarian.yaml` |
-| **CLWD** | Subtype (7-class, 6-class) | 6-7 | 408 | `datasets/other/clwd.yaml` |
-| **Placeholder** | TBD | TBD | TBD | `datasets/templates/placeholder.yaml` |
+The preprint roster is a 5-cohort TCGA slate, each pinned to one distinct
+classification gene plus an overall-survival (OS) task, run across 4 MIL
+aggregators (`clam_mb`, `simple_mil`, `ab_mil`, `dtfd_mil`) plus a TITAN
+slide-encoder arm:
+
+| Dataset | Classification gene | + Survival | Config |
+|---------|--------------------|:----------:|--------|
+| **TCGA-LUAD** | KRAS | OS | `datasets/tcga/tcga_luad.yaml` |
+| **TCGA-LGG** | IDH1 | OS | `datasets/tcga/tcga_lgg.yaml` |
+| **TCGA-SKCM** | NRAS | OS | `datasets/tcga/tcga_skcm.yaml` |
+| **TCGA-BLCA** | PIK3CA | OS | `datasets/tcga/tcga_blca.yaml` |
+| **TCGA-COAD** | BRAF | OS | `datasets/tcga/tcga_coad.yaml` |
+
+Additional non-slate cohorts also ship configs: **Ovarian** (BRCA/HRD,
+`datasets/other/ovarian.yaml`), **CLWD** (lung subtype, `datasets/other/clwd.yaml`),
+**HANCOCK** (`datasets/other/hancock.yaml`), and **CPTAC-CCRCC/GBM**
+(`datasets/cptac/`). `datasets/templates/` holds the `tcga_`, `cptac_`, and
+`placeholder` templates for adding your own. The full Phase-2 (journal) scope is
+the 16 TCGA + 10 CPTAC inventory — see [`../paper/`](../paper/).
 
 ## Setup
 
@@ -92,21 +113,28 @@ automil orchestrator start
 
 ```
 benchmarks/
-├── datasets/         # Per-dataset YAML configs (ovarian, clwd, placeholder)
+├── datasets/         # Per-dataset YAML configs, grouped by program:
+│   ├── tcga/         #   5-member preprint slate (luad/lgg/skcm/blca/coad)
+│   ├── cptac/        #   CPTAC cohorts (ccrcc, gbm)
+│   ├── other/        #   ovarian, clwd, hancock
+│   └── templates/    #   tcga_/cptac_/placeholder templates
 ├── src/autobench/    # Reusable benchmark code
 │   ├── config.py     # DatasetConfig loader (YAML → dataclass)
 │   ├── data.py       # Generic data loading and filtering
 │   ├── encoders/     # Custom encoder wrappers
 │   └── pipeline/     # Experiment execution engine
 │       ├── config.py       # ExperimentConfig, registries, grid generation
-│       ├── prepare.py      # H5→PT conversion, task CSVs, splits
-│       ├── train.py        # CLAM training loop
-│       ├── runner.py       # Single-experiment runner (all folds)
+│       ├── prepare.py      # H5→PT conversion, task CSVs
+│       ├── splits.py       # Fold / split generation
 │       ├── evaluate.py     # Metrics and confidence intervals
 │       ├── orchestrator.py # Multi-GPU scheduling
+│       ├── clam/           # CLAM adapter (train loop + runner + survival)
 │       ├── nnmil/          # nnMIL framework adapter
+│       ├── abmil/          # AB-MIL framework adapter
+│       ├── dtfd/           # DTFD-MIL framework adapter
+│       ├── titan/          # TITAN slide-encoder arm
 │       └── smmile/         # SMMILe framework adapter
-├── scripts/          # CLI entry points
+├── scripts/          # CLI entry points (run_benchmark.py, run_feature_extraction.py, slurm/)
 ├── experiments/      # autoMIL overlays per dataset
 ├── lib/              # External dependencies (CLAM, nnMIL, SMMILe, TRIDENT)
 └── tests/            # Test suite

@@ -2,13 +2,14 @@
 
 Every member runs the **full MIL grid on their own dataset** and writes to the
 lab-shared results tree. **5-fold** patient-stratified CV (the lab standard),
-**one task per dataset**. The commands are identical for everyone — you just pass
-your dataset name.
+**two tasks per dataset** — the mutation task below, plus a shared `os`
+(overall survival) task. The commands are identical for everyone — you just
+pass your dataset name.
 
 ## Your assignment
 
-| Member | Dataset | Task | `<dataset>` arg |
-|--------|---------|------|-----------------|
+| Member | Dataset | Mutation Task | `<dataset>` arg |
+|--------|---------|----------------|-----------------|
 | Leo | TCGA-LUAD | KRAS | `tcga_luad` |
 | Yeonwoo | TCGA-LGG | IDH1 | `tcga_lgg` |
 | Keishi | TCGA-SKCM | NRAS | `tcga_skcm` |
@@ -16,6 +17,8 @@ your dataset name.
 | Ryan | TCGA-COAD | BRAF | `tcga_coad` |
 
 Find your row — everywhere below, `<dataset>` is your arg (e.g. `tcga_lgg`).
+Every dataset also runs a shared `os` (overall survival) task, so each of the
+3 sbatch commands below trains both tasks — see [Notes](#notes).
 
 ---
 
@@ -65,7 +68,7 @@ arg for a comparison run (e.g. `submit_benchmark.sh $DS 10`).
 
 ```
 /project/6114359/shared/Pathology/autoMIL/phase2/<dataset>/benchmark_5fold/results/
-  <framework>/standard/<task>/<encoder>/<model>/
+  <framework>/standard/<task>/<encoder>/<model>/       # <task>=os adds one more level: /<loss>/ (cox or nllsurv)
       summary.json           # mean + 95% CI across folds
       fold_<i>/metrics.json  # per-fold val/test AUC + balanced accuracy
 ```
@@ -75,7 +78,7 @@ arg for a comparison run (e.g. `submit_benchmark.sh $DS 10`).
 ```bash
 squeue -u $USER
 BD=/project/6114359/shared/Pathology/autoMIL/phase2/$DS/benchmark_5fold
-find $BD/results -name summary.json | wc -l        # 22 when complete (21 tile + 1 TITAN); LUAD = 44
+find $BD/results -name summary.json | wc -l        # 33 when complete (30 tile + 3 TITAN)
 cat  $BD/results/_failed.json 2>/dev/null || echo "no failures"
 tail -f logs/bench_mil_bench_<jobid>.out
 ```
@@ -84,8 +87,9 @@ tail -f logs/bench_mil_bench_<jobid>.out
 
 ## Notes
 
-- **5-fold, one task per dataset.** The task is fixed per dataset (see table) and
-  clears the 5-fold minority-class guard. Only Leo also runs LUAD at 10-fold
+- **5-fold, two tasks per dataset.** Each dataset runs its mutation task (see
+  table), which clears the 5-fold minority-class guard, plus a shared `os`
+  (overall survival) task. Only Leo also runs LUAD at 10-fold
   (`submit_benchmark.sh tcga_luad 10`) for comparison — nobody else needs to.
 - **Don't skip TITAN.** It's a required arm of the comparison. Step (b) — the
   512 px CONCH extraction — is the slow part (~half a day per dataset); the arm

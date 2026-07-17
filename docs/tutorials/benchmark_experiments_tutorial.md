@@ -6,16 +6,18 @@ End-to-end guide for running MIL benchmark experiments on TCGA (and other) datas
 
 **Goal:** Train and evaluate Multiple Instance Learning (MIL) models across combinations of:
 - **Encoders**, foundation models used for feature extraction (Virchow2, H-optimus-1, UNI2-h)
-- **MIL architectures**, CLAM-MB (attention-based) and Simple MIL (baseline)
-- **Tasks**, biomarker prediction targets (e.g., EGFR mutation, KRAS mutation)
-- **Frameworks**, CLAM and nnMIL
+- **MIL architectures**, CLAM-MB, Simple MIL, DTFD-MIL, and ABMIL (attention-based and baseline aggregators)
+- **Tasks**, biomarker prediction targets (e.g., KRAS mutation) plus a shared `os` (overall survival) task
+- **Frameworks**, CLAM, nnMIL, DTFD, and ABMIL (TITAN is a separate slide-level arm — see [run_preprint_benchmark.md](run_preprint_benchmark.md))
 
-**Recommended reference** (from `submit_3dataset_benchmark.sh`):
+**Recommended reference** (from `submit_benchmark.sh`'s default `FRAMEWORKS="clam nnmil dtfd abmil"`):
 - Encoders: `hoptimus1`, `uni_v2`, `virchow2`
 - CLAM model: `clam_mb`
 - nnMIL model: `simple_mil`
+- DTFD model: `dtfd_mil`
+- ABMIL model: `abmil`
 
-This gives a focused benchmark grid of **tasks × 3 encoders × 2 models**, enough to compare encoder quality and establish baselines without burning excessive GPU hours.
+This gives a focused benchmark grid of **tasks × 3 encoders × 4 models** (plus extra fan-out from survival-loss variants on the `os` task), enough to compare encoder quality and establish baselines without burning excessive GPU hours.
 
 **Pipeline:** Data preparation → Experiment grid generation → Multi-GPU training → Cross-fold aggregation → Results export
 
@@ -79,7 +81,7 @@ The benchmark pipeline has four phases, all handled automatically by the SLURM s
 ```
 Phase 1: Data Preparation (automatic)
   mapping CSV → task CSVs (case_id, slide_id, label)
-                → patient-stratified k-fold splits on case_id (10 folds)
+                → patient-stratified k-fold splits on case_id (5-fold default)
                 → H5 features → PyTorch .pt tensors
 
 Phase 2: Experiment Grid Generation
@@ -106,8 +108,10 @@ For the standard benchmark, we use **one model per framework** to keep the grid 
 |-----------|-------|-----|-----|
 | CLAM | CLAM Multi-Branch | `clam_mb` | Best-performing CLAM variant; attention-based with multiple branches |
 | nnMIL | Simple MIL | `simple_mil` | Lightweight baseline; fast to train, establishes a floor |
+| DTFD | DTFD MIL | `dtfd_mil` | Two-tier pseudo-bag distillation |
+| ABMIL | Attention MIL | `abmil` | Attention-based aggregation, non-gated variant (Ilse et al., 2018) |
 
-This is the same configuration used in `submit_3dataset_benchmark.sh` across all production benchmarks.
+This is the default roster: each dataset YAML's `clam_models` / `nnmil_models` / `dtfd_models` / `abmil_models` lists pin exactly this one-model-per-framework selection, and `submit_benchmark.sh` runs all four frameworks by default (`FRAMEWORKS="clam nnmil dtfd abmil"`). A separate TITAN arm (a frozen slide-level foundation model — no tile-encoder sweep) runs via `submit_titan_extract.sh` + `submit_titan.sh`; see [run_preprint_benchmark.md](run_preprint_benchmark.md).
 
 #### All Available Models (for extended benchmarks)
 
@@ -123,23 +127,44 @@ This is the same configuration used in `submit_3dataset_benchmark.sh` across all
 </details>
 
 <details>
-<summary>nnMIL Framework (up to 9 models)</summary>
+<summary>nnMIL Framework (up to 7 models)</summary>
 
 | Model | Key | Description |
 |-------|-----|-------------|
-| Attention-Based MIL | `ab_mil` | Classic attention mechanism |
 | Transformer MIL | `trans_mil` | Transformer-based aggregation |
 | Deep Sets MIL | `ds_mil` | Permutation-invariant aggregation |
-| DTFD MIL | `dtfd_mil` | Deep Tagging Fusion Discriminator |
 | ILRA MIL | `ilra_mil` | Independent Learned Region Aggregation |
 | WiKG MIL | `wikg_mil` | Weighted Instance Knowledge Graph |
 | Simple MIL | `simple_mil` | Minimal baseline |
 | Vision Transformer | `vision_transformer` | ViT-based bag aggregation |
 | RRT | `rrt` | Recurrent Relational Transformer |
 
-> **Note:** Available nnMIL models depend on your dataset YAML's `nnmil_models` list. Not all datasets enable all 9 models. Check your YAML to see which are configured.
+> **Note:** Available nnMIL models depend on your dataset YAML's `nnmil_models` list. Not all datasets enable all 7 models. Check your YAML to see which are configured. Attention MIL and DTFD MIL used to be listed here but are now their own frameworks — see below.
 >
 > **Note:** `vision_transformer`, `rrt`, `trans_mil`, and `ilra_mil` are memory-intensive. The pipeline automatically caps their batch size at 4 and sequence length at 4096.
+
+</details>
+
+<details>
+<summary>DTFD Framework (1 model)</summary>
+
+| Model | Key | Description |
+|-------|-----|-------------|
+| DTFD MIL | `dtfd_mil` | Two-tier pseudo-bag distillation |
+
+Select via `--frameworks dtfd --dtfd_models dtfd_mil` (default: all from the dataset YAML's `dtfd_models`).
+
+</details>
+
+<details>
+<summary>ABMIL Framework (2 models)</summary>
+
+| Model | Key | Description |
+|-------|-----|-------------|
+| Attention MIL | `abmil` | Non-gated attention aggregation (Ilse et al., 2018) |
+| Attention MIL (gated) | `abmil_gated` | Gated attention aggregation |
+
+Select via `--frameworks abmil --abmil_models abmil` (default: all from the dataset YAML's `abmil_models`).
 
 </details>
 
@@ -180,62 +205,48 @@ uv run python benchmarks/scripts/run_benchmark.py \
     --frameworks clam \
     --encoders hoptimus1 \
     --models clam_mb \
-    --tasks egfr \
+    --tasks kras \
     --no_wandb
 ```
 
-This runs 1 experiment (10 folds) and takes ~20-60 minutes depending on dataset size.
+This runs 1 experiment (5 folds by default) and takes ~20-60 minutes depending on dataset size.
 
 #### Option B: SLURM Batch Job (recommended)
 
-For the standard benchmark, use the SLURM submission script. This runs both frameworks (CLAM + nnMIL) with the recommended model selection (`clam_mb` + `simple_mil`) across the 3 encoders (`hoptimus1`, `uni_v2`, `virchow2`).
+For the standard benchmark, use the SLURM submission script. Its interface is **positional** (`<dataset> [n_folds]`), not env-var driven — it always runs the recommended model selection (`clam_mb` + `simple_mil` + `dtfd_mil` + `abmil`) across the 3 encoders (`hoptimus1`, `uni_v2`, `virchow2`) and all of the dataset's tasks, reading the roster straight from the dataset YAML. The only env var it honors is `FRAMEWORKS`, to run a subset of the 4 frameworks.
 
 **First, configure the script for your account:**
 
-```bash
-# Update the project directory path
-sed -i "s|/home/yinshuol/scratch/autoMIL/autoMIL|$HOME/scratch/autoMIL|" benchmarks/scripts/slurm/submit_benchmark.sh
+The script resolves its project directory from `SLURM_SUBMIT_DIR`, which SLURM sets automatically — so as long as you `sbatch` from the repo root, no path edit is needed. It only falls back to a hardcoded default if `SLURM_SUBMIT_DIR` is unset:
 
-# Update the SLURM account and email
-sed -i "s|--account=def-wanglab|--account=YOUR_ACCOUNT|" benchmarks/scripts/slurm/submit_benchmark.sh
-sed -i "s|--mail-user=leo.yin@mail.utoronto.ca|--mail-user=YOUR_EMAIL|" benchmarks/scripts/slurm/submit_benchmark.sh
+```bash
+# Only needed if you don't submit from the repo root:
+sed -i "s|/home/yinshuol/scratch/autoMIL/autoMIL|$HOME/scratch/autoMIL/autoMIL|" benchmarks/scripts/slurm/submit_benchmark.sh
+
+# Update the SLURM account:
+sed -i "s|--account=rrg-jma|--account=YOUR_ACCOUNT|" benchmarks/scripts/slurm/submit_benchmark.sh
 ```
+
+The script has no `--mail-user` directive by default (only `--mail-type=BEGIN,END,FAIL`); add one yourself if you want job-completion emails.
 
 **Submit the job with recommended settings:**
 
 ```bash
 mkdir -p logs
 
-# Standard benchmark: clam_mb + simple_mil, 3 encoders, all tasks
-# This matches the submit_3dataset_benchmark.sh configuration
-DATASET=tcga_{code} \
-    ENCODERS="hoptimus1 uni_v2 virchow2" \
-    MODELS="clam_mb" \
-    NNMIL_MODELS="simple_mil" \
-    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
+# Standard benchmark: clam_mb + simple_mil + dtfd_mil + abmil, 3 encoders, all tasks, 5-fold
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_{code}
 
-# Or run only CLAM framework
-DATASET=tcga_{code} \
-    ENCODERS="hoptimus1 uni_v2 virchow2" \
-    MODELS="clam_mb" \
-    FRAMEWORKS="clam" \
-    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
+# Or a 10-fold comparison run (2nd positional arg)
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_{code} 10
 
-# Or run only nnMIL framework
-DATASET=tcga_{code} \
-    ENCODERS="hoptimus1 uni_v2 virchow2" \
-    NNMIL_MODELS="simple_mil" \
-    FRAMEWORKS="nnmil" \
-    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
-
-# Or run a single task for quick validation
-DATASET=tcga_{code} \
-    ENCODERS="hoptimus1 uni_v2 virchow2" \
-    MODELS="clam_mb" \
-    NNMIL_MODELS="simple_mil" \
-    TASKS="egfr" \
-    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
+# Or run only a subset of frameworks via FRAMEWORKS
+FRAMEWORKS="clam" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_{code}
+FRAMEWORKS="nnmil" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_{code}
+FRAMEWORKS="clam nnmil" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_{code}
 ```
+
+> **Subsetting encoders, models, or tasks?** The SLURM script doesn't expose `ENCODERS`/`MODELS`/`NNMIL_MODELS`/`TASKS`/`SEED` overrides — it always runs the dataset YAML's full roster. To run a narrower slice (e.g., one task only), use [Option A](#option-a-interactive-single-gpu-small-runs) or [Option C](#option-c-multi-gpu-interactive) with `run_benchmark.py` directly.
 
 **Monitor the job:**
 
@@ -243,8 +254,8 @@ DATASET=tcga_{code} \
 # Check job status
 squeue -u $USER
 
-# Watch the output log
-tail -f logs/bench_autobench_train_*.out
+# Watch the output log (job name is "mil_bench")
+tail -f logs/bench_mil_bench_*.out
 ```
 
 The SLURM script:
@@ -281,15 +292,19 @@ uv run python benchmarks/scripts/run_benchmark.py \
 
 ### Step 2: Understand the Experiment Grid
 
-The pipeline generates a Cartesian product: **frameworks × strategies × tasks × encoders × models**. With the recommended settings, the grid is focused and manageable:
+The pipeline generates a near-Cartesian product: **frameworks × strategies × tasks × encoders × models**, pruned by feasibility — a survival task's loss variants (`cox`, `nllsurv`) each become a separate experiment, and some frameworks restrict which loss/model combinations are valid. With the recommended settings, the grid is focused and manageable:
 
-**Standard grid for a TCGA dataset with 2 tasks (e.g., EGFR + KRAS):**
+**Standard grid for a TCGA dataset with 2 tasks (a mutation task + `os` survival):**
 
 | Framework | Model | Grid | Experiments |
 |-----------|-------|------|-------------|
-| CLAM | `clam_mb` | 2 tasks × 3 encoders × 1 model | 6 |
-| nnMIL | `simple_mil` | 2 tasks × 3 encoders × 1 model | 6 |
-| **Total** | | | **12 experiments, 60 fold trainings** |
+| CLAM | `clam_mb` | 3 encoders × (1 mutation + 1 survival-loss variant) | 6 |
+| nnMIL | `simple_mil` | 3 encoders × (1 mutation + 2 survival-loss variants) | 9 |
+| DTFD | `dtfd_mil` | 3 encoders × (1 mutation + 1 survival-loss variant) | 6 |
+| ABMIL | `abmil` | 3 encoders × (1 mutation + 2 survival-loss variants) | 9 |
+| **Total** | | | **30 experiments, 150 fold trainings (5-fold)** |
+
+CLAM and DTFD only run `nllsurv` for `os` here (CLAM's `cox` needs `clam_sb`, not the recommended `clam_mb`; DTFD's pseudo-bag distillation only supports `nllsurv`), while nnMIL and ABMIL run both `cox` and `nllsurv`, so they fan out further. Add the separate TITAN arm (3 more experiments — see [run_preprint_benchmark.md](run_preprint_benchmark.md)) and the full grid is 33 experiments.
 
 To verify the exact count for your dataset:
 
@@ -301,13 +316,10 @@ from autobench.pipeline.config import BenchmarkConfig, Framework, build_registri
 ds = load_dataset_config('tcga_{code}')
 registries = build_registries(ds)
 
-# Standard grid with recommended model selection
+# Standard grid with the recommended (default) model selection
 cfg = BenchmarkConfig.from_dataset_config(
     ds,
-    frameworks=[Framework.CLAM, Framework.NNMIL],
-    encoder_keys=['hoptimus1', 'uni_v2', 'virchow2'],
-    model_types=['clam_mb'],
-    nnmil_model_types=['simple_mil'],
+    frameworks=[Framework.CLAM, Framework.NNMIL, Framework.DTFD, Framework.ABMIL],
 )
 exps = generate_all_experiments(cfg, registries)
 
@@ -328,7 +340,7 @@ for e in exps:
 "
 ```
 
-> **Extended benchmarks:** If you want to run all available models, omit the `--models` and `--nnmil_models` flags. This expands the grid significantly (3 CLAM + up to 9 nnMIL models), so plan for longer wall times. See [All Available Models](#all-available-models-for-extended-benchmarks) above.
+> **Extended benchmarks:** If you want to run all available models, omit the `--models`, `--nnmil_models`, `--dtfd_models`, and `--abmil_models` flags. This expands the grid significantly (3 CLAM + up to 7 nnMIL + 1 DTFD + 2 ABMIL models), so plan for longer wall times. See [All Available Models](#all-available-models-for-extended-benchmarks) above.
 
 ### Step 3: Understanding the Output
 
@@ -339,14 +351,14 @@ The SLURM script's Phase 1 creates:
 ```
 {benchmark_dir}/
 ├── dataset_csv/
-│   ├── egfr.csv              # slide_id, case_id, label for each task
-│   └── kras.csv
+│   ├── kras.csv               # slide_id, case_id, label
+│   └── os.csv                 # slide_id, case_id, status, time (survival task)
 ├── splits/
 │   └── standard/
-│       ├── egfr/
+│       ├── kras/
 │       │   ├── splits_0.csv  # fold 0: train/val/test slide IDs
 │       │   └── ...           # splits_1.csv through splits_4.csv
-│       └── kras/
+│       └── os/
 │           └── ...
 └── features/
     ├── virchow2/
@@ -367,7 +379,7 @@ After training completes, the results directory looks like:
 ├── _failed.json                               # Failed experiments with error details
 ├── clam/
 │   └── standard/
-│       ├── egfr/
+│       ├── kras/
 │       │   ├── hoptimus1/
 │       │   │   └── clam_mb/
 │       │   │       ├── config.json            # Experiment configuration
@@ -384,18 +396,24 @@ After training completes, the results directory looks like:
 │       │   └── uni_v2/
 │       │       └── clam_mb/
 │       │           └── ...
-│       └── kras/
-│           └── ...  (same structure)
+│       └── os/                                 # survival task: one extra level per loss variant
+│           └── hoptimus1/
+│               └── clam_mb/
+│                   └── nllsurv/                 # CLAM+os is nllsurv-only here (cox needs clam_sb)
+│                       └── ...
 └── nnmil/
     └── standard/
-        ├── egfr/
+        ├── kras/
         │   ├── hoptimus1/
         │   │   └── simple_mil/
         │   │       └── ...
         │   ├── virchow2/
         │   └── uni_v2/
-        └── kras/
-            └── ...
+        └── os/
+            └── hoptimus1/
+                └── simple_mil/
+                    ├── cox/
+                    └── nllsurv/
 ```
 
 #### The summary.json File
@@ -404,8 +422,8 @@ This is the key output. Each experiment produces one:
 
 ```json
 {
-  "experiment_id": "clam__standard__egfr__hoptimus1__clam_mb__s42",
-  "task": "egfr",
+  "experiment_id": "clam__standard__kras__hoptimus1__clam_mb__s42",
+  "task": "kras",
   "encoder": "hoptimus1",
   "embed_dim": 1536,
   "model_type": "clam_mb",
@@ -556,11 +574,13 @@ Path Overrides:
 
 Experiment Grid:
   --encoders E [E ...]      Encoder keys (default: all from dataset config)
-  --models M [M ...]        CLAM model types (default: clam_sb, clam_mb, mil)
+  --models M [M ...]        CLAM model types (default: all from dataset config)
   --tasks T [T ...]         Task names (default: all from dataset config)
   --strategies S [S ...]    Split strategies (default: first from dataset config)
-  --frameworks {clam,nnmil} [...]   Model frameworks (default: clam)
+  --frameworks {clam,nnmil,dtfd,titan,abmil} [...]   Model frameworks (default: clam)
   --nnmil_models M [M ...]  nnMIL model types (default: all from dataset config)
+  --dtfd_models M [M ...]   DTFD model types (default: all from dataset config)
+  --abmil_models M [M ...]  ABMIL model types (default: all from dataset config)
 
 Training:
   --max_epochs N            Maximum training epochs (default: 200)
@@ -577,7 +597,7 @@ Logging:
   --no_wandb                Disable W&B logging
 
 Other:
-  --experiments_per_gpu N   Max concurrent worker processes per GPU (default: 12).
+  --experiments_per_gpu N   Max concurrent worker processes per GPU (default: auto-detect).
                             VRAM-budget scheduling still gates actual submission;
                             this only binds for small-VRAM model sweeps.
   --prep_only               Only run data preparation, skip training (used internally by SLURM script)
@@ -585,43 +605,32 @@ Other:
 
 ### SLURM Environment Variables
 
-When using `submit_benchmark.sh`, customize via environment variables:
+`submit_benchmark.sh` takes the dataset and fold count as **positional** arguments, not env vars — it always runs the dataset YAML's full recommended roster (all encoders, all tasks, `clam_mb` + `simple_mil` + `dtfd_mil` + `abmil`). The only env var it reads is `FRAMEWORKS`:
 
 ```bash
-# Required
-DATASET=tcga_luad                    # Dataset name
+# Positional: <dataset> [n_folds]
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad        # 5-fold (default)
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad 10     # 10-fold comparison run
 
-# Recommended overrides (matching submit_3dataset_benchmark.sh)
-ENCODERS="hoptimus1 uni_v2 virchow2"  # 3 encoders
-MODELS="clam_mb"                       # CLAM model
-NNMIL_MODELS="simple_mil"             # nnMIL model
-FRAMEWORKS="clam nnmil"               # Both frameworks (default)
-
-# Other optional overrides
-TASKS="egfr"                         # Task subset (default: all)
-SEED=42                              # Random seed
-N_FOLDS=5                            # Number of folds
+# FRAMEWORKS (optional, default: "clam nnmil dtfd abmil")
+FRAMEWORKS="clam" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad
 ```
+
+There's no `ENCODERS`/`MODELS`/`NNMIL_MODELS`/`TASKS`/`SEED` override — the script doesn't pass those flags through to `run_benchmark.py`. If you need to subset encoders, models, or tasks, run `run_benchmark.py` directly ([Option A](#option-a-interactive-single-gpu-small-runs) / [Option C](#option-c-multi-gpu-interactive)).
+
+The legacy `DATASET=... sbatch ...` env-var form still works as a fallback (so does `N_FOLDS=`), but the positional form is preferred.
 
 **Example submissions:**
 
 ```bash
-# Standard benchmark (recommended)
-DATASET=tcga_luad \
-    ENCODERS="hoptimus1 uni_v2 virchow2" \
-    MODELS="clam_mb" \
-    NNMIL_MODELS="simple_mil" \
-    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
+# Standard benchmark (recommended, 5-fold, all 4 frameworks)
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad
 
 # CLAM only
-DATASET=tcga_luad \
-    ENCODERS="hoptimus1 uni_v2 virchow2" \
-    MODELS="clam_mb" \
-    FRAMEWORKS="clam" \
-    sbatch benchmarks/scripts/slurm/submit_benchmark.sh
+FRAMEWORKS="clam" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad
 
-# Extended benchmark (all models, longer run time)
-DATASET=tcga_luad sbatch benchmarks/scripts/slurm/submit_benchmark.sh
+# 10-fold comparison run, all 4 frameworks
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad 10
 ```
 
 ## Timing Estimates
@@ -632,12 +641,12 @@ These are rough estimates based on a single H100 GPU. Multi-GPU (4× H100) divid
 |-------|--------------|------|-------|
 | `clam_mb` | 5-15 min | ~3-4 GB | Fast, recommended CLAM model |
 | `simple_mil` | 10-20 min | ~3 GB | Fast, recommended nnMIL baseline |
-| `ab_mil`, `ds_mil` | 10-30 min | ~3-4 GB | Extended benchmark |
+| `ds_mil` | 10-30 min | ~3-4 GB | Extended benchmark |
 | `trans_mil`, `vision_transformer`, `rrt` | 30-90 min | ~8-16 GB | Extended benchmark, memory-intensive |
 
-**Standard benchmark** (recommended): 2 tasks × 3 encoders × 2 models × 10 folds = 120 fold trainings. On 4× H100: **~2-6 hours**.
+**Standard benchmark** (recommended, default 4-framework roster): 30 experiments × 5 folds = 150 fold trainings for a 2-task dataset (mutation + `os` survival). On 4× H100: **~2-6 hours**.
 
-**Extended benchmark** (all models): 2 tasks × 3 encoders × 12 models × 10 folds = 720 fold trainings. On 4× H100: **~12-24 hours**.
+**Extended benchmark** (all models — 3 CLAM + 7 nnMIL + 1 DTFD + 2 ABMIL model types): 93 experiments × 5 folds = 465 fold trainings for the same dataset. On 4× H100: **~12-24 hours**.
 
 For large datasets (>800 slides), increase the SLURM time limit:
 
@@ -760,12 +769,12 @@ The SLURM script disables W&B by default. For interactive runs, add `--no_wandb`
 | Step | Command |
 |------|---------|
 | Verify setup | `uv run python -c "from autobench.config import load_dataset_config; print(load_dataset_config('tcga_{code}').name)"` |
-| Single experiment (interactive) | `uv run python benchmarks/scripts/run_benchmark.py --dataset tcga_{code} --gpu 0 --encoders hoptimus1 --models clam_mb --tasks egfr --no_wandb` |
-| Standard benchmark (SLURM) | `DATASET=tcga_{code} ENCODERS="hoptimus1 uni_v2 virchow2" MODELS="clam_mb" NNMIL_MODELS="simple_mil" sbatch benchmarks/scripts/slurm/submit_benchmark.sh` |
-| CLAM only (SLURM) | `DATASET=tcga_{code} ENCODERS="hoptimus1 uni_v2 virchow2" MODELS="clam_mb" FRAMEWORKS="clam" sbatch benchmarks/scripts/slurm/submit_benchmark.sh` |
-| Extended benchmark (SLURM) | `DATASET=tcga_{code} sbatch benchmarks/scripts/slurm/submit_benchmark.sh` |
+| Single experiment (interactive) | `uv run python benchmarks/scripts/run_benchmark.py --dataset tcga_{code} --gpu 0 --encoders hoptimus1 --models clam_mb --tasks kras --no_wandb` |
+| Standard benchmark (SLURM, 5-fold, all 4 frameworks) | `sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_{code}` |
+| CLAM only (SLURM) | `FRAMEWORKS="clam" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_{code}` |
+| 10-fold comparison run (SLURM) | `sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_{code} 10` |
 | Check job status | `squeue -u $USER` |
-| Monitor logs | `tail -f logs/bench_autobench_train_*.out` |
+| Monitor logs | `tail -f logs/bench_mil_bench_*.out` |
 | Resume after timeout | Resubmit the same command (idempotent) |
 | Count completed | `uv run python -c "import json; print(len(json.loads(open('results/_completed.json').read())))"` |
 

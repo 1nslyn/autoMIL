@@ -81,7 +81,7 @@ The default SLURM script (`benchmarks/scripts/slurm/submit_feature_extraction.sh
 sed -i "s|/home/yinshuol/scratch/autoMIL/autoMIL|$HOME/scratch/autoMIL|" benchmarks/scripts/slurm/submit_feature_extraction.sh
 
 # Update the SLURM account and email
-sed -i "s|--account=def-wanglab|--account=YOUR_ACCOUNT|" benchmarks/scripts/slurm/submit_feature_extraction.sh
+sed -i "s|--account=rrg-jma|--account=YOUR_ACCOUNT|" benchmarks/scripts/slurm/submit_feature_extraction.sh
 sed -i "s|--mail-user=leo.yin@mail.utoronto.ca|--mail-user=YOUR_EMAIL|" benchmarks/scripts/slurm/submit_feature_extraction.sh
 ```
 
@@ -167,24 +167,38 @@ print(f'Written to: {dataset_dir}/gdc_manifest_matched.txt')
 "
 ```
 
-#### 3c. Download the slides via SLURM
+#### 3c. Download the slides with gdc-client
 
-Submit the download as a SLURM job (runs on CPU, no GPU needed):
-
-```bash
-mkdir -p logs
-sbatch benchmarks/scripts/slurm/submit_gdc_download.sh \
-    datasets/{DATASET} \
-    datasets/{DATASET}/gdc_manifest_matched.txt
-```
-
-This script downloads all matched slides, flattens them from GDC's nested UUID directories into `datasets/{DATASET}/wsi/`, and cleans up. Monitor with:
+There's no dedicated SLURM script for this step (the old one-time job with a
+hardcoded path was retired). Download directly with the `gdc-client` you
+installed in Prerequisites step 3. This is CPU/network-only work, so grab a
+short interactive allocation instead of running it on the login node:
 
 ```bash
-tail -f logs/gdc_download_*.out
+salloc --account=YOUR_ACCOUNT --cpus-per-task=8 --mem=16G --time=12:00:00
 ```
 
-After the job completes, verify:
+Inside the allocation:
+
+```bash
+cd ~/scratch/autoMIL
+mkdir -p datasets/{DATASET}/gdc_download
+gdc-client download \
+    -m datasets/{DATASET}/gdc_manifest_matched.txt \
+    -d datasets/{DATASET}/gdc_download/ \
+    --n-processes 8
+```
+
+Once the download finishes, flatten the slides out of GDC's nested UUID directories into `datasets/{DATASET}/wsi/` and clean up:
+
+```bash
+mkdir -p datasets/{DATASET}/wsi
+find datasets/{DATASET}/gdc_download/ -name "*.svs" -exec mv {} datasets/{DATASET}/wsi/ \;
+rm -rf datasets/{DATASET}/gdc_download/
+exit  # leave the allocation
+```
+
+Verify:
 
 ```bash
 echo "Downloaded: $(ls datasets/{DATASET}/wsi/*.svs | wc -l) slides"
@@ -245,8 +259,8 @@ task_strategy_feasibility:
 #   slide_name  = GDC filename (matches .svs files on disk after download)
 #   sample_names = TCGA case/patient ID
 slide_id_column: "slide_name"
-slide_id_transform: null
-wsi_extension: null              # slide_name already includes .svs
+slide_id_transform: "strip_svs"  # strips ".svs" for the internal slide_id (UUID stays)
+wsi_extension: null              # slide_name already includes .svs, used as-is for file lookups
 case_id_column: "sample_names"
 status_column: null
 status_value: null
@@ -465,7 +479,7 @@ uv run python benchmarks/scripts/run_feature_extraction.py \
 
 | Step | Command |
 |------|---------|
-| Download slides | `sbatch benchmarks/scripts/slurm/submit_gdc_download.sh datasets/{DATASET} datasets/{DATASET}/gdc_manifest_matched.txt` |
+| Download slides | `gdc-client download -m datasets/{DATASET}/gdc_manifest_matched.txt -d datasets/{DATASET}/gdc_download/ --n-processes 8` (see Step 3c) |
 | Extract features (MIG) | `sbatch benchmarks/scripts/slurm/submit_feature_extraction_mig.sh tcga_{code} virchow2 hoptimus1 uni_v2` |
 | Extract features (full H100) | `sbatch benchmarks/scripts/slurm/submit_feature_extraction.sh tcga_{code}` |
 | Check jobs | `squeue -u $USER` |

@@ -129,6 +129,12 @@ Does the training script write `result.json`? Grep for `result.json`,
 and emit an example adapter snippet in `program.md`. The training script either
 writes `result.json` directly or wraps an upstream output via the snippet.
 
+The adapter must respect the val-firewall: put only **validation** metrics in
+`metrics` (that is what `composite` is computed from, and the only selection
+signal), and put any test metrics in a separate sealed `held_out` block. The
+framework quarantines `held_out` and reveals it only via `automil certify` at the
+end of search, so test performance never leaks into selection.
+
 ## Drafting Conventions
 
 The skill drafts EXACTLY these artifacts (D-192). It does NOT run experiments,
@@ -217,25 +223,32 @@ automil submit --node node_setup_validation --desc "setup-validation" --files <m
 ```
 
 The `--max-time 60` flag (added in plan 07-02) caps the experiment at 60 seconds
-wall-clock; the local backend rounds up to the 1-minute floor. The training
-script's responsibility to honour the cap; if it cannot, this gate emits a
-warning before submit.
+wall-clock; the local backend rounds up to the 1-minute floor. Honouring the cap
+is the training script's responsibility; if it cannot, this gate emits a warning
+before submit.
 
-Poll the orchestrator until terminal:
+The dry-run needs the orchestrator daemon to execute it (`automil orchestrator
+start` runs in the foreground, so background it for the gate). A node is terminal
+once its `result.json` lands in the archive; the `status` field in that file is
+the verdict. Do NOT poll `automil status` for a per-node line: it only prints
+aggregate counts (`Executed: N  Proposed: M  Best: X` and `Queue / Completed`),
+so a per-node grep can never match.
 
 ```bash
-for i in $(seq 1 18); do
-    sleep 5
-    automil status | grep -q "node_setup_validation.*\(executed\|crashed\)" && break
+automil orchestrator start &
+result="automil/orchestrator/archive/node_setup_validation/result.json"  # adjust if automil/ is not at the repo root
+for i in $(seq 1 45); do          # 45 x 2s = 90s polling budget (D-195)
+    [ -f "$result" ] && break
+    sleep 2
 done
+status=$(python3 -c "import json; print(json.load(open('$result')).get('status','timeout'))" 2>/dev/null || echo timeout)
+automil orchestrator stop
 ```
 
-The 90-second polling budget (18 iterations of 5-second sleep) matches D-195.
-
-If the node reaches `executed` (NOT `crashed`), the gate passes. On `crashed`,
+If `status` is `completed`, the gate passes. On `crash` or `timeout`,
 investigate the failure (typically: training script raises early, env vars
-missing, paths wrong) and fix BEFORE printing "Setup complete." A "crashed"
-result does NOT count as "done."
+missing, paths wrong, or the orchestrator was not running) and fix BEFORE
+printing "Setup complete." A `crash` or `timeout` does NOT count as "done."
 
 ## Failure Modes
 
