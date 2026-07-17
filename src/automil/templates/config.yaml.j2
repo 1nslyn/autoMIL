@@ -57,6 +57,10 @@ files:
 run:
   script: "train.py"              # training script name (relative to project root)
   command: null                   # optional: full command override (e.g., "python src/train.py --config config.yaml")
+  mil_model: "default"            # budget-cell key (D-12): `automil submit` resolves --mil-model from here,
+                                  # so submits work without the flag. Single-model projects can leave this;
+                                  # multi-model projects pass `--mil-model <name>` per submit (it overrides)
+                                  # so each model gets its own budget cell.
 
 orchestrator:
   poll_interval_sec: 5
