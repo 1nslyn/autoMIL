@@ -7,18 +7,39 @@ same day from the confirmed pivot._
 
 ## Status: confirmed pivot
 
-### 1. Dataset scope: 5 datasets, drop by runtime
+### 1. Dataset scope: 5 datasets, diverse tasks across TCGA + CPTAC
 
-**Confirmed: 5 datasets, and "largest" means wall-clock runtime, not slide
-count** — drop whichever cohort(s) take the longest to run, to cut
-compute time for the preprint. Full-grid coverage (16 TCGA + 10 CPTAC) is
+**Confirmed: 5 cohorts (3 TCGA + 2 CPTAC), chosen for classification-task
+diversity, not survival power.** Full-grid coverage (16 TCGA + 10 CPTAC) remains
 Phase 2 (journal) scope only.
 
-**Still open:** which 5 datasets. Needs actual per-cohort wall-clock numbers,
-not slide count — `tasks/baseline_summary/REPORT.md`'s 53–1000 slide range
-(UCS→BRCA) is *not* the right proxy now that the metric is confirmed as
-runtime. SLURM `sacct` history on `fir.alliancecan.ca` would have real
-wall-clock per cohort if useful — say the word and I'll pull it.
+**Resolved (2026-07-17): the final 5 are TCGA-LUAD, TCGA-LGG, CPTAC-GBM,
+CPTAC-PDAC, TCGA-HNSC** — each pinned to one classification task + an OS
+survival task. The roster deliberately spans three classification *task types*
+across two data sources:
+
+| Dataset | Source | Classification task | Task type | n | OS deaths |
+|---|---|---|---|--:|--:|
+| TCGA-LUAD | TCGA | KRAS mutation | binary | 465 | 167 |
+| TCGA-LGG | TCGA | IDH1 mutation | binary | 491 | 115 |
+| CPTAC-GBM | CPTAC | TP53 mutation | binary | 99 | 72 |
+| CPTAC-PDAC | CPTAC | immune subtype (low/med/high) | 3-class | 105 | 81 |
+| TCGA-HNSC | TCGA | tumor grade (G1/G2/G3) | 3-class | 431 | 204 |
+
+Selection now prioritizes **classification-task diversity** (binary mutation +
+3-class immune subtype + 3-class tumor grade) and **cross-source coverage**
+(TCGA GOLDMARK + CPTAC Patho-Bench), with OS survival retained as a secondary
+axis on all five. This **replaces** the earlier survival-power rule: the old
+"≥100 OS deaths hard gate" is dropped — CPTAC-GBM (72 deaths) and CPTAC-PDAC (81
+deaths) fall below it — because the roster intentionally trades survival power
+for task/source diversity and a genuine small-sample regime (GBM n=99, PDAC
+n=105). Tasks are all distinct. The two 3-class tasks required **no pipeline
+changes**: the metric, model-head, and split path are already multi-class-safe
+(per-class one-vs-rest AUC, `n_classes`-sized heads, stratified folds — see
+[`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) §2). This also **supersedes**
+EXECUTION_PLAN.md §2's earlier {THCA, LGG, LUAD, HNSC, COAD} recommendation.
+Full grid (33 exps/dataset, 165 total, 825 fold-trainings) + compute estimate +
+figure plan: [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md).
 
 ### 2. Model roster: expand from 2 to 4 MIL aggregators
 
@@ -176,11 +197,89 @@ below the two items.)
   ovarian config currently binarizes into `HRD_label`. Worth confirming
   against the manifest before deciding.
 
+### 5. Agent search-space scope — the frozen data substrate
+
+**Resolved (2026-07-15): the agent's equal-effort recipe search runs on a frozen
+data substrate — it may not change data preparation.** This is what makes the
+headline *encoder ≫ aggregator* decomposition interpretable: a two-axis variance
+claim is only valid if the third axis (data prep) is held constant across every
+cell. That is exactly what the neighbors do — Patho-Bench, EVA, and the Frontiers
+embedding paper (the very paper this claim argues with) all freeze mag/patch/
+splits and let no search touch preprocessing; the Frontiers paper even disables
+stain-norm on purpose "to avoid preprocessing-induced biases across cohorts."
+PathBench-MIL is the lone exception, and it exposes tiling/normalization as a
+*declared, compared* menu axis — not a hidden per-cell optimization run under an
+"isolate the encoder" claim. Freezing the substrate is also on-brand for the
+"MIL-benchmark rigor backbone" positioning: the freeze *is* the rigor claim.
+
+**The line — what the agent may vs. may not change:**
+
+| Layer | Agent may change? | Rationale |
+|---|---|---|
+| Splits / folds / test-set identity / labels | **No — frozen** | The evaluation protocol; mutable → cross-cell incomparable + test-leak surface |
+| Feature extraction (mag, patch size, tiling, segmentation, stain-norm policy) | **No — shared substrate** | This *is* the encoder axis; per-cell change confounds the headline |
+| Encoder-spec-dictated prep (native mpp / patch size / channel-norm) | Standardized per encoder, not searched | Field norm; standardization, not tuning |
+| Train-only feature handling (norm fit-on-train, bag sampling, dropout, aug, class weighting) | **Optional — declare it** | Downstream of fixed features; doesn't touch test identity |
+| Architecture / aggregator internals / training hyperparams / loss | **Yes — the search target** | The de-biasing objective |
+
+"Model-only" is too narrow — the recipe legitimately includes the training
+procedure (lr, schedule, optimizer, regularization, loss). "Anything including
+prep" is too broad — it collapses the headline. The frozen substrate is the line.
+
+**Enforcement — the protected list is necessary but not sufficient.** Today
+`registry.protected` ships empty ([`registry/config.py:37`](../../src/automil/registry/config.py)),
+`files.readonly` is warning-only and bypassed by explicit `--files`, and
+`run_experiment.py` (split entry point + composite writer) is `files.editable`.
+Defense-in-depth, cheapest first:
+
+1. **`registry.protected` — config-only, do this now.** Add to each dataset's
+   `automil/config.yaml` (schema per `registry/config.py`; globs are project-root
+   relative; a submit that overlays any match is hard-rejected at
+   [`submit.py:263-274`](../../src/automil/cli/submit.py), independent of the soft
+   `readonly` list):
+
+   ```yaml
+   registry:
+     mode: "architecture-preserving"   # optional; complements the list below
+     protected:
+       # --- evaluation protocol: splits + metrics ---
+       - "benchmarks/src/autobench/pipeline/splits.py"
+       - "benchmarks/src/autobench/pipeline/prepare.py"
+       - "benchmarks/src/autobench/pipeline/evaluate.py"
+       - "benchmarks/src/autobench/pipeline/*/dataset.py"   # clam/abmil/dtfd/nnmil split+feature consumers
+       # --- composite writers (the val-selection guarantee) ---
+       - "benchmarks/src/autobench/pipeline/*/runner.py"    # shared writer = clam/runner.py
+       - "benchmarks/scripts/run_experiment.py"             # entry point + summary_to_result_json
+       # --- feature extraction / encoder inputs ---
+       - "benchmarks/scripts/run_feature_extraction.py"
+       - "benchmarks/src/autobench/data.py"                 # WSI-list CSV feeding TRIDENT
+   ```
+
+   (Protecting `run_experiment.py` blocks the dispatch entry point — acceptable,
+   since model variants belong in `automil/variants/*.py`. If a recipe ever needs
+   the entry point, first extract `summary_to_result_json` into its own protected
+   module and keep dispatch editable.)
+2. **Operational — do before launching the loop.** (a) Pre-generate all split
+   CSVs into the shared `benchmark_dir`; generation is idempotent, so the `seed`/
+   `num_folds` that live in the editable `pipeline/config.py` + consumer `data:`
+   block become **inert during search**. (b) Have the orchestrator **recompute
+   `composite` from the val `metrics` block** rather than trusting the scalar
+   ([`terminal_writer.py:205`](../../src/automil/terminal_writer.py)), so an edited
+   writer cannot fold test into selection.
+3. **Structural — airtight, larger refactor (Phase 2).** Withhold the test split
+   from the worktree during search entirely; the orchestrator evaluates the frozen,
+   selected model on test out-of-process. `train.py` currently receives
+   `(train, val, test)` in-process ([`clam/runner.py:119`](../../benchmarks/src/autobench/pipeline/clam/runner.py)),
+   so layers 1–2 rest on the agent not mislabeling test as val; layer 3 removes the
+   leak at its root.
+
 ## Open / pending — to confirm
 
-1. **Final 5-dataset list.** Metric confirmed as **runtime** (not slide
-   count). Need actual per-cohort wall-clock numbers to pick which 5 — the
-   `sacct` history on `fir.alliancecan.ca` can supply this if useful.
+1. **Final 5-dataset list — RESOLVED (2026-07-17):** TCGA-LUAD, TCGA-LGG,
+   CPTAC-GBM, CPTAC-PDAC, TCGA-HNSC (see §1). Chosen for classification-task
+   diversity (binary mutation + 3-class immune subtype + 3-class grade) across
+   TCGA + CPTAC; OS survival retained as a secondary axis on all five. Replaces
+   the earlier survival-power roster (LUAD/LGG/SKCM/BLCA/COAD).
 2. **Regression — deferred to Phase 2 (see §4).** Not in the preprint. The
    only thing that would pull it back in is a clean, ready continuous target
    in one of the 5 chosen datasets — most likely **ovarian HRD** — which needs
@@ -194,6 +293,11 @@ below the two items.)
      C). Pushed to GitHub, not merged into `main`.
    Not urgent to merge today, but the preprint will eventually need one
    commit/tag as "the" pipeline version, and neither is in `main` yet.
+4. **Enforce the frozen substrate before the agentic loop (see §5).** Wire
+   `registry.protected` into each dataset's `automil/config.yaml`, pre-generate
+   splits into the shared `benchmark_dir`, and recompute `composite`
+   orchestrator-side from the val block. The protected list is drafted in §5; **not
+   yet applied to any config** — `registry.protected` is still empty everywhere.
 
 ## Sources (pivot-specific, in addition to shared background)
 

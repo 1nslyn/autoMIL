@@ -13,25 +13,27 @@ confounded by uneven per-cell tuning effort.
 
 ## Datasets
 
-The preprint roster is a 5-cohort TCGA slate, each pinned to one distinct
-classification gene plus an overall-survival (OS) task, run across 4 MIL
+The preprint roster is a 5-cohort slate (3 TCGA + 2 CPTAC), each pinned to one
+classification task plus an overall-survival (OS) task, run across 4 MIL
 aggregators (`clam_mb`, `simple_mil`, `ab_mil`, `dtfd_mil`) plus a TITAN
-slide-encoder arm:
+slide-encoder arm. The roster spans binary mutation tasks and multi-class
+(3-way) tasks across two data sources (TCGA + CPTAC):
 
-| Dataset | Classification gene | + Survival | Config |
-|---------|--------------------|:----------:|--------|
-| **TCGA-LUAD** | KRAS | OS | `datasets/tcga/tcga_luad.yaml` |
-| **TCGA-LGG** | IDH1 | OS | `datasets/tcga/tcga_lgg.yaml` |
-| **TCGA-SKCM** | NRAS | OS | `datasets/tcga/tcga_skcm.yaml` |
-| **TCGA-BLCA** | PIK3CA | OS | `datasets/tcga/tcga_blca.yaml` |
-| **TCGA-COAD** | BRAF | OS | `datasets/tcga/tcga_coad.yaml` |
+| Dataset | Classification task | Task type | + Survival | Config |
+|---------|---------------------|-----------|:----------:|--------|
+| **TCGA-LUAD** | KRAS (mut/wt) | binary | OS | `datasets/tcga/tcga_luad.yaml` |
+| **TCGA-LGG** | IDH1 (mut/wt) | binary | OS | `datasets/tcga/tcga_lgg.yaml` |
+| **TCGA-HNSC** | tumor grade | 3-class (G1/G2/G3) | OS | `datasets/tcga/tcga_hnsc.yaml` |
+| **CPTAC-GBM** | TP53 (mut/wt) | binary | OS | `datasets/cptac/cptac_gbm.yaml` |
+| **CPTAC-PDAC** | immune_class | 3-class (low/med/high) | OS | `datasets/cptac/cptac_pdac.yaml` |
 
 Additional non-slate cohorts also ship configs: **Ovarian** (BRCA/HRD,
 `datasets/other/ovarian.yaml`), **CLWD** (lung subtype, `datasets/other/clwd.yaml`),
-**HANCOCK** (`datasets/other/hancock.yaml`), and **CPTAC-CCRCC/GBM**
-(`datasets/cptac/`). `datasets/templates/` holds the `tcga_`, `cptac_`, and
-`placeholder` templates for adding your own. The full Phase-2 (journal) scope is
-the 16 TCGA + 10 CPTAC inventory — see [`../paper/`](../paper/).
+**HANCOCK** (`datasets/other/hancock.yaml`), and **CPTAC-CCRCC**
+(`datasets/cptac/`, a feasibility anchor, not part of the roster).
+`datasets/templates/` holds the `tcga_`, `cptac_`, and `placeholder` templates
+for adding your own. The full Phase-2 (journal) scope is the 16 TCGA + 10
+CPTAC inventory — see [`../paper/`](../paper/).
 
 ## Setup
 
@@ -114,8 +116,8 @@ automil orchestrator start
 ```
 benchmarks/
 ├── datasets/         # Per-dataset YAML configs, grouped by program:
-│   ├── tcga/         #   5-member preprint slate (luad/lgg/skcm/blca/coad)
-│   ├── cptac/        #   CPTAC cohorts (ccrcc, gbm)
+│   ├── tcga/         #   preprint roster TCGA members (luad/lgg/hnsc)
+│   ├── cptac/        #   preprint roster CPTAC members (gbm/pdac) + ccrcc (feasibility anchor)
 │   ├── other/        #   ovarian, clwd, hancock
 │   └── templates/    #   tcga_/cptac_/placeholder templates
 ├── src/autobench/    # Reusable benchmark code

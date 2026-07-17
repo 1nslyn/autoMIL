@@ -6,6 +6,14 @@ Compiled 2026-07-03 from a live audit of the codebase + the cluster
 actually on disk today**, which differs from PLAN.md's cost assumptions in two
 load-bearing ways — see §0._
 
+> **Status (2026-07-17): roster resolved — see §2.** The dataset decision is
+> **closed**: the roster is TCGA-LUAD/LGG/HNSC + CPTAC-GBM/PDAC. The §0 audit,
+> §0b gap checklist, and §1 on-disk coverage tables are the **2026-07-03
+> planning snapshot** and still name the earlier candidate set
+> (THCA/COAD/SKCM/BLCA) — kept for provenance. Re-run the coverage/preflight
+> checks against the resolved roster before launching. Canonical roster:
+> [`PLAN.md`](PLAN.md) §1 + [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) §1.
+
 ---
 
 ## 0. TL;DR — how the audit revises PLAN.md
@@ -30,13 +38,13 @@ Detailed "how" for each is in §3.
 **A. Experiments — MIL model coverage** _(the bulk; ~1 day compute — §4)_
 - ☐ **`ab_mil`** — train on all 5 chosen datasets. **0 folds on disk today** (only a partial TGCT fragment); PLAN.md's "free re-aggregation" does not hold. _(compute)_
 - ☐ **`dtfd_mil`** — train on all 5. 0 folds on disk; not in the TCGA YAMLs' `nnmil_models` (pass via `--nnmil_models`, no YAML edit needed). _(compute)_
-- ☐ **Re-run `clam_mb` + `simple_mil`** for any chosen cohort whose results were purged: **COAD, THCA** (also SKCM/STAD/UCEC if picked). _(compute)_
+- ☐ **Re-run `clam_mb` + `simple_mil`** for any *roster* cohort lacking on-disk folds. Per the 2026-07-03 audit, LGG/LUAD/GBM/HNSC had them but **CPTAC-PDAC did not** — re-verify current cluster state for the resolved roster. _(compute)_
 - ✅ `clam_mb` + `simple_mil` already on disk for **LGG, LUAD** (and BLCA/BRCA/CESC/GBM/HNSC/PAAD/PCPG/UCS).
 
 **B. Datasets & configs**
-- ☐ **Decide the final 5** (recommendation §2: THCA, LGG, LUAD, HNSC, COAD). _(your call)_
-- ☐ **Build missing YAML configs**: THCA (from `templates/tcga_template.yaml`); HNSC exists on `origin/feat/nnmil-survival`; UCEC/BLCA if swapped in. _(small)_
-- ☐ **Preflight: confirm patch features survived** for the purged cohorts (THCA/COAD `benchmark/features/*` or `trident_output/`) — if gone, add TRIDENT extraction. _(check)_
+- ✅ **Final 5 decided** (§2): TCGA-LUAD/LGG/HNSC + CPTAC-GBM/PDAC. _(closed 2026-07-17)_
+- ✅ **Roster YAML configs built**: `tcga_hnsc.yaml` (grade), `cptac_gbm.yaml` (tp53), `cptac_pdac.yaml` (immune_class) created; `tcga_luad`/`tcga_lgg` already present. _(done 2026-07-17)_
+- ☐ **Preflight: confirm patch features exist** for the roster, especially the 3 new cohorts CPTAC-GBM/PDAC + TCGA-HNSC (`benchmark/features/{uni_v2,virchow2,hoptimus1}/` or `trident_output/`) — extract if missing. _(check)_
 
 **C. TITAN slide-encoder arm** _(longer pole)_
 - ☐ **autobench code path** — `Framework.TITAN` + dispatch + new `pipeline/titan/` package (~500–650 lines, greenfield; reuses `metrics.json`/`summary.json`). _(1–2 dev-days)_
@@ -83,30 +91,37 @@ Two consequences that aren't in PLAN.md:
 
 ## 2. Decision 1 — the 5 datasets (the primary fork)
 
-PLAN.md §3's competitive table leans on **"built-in datasets & tasks (16 TCGA + 10 CPTAC)"** as "our single strongest row," so the 5-dataset showcase should be **TCGA mutation cohorts** (Pool A), not the custom datasets (Pool B: ovarian is off-cluster; ccrcc/clwd/hancock are on purgeable scratch and no more ready than TCGA). This plan assumes Pool A. _If you'd rather showcase the custom datasets, say so — it changes §3–§4._
+PLAN.md §3's competitive table leans on **"built-in datasets & tasks (16 TCGA + 10 CPTAC)"** as "our single strongest row," so the 5-dataset showcase should be **TCGA + CPTAC cohorts** (Pool A), not the fully custom datasets (Pool B: ovarian is off-cluster; ccrcc/clwd/hancock are on purgeable scratch and no more ready than TCGA/CPTAC). This plan assumes Pool A. _If you'd rather showcase the custom datasets, say so — it changes §3–§4._
 
-**Ranking — signal (best test AUC, May baseline) vs. campaign cost (`tasks × n`, the driver of how many new runs `ab_mil`+`dtfd_mil` add):**
+**Final roster (5 cohorts — 3 TCGA + 2 CPTAC): each pinned to one classification task plus an OS survival task.**
 
-| Cohort | tasks | n | cost `t×n` | best AUC | headline task | ready? |
-|---|:--:|:--:|:--:|:--:|---|---|
-| **THCA** | 2 | 495 | 990 | **0.925** | braf, nras | needs config + rerun (no results) |
-| **LGG** | 2 | 491 | 982 | **0.849** | idh1 | ✅ YAML+results |
-| **LUAD** | 2 | 465 | 930 | 0.788 | egfr, kras | ✅ YAML+results (goldmark focus) |
-| **HNSC** | 2 | 431 | 862 | 0.811 | hras | config on `origin/feat/nnmil-survival` |
-| **COAD** | 5 | 550 | 2750 | **0.871** | msi, braf | YAML in `main`, **no results** (rerun) |
-| UCEC | 5 | 499 | 2495 | 0.841 | pten | no config, no results |
-| BLCA | 5 | 386 | 1930 | 0.838 | fgfr3 | no config |
-| STAD | 1 | 374 | 374 | 0.734 | pik3ca | no config, no results |
-| PAAD/PCPG | 1 | ~180 | ~180 | ~0.72 | kras/hras | no config |
-| BRCA | 1 | 1000 | 1000 | 0.692 | pik3ca | ✅ results |
-| CESC/GBM/SKCM/UCS | — | — | — | ≤0.65 | (near-chance) | — |
+| Dataset | Source | Cls task | Task type | n | cls prevalence | OS deaths | OS % |
+|---|---|---|---|:--:|:--:|:--:|:--:|
+| **TCGA-LUAD** | TCGA / GOLDMARK | KRAS | binary (mut/wt) | 465 | 36.8% | 167 | 35.9% |
+| **TCGA-LGG** | TCGA / GOLDMARK | IDH1 | binary (mut/wt) | 491 | 77.8% | 115 | 23.4% |
+| **CPTAC-GBM** | CPTAC / Patho-Bench | TP53 | binary (mut/wt) | 99 | 32.3% | 72 | 72.7% |
+| **CPTAC-PDAC** | CPTAC / Patho-Bench | immune_class | 3-class (low/med/high) | 105 | balanced | 81 | 77.1% |
+| **TCGA-HNSC** | TCGA / GDC clinical | tumor grade | 3-class (G1/G2/G3) | 431 | — | 204 | 47.3% |
 
-**Recommended 5: THCA, LGG, LUAD, HNSC, COAD.**
-Rationale: the four 2-task cohorts give five strong, distinct mutation stories (BRAF/NRAS, IDH1, EGFR/KRAS, HRAS) at low cost; COAD adds the MSI headline (0.871). To trim COAD's 5-task cost, **subset it to `msi` + `braf`** (its only strong tasks) — that drops its cost from 2750 → ~955 and keeps the headline. Net campaign cost of the recommended 5 with COAD subset ≈ **10 task-units**, all comparable size.
-- **Swap options:** UCEC (pten 0.841) or BLCA (fgfr3 0.838) instead of HNSC if you want a bigger cohort; both cost more (5 tasks) and need configs built.
-- **Leanest possible 5** (all ready, minimal new config): LUAD, LGG, COAD, BRCA + one of THCA/HNSC — but BRCA (pik3ca 0.692) is a weaker story.
+**Rationale:** the roster prioritizes **classification-task diversity** (binary
+mutation + 3-class immune subtype + 3-class tumor grade) across **two data
+sources** (TCGA + CPTAC), while retaining OS survival as a secondary axis on
+all five cohorts. The old "≥100 OS deaths hard gate" is **dropped** —
+CPTAC-GBM (72 deaths) and CPTAC-PDAC (81 deaths) fall below it; the roster
+deliberately trades survival-power for task/source diversity and a
+small-sample regime (GBM n=99, PDAC n=105). Genes/tasks are all distinct
+(KRAS/IDH1/TP53/immune-subtype/grade).
 
-**Decision needed from you:** confirm the 5 (recommended set, or a swap), and whether to subset COAD's tasks.
+**Decision closed:** the 5 datasets above are final. TCGA-SKCM (NRAS),
+TCGA-BLCA (PIK3CA), and TCGA-COAD (BRAF) — considered in an earlier draft of
+this roster — are dropped in favor of the CPTAC-GBM/CPTAC-PDAC/TCGA-HNSC set
+above. Grid math is unchanged: 33 experiments/dataset (30 tile-encoder + 3
+TITAN), 165 total, 825 fold-trainings — a 3-class task generates the same 33
+experiments as a binary one.
+
+_Note: this document predates the final roster pivot and is superseded by
+[`PLAN.md`](PLAN.md); commands below are illustrative of the campaign
+mechanics, not a live task list._
 
 ---
 
@@ -118,18 +133,21 @@ Rationale: the four 2-task cohorts give five strong, distinct mutation stories (
 - **Build the 2 missing configs** (THCA, and HNSC if not pulled from the survival branch) from `benchmarks/datasets/templates/tcga_template.yaml`, mirroring `tcga/tcga_luad.yaml` (3 encoders; `nnmil_models: [ab_mil, trans_mil, simple_mil]` — dtfd added via CLI).
 
 ### Phase A — train `ab_mil` + `dtfd_mil` on the 5 (the bulk; ~1 day compute)
-One idempotent multi-GPU job per cohort (skips completed automatically). CLAM (`clam_mb`) is already on disk for LUAD/LGG — only re-run canonical heads where results are missing (THCA, COAD).
+One idempotent multi-GPU job per cohort (skips completed automatically). CLAM (`clam_mb`) is already on disk for LUAD/LGG — only re-run canonical heads where results are missing (CPTAC-GBM, CPTAC-PDAC, HNSC).
 
 ```bash
 # from benchmarks/scripts/ on the cluster, against the tagged pipeline
 DATASET=tcga_luad FRAMEWORKS=nnmil NNMIL_MODELS="ab_mil dtfd_mil" \
   ENCODERS="uni_v2 virchow2 hoptimus1" N_FOLDS=5 SEED=42 \
   sbatch submit_benchmark.sh          # 4×H100, 24h, mem=0, self-resubmits on timeout
-# repeat for tcga_lgg, tcga_thca, tcga_hnsc
-# COAD (rerun ALL heads incl. clam_mb + subset tasks):
-DATASET=tcga_coad FRAMEWORKS="clam nnmil" NNMIL_MODELS="ab_mil dtfd_mil simple_mil" \
-  MODELS="clam_mb" TASKS="msi braf" ENCODERS="uni_v2 virchow2 hoptimus1" \
-  N_FOLDS=5 SEED=42 sbatch submit_benchmark.sh
+# repeat for tcga_lgg
+# TCGA-HNSC (tumor grade, 3-class):
+DATASET=tcga_hnsc FRAMEWORKS=nnmil NNMIL_MODELS="ab_mil dtfd_mil" TASKS="grade" \
+  ENCODERS="uni_v2 virchow2 hoptimus1" N_FOLDS=5 SEED=42 sbatch submit_benchmark.sh
+# CPTAC-PDAC (immune subtype, 3-class):
+DATASET=cptac_pdac FRAMEWORKS=nnmil NNMIL_MODELS="ab_mil dtfd_mil" TASKS="immune_class" \
+  ENCODERS="uni_v2 virchow2 hoptimus1" N_FOLDS=5 SEED=42 sbatch submit_benchmark.sh
+# repeat for cptac_gbm (TP53, binary)
 ```
 Idempotency: reruns skip experiments already in `results/_completed.json`, so a timeout-resubmit is safe.
 
@@ -155,8 +173,8 @@ Reference point: `autobench_luad_sgpu` ran clam+simple × 2 tasks × 3 enc × 10
 | Work | Runs | Est. wall-clock |
 |---|---|---|
 | ab_mil+dtfd, one 2-task cohort (3 enc ×10 folds ×2 heads) | 120 | ~2–3 h on 4×H100 |
-| ab_mil+dtfd, all 5 (COAD subset to 2 tasks ≈ 10 task-units) | ~600 | **~1 day in one self-resubmitting 4×H100 job** |
-| COAD canonical-head rerun (clam_mb, 2 tasks) | 60 | folded into the above |
+| ab_mil+dtfd, all 5 (each cohort ≈ 2 task-units: 1 cls + 1 OS) | ~600 | **~1 day in one self-resubmitting 4×H100 job** |
+| CPTAC-GBM/PDAC + HNSC canonical-head rerun (clam_mb) | 60 | folded into the above |
 | `conch_v15` extraction ×5 cohorts | — | ~24 h/GPU, ~1 day across 5 GPUs |
 | TITAN training runs ×5 | ~50 | hours (slide-level) |
 | TITAN code | — | ~1–2 dev-days |
@@ -171,8 +189,8 @@ Since the campaign re-runs everything, instrument it: the orchestrator already w
 ---
 
 ## 6. Open decisions for you
-1. **The 5 datasets** — confirm recommended {THCA, LGG, LUAD, HNSC, COAD} (COAD subset to msi+braf?), or a swap. _(§2)_
-2. **Dataset pool** — TCGA (assumed) vs. custom (ovarian/ccrcc/clwd/hancock). _(§2)_
+1. **The 5 datasets** — final roster is {TCGA-LUAD, TCGA-LGG, TCGA-HNSC, CPTAC-GBM, CPTAC-PDAC} per §2. _(closed)_
+2. **Dataset pool** — TCGA + CPTAC (assumed) vs. custom (ovarian/ccrcc/clwd/hancock). _(§2)_
 3. **Pipeline single-source-of-truth** — what merges into `main` + gets tagged before the campaign (goldmark orchestrator fix? survival configs?). _(Phase 0)_
 4. **TITAN in scope for the preprint, or fast-follow?** — decouples cleanly if timeline is tight. _(Phase B)_
 
