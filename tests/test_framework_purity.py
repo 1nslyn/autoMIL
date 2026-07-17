@@ -58,14 +58,16 @@ _ALLOWLIST: dict[str, str] = {
     # 4. Migration note comment in config.yaml.j2 directing autobench-shaped
     #    consumers to the CHANGELOG 8.0.0 BREAKING section. Informational only;
     #    not a code path. Retained by 08-04 executor.
-    #    Line shifted +1 by 12-02 (added scheduling_policy key above it).
-    "src/automil/templates/config.yaml.j2:110":
+    #    Line shifted +1 by 12-02 (added scheduling_policy key above it),
+    #    +4 by the run.mil_model addition to the run: block.
+    "src/automil/templates/config.yaml.j2:114":
         "autobench-shaped consumers",
     # 5. Inline example comment in the scoring.formula block showing what an
     #    autobench consumer formula looks like. Documentation only. Retained by
     #    08-04 executor.
-    #    Line shifted +1 by 12-02 (added scheduling_policy key to orchestrator block).
-    "src/automil/templates/config.yaml.j2:136":
+    #    Line shifted +1 by 12-02 (added scheduling_policy key to orchestrator block),
+    #    +4 by the run.mil_model addition to the run: block.
+    "src/automil/templates/config.yaml.j2:140":
         "autobench consumer",
 }
 
