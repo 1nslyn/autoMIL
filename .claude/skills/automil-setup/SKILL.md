@@ -153,6 +153,11 @@ Stamp values from the hardware probe (D-191):
 - `hardware.accelerator`, `hardware.gpu_count`, `hardware.min_vram_gb`: stamped
   for operator visibility (D-191 says stamp values, not comments; operator can
   edit afterwards).
+- `run.mil_model`: stamp the detected model class from Heuristic 3 (a short
+  identifier), or `"default"` when the model class is unknown. This is the
+  budget-cell key (D-12), so `automil submit` resolves it from config and does
+  not need a per-submit `--mil-model` flag. Multi-model projects override it per
+  submit.
 
 ### automil/program.md
 

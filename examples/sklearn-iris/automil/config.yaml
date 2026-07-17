@@ -4,6 +4,7 @@
 
 run:
   script: train.py
+  mil_model: sklearn_iris        # budget-cell key (D-12); lets `automil submit` run without --mil-model
 
 data:
   seed: 42

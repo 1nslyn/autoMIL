@@ -244,6 +244,37 @@ class TestMilModelCellIdentity:
             f"D-12: error message does not mention 'required' or 'mil': {result.output!r}"
         )
 
+    def test_config_mil_model_default_resolves_without_flag(self, cli_runner, tmp_path, monkeypatch):
+        """A freshly-init'd project resolves run.mil_model from config, so submit
+        works without --mil-model.
+
+        config.yaml.j2 ships run.mil_model="default", so `automil init` scaffolds a
+        config that `automil submit` can use directly (no per-submit --mil-model flag).
+        """
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+        # Deliberately do NOT pass --mil-model or override run: rely on the template default.
+        (tmp_path / "model.py").write_text("print('changed')\n")
+        result = cli_runner.invoke(
+            main,
+            ["submit", "--node", "node_0001", "--desc", "config-resolved mil_model",
+             "--files", "model.py"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, (
+            f"submit without --mil-model should resolve run.mil_model from the init'd "
+            f"config template (default), got exit_code={result.exit_code}. Output: {result.output!r}"
+        )
+        cell_files = list((tmp_path / "automil" / "cells").glob("*.json"))
+        assert cell_files, "No cell file created after submit resolving config mil_model"
+        cell = json.loads(cell_files[0].read_text())
+        assert cell.get("mil_model") == "default", (
+            f"expected cell['mil_model']='default' (normalized template value), "
+            f"got {cell.get('mil_model')!r}"
+        )
+
     def test_mil_model_normalization_same_cell(self, cli_runner, tmp_path, monkeypatch):
         """D-14: 'CLAM_SB' and ' clam sb ' normalize to the same cell_id.
 
