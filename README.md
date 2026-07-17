@@ -11,7 +11,9 @@
 [![Release v1.2.1](https://img.shields.io/badge/release-v1.2.1-brightgreen.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-1100%2B%20collected-brightgreen.svg)](#)
 
----
+[Getting Started](#quick-start) | [How It Works](#how-it-works) | [Training-Script Contract](docs/training-script-contract.md) | [Documentation](docs/getting-started.md)
+
+</div>
 
 **autoMIL** is a plug-and-play experiment framework that automates the
 **research iteration**, not the hyperparameter. It overlays onto your existing
@@ -27,10 +29,6 @@ pathology (see [`examples/ovarian_hrd`](examples/ovarian_hrd/) for a
 189-experiment autonomous run); the framework itself is generic and runs
 sklearn-iris end-to-end via the same contract (see
 [`examples/sklearn-iris`](examples/sklearn-iris/)).
-
-[Getting Started](#quick-start) | [How It Works](#how-it-works) | [Training-Script Contract](docs/training-script-contract.md) | [Documentation](docs/getting-started.md)
-
-</div>
 
 ---
 
