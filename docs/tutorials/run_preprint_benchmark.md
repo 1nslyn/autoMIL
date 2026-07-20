@@ -12,9 +12,9 @@ identical for everyone — you just pass your dataset name.
 |--------|---------|----------------------|-----------------|
 | Leo | TCGA-LUAD | KRAS (binary) | `tcga_luad` |
 | Yeonwoo | TCGA-LGG | IDH1 (binary) | `tcga_lgg` |
-| TBD | TCGA-HNSC | tumor grade (3-class) | `tcga_hnsc` |
-| TBD | CPTAC-GBM | TP53 (binary) | `cptac_gbm` |
-| TBD | CPTAC-PDAC | immune_class (3-class) | `cptac_pdac` |
+| Ryan | TCGA-HNSC | tumor grade (3-class) | `tcga_hnsc` |
+| Keishi | CPTAC-GBM | TP53 (binary) | `cptac_gbm` |
+| Terry | CPTAC-PDAC | immune_class (3-class) | `cptac_pdac` |
 
 Find your row — everywhere below, `<dataset>` is your arg (e.g. `tcga_lgg`).
 Every dataset also runs a shared `os` (overall survival) task, so each of the
