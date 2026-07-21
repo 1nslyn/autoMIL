@@ -18,7 +18,7 @@ lifecycle_changed: 2026-06-26
 
 > **Status note (added 2026-07-01):** This is an old reference, not exactly
 > right relative to the confirmed pivot in
-> [`../PLAN.md`](../PLAN.md). Kept here verbatim for provenance and because
+> [`../preprint/PLAN.md`](../preprint/PLAN.md). Kept here verbatim for provenance and because
 > several sub-parts (freeze-before-test discipline, reviewer-attack
 > rebuttals in §10, statistical-analysis plan in §6.5) may still be useful.
 > It predates the confirmed pivot and does not mention slide-level
