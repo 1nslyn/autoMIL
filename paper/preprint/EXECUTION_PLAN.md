@@ -112,7 +112,7 @@ PLAN.md §3's competitive table leans on **"built-in datasets & tasks (16 TCGA +
 | **TCGA-LGG** | TCGA / GOLDMARK | IDH1 | binary (mut/wt) | 491 | 77.8% | 115 | 23.4% |
 | **CPTAC-GBM** | CPTAC / Patho-Bench | TP53 | binary (mut/wt) | 99 | 32.3% | 72 | 72.7% |
 | **CPTAC-PDAC** | CPTAC / Patho-Bench | immune_class | 3-class (low/med/high) | 105 | balanced | 81 | 77.1% |
-| **TCGA-HNSC** | TCGA / GDC clinical | tumor grade | 3-class (G1/G2/G3) | 431 | — | 204 | 47.3% |
+| **TCGA-HNSC** | TCGA / GDC clinical | tumor grade | 3-class (G1/G2/G3) | 431 (414 gradeable) | — | 205 | 47.6% |
 
 **Rationale:** the roster prioritizes **classification-task diversity** (binary
 mutation + 3-class immune subtype + 3-class tumor grade) across **two data

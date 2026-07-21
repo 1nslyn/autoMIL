@@ -7,12 +7,13 @@ material: [`../references/`](../references/). Compiled 2026-07-01; §5 resolved
 2026-07-21. **Counts are owned by [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md)** —
 where this file disagrees on a number, that one wins._
 
-> **Open items gating the campaign — see [`PRELAUNCH_REVIEW.md`](PRELAUNCH_REVIEW.md).**
-> Two decisions in this document are contradicted by our own evidence and are
-> **not yet resolved**: §3/§4's *encoder ≫ aggregator* headline (our 210-config
-> baseline measured the reverse on classification), and §2's claim that `ab_mil`
-> results already exist on disk (coverage is essentially zero). The review also
-> records two survival bugs found and fixed on 2026-07-21.
+> **Open item gating the campaign — see [`PRELAUNCH_REVIEW.md`](PRELAUNCH_REVIEW.md).**
+> One decision in this document is contradicted by our own evidence and is
+> **not yet resolved**: §3/§4's *encoder ≫ aggregator* headline — our 210-config
+> baseline measured the reverse on classification (encoder spread 2.0 pts vs
+> aggregator 3.0 pts). See PRELAUNCH_REVIEW §3, item O1. That review also flagged §2's
+> `ab_mil` "free re-aggregation" claim; **that one is now fixed** — §2 below
+> budgets both additions as from-scratch training.
 
 ## Status: confirmed pivot
 
@@ -33,7 +34,7 @@ across two data sources:
 | TCGA-LGG | TCGA | IDH1 mutation | binary | 491 | 115 |
 | CPTAC-GBM | CPTAC | TP53 mutation | binary | 99 | 72 |
 | CPTAC-PDAC | CPTAC | immune subtype (low/med/high) | 3-class | 105 | 81 |
-| TCGA-HNSC | TCGA | tumor grade (G1/G2/G3) | 3-class | 431 | 204 |
+| TCGA-HNSC | TCGA | tumor grade (G1/G2/G3) | 3-class | 431 (414 gradeable) | 205 |
 
 Selection now prioritizes **classification-task diversity** (binary mutation +
 3-class immune subtype + 3-class tumor grade) and **cross-source coverage**
@@ -214,13 +215,24 @@ items.)
   chosen per cohort. Too much new surface for the fast preprint; lands in
   Phase 2.
 
-  *The exception that could have pulled it in is now closed.* The candidate was
-  **ovarian HRD** — natively a continuous genomic-scar score. The 2026-07-03
-  audit killed it twice over: `HRD_label` is a **pre-binarized 0/1 manifest
-  column** with no threshold or regression logic anywhere in the code, and the
-  ovarian data root is **not on fir** at all. Ovarian is also not one of the 5
-  roster cohorts. Regression is Phase 2, unconditionally. See
-  [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md) §0.
+  *The ovarian exception is closed; a second candidate is open.* The original
+  candidate was **ovarian HRD** — natively a continuous genomic-scar score. The
+  2026-07-03 audit killed it twice over: `HRD_label` is a **pre-binarized 0/1
+  manifest column** with no threshold or regression logic anywhere in the code,
+  and the ovarian data root is **not on fir** at all. Ovarian is also not one of
+  the 5 roster cohorts. See [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md) §0.
+
+  **But the premise "no continuous target exists in any dataset" was only ever
+  tested against ovarian, and it does not survive contact with the roster.**
+  CPTAC-PDAC's `immune_class` is an exactly-balanced 35/35/35 tertile split of a
+  *continuous* tumour-immune infiltration score (PRELAUNCH_REVIEW §5 item 5) — i.e. a
+  binned continuous target sitting inside the preprint roster. Whether the
+  underlying score is recoverable from the CPTAC source has **not been checked**.
+  Two consequences: (a) the tertile derivation must be disclosed in Table 1
+  either way, and (b) if the score is recoverable, a single genuine regression
+  arm becomes cheap and the deferral should be revisited rather than asserted.
+  **Action: check the CPTAC-PDAC source for the continuous score before treating
+  the regression deferral as final.**
 
 ### 5. Agent search-space scope — the frozen data substrate
 
@@ -305,10 +317,12 @@ Defense-in-depth, cheapest first:
    diversity (binary mutation + 3-class immune subtype + 3-class grade) across
    TCGA + CPTAC; OS survival retained as a secondary axis on all five. Replaces
    the earlier survival-power roster (LUAD/LGG/SKCM/BLCA/COAD).
-2. **Regression — deferred to Phase 2 (see §4). CLOSED, unconditionally.** Not
-   in the preprint. The ovarian-HRD exception that could have pulled it in was
-   ruled out by the 2026-07-03 audit (HRD is pre-binarized; ovarian is off-cluster;
-   ovarian is not a roster cohort).
+2. **Regression — deferred to Phase 2 (see §4), but the premise needs one
+   check.** The ovarian-HRD exception is ruled out (HRD is pre-binarized; ovarian
+   is off-cluster and not a roster cohort). However CPTAC-PDAC's `immune_class` is
+   a tertile split of a continuous infiltration score — a binned continuous target
+   already in the roster. Check whether that score is recoverable from the CPTAC
+   source before calling the deferral final.
 3. **One unmerged branch remains — narrower than this item once claimed.**
    - `feat/nnmil-survival` — **RESOLVED: merged.** The survival pipeline is on
      `main` (the branch no longer exists on `origin`), along with the roster
