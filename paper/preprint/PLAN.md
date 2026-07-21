@@ -2,8 +2,10 @@
 
 _Background/shared context: [`../shared/BACKGROUND.md`](../shared/BACKGROUND.md).
 Full-scope journal plan: [`../journal/PLAN.md`](../journal/PLAN.md). Raw source
-material: [`../references/`](../references/). Compiled 2026-07-01, updated
-same day from the confirmed pivot._
+material: [`../references/`](../references/). Compiled 2026-07-01; §5 resolved
+2026-07-15, §1 roster resolved 2026-07-17, last reconciled against `main`
+2026-07-21. **Counts are owned by [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md)** —
+where this file disagrees on a number, that one wins._
 
 ## Status: confirmed pivot
 
@@ -44,30 +46,40 @@ figure plan: [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md).
 ### 2. Model roster: expand from 2 to 4 MIL aggregators
 
 Baseline reporting today filters to one canonical head per framework
-(`clam_mb`, `simple_mil` — [`../../tasks/baseline_summary/README.md`](../../tasks/baseline_summary/README.md)
-§Scope). A citation-ranking literature study (PDF not yet in this
+(`clam_mb`, `simple_mil` — `tasks/baseline_summary/README.md` §Scope; note
+`tasks/` is **gitignored**, so that path resolves only in a local checkout, not
+on GitHub). A citation-ranking literature study (PDF not yet in this
 repo) put the top candidates at **DTFD-MIL, DSMIL, AB-MIL, TransMIL**.
 
-**Confirmed: 4 models total** — `clam_mb, simple_mil, ab_mil, dtfd_mil`.
+**Confirmed: 4 models total** — `clam_mb, simple_mil, abmil, dtfd_mil`.
 AB-MIL and DTFD-MIL are the two additions. **DSMIL is out** — the roster is
 held at 4, not expanded to 5.
 
-**Partly cheap, but not uniformly free:** both additions are already wired
-into every dataset's `nnmil_models` list (e.g.
-[`../../benchmarks/datasets/other/ovarian.yaml`](../../benchmarks/datasets/other/ovarian.yaml):
-`ab_mil, trans_mil, ds_mil, dtfd_mil, ...`), so neither needs new model
-integration. But "wired in" is not the same as "already run":
-- **`ab_mil`** results already exist on disk — the baseline README lists it
-  among heads "found on disk" that were deliberately *excluded* from the
-  cross-dataset report for apples-to-apples cleanliness. Adding it is just a
-  **re-aggregation/re-report** job (re-run `scripts/00_aggregate.py` +
-  `01_tables.py` with a wider `KEEP_AND_RENAME` map).
-- **`dtfd_mil`** is *not* in that on-disk list, so it likely still needs
-  actual training runs per dataset before it can be aggregated.
+**Naming and wiring (corrected 2026-07-21).** The model key is `abmil`, not
+`ab_mil` — and ABMIL and DTFD are each their **own framework**
+(`Framework.ABMIL` / `Framework.DTFD`), configured via their own YAML keys, not
+via `nnmil_models`. All five roster YAMLs pin one model per framework:
 
-So expanding the roster is a mix of free re-reporting (`ab_mil`) and real
-compute (`dtfd_mil`) — needs a per-dataset coverage check before assuming
-it's all free.
+```yaml
+clam_models:  [clam_mb]
+nnmil_models: [simple_mil]
+abmil_models: [abmil]
+dtfd_models:  [dtfd_mil]
+```
+
+An earlier draft of this section claimed both additions were "already wired into
+every dataset's `nnmil_models` list" and cited `ovarian.yaml`. That was wrong:
+`ovarian.yaml`'s `nnmil_models` is `[trans_mil, ds_mil, dtfd_mil, ilra_mil,
+wikg_mil, simple_mil, vision_transformer, rrt]`, with `abmil` in a separate
+`abmil_models` key. The string `ab_mil` appears nowhere in the codebase.
+
+**Neither addition is free — both need training runs.** An earlier draft called
+`abmil` a "free re-aggregation/re-report" job. The 2026-07-03 cluster audit
+refutes that: `abmil` has **essentially zero usable coverage** on disk (one
+partial TGCT fragment; every other cohort's fold-metric tree holds only
+`clam_mb` + `simple_mil`), so it needs real compute exactly like `dtfd_mil`. See
+[`EXECUTION_PLAN.md`](EXECUTION_PLAN.md) §0 and §0b-A. Budget both as
+from-scratch training.
 
 ### 3. Competitive positioning: a feature/coverage table vs. two named papers
 
@@ -90,8 +102,10 @@ differentiator. The two benchmarks named:
   CPTAC-CCRCC, 8,224 WSIs), **survival-only**. Headline finding — **encoder
   choice matters far more than aggregator choice** (TITAN c-index 0.62 best
   overall) — this is very likely the paper that motivated the survival-phase
-  cohort picks (4 of its 6 cohorts overlap with `feat/nnmil-survival`'s
-  target list, see shared background Phase C) and is also the direct
+  cohort picks (2 of its 6 cohorts — TCGA-HNSC and CPTAC-CCRCC — overlap with
+  the survival configs now on `main`; the earlier "4 of 6" count assumed
+  TCGA-BLCA/BRCA configs that were never merged — see shared background
+  Phase C) and is also the direct
   precedent for the encoder>aggregator claim surfaced in the
   citation-ranking review.
 
@@ -166,11 +180,13 @@ as a proper task-type axis. (One exception could pull it back in — see the not
 below the two items.)
 
 - **Slide-level pathology foundation model — confirmed for preprint: TITAN**
-  (`MahmoodLab/TITAN` on Hugging Face). Emits one embedding per whole slide
-  directly — **no patch tiling via TRIDENT, and no separate MIL aggregator**
-  for this arm. New code path in `autobench`, not just config: `TRIDENT →
-  patch features → MIL aggregator` becomes `TITAN → embedding → head` for
-  this arm. Why TITAN:
+  (`MahmoodLab/TITAN` on Hugging Face). Emits one **768-d** embedding per whole
+  slide directly, so TITAN *is* both the encoder and the aggregator for this arm
+  — there is no tile-encoder sweep and no separate MIL aggregator axis. It
+  needed a new code path in `autobench`, not just config (`TRIDENT → patch
+  features → MIL aggregator` becomes `TITAN → embedding → head`); **that code is
+  now merged on `main`** (`Framework.TITAN` + `benchmarks/src/autobench/pipeline/titan/`),
+  configured per dataset as `titan: {head: linear}`. Why TITAN:
   1. Built directly on **CONCH v1.5 patch features** — already one of our
      configured encoders (`MahmoodLab/conchv1_5` → `conch_v15` in every
      dataset YAML). Same lab, same feature family we already pull.
@@ -190,12 +206,13 @@ below the two items.)
   chosen per cohort. Too much new surface for the fast preprint; lands in
   Phase 2.
 
-  *Exception that would pull it into the preprint:* if one of the 5 chosen
-  datasets already carries a clean, ready continuous target, a single
-  regression arm becomes cheap and genuine. The strongest candidate is
-  **ovarian HRD** — HRD is natively a continuous genomic-scar score that the
-  ovarian config currently binarizes into `HRD_label`. Worth confirming
-  against the manifest before deciding.
+  *The exception that could have pulled it in is now closed.* The candidate was
+  **ovarian HRD** — natively a continuous genomic-scar score. The 2026-07-03
+  audit killed it twice over: `HRD_label` is a **pre-binarized 0/1 manifest
+  column** with no threshold or regression logic anywhere in the code, and the
+  ovarian data root is **not on fir** at all. Ovarian is also not one of the 5
+  roster cohorts. Regression is Phase 2, unconditionally. See
+  [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md) §0.
 
 ### 5. Agent search-space scope — the frozen data substrate
 
@@ -246,9 +263,9 @@ Defense-in-depth, cheapest first:
        - "benchmarks/src/autobench/pipeline/splits.py"
        - "benchmarks/src/autobench/pipeline/prepare.py"
        - "benchmarks/src/autobench/pipeline/evaluate.py"
-       - "benchmarks/src/autobench/pipeline/*/dataset.py"   # clam/abmil/dtfd/nnmil split+feature consumers
+       - "benchmarks/src/autobench/pipeline/*/dataset.py"   # clam/nnmil/abmil/dtfd/titan/smmile split+feature consumers
        # --- composite writers (the val-selection guarantee) ---
-       - "benchmarks/src/autobench/pipeline/*/runner.py"    # shared writer = clam/runner.py
+       - "benchmarks/src/autobench/pipeline/*/runner.py"    # shared writer lives in clam/runner.py; nnmil/abmil/dtfd/titan/smmile all import it
        - "benchmarks/scripts/run_experiment.py"             # entry point + summary_to_result_json
        # --- feature extraction / encoder inputs ---
        - "benchmarks/scripts/run_feature_extraction.py"
@@ -261,7 +278,7 @@ Defense-in-depth, cheapest first:
    module and keep dispatch editable.)
 2. **Operational — do before launching the loop.** (a) Pre-generate all split
    CSVs into the shared `benchmark_dir`; generation is idempotent, so the `seed`/
-   `num_folds` that live in the editable `pipeline/config.py` + consumer `data:`
+   `n_folds` that live in the editable `pipeline/config.py` + consumer `data:`
    block become **inert during search**. (b) Have the orchestrator **recompute
    `composite` from the val `metrics` block** rather than trusting the scalar
    ([`terminal_writer.py:205`](../../src/automil/terminal_writer.py)), so an edited
@@ -280,19 +297,20 @@ Defense-in-depth, cheapest first:
    diversity (binary mutation + 3-class immune subtype + 3-class grade) across
    TCGA + CPTAC; OS survival retained as a secondary axis on all five. Replaces
    the earlier survival-power roster (LUAD/LGG/SKCM/BLCA/COAD).
-2. **Regression — deferred to Phase 2 (see §4).** Not in the preprint. The
-   only thing that would pull it back in is a clean, ready continuous target
-   in one of the 5 chosen datasets — most likely **ovarian HRD** — which needs
-   confirming against the manifest before deciding.
-3. **Unmerged branches block a single source of truth.** Two pieces of
-   finished work currently live outside `main`:
+2. **Regression — deferred to Phase 2 (see §4). CLOSED, unconditionally.** Not
+   in the preprint. The ovarian-HRD exception that could have pulled it in was
+   ruled out by the 2026-07-03 audit (HRD is pre-binarized; ovarian is off-cluster;
+   ovarian is not a roster cohort).
+3. **One unmerged branch remains — narrower than this item once claimed.**
+   - `feat/nnmil-survival` — **RESOLVED: merged.** The survival pipeline is on
+     `main` (the branch no longer exists on `origin`), along with the roster
+     configs and the TITAN arm.
    - `feat/goldmark-parity` — the protocol-validation work (shared background
-     Phase B). Lives only on the cluster (`wt-goldmark-parity` worktree on
-     `fir.alliancecan.ca`), **never pushed to GitHub at all**.
-   - `feat/nnmil-survival` — the survival pipeline (shared background Phase
-     C). Pushed to GitHub, not merged into `main`.
-   Not urgent to merge today, but the preprint will eventually need one
-   commit/tag as "the" pipeline version, and neither is in `main` yet.
+     Phase B). **Pushed to GitHub** (`origin/feat/goldmark-parity`, `d42f0b4`) —
+     it is *not* cluster-only and *not* at risk from a scratch purge — but still
+     **not merged into `main`**.
+   So the remaining task is a decision about goldmark-parity plus one
+   commit/tag (`preprint-pipeline-v1`) as "the" pipeline version.
 4. **Enforce the frozen substrate before the agentic loop (see §5).** Wire
    `registry.protected` into each dataset's `automil/config.yaml`, pre-generate
    splits into the shared `benchmark_dir`, and recompute `composite`
