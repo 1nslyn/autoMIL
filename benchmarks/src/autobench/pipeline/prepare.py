@@ -48,7 +48,15 @@ def create_task_csv(
 
     df = load_all_slides(mapping_csv, ds)
 
+    n_before = len(df)
     df = df.dropna(subset=[label_col]).reset_index(drop=True)
+    if df.empty:
+        raise ValueError(
+            f"Task CSV for {label_col!r} would be empty: all {n_before} rows have a "
+            f"null label. This usually means {label_col!r} was never populated in "
+            f"{mapping_csv}, or a manifest join used the wrong case-id column. "
+            "(An empty CSV would otherwise fail much later inside split generation.)"
+        )
 
     # Handle label values that may be strings (multiclass) or numeric
     slide_col = ds.slide_id_column
@@ -64,12 +72,38 @@ def create_task_csv(
     else:
         # Labels are already strings (e.g., CLWD where CSV has "Acinar", "Solid", etc.)
         # label_map is {0: "Acinar", ...} -- we need reverse: {"Acinar": "Acinar", ...}
-        # Just use the raw label values directly since they are already class names
+        # Just use the raw label values directly since they are already class names.
+        #
+        # Check membership explicitly: this branch never calls .map(), so an
+        # unrecognised class name would otherwise flow straight into the splits
+        # as an unannounced extra class. String-labelled datasets are precisely
+        # the ones most likely to gain a new class name upstream.
+        known = set(label_map.values()) if label_map else set()
+        if known:
+            unknown = sorted(set(df[label_col].astype(str).unique()) - known)
+            if unknown:
+                raise ValueError(
+                    f"{len(unknown)} class name(s) in {label_col!r} are absent from "
+                    f"the task's label_map: {unknown[:10]}. Add them to the dataset "
+                    f"YAML's label_map (known: {sorted(known)}), or exclude them "
+                    "upstream in the manifest."
+                )
         task_df = pd.DataFrame({
             "case_id": df[case_col],
             "slide_id": df[slide_col].apply(ds.get_slide_id),
             "label": df[label_col],
         })
+
+    # A value absent from label_map becomes NaN via .map() and would flow into
+    # the split CSV as a silently-corrupt class. Fail instead — this is how a
+    # new class (e.g. a 4th tumour grade) would otherwise slip in unnoticed.
+    if task_df["label"].isna().any():
+        unmapped = sorted(set(df.loc[task_df["label"].isna(), label_col].unique()))
+        raise ValueError(
+            f"{len(unmapped)} value(s) in {label_col!r} are absent from the task's "
+            f"label_map and became NaN: {unmapped[:10]}. Add them to the dataset "
+            "YAML's label_map, or exclude them upstream in the manifest."
+        )
 
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
     task_df.to_csv(output_csv, index=False)
@@ -89,7 +123,8 @@ def _create_survival_task_csv(
 
     ``status`` is the integer event indicator (1=event, 0=censored) read
     from ``event_col``; ``time`` is the continuous survival/follow-up time
-    from ``time_col``. Rows missing either are dropped.
+    from ``time_col``. Rows missing either are dropped, as are rows with a
+    non-positive ``time`` (see below).
     """
     if not event_col or not time_col:
         raise ValueError(
@@ -97,7 +132,33 @@ def _create_survival_task_csv(
             f"(got event_col={event_col!r}, time_col={time_col!r})."
         )
     df = load_all_slides(mapping_csv, ds)
+    n_total = len(df)
     df = df.dropna(subset=[event_col, time_col]).reset_index(drop=True)
+    n_missing = n_total - len(df)
+
+    # Non-positive follow-up (a GDC date artifact — e.g. a death recorded at
+    # day 0) is undefined for Cox's partial likelihood and breaks most c-index
+    # implementations. Drop it here rather than letting it silently corrupt the
+    # fit; the count is reported below so the loss is never invisible.
+    times = pd.to_numeric(df[time_col], errors="coerce")
+    # Count unparseable separately from non-positive: both are dropped, but
+    # reporting a non-numeric time as "time <= 0" would misdescribe the cause.
+    n_unparseable = int(times.isna().sum())
+    keep = times > 0
+    n_nonpos = int((~keep).sum()) - n_unparseable
+    df = df[keep].reset_index(drop=True)
+    if df.empty:
+        # Mirror the classification guard. Without this a 0-row CSV is written,
+        # and the *next* run's cache check reports it as "empty (header only)"
+        # and blames a task-type change — the wrong cause — then tells the
+        # operator to purge and re-run, which regenerates the same empty file.
+        raise ValueError(
+            f"Survival task CSV for {event_col!r}/{time_col!r} would be empty: no "
+            f"row has both a non-null event/time and a positive time. Of {n_total} "
+            f"slides: {n_missing} missing event/time, {n_nonpos} with time <= 0, "
+            f"{n_unparseable} with a non-numeric time. Check that the survival "
+            f"columns were joined onto {mapping_csv} correctly."
+        )
 
     slide_col = ds.slide_id_column
     case_col = ds.case_id_column
@@ -113,6 +174,10 @@ def _create_survival_task_csv(
     n_events = int(task_df["status"].sum())
     print(f"  Survival task CSV: {output_csv}  ({len(task_df)} slides, "
           f"{n_events} events, {len(task_df) - n_events} censored)")
+    if n_missing or n_nonpos or n_unparseable:
+        print(f"    dropped {n_missing + n_nonpos + n_unparseable} of {n_total} slides: "
+              f"{n_missing} missing event/time, {n_nonpos} with time <= 0, "
+              f"{n_unparseable} with a non-numeric time")
     return task_df
 
 
@@ -167,8 +232,48 @@ def prepare_all(
                     ds=ds,
                 )
         else:
-            print(f"[prep] Task CSV already exists: {csv_path}")
             task_df = pd.read_csv(csv_path)
+            # The cache key is the task NAME only, so a CSV left over from an
+            # earlier roster can be reused under a task whose type has since
+            # changed (e.g. `os` was a Patho-Bench classification task before it
+            # became survival). Detect that and FAIL LOUDLY — deliberately do
+            # NOT self-heal here.
+            #
+            # prepare_all runs once per EXPERIMENT against the *shared*
+            # benchmark_dir (see scripts/run_experiment.py), so under the agentic
+            # loop many processes execute this block concurrently. Rewriting the
+            # CSV or removing the splits directory would race: a concurrent
+            # reader can observe a truncated-but-line-aligned CSV and build
+            # splits from a partial cohort, and a purge can delete splits another
+            # process is already training from. So the operator purges explicitly.
+            #
+            # Note this only removes the *destructive* race. Creation itself is
+            # still not atomic (`to_csv` truncates then writes), so run
+            # `run_benchmark.py --dataset <cohort> --prep_only` once before
+            # launching concurrent work, rather than letting 8xN experiment
+            # processes race to generate the same CSVs and splits.
+            expected = {"status", "time"} if tdef.task_type == "survival" else {"label"}
+            stale_splits = os.path.join(
+                benchmark_dir, "splits", default_strategy, task_name
+            )
+            if task_df.empty or not expected.issubset(task_df.columns):
+                why = (
+                    "it is empty (header only)" if task_df.empty
+                    else f"it is missing {sorted(expected - set(task_df.columns))}"
+                )
+                raise ValueError(
+                    f"Cached task CSV does not match task {task_name!r} "
+                    f"(task_type={tdef.task_type}): {why}.\n"
+                    f"  file:  {csv_path}\n"
+                    f"  found: {list(task_df.columns)}\n"
+                    "The task's type or labels changed since this cache was written "
+                    "(e.g. a roster pivot). Purge the derived artefacts and re-run "
+                    "prep — this is not done automatically because prep runs "
+                    "concurrently against a shared directory:\n"
+                    f"  rm -f {csv_path}\n"
+                    f"  rm -rf {stale_splits}"
+                )
+            print(f"[prep] Task CSV already exists: {csv_path}")
         all_slide_ids.update(task_df["slide_id"].tolist())
 
         splits_dir = os.path.join(benchmark_dir, "splits", default_strategy, task_name)
@@ -182,7 +287,29 @@ def prepare_all(
                 seed=seed, stratify_col=stratify_col,
             )
         else:
-            print(f"[prep] Splits already exist: {splits_dir}")
+            # A cached splits directory is reused wholesale, so `n_splits` would
+            # otherwise be silently ignored: a 5-fold request trains on whatever
+            # fold count happens to be on disk. These directories still hold
+            # legacy 10-fold splits from the phase-1 runs, which would halve the
+            # validation set and change the train/val/test proportions without
+            # any message. Verify the count and fail loudly — and, as with the
+            # task CSV above, deliberately do NOT self-heal: this path runs
+            # concurrently against a shared benchmark_dir.
+            n_cached = sum(
+                1 for f in os.listdir(splits_dir)
+                if f.startswith("splits_") and f.endswith(".csv")
+            )
+            if n_cached != n_splits:
+                raise ValueError(
+                    f"Cached splits for task {task_name!r} are {n_cached}-fold, but "
+                    f"{n_splits}-fold was requested.\n"
+                    f"  dir: {splits_dir}\n"
+                    "Reusing them would silently change the train/val/test "
+                    "proportions (and the validation-set size that model selection "
+                    "depends on). Purge and re-run prep:\n"
+                    f"  rm -rf {splits_dir}"
+                )
+            print(f"[prep] Splits already exist: {splits_dir} ({n_cached}-fold)")
 
     # H5 -> PT for each encoder (CLAM-specific)
     from autobench.pipeline.clam.prepare import convert_h5_to_pt
