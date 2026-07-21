@@ -30,13 +30,13 @@ identical for everyone — you just pass your dataset name.
 
 ## Your assignment
 
-| Member | Dataset | Classification Task | `<dataset>` arg |
-|--------|---------|----------------------|-----------------|
-| Leo | TCGA-LUAD | KRAS (binary) | `tcga_luad` |
-| Yeonwoo | TCGA-LGG | IDH1 (binary) | `tcga_lgg` |
-| Ryan | TCGA-HNSC | tumor grade (3-class) | `tcga_hnsc` |
-| Keishi | CPTAC-GBM | TP53 (binary) | `cptac_gbm` |
-| Terry | CPTAC-PDAC | immune_class (3-class) | `cptac_pdac` |
+| Member  | Dataset    | Classification Task    | `<dataset>` arg |
+| ------- | ---------- | ---------------------- | --------------- |
+| Leo     | TCGA-LUAD  | KRAS (binary)          | `tcga_luad`     |
+| Yeonwoo | TCGA-LGG   | IDH1 (binary)          | `tcga_lgg`      |
+| Ryan    | TCGA-HNSC  | tumor grade (3-class)  | `tcga_hnsc`     |
+| Keishi  | CPTAC-GBM  | TP53 (binary)          | `cptac_gbm`     |
+| Terry   | CPTAC-PDAC | immune_class (3-class) | `cptac_pdac`    |
 
 Find your row — everywhere below, `<dataset>` is your arg (e.g. `tcga_lgg`).
 Every dataset also runs a shared `os` (overall survival) task, so each of the
@@ -51,7 +51,7 @@ ssh <you>@fir.alliancecan.ca
 # If imports later fail with odd stdlib errors, that login node's /home is flaky —
 # reconnect or try another (login2 / login3).
 
-cd ~/scratch/autoMIL/autoMIL          # your repo checkout
+cd ~/scratch/autoMIL          # your repo checkout
 git checkout main && git pull --ff-only   # get the latest configs + launchers
 source .venv/bin/activate
 
@@ -113,12 +113,12 @@ ships an `OS` task for some CPTAC cohorts, but for PDAC it covers only 97 of 105
 patients (71 deaths) versus GDC's 105/105 (81 deaths). One consistent source beats
 mixing them.
 
-| Cohort | Label column | How it got there |
-|---|---|---|
-| TCGA-LUAD / TCGA-LGG | `KRAS_binary` / `IDH1_binary` | GOLDMARK manifest; OS already joined from `clinical.tsv` |
-| CPTAC-GBM | `TP53_binary` | Patho-Bench; OS via `fetch_gdc_clinical.py` → `add_os_to_manifest.py` |
-| CPTAC-PDAC | `IMMUNE_CLASS_binary` (3-class) | Patho-Bench; OS via `fetch_gdc_clinical.py` → `add_os_to_manifest.py` |
-| TCGA-HNSC | `GRADE` (3-class) | `add_grade_to_manifest.py` from `clinical.tsv`; OS via `add_os_to_manifest.py` |
+| Cohort               | Label column                    | How it got there                                                               |
+| -------------------- | ------------------------------- | ------------------------------------------------------------------------------ |
+| TCGA-LUAD / TCGA-LGG | `KRAS_binary` / `IDH1_binary`   | GOLDMARK manifest; OS already joined from `clinical.tsv`                       |
+| CPTAC-GBM            | `TP53_binary`                   | Patho-Bench; OS via `fetch_gdc_clinical.py` → `add_os_to_manifest.py`          |
+| CPTAC-PDAC           | `IMMUNE_CLASS_binary` (3-class) | Patho-Bench; OS via `fetch_gdc_clinical.py` → `add_os_to_manifest.py`          |
+| TCGA-HNSC            | `GRADE` (3-class)               | `add_grade_to_manifest.py` from `clinical.tsv`; OS via `add_os_to_manifest.py` |
 
 ```bash
 ROOT=/project/rrg-jma/shared/Pathology/TCGA/TCGA-XXXX   # the dataset root

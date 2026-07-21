@@ -274,7 +274,6 @@ dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
 name = "automil"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -337,7 +336,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.0" },
     { name = "watchdog", specifier = ">=4.0" },
 ]
-provides-extras = ["ml", "slurm", "ray", "examples-iris"]
+provides-extras = ["examples-iris", "ml", "ray", "slurm"]
 
 [package.metadata.requires-dev]
 dev = [

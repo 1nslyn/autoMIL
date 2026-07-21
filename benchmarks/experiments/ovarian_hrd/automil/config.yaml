@@ -45,6 +45,27 @@ training:
   batch_size: 32
   max_seq_length: 4096
 
+# --- Frozen data substrate (example wiring; see paper/preprint/PLAN.md §5) ---
+# registry.protected is a HARD submit-time gate: any submitted file matching one of
+# these project-root-relative fnmatch globs is refused (src/automil/cli/submit.py:263),
+# with no --force escape. Unlike files.readonly below (warning-only, bypassed by an
+# explicit --files), this actually freezes the split / prep / eval / feature-extraction
+# code so the agent's recipe search cannot alter the evaluation protocol or the encoder
+# inputs — the precondition for a fair encoder-vs-aggregator comparison.
+registry:
+  protected:
+    # evaluation protocol: splits + metrics
+    - "benchmarks/src/autobench/pipeline/splits.py"
+    - "benchmarks/src/autobench/pipeline/prepare.py"
+    - "benchmarks/src/autobench/pipeline/evaluate.py"
+    - "benchmarks/src/autobench/pipeline/*/dataset.py"   # clam/abmil/dtfd/nnmil loaders
+    # composite writers (the val-selection guarantee)
+    - "benchmarks/src/autobench/pipeline/*/runner.py"    # shared writer = clam/runner.py
+    - "benchmarks/scripts/run_experiment.py"             # entry point + summary_to_result_json
+    # feature extraction / encoder inputs
+    - "benchmarks/scripts/run_feature_extraction.py"
+    - "benchmarks/src/autobench/data.py"                 # WSI-list CSV feeding TRIDENT
+
 files:
   editable: ["train.py", "models/"]
   readonly: ["evaluate.py", "prepare.py"]
