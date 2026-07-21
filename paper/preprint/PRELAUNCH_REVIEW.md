@@ -224,20 +224,34 @@ called a launch foot-gun. It is handled — `submit_titan_extract.sh` extracts a
 
 ---
 
-## 5. Doc inconsistencies still to fix
+## 5. Doc inconsistencies
 
-1. `EXECUTION_PLAN.md` says TITAN is **4096-d**; the code is **768-d**
-   (`pipeline/config.py`, `titan/prepare.py`). The doc is wrong.
-2. `PLAN.md` §2 still claims `ab_mil` results exist on disk and adding it is
-   "free re-aggregation". `EXECUTION_PLAN.md` refutes this — coverage is
-   essentially zero. Changes the compute plan.
-3. `PLAN.md` §3/§4 assert encoder ≫ aggregator with no acknowledgement of O1.
-4. HNSC `n` is quoted as **431** in the roster tables; the gradeable n is **414**.
-   431 applies to survival only — Table 1 must carry both, per task.
-5. `PLAN.md` §4 defers regression on the premise that "no continuous target
-   exists in any dataset". PDAC's immune subtype is an exactly-balanced 35/35/35
-   tertile split — i.e. a binned continuous score. The premise was tested only
-   against ovarian HRD. Disclose the tertile derivation in Table 1 regardless: a
-   reviewer who sees 35/35/35 unlabelled will assume it is being hidden.
-6. `registry.protected` ships **empty** everywhere. The frozen-substrate freeze is
-   `PLAN.md` §5's central rigor claim and is currently documented but unenforced.
+_Status updated 2026-07-21 after the doc reconciliation in #35 and its follow-up.
+Items are kept in their original numbering so earlier references still resolve._
+
+1. ~~`EXECUTION_PLAN.md` says TITAN is **4096-d**; the code is **768-d**.~~
+   **FIXED (#35)** — all three 4096-d claims corrected; the doc now also records
+   that the dim is a code default (`titan_embed_dim`), not a YAML field.
+2. ~~`PLAN.md` §2 still claims `ab_mil` results exist on disk and adding it is
+   "free re-aggregation".~~ **FIXED (#35)** — §2 now budgets `abmil` and
+   `dtfd_mil` both as from-scratch training. The same pass corrected the model
+   name (`abmil`, not `ab_mil`) and the claim that either was wired into
+   `nnmil_models`; they are separate frameworks.
+3. **OPEN — the important one.** `PLAN.md` §3/§4 assert encoder ≫ aggregator with
+   no acknowledgement of O1. A banner now points here from `PLAN.md`, but the
+   §3/§4 body text is unchanged and the underlying decision (restore dynamic
+   range vs. reframe as a non-replication) is still unmade.
+4. ~~HNSC `n` is quoted as **431**; the gradeable n is **414**.~~ **FIXED** —
+   `EXPERIMENT_GRID.md` §1.1's grade row now reads `431 (414 gradeable)`.
+   The same pass corrected HNSC's raw OS deaths from **204 to 205** (47.3% →
+   47.6%) to agree with the attrition table in that section; 204 is the *usable*
+   post-filter count, not the cohort count.
+5. **PARTLY FIXED.** The tertile derivation is now disclosed in
+   `EXPERIMENT_GRID.md` §1.1 and flagged in `PLAN.md` §4. **Still open:** nobody
+   has checked whether CPTAC-PDAC's underlying continuous infiltration score is
+   recoverable from the CPTAC source. If it is, a genuine regression arm is cheap
+   and the Phase-2 deferral should be revisited rather than asserted.
+6. **OPEN.** `registry.protected` ships **empty** everywhere. The frozen-substrate
+   freeze is `PLAN.md` §5's central rigor claim and is currently documented but
+   unenforced. Tracked as `EXPERIMENT_GRID.md` §5 item 2 and `PLAN.md` open
+   item 4.

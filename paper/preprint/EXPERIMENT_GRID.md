@@ -23,7 +23,7 @@ see §6._
 | MIL aggregators | **4** — `clam_mb`, `simple_mil`, `abmil`, `dtfd_mil` |
 | Patch encoders | **3** — `uni_v2`, `virchow2`, `hoptimus1` |
 | Slide-encoder arm | **TITAN** (its own encoder + aggregator, linear probe) |
-| **Experiments / dataset** | **33** (30 tile-encoder + 3 TITAN) |
+| **Experiments / dataset** | **33** (30 tile-encoder + 3 TITAN) — but **30 today**: the 3 TITAN arms cannot run until `conch_v15` is extracted (§3.2) |
 | **Total experiments** | **165** |
 | **Total fold-trainings** (×5-fold) | **825** |
 | Static-grid compute | **≈ 40 GPU-hours ≈ ½–1 day on 4×H100** (possibly ~55 GPU-h — see the §3.1 caveat) |
@@ -51,7 +51,7 @@ across two data sources**; each cohort is pinned to a single classification task
 | TCGA-LGG | TCGA | IDH1 mutation | binary | 115 | [`tcga_lgg.yaml`](../../benchmarks/datasets/tcga/tcga_lgg.yaml) |
 | CPTAC-GBM | CPTAC | TP53 mutation | binary | 72 | [`cptac_gbm.yaml`](../../benchmarks/datasets/cptac/cptac_gbm.yaml) |
 | CPTAC-PDAC | CPTAC | immune subtype | 3-class | 81 | [`cptac_pdac.yaml`](../../benchmarks/datasets/cptac/cptac_pdac.yaml) |
-| TCGA-HNSC | TCGA | tumor grade | 3-class | 204 | [`tcga_hnsc.yaml`](../../benchmarks/datasets/tcga/tcga_hnsc.yaml) |
+| TCGA-HNSC | TCGA | tumor grade | 3-class | 205 | [`tcga_hnsc.yaml`](../../benchmarks/datasets/tcga/tcga_hnsc.yaml) |
 
 Selection prioritizes **classification-task diversity** (binary mutation +
 3-class immune subtype + 3-class tumor grade) and **cross-source coverage** (TCGA
@@ -86,14 +86,19 @@ tumor grade — matching each cohort's class structure.
 
 | Dataset | Cls task | Patients (n) | G1 | G2 | G3 | OS deaths | OS prevalence |
 |---|---|--:|--:|--:|--:|--:|--:|
-| TCGA-HNSC | tumor grade | 431 | 54 | 260 | 100 | 204 | 47.3% |
+| TCGA-HNSC | tumor grade | 431 (414 gradeable) | 54 | 260 | 100 | 205 | 47.6% |
 
 - **⚑ TCGA-LGG polarity:** IDH1-mutant is the **majority** class (382/491, 78%) —
   gliomas are commonly IDH-mutant, so the power-limiting minority is the 109
   **wildtype** cases. This also explains LGG's high baseline AUC.
 - **Small-sample cohorts:** CPTAC-GBM (n=99) and CPTAC-PDAC (n=105) are the
   smallest, included on purpose to probe the small-sample noise-vs-memorization
-  regime. CPTAC-PDAC's immune subtype is balanced by construction (35/35/35).
+  regime. **CPTAC-PDAC's immune subtype is balanced by construction (35/35/35)
+  because it is a tertile split of a continuous tumour-immune infiltration
+  score** — disclose that derivation in the paper's Table 1. An exactly equal
+  3-way split presented without explanation reads as concealment; it also
+  means this task is a *binned continuous target*, which bears on the
+  regression deferral (see `PLAN.md` §4 and PRELAUNCH_REVIEW §5 item 5).
 - **TCGA-HNSC grade:** 54 + 260 + 100 = 414 gradeable of 431 patients; the 17
   GX / not-reported cases carry no grade label and drop from the grade task
   (survival still uses all 431).
@@ -114,8 +119,8 @@ tumor grade — matching each cohort's class structure.
   | TCGA-HNSC | 429 | 204 | 431 / 205 |
 
   **Quote the usable figures in any survival results table** — the OS-deaths
-  column above is the cohort-level count, which for LUAD/LGG overstates what
-  actually trains by 5 and 1 deaths. Attrition is now small (0.5–2.6%).
+  column above is the cohort-level count, which overstates what actually trains
+  by 5 (LUAD), 1 (LGG) and 1 (HNSC) deaths. Attrition is now small (0.5–2.6%).
 
   > **Provenance note.** Until 2026-07-21 these cohorts were materially smaller
   > (LUAD 399, LGG 445, HNSC 397) because `add_os_to_manifest.py` reduced the GDC
@@ -185,6 +190,14 @@ Why the survival column is uneven (all enforced in code, not by hand):
 | Classification only (5 ds) | 65 | 325 |
 | Survival only (5 ds) | 100 | 500 |
 | **Campaign (5 datasets)** | **165** | **825** |
+
+> **Configured vs. runnable today.** The 165/825 figures are the *configured*
+> grid — what `generate_all_experiments` emits from the committed YAMLs. Until
+> `conch_v15` features exist (§3.2), the TITAN arm has no inputs, so a launch
+> today yields **30 exps/dataset = 150 experiments / 750 fold-trainings** with an
+> empty TITAN row. TITAN is therefore a **launch gate for the encoder axis**, not
+> an optional extra: without it the encoder axis is three near-identical modern
+> ViT foundation models (see PRELAUNCH_REVIEW §3, items O1 and O3).
 
 > Reproduce: the `validate config` block inside
 > [`submit_benchmark.sh`](../../benchmarks/scripts/slurm/submit_benchmark.sh:78)

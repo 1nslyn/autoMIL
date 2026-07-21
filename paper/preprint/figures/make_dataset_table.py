@@ -94,7 +94,7 @@ IMMUNE = [
 ]
 # 3-class tumor grade:  (dataset, task, n, g1, g2, g3, os_deaths, os_pct)
 GRADE = [
-    ("TCGA-HNSC", "tumor grade", 431, 54, 260, 100, 204, 47.3),
+    ("TCGA-HNSC", "tumor grade", 431, 54, 260, 100, 205, 47.6),
 ]
 
 # 8 columns, shared width profile across all three sub-tables (sums ~1.0).
@@ -133,8 +133,11 @@ def table1():
                  fontsize=12, fontweight="bold", y=0.98)
     foot = ("Counts from the roster figure (2026-07-17); TCGA-LUAD/LGG mutation counts match the May "
             "task_sizes.csv baseline.  TCGA-HNSC grade: 54+260+100=414 gradeable of 431 (17 GX/NR "
-            "dropped from the\ngrade task).  CPTAC-PDAC immune subtype is balanced by construction "
-            "(35/35/35).  OS prevalence = deaths / n;  Prevalence column = mutant fraction (binary only).")
+            "dropped from the grade task; survival uses all 431).\nCPTAC-PDAC immune subtype is a TERTILE "
+            "SPLIT of a continuous tumour-immune infiltration score, hence balanced by construction "
+            "(35/35/35).\nOS deaths are cohort-level; the usable survival cohort is smaller after the "
+            "OS_time filter (see EXPERIMENT_GRID.md 1.1).  OS prevalence = deaths / n;  Prevalence "
+            "column = mutant fraction (binary only).")
     fig.text(0.5, 0.02, foot, ha="center", va="top", fontsize=6.6, color="#555")
     p = os.path.join(OUT, "table1_dataset_stats.png")
     fig.savefig(p, bbox_inches="tight")
