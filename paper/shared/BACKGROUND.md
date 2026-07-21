@@ -1,6 +1,6 @@
 # Background — shared across both paper phases
 
-_Compiled 2026-07-01. This is the context common to both
+_Compiled 2026-07-01; last reconciled against `main` on 2026-07-21. This is the context common to both
 [`../preprint/PLAN.md`](../preprint/PLAN.md) (Phase 1, active) and
 [`../journal/PLAN.md`](../journal/PLAN.md) (Phase 2, provisional) — read this
 first, then the phase-specific doc for what's actually happening now._
@@ -25,7 +25,8 @@ first, then the phase-specific doc for what's actually happening now._
      and LLM runtimes.
    - **Status:** v1.0 "F2-readiness" shipped 2026-05-08 (69 requirements, 9
      phases); v1.1 "Bug Fixing" shipped 2026-06-12 (20 requirements, 6 phases).
-     Both merged to `main`. Full test suite green (1058 passed).
+     Both merged to `main`. Full test suite green (1133 collected as of
+     2026-07-21).
    - **The auto pipeline is the main contribution** — this framework is still
      the paper's core claim in both phases. What changes between phases is
      scope and evaluation, not the core claim.
@@ -42,7 +43,7 @@ first, then the phase-specific doc for what's actually happening now._
 Ran CLAM (`clam_mb`) and nnMIL (`simple_mil`) across **15 TCGA cancer types, 35
 (dataset, task) mutation-prediction pairs**, 3 foundation-model encoders
 (H‑Optimus‑1, UNI v2, Virchow2), 5-fold patient-stratified CV. Write-up:
-[`../../tasks/baseline_summary/REPORT.md`](../../tasks/baseline_summary/REPORT.md).
+`tasks/baseline_summary/REPORT.md` (local-only — `tasks/` is gitignored).
 
 Headline: 14/35 pairs reach test AUC ≥ 0.70 (best: THCA‑BRAF 0.925); weak
 signal concentrated in low-prevalence single-gene tasks. Model gap CLAM vs
@@ -50,14 +51,15 @@ nnMIL ~3 AUC points; encoder choice is a smaller effect (~2 points) than
 per-dataset/task variance.
 
 Comparing against published numbers (GOLDMARK, arXiv:2603.20848; nnMIL,
-arXiv:2511.14907 — [`../../tasks/baseline_summary/COMPARISON.md`](../../tasks/baseline_summary/COMPARISON.md))
+arXiv:2511.14907 — `tasks/baseline_summary/COMPARISON.md`, local-only)
 showed our numbers reading ~2–4 AUC points **below** theirs on overlapping
 tasks. That gap is what triggered Phase B.
 
 ### Phase B — GOLDMARK protocol-parity investigation (2026-06-14 to 06-19)
 
-Branch `feat/goldmark-parity` — **cluster-local only, never pushed to GitHub**
-(`/home/yinshuol/scratch/autoMIL/wt-goldmark-parity`, worktree off `main@340ae85`).
+Branch `feat/goldmark-parity` — **pushed to GitHub (`origin/feat/goldmark-parity`,
+`d42f0b4`) but not merged into `main`**; the working copy is the cluster worktree
+`/home/yinshuol/scratch/autoMIL/wt-goldmark-parity` (off `main@340ae85`).
 Full write-up: `docs/goldmark_parity.md` on that branch.
 
 Question: is the gap a real pipeline deficiency, or a comparison/protocol
@@ -80,7 +82,7 @@ artifact? Method: read GOLDMARK's actual training code
 - One open confound flagged but not yet closed: our comparison uses `clam_mb`
   (gated attention + instance-clustering loss), which is a stronger head than
   GOLDMARK's plain-GMA aggregator — the literal model-matched control would be
-  our `ab_mil`. **This is now addressed in Phase 1** (ab_mil is a confirmed
+  our `abmil`. **This is now addressed in Phase 1** (`abmil` is a confirmed
   addition — see `../preprint/PLAN.md`).
 
 Follow-on: **exact-protocol reproduction** (`goldmark_exact/`, same branch,
@@ -98,11 +100,13 @@ validated as competitive-to-SOTA — this is the evidence behind the
 is merged to `main` yet — nothing is written to the shared tree pending
 review (per the branch's own merge-plan note).
 
-### Phase C — Survival-analysis expansion (2026-06 ongoing, unmerged)
+### Phase C — Survival-analysis expansion (2026-06, **merged to `main`**)
 
-Branch `feat/nnmil-survival` (pushed to GitHub, not yet merged). Adds a second
-task family beyond mutation/subtype classification: **overall-survival
-(time-to-event) prediction**.
+Formerly branch `feat/nnmil-survival`; **merged — the branch no longer exists on
+`origin`, and the survival pipeline ships on `main`** (`pipeline/{clam,nnmil,abmil,
+dtfd,titan}/survival_train.py`, `benchmarks/scripts/slurm/submit_survival_benchmark.sh`).
+Adds a second task family beyond mutation/subtype classification:
+**overall-survival (time-to-event) prediction**.
 
 - Losses: Cox proportional hazards (`cox`, `clam_sb`/nnMIL-attention only —
   degenerate for `clam_mb`) and discrete-time NLL (`nllsurv`, works for both).
@@ -112,17 +116,20 @@ task family beyond mutation/subtype classification: **overall-survival
   flip with few events).
 - Labels: joined from GDC clinical exports (`OS_event`/`OS_time`) per cohort —
   tooling in `benchmarks/scripts/manifests/add_os_to_manifest.py`.
-- Cohorts enabled so far: TCGA‑LGG (first), TCGA‑BLCA/BRCA/GBM/HNSC and
-  CPTAC‑CCRCC/GBM configs added — 4 of these (BLCA, BRCA, HNSC, CCRCC) overlap
-  directly with the Frontiers embedding-choice paper's 6-cohort survival
-  benchmark (see Phase 1 plan), which is likely not a coincidence.
-- Methodology doc: `docs/tutorials/survival_benchmark_experiments_tutorial.md` (on this
-  branch — the survival counterpart of
+- Cohorts with an `os` task on `main` today: **TCGA‑LGG** (first), **TCGA‑LUAD**,
+  **TCGA‑HNSC**, **CPTAC‑CCRCC**, **CPTAC‑GBM**, **CPTAC‑PDAC**. (An earlier
+  draft of this section also listed TCGA‑BLCA/BRCA/GBM configs; those were never
+  merged and **do not exist in `benchmarks/datasets/` today**.) Two of the six —
+  **TCGA‑HNSC** and **CPTAC‑CCRCC** — overlap with the Frontiers
+  embedding-choice paper's 6-cohort survival benchmark (see Phase 1 plan).
+- Methodology doc: [`../../docs/tutorials/survival_benchmark_experiments_tutorial.md`](../../docs/tutorials/survival_benchmark_experiments_tutorial.md)
+  (on `main` — the survival counterpart of
   [`../../docs/tutorials/benchmark_experiments_tutorial.md`](../../docs/tutorials/benchmark_experiments_tutorial.md)).
 
 This is a genuine axis expansion for the paper: classification-only →
-classification + survival (+ regression, planned in Phase 1) to cover all
-three standard MIL task types.
+classification + survival. The third standard MIL task type, **regression, is
+deferred to Phase 2** — no continuous target exists in any dataset config today
+(see `../preprint/PLAN.md` §4).
 
 ## Data scale available (shared cluster storage)
 
@@ -134,8 +141,7 @@ three standard MIL task types.
   OV, PDAC, UCEC.
 
 Only a subset of these (ovarian, CLWD, CCRCC, HANCOCK, TCGA‑LGG/LUAD/HNSC,
-CPTAC‑GBM/PDAC, plus the in-progress survival cohorts) have
-`autobench/datasets/*.yaml` configs on GitHub today. **Phase 1 (preprint) uses
+CPTAC‑CCRCC/GBM/PDAC) have `benchmarks/datasets/*.yaml` configs on GitHub today. **Phase 1 (preprint) uses
 the 5-cohort roster (TCGA‑LUAD/LGG/HNSC + CPTAC‑GBM/PDAC); Phase 2 (journal) is
 scoped to the full 26-cohort inventory** — see the respective phase plans.
 

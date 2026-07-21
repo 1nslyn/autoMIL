@@ -26,7 +26,7 @@ remains undecided (see Open / pending):
   different paper, it's the same claim at larger scale. *How* that scale and
   its evaluation are designed is undecided.
 - **Model roster: undecided.** Phase 1 is fixed at 4 models (clam_mb,
-  simple_mil, ab_mil, dtfd_mil). Phase 2 would plausibly widen it — TransMIL,
+  simple_mil, abmil, dtfd_mil). Phase 2 would plausibly widen it — TransMIL,
   possibly DSMIL, completing the citation-ranking set the preprint scoped
   down — but nothing here is settled.
 

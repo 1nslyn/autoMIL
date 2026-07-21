@@ -7,7 +7,7 @@
 
 _Companion to [`PLAN.md`](PLAN.md) (strategy) and [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md)
 (campaign). Compiled 2026-07-14, **roster pivoted 2026-07-17** (LUAD/LGG/GBM/
-PDAC/HNSC — see §1). Counts below come from running
+PDAC/HNSC — see §1), re-verified against `main` 2026-07-21. Counts below come from running
 `autobench.pipeline.config.generate_all_experiments` against the five committed
 dataset YAMLs on `main`. Where this disagrees with older notes, this file wins —
 see §6._
@@ -26,7 +26,7 @@ see §6._
 | **Experiments / dataset** | **33** (30 tile-encoder + 3 TITAN) |
 | **Total experiments** | **165** |
 | **Total fold-trainings** (×5-fold) | **825** |
-| Static-grid compute | **≈ 40 GPU-hours ≈ ½–1 day on 4×H100** |
+| Static-grid compute | **≈ 40 GPU-hours ≈ ½–1 day on 4×H100** (possibly ~55 GPU-h — see the §3.1 caveat) |
 | Real long pole | **`conch_v15` feature extraction for TITAN** (~1 day wall) |
 | **Not yet budgeted** | **the agentic recipe-search layer** — the paper's headline; ~15–20× the static grid at full scope (§3.3) |
 
@@ -222,6 +222,17 @@ On 4×H100 with the best-fit orchestrator → **≈ 10–13 h wall-clock** for t
 5-dataset static grid (or ~2–3 h each if the five datasets run as parallel jobs).
 Consistent with EXECUTION_PLAN's "~1 day in one self-resubmitting job."
 
+> ⚠ **This may be ~1.4× optimistic against its own anchor — unreconciled.** The
+> EXECUTION_PLAN §4 reference point (120 runs / 10.5 h) is an **equal-count
+> `clam_mb`/`simple_mil`** mix, i.e. **~5.25 min/fold-training measured**. The
+> per-head rates above predict **3.75 min** for that same equal-count mix — so
+> they run ~1.4× fast. Scaling every head by that factor gives **~55 GPU-h ≈
+> ~14 h on 4×H100**, not ≈40 GPU-h ≈ 10–13 h. (Pricing all 825 fold-trainings at
+> the flat 5.25 min gives ~72 GPU-h, but that overstates — it charges TITAN's
+> linear probe at CLAM's rate.) Both are placeholders until the campaign's
+> instrumented timings land (§5, item 5) — but plan against the pessimistic end.
+> This propagates to the §0 TL;DR and §3.4.
+
 ### 3.2 Feature extraction — the real long pole
 
 Training is cheap; **features gate it.**
@@ -256,8 +267,24 @@ as the cost model — a *cell* = (dataset, task, encoder, aggregator):
 | Final (frozen) | 5 seeds × 5 folds | ~25 |
 | **Per cell** | | **≈ 235** |
 
+> ⚠ **This exceeds autoMIL's own per-cell budget cap — needs reconciling before
+> the loop launches.** At ~700 GPU-h / 60 cells this is **~11.7 GPU-h per cell**,
+> against the framework-enforced **6-hour hard wall-clock cap per cell**
+> (`.planning/PROJECT.md`). The two also define "cell" differently: the proposal's
+> is `(dataset, task, encoder, aggregator)`; the framework's is
+> `(dataset, encoder, parent)`. Either the search protocol shrinks (fewer
+> discovery candidates or fewer inner folds) or the cap is raised for the
+> campaign — as written the plan is not executable under the enforced budget.
+
 - **One dataset, classification only** (3 enc × 4 agg = 12 cells): ~2,800 fold-trainings — already **~3.4× the entire static 5-dataset grid**.
-- **All classification cells** (5 ds × 3 enc × 4 agg = 60 cells): ~14,000 fold-trainings ≈ **~700 GPU-h ≈ ~7 days on 4×H100** — journal-scale.
+- **All tile-encoder classification cells** (5 ds × 3 enc × 4 agg = 60 cells): ~14,000 fold-trainings ≈ **~700 GPU-h ≈ ~7 days on 4×H100** — journal-scale.
+
+> Two exclusions to state plainly, since "all classification cells" reads broader
+> than it is: this 60-cell count **omits the 5 TITAN classification arms** (1 per
+> dataset — TITAN has no encoder×aggregator fan-out, so classification is 65
+> experiments but only 60 tile-encoder cells), and it **omits all 100 survival
+> experiments** entirely. A search over survival cells too would be a further
+> multiple on top.
 
 **Implication for the preprint:** a paper about an agentic framework needs *some*
 agentic result, but the full 60-cell search is out of scope for "ship fast." The
@@ -284,9 +311,16 @@ Full-audit (60-cell) variant → add ~5–7 days. TITAN code is already merged
 ## 4. Figure plan
 
 Eight figures map onto the paper's claims. Five are drafted as **clearly-labelled
-mock-data examples** in [`figures/mock/`](figures/mock/) (regenerate with
+mock-data examples** (regenerate with
 [`figures/make_mock_figures.py`](figures/make_mock_figures.py)); three are
 table/diagram deliverables that don't need mocking.
+
+Separately, **Tables 1 and 2 (§1.1 and §2.1) are rendered from REAL data** by
+[`figures/make_dataset_table.py`](figures/make_dataset_table.py). Both scripts
+currently write into [`figures/mock/`](figures/mock/), so that directory holds
+seven PNGs: five mocks **plus two real tables**. Mind the distinction — the
+"MOCK DATA" warning at the end of this section applies **only** to the five
+`fig*.png` files, not to `table1_dataset_stats.png` / `table2_grid_breakdown.png`.
 
 | # | Figure | Claim it serves | Source data | Status |
 |---|---|---|---|---|
@@ -297,7 +331,14 @@ table/diagram deliverables that don't need mocking.
 | **5** | autoMIL search trajectory (one cell, val-only) | *How* the agent explores; test-quarantine discipline | `graph.json` of a real run | **mock drafted** |
 | 6 | Competitive/coverage table (vs PathBench-MIL / Patho-Bench / EVA) | Positioning | PLAN.md §3 (already filled) | table — reuse PLAN.md |
 | 7 | Protocol-parity panel (our honest test vs GOLDMARK) | "reproduces published SOTA" | `goldmark_exact/COMPARISON.csv` | needs cluster pull |
-| 8 | Pipeline schematic (TRIDENT→features→{MIL, TITAN}→result.json + worktree search loop) | System overview | architecture | diagram (Fig 1 of paper) |
+| 8 | Pipeline schematic (TRIDENT→features→{MIL, TITAN}→result.json + worktree search loop) | System overview | architecture | diagram — **intended to be Figure 1 of the paper** |
+
+> **Numbering.** The `#` column above is a **planning ID, not the paper's figure
+> number** — they will be renumbered at write-up (the schematic in row 8 is meant
+> to open the paper). Likewise "Table 1" is used for two different things in this
+> doc: §1.1's dataset-statistics table (the intended paper Table 1) and the row-1
+> leaderboard heatmap, described below as "Table-1-as-a-figure" because it renders
+> the results matrix. They are separate artifacts.
 
 ### The five drafted mocks
 
@@ -321,9 +362,12 @@ table/diagram deliverables that don't need mocking.
   over the UCB experiment tree for one cell, validation-only, with the frozen→test
   hand-off annotated (the anti-test-leakage story).
 
-> ⚠ Every number in the mocks is fabricated for layout only, loosely anchored to
-> the May-baseline AUC ranges. Each figure carries a red "MOCK DATA" tag and a
-> "(MOCK)" title. Swap in `results.tsv` / `graph.json` once the campaign runs.
+> ⚠ Every number in **the five `fig*.png` mocks** is fabricated for layout only,
+> loosely anchored to the May-baseline AUC ranges. Each carries a red "MOCK DATA"
+> tag and a "(MOCK)" title. Swap in `results.tsv` / `graph.json` once the campaign
+> runs. **This warning does not cover `table1_dataset_stats.png` and
+> `table2_grid_breakdown.png`** — those are real cohort counts and the verified
+> grid, produced by `make_dataset_table.py`, and carry no MOCK tag.
 
 ---
 
@@ -335,7 +379,7 @@ table/diagram deliverables that don't need mocking.
    keep/discard composite is now **validation-based** as of `bf9a2d6`
    ([`clam/runner.py:58,68`](../../benchmarks/src/autobench/pipeline/clam/runner.py):
    `val_c_index` and `(val_auc+val_bacc)/2`; test is sealed into the `held_out`
-   block at `:57,64-66`), computed by the single shared writer that the nnmil/abmil/
+   block at `:57,64-66`), computed by the single shared writer that the nnmil/abmil/titan/smmile/
    dtfd runners import. The orchestrator quarantines that test block **in code**
    (born-seal → strip → `certify.json`). What is *not* yet enforced: it **trusts the
    `composite` scalar verbatim** ([`terminal_writer.py:205`](../../src/automil/terminal_writer.py)),
@@ -351,9 +395,16 @@ table/diagram deliverables that don't need mocking.
    (CPTAC-GBM, CPTAC-PDAC, TCGA-HNSC).
 4. **Pipeline single-source-of-truth.** Tag one commit (`preprint-pipeline-v1`) so
    every submit runs the same code; survival + roster + TITAN are on `main` now,
-   but goldmark-parity is still cluster-only.
+   but goldmark-parity is on `origin` (`d42f0b4`) and still unmerged.
 5. **Runtime instrumentation.** Record per-fold elapsed during the campaign — the
    paper wants an honest runtime-per-cohort figure and history can't supply it.
+6. **Per-cell budget conflict (§3.3).** The proposal's search protocol costs
+   ~11.7 GPU-h/cell against autoMIL's framework-enforced **6 h/cell cap**, on two
+   different definitions of "cell." Shrink the protocol or raise the cap —
+   blocking for the agentic layer.
+7. **Static-grid estimate reconciliation (§3.1).** ≈40 GPU-h (per-head model) vs
+   ~55 GPU-h (per-head model scaled to the measured EXECUTION_PLAN §4 anchor).
+   Cheap to settle once the first cohort's instrumented timings land.
 
 ---
 
