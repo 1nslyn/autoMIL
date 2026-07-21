@@ -147,6 +147,18 @@ def _create_survival_task_csv(
     keep = times > 0
     n_nonpos = int((~keep).sum()) - n_unparseable
     df = df[keep].reset_index(drop=True)
+    if df.empty:
+        # Mirror the classification guard. Without this a 0-row CSV is written,
+        # and the *next* run's cache check reports it as "empty (header only)"
+        # and blames a task-type change — the wrong cause — then tells the
+        # operator to purge and re-run, which regenerates the same empty file.
+        raise ValueError(
+            f"Survival task CSV for {event_col!r}/{time_col!r} would be empty: no "
+            f"row has both a non-null event/time and a positive time. Of {n_total} "
+            f"slides: {n_missing} missing event/time, {n_nonpos} with time <= 0, "
+            f"{n_unparseable} with a non-numeric time. Check that the survival "
+            f"columns were joined onto {mapping_csv} correctly."
+        )
 
     slide_col = ds.slide_id_column
     case_col = ds.case_id_column
@@ -233,8 +245,13 @@ def prepare_all(
             # CSV or removing the splits directory would race: a concurrent
             # reader can observe a truncated-but-line-aligned CSV and build
             # splits from a partial cohort, and a purge can delete splits another
-            # process is already training from. Keeping this path purely additive
-            # is what makes concurrent prep safe; the operator purges explicitly.
+            # process is already training from. So the operator purges explicitly.
+            #
+            # Note this only removes the *destructive* race. Creation itself is
+            # still not atomic (`to_csv` truncates then writes), so run
+            # `run_benchmark.py --dataset <cohort> --prep_only` once before
+            # launching concurrent work, rather than letting 8xN experiment
+            # processes race to generate the same CSVs and splits.
             expected = {"status", "time"} if tdef.task_type == "survival" else {"label"}
             stale_splits = os.path.join(
                 benchmark_dir, "splits", default_strategy, task_name

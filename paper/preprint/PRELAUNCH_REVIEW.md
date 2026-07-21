@@ -83,9 +83,24 @@ prep safe.
 > rm -f  $PDAC/benchmark/dataset_csv/os.csv
 > rm -rf $PDAC/benchmark/splits/standard/os
 > ```
+> Then **generate the caches once, single-process, before launching anything
+> concurrent**:
+> ```bash
+> python benchmarks/scripts/run_benchmark.py --dataset cptac_pdac --prep_only --n_folds 5
+> ```
+> Creation is not atomic (`to_csv` truncates then writes), so letting 8×N
+> experiment processes race to generate the same CSVs and splits can leave a
+> reader with a truncated-but-valid-looking file. Prep once, then launch.
+>
 > More generally: **after any manifest rebuild, delete that cohort's
 > `benchmark/dataset_csv/` and `benchmark/splits/`** — the cache detects a schema
-> change but cannot detect that a same-schema CSV is merely out of date.
+> change (and a fold-count mismatch) but cannot detect that a same-schema CSV is
+> merely out of date.
+>
+> Note the split caches in `${data_root}/benchmark` are legacy **10-fold**
+> (`splits_0..9`) for LUAD `kras`, LGG `idh1`, GBM `tp53`, PDAC `immune_class`,
+> HNSC `hras`/`pik3ca`. Prep now refuses to reuse them for a 5-fold run rather
+> than silently changing the train/val/test proportions — purge them too.
 
 ---
 
