@@ -43,6 +43,55 @@ grep -q AUTOBENCH_TCGA_XXXX_ROOT benchmarks/.env || \
 
 ---
 
+## 1b. Manifest labels — already done for the roster (reference only)
+
+Each dataset's `normalized_manifest.csv` must carry the classification label
+column its YAML names, **plus `OS_event` / `OS_time`** for the shared survival
+task. As of 2026-07-20 all five roster cohorts are prepared and verified against
+the roster figure — you should not need to re-run any of this. It is kept here so
+the prep is reproducible, and as the recipe for adding a new cohort.
+
+**Survival comes from GDC for all five cohorts**, deliberately: Patho-Bench also
+ships an `OS` task for some CPTAC cohorts, but for PDAC it covers only 97 of 105
+patients (71 deaths) versus GDC's 105/105 (81 deaths). One consistent source beats
+mixing them.
+
+| Cohort | Label column | How it got there |
+|---|---|---|
+| TCGA-LUAD / TCGA-LGG | `KRAS_binary` / `IDH1_binary` | GOLDMARK manifest; OS already joined from `clinical.tsv` |
+| CPTAC-GBM | `TP53_binary` | Patho-Bench; OS via `fetch_gdc_clinical.py` → `add_os_to_manifest.py` |
+| CPTAC-PDAC | `IMMUNE_CLASS_binary` (3-class) | Patho-Bench; OS via `fetch_gdc_clinical.py` → `add_os_to_manifest.py` |
+| TCGA-HNSC | `GRADE` (3-class) | `add_grade_to_manifest.py` from `clinical.tsv`; OS via `add_os_to_manifest.py` |
+
+```bash
+ROOT=/project/rrg-jma/shared/Pathology/TCGA/TCGA-XXXX   # the dataset root
+
+# TCGA cohort with a GDC clinical.tsv on disk (e.g. HNSC) — grade + OS
+python benchmarks/scripts/manifests/add_grade_to_manifest.py \
+    --manifest $ROOT/normalized_manifest.csv --clinical $ROOT/clinical.tsv --case-col sample_names
+python benchmarks/scripts/manifests/add_os_to_manifest.py \
+    --manifest $ROOT/normalized_manifest.csv --clinical $ROOT/clinical.tsv --case-col sample_names
+
+# CPTAC cohort from Patho-Bench — classification labels only (OS comes from GDC below).
+# If you DO want a Patho-Bench survival task for some other cohort, add it to --tasks:
+# its OS_event/OS_days ride in the task config's extra_cols and are preserved.
+python benchmarks/scripts/manifests/prepare_cptac_manifest.py \
+    --source cptac_pda --tasks Immune_class SMAD4_mutation --saveto $ROOT
+
+# Both CPTAC cohorts (GBM + PDAC) — pull OS from the GDC API, then join
+python benchmarks/scripts/manifests/fetch_gdc_clinical.py \
+    --manifest $ROOT/normalized_manifest.csv --case-col case_id --output $ROOT/clinical.tsv
+python benchmarks/scripts/manifests/add_os_to_manifest.py \
+    --manifest $ROOT/normalized_manifest.csv --clinical $ROOT/clinical.tsv --case-col case_id
+```
+
+`add_grade_to_manifest.py` maps G1/G2/G3 → 0/1/2 and drops GX/G4, since the grade
+task is 3-class (HNSC: 54/260/100 = 414 gradeable of 431). **Back up the manifest
+before re-running any of these** — they overwrite in place:
+`cp $ROOT/normalized_manifest.csv $ROOT/normalized_manifest.csv.bak.$(date +%Y%m%d)`.
+
+---
+
 ## 2. Run it — 3 sbatch commands, from the repo root
 
 ```bash
@@ -61,6 +110,22 @@ sbatch --dependency=afterok:$EXTRACT benchmarks/scripts/slurm/submit_titan.sh $D
 Jobs are **idempotent** (finished experiments are skipped) and **auto-resubmit**
 on the 24 h wall, so re-running any command is safe. Add a fold count as a 2nd
 arg for a comparison run (e.g. `submit_benchmark.sh $DS 10`).
+
+> ⚠ **TITAN features are not extracted for _any_ roster cohort yet** (checked
+> 2026-07-20 — no `conch_v15` @ 20×/512 px exists under any dataset's
+> `trident_output/`, including LUAD and LGG). Step **(b)** is therefore required
+> for all five. Until it runs, a dataset completes **30** experiments, not 33,
+> and the TITAN row of the leaderboard stays empty.
+
+Step (b) is fold-independent and dataset-agnostic, so the whole roster can be
+queued at once (~half a day of 1×H100 each, they run independently):
+
+```bash
+for DS in tcga_luad tcga_lgg tcga_hnsc cptac_gbm cptac_pdac; do
+  EX=$(sbatch --parsable benchmarks/scripts/slurm/submit_titan_extract.sh $DS)
+  sbatch --dependency=afterok:$EX benchmarks/scripts/slurm/submit_titan.sh $DS
+done
+```
 
 ---
 
@@ -87,9 +152,11 @@ tail -f logs/bench_mil_bench_<jobid>.out
 
 ## Notes
 
-- **5-fold, two tasks per dataset.** Each dataset runs its mutation task (see
-  table), which clears the 5-fold minority-class guard, plus a shared `os`
-  (overall survival) task. Only Leo also runs LUAD at 10-fold
+- **5-fold, two tasks per dataset.** Each dataset runs its classification task
+  (see table — binary mutation for LUAD/LGG/GBM, 3-class for PDAC/HNSC), which
+  clears the 5-fold minority-class guard, plus a shared `os` (overall survival)
+  task. The 3-class tasks need no special handling: metrics, model heads, and
+  stratified splits are all class-count-agnostic. Only Leo also runs LUAD at 10-fold
   (`submit_benchmark.sh tcga_luad 10`) for comparison — nobody else needs to.
 - **Don't skip TITAN.** It's a required arm of the comparison. Step (b) — the
   512 px CONCH extraction — is the slow part (~half a day per dataset); the arm

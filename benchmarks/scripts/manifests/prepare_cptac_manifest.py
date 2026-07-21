@@ -18,7 +18,12 @@ Output:
 Column conventions in the output CSV:
     case_id    — patient-level ID (from Patho-Bench sample_col)
     slide_id   — slide stem, no extension; matches TRIDENT .h5 filenames
-    {GENE}_binary — 0/1 label per task (e.g. BAP1_binary, VHL_binary)
+    {GENE}_binary — label per task (e.g. BAP1_binary, VHL_binary). The
+                 "_binary" suffix is the naming convention regardless of class
+                 count — a 3-class task (e.g. Immune_class) also lands here.
+    OS_event / OS_time — emitted for survival tasks from the task config's
+                 `extra_cols` (Patho-Bench names the time column OS_days; it is
+                 renamed to OS_time to match the pipeline's `os` task contract).
 
 Available CPTAC sources on HuggingFace (MahmoodLab/Patho-Bench):
     cptac_brca, cptac_ccrcc, cptac_coad, cptac_gbm, cptac_hnsc,
@@ -83,6 +88,10 @@ def _load_task(split_path: str, config_path: str, task: str) -> pd.DataFrame:
 
     sample_col: str = info["sample_col"]       # e.g. "case_id"
     task_col: str = info.get("task_col", task)  # e.g. "BAP1_mutation"
+    # Survival tasks carry their real labels in `extra_cols` (OS_event / OS_days).
+    # `task_col` alone is a discretised quartile x event code (0-7), which is
+    # useless for cox/nllsurv — dropping extra_cols silently loses survival.
+    extra_cols: list[str] = list(info.get("extra_cols") or [])
 
     df = pd.read_csv(
         split_path,
@@ -90,8 +99,8 @@ def _load_task(split_path: str, config_path: str, task: str) -> pd.DataFrame:
         dtype={"case_id": str, "slide_id": str},
     )
 
-    # Keep only what we need; drop pre-assigned fold columns
-    keep = [c for c in [sample_col, "slide_id", task_col] if c in df.columns]
+    # Keep what we need (including extra_cols); drop pre-assigned fold columns
+    keep = [c for c in [sample_col, "slide_id", task_col, *extra_cols] if c in df.columns]
     df = df[keep].copy()
 
     # Normalise to autobench column names
@@ -113,6 +122,10 @@ def _load_task(split_path: str, config_path: str, task: str) -> pd.DataFrame:
         df[label_col] = df[label_col].astype(float).astype("Int64")
     except (ValueError, TypeError):
         pass
+
+    # Survival contract: the pipeline's `os` task reads OS_event / OS_time
+    # (see each dataset YAML); Patho-Bench ships the time column as OS_days.
+    df = df.rename(columns={"OS_days": "OS_time"})
 
     return df
 
