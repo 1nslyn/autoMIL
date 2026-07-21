@@ -89,7 +89,8 @@ def _create_survival_task_csv(
 
     ``status`` is the integer event indicator (1=event, 0=censored) read
     from ``event_col``; ``time`` is the continuous survival/follow-up time
-    from ``time_col``. Rows missing either are dropped.
+    from ``time_col``. Rows missing either are dropped, as are rows with a
+    non-positive ``time`` (see below).
     """
     if not event_col or not time_col:
         raise ValueError(
@@ -97,7 +98,18 @@ def _create_survival_task_csv(
             f"(got event_col={event_col!r}, time_col={time_col!r})."
         )
     df = load_all_slides(mapping_csv, ds)
+    n_total = len(df)
     df = df.dropna(subset=[event_col, time_col]).reset_index(drop=True)
+    n_missing = n_total - len(df)
+
+    # Non-positive follow-up (a GDC date artifact — e.g. a death recorded at
+    # day 0) is undefined for Cox's partial likelihood and breaks most c-index
+    # implementations. Drop it here rather than letting it silently corrupt the
+    # fit; the count is reported below so the loss is never invisible.
+    times = pd.to_numeric(df[time_col], errors="coerce")
+    keep = times > 0
+    n_nonpos = int((~keep).sum())
+    df = df[keep].reset_index(drop=True)
 
     slide_col = ds.slide_id_column
     case_col = ds.case_id_column
@@ -113,6 +125,9 @@ def _create_survival_task_csv(
     n_events = int(task_df["status"].sum())
     print(f"  Survival task CSV: {output_csv}  ({len(task_df)} slides, "
           f"{n_events} events, {len(task_df) - n_events} censored)")
+    if n_missing or n_nonpos:
+        print(f"    dropped {n_missing + n_nonpos} of {n_total} slides: "
+              f"{n_missing} missing event/time, {n_nonpos} with time <= 0")
     return task_df
 
 

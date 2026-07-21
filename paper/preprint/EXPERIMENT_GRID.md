@@ -93,8 +93,25 @@ tumor grade — matching each cohort's class structure.
   GX / not-reported cases carry no grade label and drop from the grade task
   (survival still uses all 431).
 - **Units:** `n` is patient/case-level; TCGA is ~1 slide/case (slides ≈ cases),
-  CPTAC may carry >1 slide/case. Each slide = one MIL bag. OS deaths are
+  CPTAC carries ~2.4 slides/case. Each slide = one MIL bag. OS deaths are
   case-level events; OS prevalence = deaths / n.
+- **⚠ The survival cohort is smaller than `n`.** Slides with a missing or
+  non-positive `OS_time` are dropped from the survival task (non-positive
+  follow-up is undefined for Cox's partial likelihood). The **usable** survival
+  cohorts are:
+
+  | Dataset | Usable patients | Usable deaths | (vs cohort `n` / raw deaths) |
+  |---|--:|--:|---|
+  | TCGA-LUAD | 399 | 162 | 465 / 167 |
+  | TCGA-LGG | 445 | 114 | 491 / 115 |
+  | CPTAC-GBM | 98 | 72 | 99 / 72 |
+  | CPTAC-PDAC | 102 | 81 | 105 / 81 |
+  | TCGA-HNSC | 397 | 204 | 431 / 205 |
+
+  **Quote the usable figures in any survival results table** — the OS-deaths
+  column above is the cohort-level count, which for LUAD/LGG overstates what
+  actually trains by 5 and 1 deaths. TCGA loses 8–14% of patients to missing
+  follow-up dates; the CPTAC cohorts lose almost none.
 - **Provenance:** TCGA-LUAD/LGG mutation counts match the May `task_sizes.csv`
   baseline; CPTAC-GBM/PDAC and TCGA-HNSC counts + all OS-death counts are from
   the roster figure (2026-07-17). `task_sizes.csv` is mutation-only (15-cohort
