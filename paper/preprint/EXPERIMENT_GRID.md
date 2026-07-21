@@ -21,7 +21,7 @@ see §6._
 | **Experiments / dataset** | **33** (30 tile-encoder + 3 TITAN) |
 | **Total experiments** | **165** |
 | **Total fold-trainings** (×5-fold) | **825** |
-| Static-grid compute | **≈ 40 GPU-hours ≈ ½–1 day on 4×H100** (possibly ~72 GPU-h — see the §3.1 caveat) |
+| Static-grid compute | **≈ 40 GPU-hours ≈ ½–1 day on 4×H100** (possibly ~55 GPU-h — see the §3.1 caveat) |
 | Real long pole | **`conch_v15` feature extraction for TITAN** (~1 day wall) |
 | **Not yet budgeted** | **the agentic recipe-search layer** — the paper's headline; ~15–20× the static grid at full scope (§3.3) |
 
@@ -190,12 +190,15 @@ On 4×H100 with the best-fit orchestrator → **≈ 10–13 h wall-clock** for t
 Consistent with EXECUTION_PLAN's "~1 day in one self-resubmitting job."
 
 > ⚠ **This may be ~1.4× optimistic against its own anchor — unreconciled.** The
-> EXECUTION_PLAN §4 reference point (120 runs / 10.5 h) is a **half-`clam_mb`,
-> half-`simple_mil`** mix, i.e. **~5.25 min/fold-training measured**. The per-head
-> rates above predict **3.75 min** for that same mix. Taking the measured rate
-> instead gives **~72 GPU-h ≈ ~18 h on 4×H100**, not ≈40 GPU-h ≈ 10–13 h. Both are
-> placeholders until the campaign's instrumented timings land (§5.5) — but plan
-> against the pessimistic end. This propagates to the §0 TL;DR and §3.4.
+> EXECUTION_PLAN §4 reference point (120 runs / 10.5 h) is an **equal-count
+> `clam_mb`/`simple_mil`** mix, i.e. **~5.25 min/fold-training measured**. The
+> per-head rates above predict **3.75 min** for that same equal-count mix — so
+> they run ~1.4× fast. Scaling every head by that factor gives **~55 GPU-h ≈
+> ~14 h on 4×H100**, not ≈40 GPU-h ≈ 10–13 h. (Pricing all 825 fold-trainings at
+> the flat 5.25 min gives ~72 GPU-h, but that overstates — it charges TITAN's
+> linear probe at CLAM's rate.) Both are placeholders until the campaign's
+> instrumented timings land (§5, item 5) — but plan against the pessimistic end.
+> This propagates to the §0 TL;DR and §3.4.
 
 ### 3.2 Feature extraction — the real long pole
 
@@ -359,7 +362,7 @@ seven PNGs: five mocks **plus two real tables**. Mind the distinction — the
    (CPTAC-GBM, CPTAC-PDAC, TCGA-HNSC).
 4. **Pipeline single-source-of-truth.** Tag one commit (`preprint-pipeline-v1`) so
    every submit runs the same code; survival + roster + TITAN are on `main` now,
-   but goldmark-parity is still cluster-only.
+   but goldmark-parity is on `origin` (`d42f0b4`) and still unmerged.
 5. **Runtime instrumentation.** Record per-fold elapsed during the campaign — the
    paper wants an honest runtime-per-cohort figure and history can't supply it.
 6. **Per-cell budget conflict (§3.3).** The proposal's search protocol costs
@@ -367,8 +370,8 @@ seven PNGs: five mocks **plus two real tables**. Mind the distinction — the
    different definitions of "cell." Shrink the protocol or raise the cap —
    blocking for the agentic layer.
 7. **Static-grid estimate reconciliation (§3.1).** ≈40 GPU-h (per-head model) vs
-   ~72 GPU-h (measured EXECUTION_PLAN §4 anchor). Cheap to settle once the first
-   cohort's instrumented timings land.
+   ~55 GPU-h (per-head model scaled to the measured EXECUTION_PLAN §4 anchor).
+   Cheap to settle once the first cohort's instrumented timings land.
 
 ---
 

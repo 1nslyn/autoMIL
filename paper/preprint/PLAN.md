@@ -176,8 +176,9 @@ EVA (both lack it), but it's a new task type with **no continuous target wired
 into any dataset today**, needs new loss + metrics + a re-thought composite
 contract, and sits off to the side of the core claim. It doesn't earn its
 engineering + validation cost against a ship-fast phase, so it moves to Phase 2
-as a proper task-type axis. (One exception could pull it back in — see the note
-below the two items.)
+as a proper task-type axis. (An exception was once held open that could have
+pulled it back in; the 2026-07-03 audit closed it — see the note below the two
+items.)
 
 - **Slide-level pathology foundation model — confirmed for preprint: TITAN**
   (`MahmoodLab/TITAN` on Hugging Face). Emits one **768-d** embedding per whole

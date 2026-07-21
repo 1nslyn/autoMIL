@@ -193,7 +193,7 @@ Reference point: `autobench_luad_sgpu` ran clam+simple × 2 tasks × 3 enc × **
 
 **Bottleneck is TITAN's `conch_v15` feature extraction, not the MIL training** (the code pole is gone). If extraction slips, the 4-model × 5-dataset table can ship on its own.
 
-⚠ **Open discrepancy — see [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) §3.1.** That doc's per-head model (`clam_mb` ~5 min, `simple_mil` ~2.5 min) predicts **3.75 min** for the same clam+simple mix this anchor measured at **5.25 min** — so the grid's headline "≈ 40 GPU-h" could be ~1.4× optimistic (~72 GPU-h if the anchor is right). Both are order-of-magnitude placeholders pending the campaign's own instrumented timings; **not yet reconciled.**
+⚠ **Open discrepancy — see [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) §3.1.** That doc's per-head model (`clam_mb` ~5 min, `simple_mil` ~2.5 min) predicts **3.75 min** for the same equal-count clam+simple mix this anchor measured at **5.25 min** — so its rates run ~1.4× fast, and the headline "≈ 40 GPU-h" becomes **~55 GPU-h** once every head is scaled by that factor. Both are order-of-magnitude placeholders pending the campaign's own instrumented timings; **not yet reconciled.**
 
 ---
 
@@ -207,7 +207,7 @@ Since the campaign re-runs everything, instrument it: the orchestrator already w
 2. **Dataset pool** — TCGA + CPTAC (assumed) vs. custom (ovarian/ccrcc/clwd/hancock). _(§2)_
 3. **Pipeline single-source-of-truth** — whether `origin/feat/goldmark-parity`'s orchestrator free-VRAM fix merges into `main` before the tag. Survival + roster + TITAN are already in. _(Phase 0)_
 4. ~~**TITAN in scope for the preprint, or fast-follow?**~~ — **closed: in scope, and the code is merged.** _(Phase B)_
-5. **Compute estimate reconciliation** — §4's 5.25 min/fold-training anchor vs `EXPERIMENT_GRID.md` §3.1's 3.75 min for the same mix. Decides whether the static grid is ~40 or ~72 GPU-h. _(§4)_
+5. **Compute estimate reconciliation** — §4's 5.25 min/fold-training anchor vs `EXPERIMENT_GRID.md` §3.1's 3.75 min for the same mix. Decides whether the static grid is ~40 or ~55 GPU-h. _(§4)_
 
 ## 7. Risks & durability
 - **Scratch purge.** The custom datasets + the goldmark worktree live on `/scratch` (Alliance purges on inactivity). goldmark is now on GitHub; the custom-dataset *features* are not backed up (regenerable from WSIs, but expensive). Not blocking for a TCGA-only campaign (TCGA is on durable `/projects`).
