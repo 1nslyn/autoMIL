@@ -277,8 +277,19 @@ def prepare_all(
         all_slide_ids.update(task_df["slide_id"].tolist())
 
         splits_dir = os.path.join(benchmark_dir, "splits", default_strategy, task_name)
-        first_split = os.path.join(splits_dir, "splits_0.csv")
-        if not os.path.exists(first_split):
+        # Look for ANY cached fold file, not just splits_0.csv. Keying on
+        # splits_0 alone leaves a hole: delete just that file (a natural way to
+        # "force a regenerate") and this branch regenerates folds 0..n-1 while
+        # stale higher-numbered folds survive alongside them. The immediate run
+        # is fine, but the directory is left holding a mix — and a later run at
+        # the *higher* fold count would match on total and silently train on
+        # part-new, part-stale splits.
+        cached_splits = (
+            {f for f in os.listdir(splits_dir)
+             if f.startswith("splits_") and f.endswith(".csv")}
+            if os.path.isdir(splits_dir) else set()
+        )
+        if not cached_splits:
             print(f"[prep] Creating splits: {task_name}")
             stratify_col = "status" if tdef.task_type == "survival" else "label"
             create_strategy_splits(
@@ -295,21 +306,31 @@ def prepare_all(
             # any message. Verify the count and fail loudly — and, as with the
             # task CSV above, deliberately do NOT self-heal: this path runs
             # concurrently against a shared benchmark_dir.
-            n_cached = sum(
-                1 for f in os.listdir(splits_dir)
-                if f.startswith("splits_") and f.endswith(".csv")
-            )
-            if n_cached != n_splits:
+            # Require the EXACT set {splits_0..n-1}. A bare count would accept a
+            # directory holding the right number of files with the wrong indices
+            # — e.g. folds 0-4 regenerated next to stale folds 5-9 totals 10 and
+            # would pass a 10-fold request while being half stale.
+            expected = {f"splits_{i}.csv" for i in range(n_splits)}
+            if cached_splits != expected:
+                extra = sorted(cached_splits - expected)
+                missing = sorted(expected - cached_splits)
+                detail = []
+                if extra:
+                    detail.append(f"unexpected: {extra[:6]}{'...' if len(extra) > 6 else ''}")
+                if missing:
+                    detail.append(f"missing: {missing[:6]}{'...' if len(missing) > 6 else ''}")
                 raise ValueError(
-                    f"Cached splits for task {task_name!r} are {n_cached}-fold, but "
-                    f"{n_splits}-fold was requested.\n"
+                    f"Cached splits for task {task_name!r} do not match a "
+                    f"{n_splits}-fold run ({len(cached_splits)} file(s) on disk; "
+                    f"{'; '.join(detail)}).\n"
                     f"  dir: {splits_dir}\n"
-                    "Reusing them would silently change the train/val/test "
-                    "proportions (and the validation-set size that model selection "
-                    "depends on). Purge and re-run prep:\n"
+                    "Reusing them would change the train/val/test proportions (and "
+                    "the validation-set size that model selection depends on), or "
+                    "mix freshly-generated folds with stale ones. Purge and re-run "
+                    "prep:\n"
                     f"  rm -rf {splits_dir}"
                 )
-            print(f"[prep] Splits already exist: {splits_dir} ({n_cached}-fold)")
+            print(f"[prep] Splits already exist: {splits_dir} ({n_splits}-fold)")
 
     # H5 -> PT for each encoder (CLAM-specific)
     from autobench.pipeline.clam.prepare import convert_h5_to_pt
