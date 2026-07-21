@@ -229,10 +229,10 @@ def main() -> None:
             clash = (set(df.columns) & set(merged.columns)) - {"case_id", "slide_id"}
             if clash:
                 raise ValueError(
-                    f"Task {task!r} would overwrite existing column(s) {sorted(clash)}. "
-                    "Two tasks carry the same extra_cols, or this manifest already has "
-                    "survival columns joined onto it. Rebuild from the Patho-Bench "
-                    "tasks alone, then re-join survival afterwards."
+                    f"Task {task!r} would overwrite column(s) {sorted(clash)} already "
+                    "contributed by an earlier task in this run — two of the requested "
+                    "tasks declare the same extra_cols. Request them in separate runs, "
+                    "or drop one of the tasks."
                 )
             merged = merged.merge(df, on=["case_id", "slide_id"], how="outer")
 

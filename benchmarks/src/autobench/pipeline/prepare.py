@@ -9,7 +9,6 @@ Framework-specific preparation lives in each adapter:
 from __future__ import annotations
 
 import os
-import shutil
 
 import pandas as pd
 
@@ -73,7 +72,22 @@ def create_task_csv(
     else:
         # Labels are already strings (e.g., CLWD where CSV has "Acinar", "Solid", etc.)
         # label_map is {0: "Acinar", ...} -- we need reverse: {"Acinar": "Acinar", ...}
-        # Just use the raw label values directly since they are already class names
+        # Just use the raw label values directly since they are already class names.
+        #
+        # Check membership explicitly: this branch never calls .map(), so an
+        # unrecognised class name would otherwise flow straight into the splits
+        # as an unannounced extra class. String-labelled datasets are precisely
+        # the ones most likely to gain a new class name upstream.
+        known = set(label_map.values()) if label_map else set()
+        if known:
+            unknown = sorted(set(df[label_col].astype(str).unique()) - known)
+            if unknown:
+                raise ValueError(
+                    f"{len(unknown)} class name(s) in {label_col!r} are absent from "
+                    f"the task's label_map: {unknown[:10]}. Add them to the dataset "
+                    f"YAML's label_map (known: {sorted(known)}), or exclude them "
+                    "upstream in the manifest."
+                )
         task_df = pd.DataFrame({
             "case_id": df[case_col],
             "slide_id": df[slide_col].apply(ds.get_slide_id),
@@ -127,8 +141,11 @@ def _create_survival_task_csv(
     # implementations. Drop it here rather than letting it silently corrupt the
     # fit; the count is reported below so the loss is never invisible.
     times = pd.to_numeric(df[time_col], errors="coerce")
+    # Count unparseable separately from non-positive: both are dropped, but
+    # reporting a non-numeric time as "time <= 0" would misdescribe the cause.
+    n_unparseable = int(times.isna().sum())
     keep = times > 0
-    n_nonpos = int((~keep).sum())
+    n_nonpos = int((~keep).sum()) - n_unparseable
     df = df[keep].reset_index(drop=True)
 
     slide_col = ds.slide_id_column
@@ -145,9 +162,10 @@ def _create_survival_task_csv(
     n_events = int(task_df["status"].sum())
     print(f"  Survival task CSV: {output_csv}  ({len(task_df)} slides, "
           f"{n_events} events, {len(task_df) - n_events} censored)")
-    if n_missing or n_nonpos:
-        print(f"    dropped {n_missing + n_nonpos} of {n_total} slides: "
-              f"{n_missing} missing event/time, {n_nonpos} with time <= 0")
+    if n_missing or n_nonpos or n_unparseable:
+        print(f"    dropped {n_missing + n_nonpos + n_unparseable} of {n_total} slides: "
+              f"{n_missing} missing event/time, {n_nonpos} with time <= 0, "
+              f"{n_unparseable} with a non-numeric time")
     return task_df
 
 
@@ -206,38 +224,39 @@ def prepare_all(
             # The cache key is the task NAME only, so a CSV left over from an
             # earlier roster can be reused under a task whose type has since
             # changed (e.g. `os` was a Patho-Bench classification task before it
-            # became survival). Validate the cached schema against the task type
-            # and regenerate on mismatch rather than training on the wrong labels.
+            # became survival). Detect that and FAIL LOUDLY — deliberately do
+            # NOT self-heal here.
+            #
+            # prepare_all runs once per EXPERIMENT against the *shared*
+            # benchmark_dir (see scripts/run_experiment.py), so under the agentic
+            # loop many processes execute this block concurrently. Rewriting the
+            # CSV or removing the splits directory would race: a concurrent
+            # reader can observe a truncated-but-line-aligned CSV and build
+            # splits from a partial cohort, and a purge can delete splits another
+            # process is already training from. Keeping this path purely additive
+            # is what makes concurrent prep safe; the operator purges explicitly.
             expected = {"status", "time"} if tdef.task_type == "survival" else {"label"}
-            if not expected.issubset(task_df.columns):
-                print(
-                    f"[prep] Stale task CSV for {task_name!r} "
-                    f"(task_type={tdef.task_type}, missing {sorted(expected - set(task_df.columns))}) "
-                    f"— regenerating: {csv_path}"
+            stale_splits = os.path.join(
+                benchmark_dir, "splits", default_strategy, task_name
+            )
+            if task_df.empty or not expected.issubset(task_df.columns):
+                why = (
+                    "it is empty (header only)" if task_df.empty
+                    else f"it is missing {sorted(expected - set(task_df.columns))}"
                 )
-                if tdef.task_type == "survival":
-                    task_df = create_task_csv(
-                        mapping_csv, csv_path, ds=ds,
-                        task_type="survival",
-                        event_col=tdef.event_col,
-                        time_col=tdef.time_col,
-                    )
-                else:
-                    task_df = create_task_csv(
-                        mapping_csv, csv_path,
-                        label_col=tdef.label_col,
-                        label_map=tdef.label_map,
-                        ds=ds,
-                    )
-                # Splits derived from the stale CSV are invalid too.
-                stale_splits = os.path.join(
-                    benchmark_dir, "splits", default_strategy, task_name
+                raise ValueError(
+                    f"Cached task CSV does not match task {task_name!r} "
+                    f"(task_type={tdef.task_type}): {why}.\n"
+                    f"  file:  {csv_path}\n"
+                    f"  found: {list(task_df.columns)}\n"
+                    "The task's type or labels changed since this cache was written "
+                    "(e.g. a roster pivot). Purge the derived artefacts and re-run "
+                    "prep — this is not done automatically because prep runs "
+                    "concurrently against a shared directory:\n"
+                    f"  rm -f {csv_path}\n"
+                    f"  rm -rf {stale_splits}"
                 )
-                if os.path.isdir(stale_splits):
-                    shutil.rmtree(stale_splits)
-                    print(f"[prep] Removed stale splits: {stale_splits}")
-            else:
-                print(f"[prep] Task CSV already exists: {csv_path}")
+            print(f"[prep] Task CSV already exists: {csv_path}")
         all_slide_ids.update(task_df["slide_id"].tolist())
 
         splits_dir = os.path.join(benchmark_dir, "splits", default_strategy, task_name)

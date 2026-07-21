@@ -58,15 +58,24 @@ def build_os_table(clinical_tsv: str) -> pd.DataFrame:
     # no case has >1 distinct non-null value for either, so max == first-non-null
     # today; the choice only matters if a future export disagrees.)
     def _reduce(col: str, how: str = "first") -> pd.Series:
-        s = clin[[_CASE, col]].dropna(subset=[col])
+        s = clin[[_CASE, col]].copy()
+        if how == "max":
+            # Coerce to numeric BEFORE reducing. These GDC day-count columns
+            # arrive as object dtype (the '-- sentinel forces string inference),
+            # and max() on strings is LEXICOGRAPHIC: max("85", "1000") == "85",
+            # which would silently re-date a death by 915 days. The two columns
+            # even mix formats in one file ("321" vs "1288.0"), so string
+            # ordering is doubly meaningless.
+            s[col] = pd.to_numeric(s[col], errors="coerce")
+        s = s.dropna(subset=[col])
         g = s.groupby(_CASE)[col]
         return g.max() if how == "max" else g.first()
 
     sub = pd.concat(
         {
             "vital_status": _reduce(_VITAL),
-            "days_to_death": pd.to_numeric(_reduce(_DEATH, "max"), errors="coerce"),
-            "days_to_last_follow_up": pd.to_numeric(_reduce(_FOLLOWUP, "max"), errors="coerce"),
+            "days_to_death": _reduce(_DEATH, "max"),
+            "days_to_last_follow_up": _reduce(_FOLLOWUP, "max"),
         },
         axis=1,
     ).rename_axis("case_id").reset_index()

@@ -65,9 +65,27 @@ GPU allocation. The silent variant was one file away: had the matching
 `splits_0.csv` also survived, both branches would have been skipped and training
 would have proceeded on stale 8-class splits under a survival task.
 
-**Fixed:** validate a cached CSV's schema against `tdef.task_type` before reuse,
-regenerate on mismatch, and purge the derived splits. Verified end-to-end against
-the real stale file (and a planted stale splits dir).
+**Fixed:** validate a cached CSV's schema against `tdef.task_type` before reuse
+and **fail loudly** with the exact purge commands. Deliberately *not* self-healing:
+`prepare_all` runs once per **experiment** against the *shared* `benchmark_dir`
+(`run_experiment.py`), so under the agentic loop many processes execute it
+concurrently. An earlier version of this fix regenerated the CSV and `rmtree`'d
+the splits in that path — a review measured 6 concurrent `rmtree` calls producing
+5 `FileNotFoundError`s, and a purge could delete splits another process was
+already training from. Keeping the path purely additive is what makes concurrent
+prep safe.
+
+> **Pre-launch action required.** CPTAC-PDAC still holds the stale pre-pivot
+> `benchmark/dataset_csv/os.csv` (June, 8-way classification labels). Prep will now
+> stop with instructions rather than silently proceed. Purge it before launching:
+> ```bash
+> PDAC=/home/yinshuol/projects/rrg-jma/shared/Pathology/CPTAC/CPTAC-PDAC
+> rm -f  $PDAC/benchmark/dataset_csv/os.csv
+> rm -rf $PDAC/benchmark/splits/standard/os
+> ```
+> More generally: **after any manifest rebuild, delete that cohort's
+> `benchmark/dataset_csv/` and `benchmark/splits/`** — the cache detects a schema
+> change but cannot detect that a same-schema CSV is merely out of date.
 
 ---
 
