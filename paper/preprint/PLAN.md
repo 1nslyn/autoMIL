@@ -5,6 +5,13 @@ Full-scope journal plan: [`../journal/PLAN.md`](../journal/PLAN.md). Raw source
 material: [`../references/`](../references/). Compiled 2026-07-01, updated
 same day from the confirmed pivot._
 
+> **Open items gating the campaign — see [`PRELAUNCH_REVIEW.md`](PRELAUNCH_REVIEW.md).**
+> Two decisions in this document are contradicted by our own evidence and are
+> **not yet resolved**: §3/§4's *encoder ≫ aggregator* headline (our 210-config
+> baseline measured the reverse on classification), and §2's claim that `ab_mil`
+> results already exist on disk (coverage is essentially zero). The review also
+> records two survival bugs found and fixed on 2026-07-21.
+
 ## Status: confirmed pivot
 
 ### 1. Dataset scope: 5 datasets, diverse tasks across TCGA + CPTAC

@@ -1,5 +1,10 @@
 # Preprint — Experiment Grid & Estimation
 
+> **Before launching, read [`PRELAUNCH_REVIEW.md`](PRELAUNCH_REVIEW.md)** — the
+> 2026-07-21 adversarial verification. It records two blocking bugs (now fixed,
+> incl. informative censoring that biased every TCGA survival arm) and two open
+> strategic decisions that gate the campaign.
+
 _Companion to [`PLAN.md`](PLAN.md) (strategy) and [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md)
 (campaign). Compiled 2026-07-14, **roster pivoted 2026-07-17** (LUAD/LGG/GBM/
 PDAC/HNSC — see §1). Counts below come from running
