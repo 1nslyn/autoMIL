@@ -270,7 +270,29 @@ def prepare_all(
                 seed=seed, stratify_col=stratify_col,
             )
         else:
-            print(f"[prep] Splits already exist: {splits_dir}")
+            # A cached splits directory is reused wholesale, so `n_splits` would
+            # otherwise be silently ignored: a 5-fold request trains on whatever
+            # fold count happens to be on disk. These directories still hold
+            # legacy 10-fold splits from the phase-1 runs, which would halve the
+            # validation set and change the train/val/test proportions without
+            # any message. Verify the count and fail loudly — and, as with the
+            # task CSV above, deliberately do NOT self-heal: this path runs
+            # concurrently against a shared benchmark_dir.
+            n_cached = sum(
+                1 for f in os.listdir(splits_dir)
+                if f.startswith("splits_") and f.endswith(".csv")
+            )
+            if n_cached != n_splits:
+                raise ValueError(
+                    f"Cached splits for task {task_name!r} are {n_cached}-fold, but "
+                    f"{n_splits}-fold was requested.\n"
+                    f"  dir: {splits_dir}\n"
+                    "Reusing them would silently change the train/val/test "
+                    "proportions (and the validation-set size that model selection "
+                    "depends on). Purge and re-run prep:\n"
+                    f"  rm -rf {splits_dir}"
+                )
+            print(f"[prep] Splits already exist: {splits_dir} ({n_cached}-fold)")
 
     # H5 -> PT for each encoder (CLAM-specific)
     from autobench.pipeline.clam.prepare import convert_h5_to_pt
