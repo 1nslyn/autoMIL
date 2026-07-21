@@ -6,13 +6,23 @@ Compiled 2026-07-03 from a live audit of the codebase + the cluster
 actually on disk today**, which differs from PLAN.md's cost assumptions in two
 load-bearing ways — see §0._
 
-> **Status (2026-07-17): roster resolved — see §2.** The dataset decision is
-> **closed**: the roster is TCGA-LUAD/LGG/HNSC + CPTAC-GBM/PDAC. The §0 audit,
-> §0b gap checklist, and §1 on-disk coverage tables are the **2026-07-03
-> planning snapshot** and still name the earlier candidate set
-> (THCA/COAD/SKCM/BLCA) — kept for provenance. Re-run the coverage/preflight
-> checks against the resolved roster before launching. Canonical roster:
-> [`PLAN.md`](PLAN.md) §1 + [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) §1.
+> **Status (updated 2026-07-21).** Two things have moved since this doc was
+> compiled:
+>
+> 1. **Roster resolved (2026-07-17), decision closed** — TCGA-LUAD/LGG/HNSC +
+>    CPTAC-GBM/PDAC (§2). The §0 audit, §0b checklist, and §1 on-disk coverage
+>    tables are the **2026-07-03 planning snapshot** and still name the earlier
+>    candidate set (THCA/COAD/SKCM/BLCA) — kept for provenance. Re-run the
+>    coverage/preflight checks against the resolved roster before launching.
+> 2. **The TITAN build and the survival pipeline are now merged on `main`** —
+>    `Framework.TITAN` + `benchmarks/src/autobench/pipeline/titan/` ship today,
+>    so §0b-C's code item and §6's "TITAN in scope?" question are **closed**.
+>    §4's compute table is also built on a **10-fold** reference point; the
+>    campaign is **5-fold** — corrected in place below.
+>
+> Canonical roster: [`PLAN.md`](PLAN.md) §1. **Canonical counts:**
+> [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) — where this doc disagrees on a
+> number, that one wins.
 
 ---
 
@@ -20,13 +30,13 @@ load-bearing ways — see §0._
 
 | PLAN.md assumption | Audit finding | Impact |
 |---|---|---|
-| §2: `ab_mil` results already on disk → adding it is "free re-aggregation" | **`ab_mil` has essentially zero usable coverage** — one partial cohort (TGCT, 1 task, 5 folds). `_completed.json` and the fold-metric tree everywhere else contain **only `clam_mb` + `simple_mil`**. | ab_mil is **not free** — it needs training runs like dtfd_mil. The "free re-aggregation" path does not exist. |
-| §2: `dtfd_mil` needs training | Confirmed — `dtfd_mil` is on **zero** cohorts, and isn't even in the 3 TCGA YAMLs' `nnmil_models`. | Correct as written. Pass it via `--nnmil_models` (CLI overrides YAML; no YAML edit strictly required). |
+| §2: `abmil` results already on disk → adding it is "free re-aggregation" | **`abmil` has essentially zero usable coverage** — one partial cohort (TGCT, 1 task, 5 folds). `_completed.json` and the fold-metric tree everywhere else contain **only `clam_mb` + `simple_mil`**. | `abmil` is **not free** — it needs training runs like `dtfd_mil`. The "free re-aggregation" path does not exist. |
+| §2: `dtfd_mil` needs training | Confirmed — `dtfd_mil` is on **zero** cohorts. | Correct as written. **Since resolved in config:** ABMIL and DTFD are each their own framework, and all 5 roster YAMLs now pin `abmil_models: [abmil]` / `dtfd_models: [dtfd_mil]`. No CLI override needed — just include them in `FRAMEWORKS`. |
 | §1: pick 5 datasets "by wall-clock runtime"; `sacct` will supply it | **Clean per-cohort wall-clock is not recoverable.** `metrics.json`/`_completed.json` carry no timing; `sacct` history is date-capped and dominated by goldmark LUAD jobs; log mtime spans are calendar envelopes (BRCA 239h, LUAD 554h), not run times. | Moot — since every cohort needs re-running for the 2 new heads, the **new campaign itself yields clean timing**. Select on signal × task-count now; measure real runtime from the campaign. |
 | §4: ovarian HRD might be a ready continuous target for a regression arm | **No continuous HRD score exists** — `HRD_label` is a pre-binarized 0/1 manifest column; no threshold/regression logic in the code. Also, **the ovarian root `/mnt/pool/ovariancancer/...` is not on fir** (off-cluster). | Regression stays in Phase 2 (the "exception" does not hold). Ovarian is not runnable on the cluster as-is. |
-| §4: TITAN is "new code path, not just config" | Confirmed, and **cheaper than feared**: TRIDENT already ships a `TitanSlideEncoder` (loads `MahmoodLab/TITAN`, 4096-d). Missing piece is ~500–650 lines of *autobench* wiring, reusing the `metrics.json`/`summary.json` contract unchanged. | TITAN is tractable. The real cost is **`conch_v15` patch-feature extraction for the TCGA cohorts** (not yet extracted), which TITAN depends on. |
+| §4: TITAN is "new code path, not just config" | Confirmed, and **cheaper than feared**: TRIDENT already ships a `TitanSlideEncoder` (loads `MahmoodLab/TITAN`, **768-d**). Missing piece was ~500–650 lines of *autobench* wiring, reusing the `metrics.json`/`summary.json` contract unchanged. | **Now built and merged on `main`** (`Framework.TITAN` + `pipeline/titan/`). The remaining cost is **`conch_v15` patch-feature extraction for the roster cohorts** (not yet extracted), which TITAN depends on. |
 
-**Net:** the 4-model roster is a **from-scratch training campaign for `ab_mil` + `dtfd_mil` on the chosen datasets** (not a re-report), plus a scoped TITAN build. The good news: nnMIL heads are cheap — the whole ab_mil+dtfd campaign fits in roughly **one 24-h 4×H100 job** (see §4). The longer pole is TITAN's `conch_v15` feature extraction.
+**Net:** the 4-model roster is a **from-scratch training campaign for `abmil` + `dtfd_mil` on the chosen datasets** (not a re-report). The TITAN build that this doc scoped as pending is **done** — it is merged on `main`, so it is no longer a dev-time pole. The `abmil`+`dtfd_mil` heads are cheap and fit in roughly **one 24-h 4×H100 job** (see §4). The remaining long pole is TITAN's `conch_v15` feature extraction.
 
 ---
 
@@ -36,27 +46,28 @@ load-bearing ways — see §0._
 Detailed "how" for each is in §3.
 
 **A. Experiments — MIL model coverage** _(the bulk; ~1 day compute — §4)_
-- ☐ **`ab_mil`** — train on all 5 chosen datasets. **0 folds on disk today** (only a partial TGCT fragment); PLAN.md's "free re-aggregation" does not hold. _(compute)_
-- ☐ **`dtfd_mil`** — train on all 5. 0 folds on disk; not in the TCGA YAMLs' `nnmil_models` (pass via `--nnmil_models`, no YAML edit needed). _(compute)_
-- ☐ **Re-run `clam_mb` + `simple_mil`** for any *roster* cohort lacking on-disk folds. Per the 2026-07-03 audit, LGG/LUAD/GBM/HNSC had them but **CPTAC-PDAC did not** — re-verify current cluster state for the resolved roster. _(compute)_
-- ✅ `clam_mb` + `simple_mil` already on disk for **LGG, LUAD** (and BLCA/BRCA/CESC/GBM/HNSC/PAAD/PCPG/UCS).
+- ☐ **`abmil`** — train on all 5 chosen datasets. **0 folds on disk today** (only a partial TGCT fragment); the "free re-aggregation" path does not hold. _(compute)_
+- ☐ **`dtfd_mil`** — train on all 5. 0 folds on disk. Now pinned in each roster YAML's `dtfd_models`, so no CLI override is needed. _(compute)_
+- ☐ **Re-run `clam_mb` + `simple_mil`** for any *roster* cohort lacking on-disk folds. **The 2026-07-03 audit covers the `…/Pathology/TCGA/` tree only**, so its GBM/HNSC rows are **TCGA**-GBM/HNSC — they say nothing about the roster's **CPTAC**-GBM. On the audit's evidence, TCGA-LGG/LUAD/HNSC had folds and **CPTAC-GBM and CPTAC-PDAC are unverified**. Re-verify all five against the current cluster state. _(compute)_
+- ✅ `clam_mb` + `simple_mil` already on disk for **TCGA-LGG, TCGA-LUAD, TCGA-HNSC** (and TCGA BLCA/BRCA/CESC/GBM/PAAD/PCPG/UCS).
 
 **B. Datasets & configs**
 - ✅ **Final 5 decided** (§2): TCGA-LUAD/LGG/HNSC + CPTAC-GBM/PDAC. _(closed 2026-07-17)_
 - ✅ **Roster YAML configs built**: `tcga_hnsc.yaml` (grade), `cptac_gbm.yaml` (tp53), `cptac_pdac.yaml` (immune_class) created; `tcga_luad`/`tcga_lgg` already present. _(done 2026-07-17)_
 - ☐ **Preflight: confirm patch features exist** for the roster, especially the 3 new cohorts CPTAC-GBM/PDAC + TCGA-HNSC (`benchmark/features/{uni_v2,virchow2,hoptimus1}/` or `trident_output/`) — extract if missing. _(check)_
 
-**C. TITAN slide-encoder arm** _(longer pole)_
-- ☐ **autobench code path** — `Framework.TITAN` + dispatch + new `pipeline/titan/` package (~500–650 lines, greenfield; reuses `metrics.json`/`summary.json`). _(1–2 dev-days)_
-- ☐ **`conch_v15` patch features for the 5 TCGA cohorts** — TITAN's dependency, **not extracted** on any TCGA cohort (only on the custom datasets). ~24 h/GPU, parallelizable. _(compute)_
-- ☐ **TITAN config keys** (`titan:` encoder + `4096` dim) in each chosen YAML + the training runs (cheap, slide-level). _(small + compute)_
+**C. TITAN slide-encoder arm** _(the feature extraction is the remaining pole)_
+- ✅ **autobench code path** — `Framework.TITAN` + dispatch + `pipeline/titan/` package. **Built and merged on `main`.** _(done)_
+- ✅ **TITAN config keys** — `titan: {head: linear}` is present in all 5 roster YAMLs. (The embedding is **768-d**, not 4096; the dim is a code default, `pipeline/config.py: titan_embed_dim = 768`, not a YAML field.) _(done)_
+- ☐ **`conch_v15` patch features for all 5 roster cohorts** — TITAN's dependency, **not extracted** on any TCGA cohort as of the audit (only on the custom datasets); the two CPTAC cohorts go via the Patho-Bench/TRIDENT path. ~24 h/GPU, parallelizable. _(compute)_
+- ☐ **TITAN training runs** — cheap, slide-level, once features land. _(compute)_
 
 **D. Aggregation & reporting**
-- ☐ **Extend `KEEP_AND_RENAME`** in `tasks/baseline_summary/scripts/00_aggregate.py:41` to add `ab_mil`, `dtfd_mil` (+ titan once tagged); re-run `00→01→02→04`. _(small)_
+- ☐ **Extend `KEEP_AND_RENAME`** in `tasks/baseline_summary/scripts/00_aggregate.py` to add `abmil`, `dtfd_mil` (+ titan); re-run `00→01→02→04`. Key on the right framework — `("abmil","abmil")` and `("dtfd","dtfd_mil")`, **not** `("nnmil", …)`. (`tasks/` is gitignored, so this script exists only in a local checkout.) _(small)_
 - ☐ **Competitive/coverage table** vs PathBench-MIL / Patho-Bench / EVA (PLAN.md §3) + the encoder-vs-aggregator de-biasing narrative. _(writing)_
 
 **E. Pipeline reproducibility**
-- ☐ **One canonical pipeline commit + tag** (`preprint-pipeline-v1`). Work is split across `main`, `origin/feat/goldmark-parity` (orchestrator free-VRAM fix), `origin/feat/nnmil-survival` (+6 configs). Merge/cherry-pick the needed pieces. _(decision + small)_
+- ☐ **One canonical pipeline commit + tag** (`preprint-pipeline-v1`). **Narrower than originally written:** survival, the roster configs, and TITAN are all **merged on `main`** now (`feat/nnmil-survival` no longer exists on `origin`). The only work still outside `main` is `origin/feat/goldmark-parity` (orchestrator free-VRAM fix + parity mode). Decide whether to merge/cherry-pick it, then tag. _(decision + small)_
 - ☐ **Runtime instrumentation** — record per-fold elapsed so the campaign yields the honest "runtime per cohort" the paper wants (history can't supply it). _(small)_
 
 **F. Hygiene / durability**
@@ -75,7 +86,7 @@ Patch features live in `trident_output/` + per-encoder `benchmark/features/{uni_
 
 **Model coverage — `metrics.json` fold count per (cohort × head), all locations incl. archives:**
 
-| Cohort | clam_mb | simple_mil | ab_mil | dtfd_mil | trans_mil | Local YAML in `main`? |
+| Cohort | clam_mb | simple_mil | abmil | dtfd_mil | trans_mil | Local YAML in `main`? |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
 | BLCA, BRCA, CESC, GBM, HNSC, LGG, LUAD, PAAD, PCPG, UCS | ✓ | ✓ | ✗ | ✗ | ✗ (stray logs only) | LGG/LUAD only |
 | **COAD, SKCM, STAD, THCA, UCEC** | **✗ (no `results/` dir at all)** | **✗** | ✗ | ✗ | ✗ | COAD only |
@@ -83,7 +94,7 @@ Patch features live in `trident_output/` + per-encoder `benchmark/features/{uni_
 
 Two consequences that aren't in PLAN.md:
 1. **5 of the 15 baseline cohorts currently have no on-disk fold metrics** — including the two headline results (THCA-BRAF **0.925**, COAD-MSI **0.871**). Their May-11 report numbers came from data since cleaned/purged (the `_unfair_archive_2026-05-29` cleanup + scratch purge). If a chosen dataset is in this set, its **canonical heads must be re-run too**, not just the new ones.
-2. **`ab_mil`/`dtfd_mil`/`trans_mil` are effectively greenfield everywhere** (custom datasets CCRCC/CLWD/HANCOCK on `/scratch` also carry only clam_mb+simple_mil).
+2. **`abmil`/`dtfd_mil`/`trans_mil` are effectively greenfield everywhere** (custom datasets CCRCC/CLWD/HANCOCK on `/scratch` also carry only clam_mb+simple_mil).
 
 **Encoders:** TCGA cohorts have 3 patch encoders (uni_v2, virchow2, hoptimus1). `conch_v15` (TITAN's dependency) is configured only on the 4 custom datasets, **not** on any TCGA cohort.
 
@@ -129,57 +140,60 @@ mechanics, not a live task list._
 
 ### Phase 0 — preflight (½ day, do first)
 - **Verify patch features exist** for the chosen 5, per encoder. LUAD/LGG have them; **THCA/COAD had their `results/` purged — confirm their `benchmark/features/{uni_v2,virchow2,hoptimus1}/` (or `trident_output/`) survived.** If features are gone, add a TRIDENT extraction step (24 h/cohort/GPU) before training.
-- **Lock a reproducible pipeline commit** (PLAN.md open item #3). The pipeline is currently split across `main`, `origin/feat/goldmark-parity` (orchestrator free-VRAM budgeting fix + parity mode — now backed up), and `origin/feat/nnmil-survival` (+6 dataset configs incl. HNSC). Decide the canonical set, merge/cherry-pick to `main`, and **tag it** (e.g. `preprint-pipeline-v1`). Every submit script should run that tag.
-- **Build the 2 missing configs** (THCA, and HNSC if not pulled from the survival branch) from `benchmarks/datasets/templates/tcga_template.yaml`, mirroring `tcga/tcga_luad.yaml` (3 encoders; `nnmil_models: [ab_mil, trans_mil, simple_mil]` — dtfd added via CLI).
+- **Lock a reproducible pipeline commit** (PLAN.md open item #3). Survival, the roster configs, and TITAN are **already on `main`**; the only outstanding piece is `origin/feat/goldmark-parity` (orchestrator free-VRAM budgeting fix + parity mode). Decide whether it's in, merge/cherry-pick, and **tag it** (e.g. `preprint-pipeline-v1`). Every submit script should run that tag.
+- ~~**Build the 2 missing configs** (THCA, HNSC)~~ — **done, and THCA is no longer in the roster.** All five roster YAMLs exist on `main` with one model pinned per framework (`clam_models: [clam_mb]`, `nnmil_models: [simple_mil]`, `abmil_models: [abmil]`, `dtfd_models: [dtfd_mil]`). Do **not** widen `nnmil_models` — a multi-model list would break the verified 33-experiments/dataset grid.
 
-### Phase A — train `ab_mil` + `dtfd_mil` on the 5 (the bulk; ~1 day compute)
-One idempotent multi-GPU job per cohort (skips completed automatically). CLAM (`clam_mb`) is already on disk for LUAD/LGG — only re-run canonical heads where results are missing (CPTAC-GBM, CPTAC-PDAC, HNSC).
+### Phase A — train `abmil` + `dtfd_mil` on the 5 (the bulk; ~1 day compute)
+One idempotent multi-GPU job per cohort (skips completed automatically). CLAM (`clam_mb`) is already on disk for TCGA-LUAD/LGG/HNSC — re-run canonical heads only where results are missing (verify CPTAC-GBM and CPTAC-PDAC; the 2026-07-03 audit did not cover the CPTAC tree).
+
+**`submit_benchmark.sh` reads exactly three inputs** — `<dataset>` (arg 1 or `DATASET`), `<n_folds>` (arg 2 or `N_FOLDS`, default **5**), and `FRAMEWORKS` (default `clam nnmil dtfd abmil`). Everything else — tasks, encoders, per-framework model lists, seed — comes from the dataset YAML. An earlier draft of this block passed `NNMIL_MODELS`/`ENCODERS`/`TASKS`/`SEED`; **the script ignores all four**, so those commands would have silently run the full default grid instead of the intended subset.
 
 ```bash
-# from benchmarks/scripts/ on the cluster, against the tagged pipeline
-DATASET=tcga_luad FRAMEWORKS=nnmil NNMIL_MODELS="ab_mil dtfd_mil" \
-  ENCODERS="uni_v2 virchow2 hoptimus1" N_FOLDS=5 SEED=42 \
-  sbatch submit_benchmark.sh          # 4×H100, 24h, mem=0, self-resubmits on timeout
-# repeat for tcga_lgg
-# TCGA-HNSC (tumor grade, 3-class):
-DATASET=tcga_hnsc FRAMEWORKS=nnmil NNMIL_MODELS="ab_mil dtfd_mil" TASKS="grade" \
-  ENCODERS="uni_v2 virchow2 hoptimus1" N_FOLDS=5 SEED=42 sbatch submit_benchmark.sh
-# CPTAC-PDAC (immune subtype, 3-class):
-DATASET=cptac_pdac FRAMEWORKS=nnmil NNMIL_MODELS="ab_mil dtfd_mil" TASKS="immune_class" \
-  ENCODERS="uni_v2 virchow2 hoptimus1" N_FOLDS=5 SEED=42 sbatch submit_benchmark.sh
-# repeat for cptac_gbm (TP53, binary)
-```
-Idempotency: reruns skip experiments already in `results/_completed.json`, so a timeout-resubmit is safe.
+# from the repo root on the cluster, against the tagged pipeline
+# just the two new heads (abmil + dtfd are their own frameworks):
+FRAMEWORKS="abmil dtfd" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad
+FRAMEWORKS="abmil dtfd" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_lgg
+FRAMEWORKS="abmil dtfd" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_hnsc
 
-### Phase B — TITAN arm (longer pole: code + `conch_v15` features)
-1. **Code (~500–650 lines, greenfield — subagent-scoped):**
-   - `Framework.TITAN = "titan"` in `benchmarks/src/autobench/pipeline/config.py:27`
-   - dispatch branch in `orchestrator.py:_run_single_experiment_dispatch` (~353)
-   - new `benchmarks/src/autobench/pipeline/titan/` package (model `nnmil/`'s shape, ~400 lines): `TitanDataset` returns one `[1,4096]` embedding/slide (no bag/patch loop) → linear/MLP head → **same `metrics.json`/`summary.json` contract**.
-   - route TITAN prep to `run_slide_feature_extraction_job` (skip H5→PT); add `titan: <HF repo>` / `titan: 4096` to each chosen YAML.
-2. **`conch_v15` patch features for the 5 TCGA cohorts** (TITAN's dependency; not yet extracted) — `submit_feature_extraction.sh` per cohort, ~24 h/GPU, parallelizable across 5 GPUs → ~1 day wall-clock.
-3. **TITAN runs** — slide-level, 1 vector/slide, very cheap once features + code land.
+# CPTAC pair — canonical heads unverified, so run the full 4-framework default:
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh cptac_gbm
+sbatch benchmarks/scripts/slurm/submit_benchmark.sh cptac_pdac
+```
+Each job is 4×H100, 24 h, `mem=0`, and self-resubmits before the wall. Idempotency: reruns skip experiments already in `results/_completed.json`, so a timeout-resubmit is safe. The `validate config` block prints `experiments=… fold-trainings=…` before launching — sanity-check it against [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) §2.
+
+### Phase B — TITAN arm (**code done**; `conch_v15` features are the remaining pole)
+1. ~~**Code (~500–650 lines, greenfield)**~~ — **shipped on `main`.** For reference, what landed:
+   - `Framework.TITAN = "titan"` in `benchmarks/src/autobench/pipeline/config.py:29`
+   - dispatch branch in `pipeline/orchestrator.py`
+   - `benchmarks/src/autobench/pipeline/titan/` package: `TitanDataset` returns one **`[1,768]`** embedding/slide (no bag/patch loop) → linear head → **same `metrics.json`/`summary.json` contract**
+   - TITAN prep routed to `run_slide_feature_extraction_job` (skips H5→PT); the YAML key is `titan: {head: linear}` — the 768-d dim is a code default (`titan_embed_dim`), **not** a YAML field
+2. **`conch_v15` patch features for all 5 roster cohorts** (TITAN's dependency; not yet extracted) — `submit_titan_extract.sh` per cohort, ~24 h/GPU, parallelizable across 5 GPUs → ~1 day wall-clock. Note the CPTAC pair extracts via the Patho-Bench/TRIDENT path, not the TCGA one.
+3. **TITAN runs** — `submit_titan.sh` (1×H100), slide-level, 1 vector/slide, very cheap once features land.
 
 ### Phase C — aggregate + report
-- Extend `tasks/baseline_summary/scripts/00_aggregate.py` `KEEP_AND_RENAME` (`:41`) to add `("nnmil","ab_mil"):"ab_mil"`, `("nnmil","dtfd_mil"):"dtfd_mil"` (and a titan row once framework-tagged), re-run `00→01→02→04`. Point `ROOT` at the chosen 5.
+- Extend `tasks/baseline_summary/scripts/00_aggregate.py`'s `KEEP_AND_RENAME` to add `("abmil","abmil"):"abmil"`, `("dtfd","dtfd_mil"):"dtfd_mil"`, and `("titan","titan"):"titan"` — key on each model's **own** framework, not `nnmil`. Re-run `00→01→02→04`; point `ROOT` at the chosen 5.
 - Build PLAN.md §3's competitive/coverage table (autobench row) and the encoder-vs-aggregator de-biasing narrative.
 
 ---
 
 ## 4. Compute budget (order-of-magnitude)
 
-Reference point: `autobench_luad_sgpu` ran clam+simple × 2 tasks × 3 enc × 10 folds = 120 runs in **10.5 h single-GPU** (CLAM-heavy). nnMIL heads (ab_mil, dtfd_mil) are lighter than CLAM.
+Reference point: `autobench_luad_sgpu` ran clam+simple × 2 tasks × 3 enc × **10 folds** = 120 runs in **10.5 h single-GPU**, i.e. **~5.25 min per fold-training averaged over a CLAM-heavy mix**. `abmil` and `dtfd_mil` are lighter than CLAM.
 
-| Work | Runs | Est. wall-clock |
-|---|---|---|
-| ab_mil+dtfd, one 2-task cohort (3 enc ×10 folds ×2 heads) | 120 | ~2–3 h on 4×H100 |
-| ab_mil+dtfd, all 5 (each cohort ≈ 2 task-units: 1 cls + 1 OS) | ~600 | **~1 day in one self-resubmitting 4×H100 job** |
-| CPTAC-GBM/PDAC + HNSC canonical-head rerun (clam_mb) | 60 | folded into the above |
+> **The campaign is 5-fold, not 10.** An earlier version of this table carried the 10-fold reference straight into its run counts and roughly doubled every row. Counts below are the **verified 5-fold grid** from [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) §2.1–2.2 (33 exps/dataset; per dataset: `clam_mb` 6, `simple_mil` 9, `abmil` 9, `dtfd_mil` 6, TITAN 3).
+
+| Work | Fold-trainings | Est. wall-clock |
+|---|--:|---|
+| `abmil`+`dtfd_mil`, one cohort (15 exps × 5 folds) | 75 | ~1–1.5 h on 4×H100 |
+| `abmil`+`dtfd_mil`, all 5 cohorts | **375** | **well under one 24-h 4×H100 job** |
+| CPTAC-GBM/PDAC canonical-head rerun (`clam_mb`+`simple_mil`, 15 exps × 5 folds × 2 cohorts) | 150 | folded into the above |
 | `conch_v15` extraction ×5 cohorts | — | ~24 h/GPU, ~1 day across 5 GPUs |
-| TITAN training runs ×5 | ~50 | hours (slide-level) |
-| TITAN code | — | ~1–2 dev-days |
+| TITAN training runs (3 exps × 5 folds × 5 cohorts) | 75 | hours (slide-level) |
+| ~~TITAN code~~ | — | **done — merged on `main`** |
 
-**Bottleneck is TITAN's feature extraction + code, not the MIL training.** If TITAN slips, the 4-model × 5-dataset table can ship on its own.
+**Bottleneck is TITAN's `conch_v15` feature extraction, not the MIL training** (the code pole is gone). If extraction slips, the 4-model × 5-dataset table can ship on its own.
+
+⚠ **Open discrepancy — see [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) §3.1.** That doc's per-head model (`clam_mb` ~5 min, `simple_mil` ~2.5 min) predicts **3.75 min** for the same clam+simple mix this anchor measured at **5.25 min** — so the grid's headline "≈ 40 GPU-h" could be ~1.4× optimistic (~72 GPU-h if the anchor is right). Both are order-of-magnitude placeholders pending the campaign's own instrumented timings; **not yet reconciled.**
 
 ---
 
@@ -191,10 +205,11 @@ Since the campaign re-runs everything, instrument it: the orchestrator already w
 ## 6. Open decisions for you
 1. **The 5 datasets** — final roster is {TCGA-LUAD, TCGA-LGG, TCGA-HNSC, CPTAC-GBM, CPTAC-PDAC} per §2. _(closed)_
 2. **Dataset pool** — TCGA + CPTAC (assumed) vs. custom (ovarian/ccrcc/clwd/hancock). _(§2)_
-3. **Pipeline single-source-of-truth** — what merges into `main` + gets tagged before the campaign (goldmark orchestrator fix? survival configs?). _(Phase 0)_
-4. **TITAN in scope for the preprint, or fast-follow?** — decouples cleanly if timeline is tight. _(Phase B)_
+3. **Pipeline single-source-of-truth** — whether `origin/feat/goldmark-parity`'s orchestrator free-VRAM fix merges into `main` before the tag. Survival + roster + TITAN are already in. _(Phase 0)_
+4. ~~**TITAN in scope for the preprint, or fast-follow?**~~ — **closed: in scope, and the code is merged.** _(Phase B)_
+5. **Compute estimate reconciliation** — §4's 5.25 min/fold-training anchor vs `EXPERIMENT_GRID.md` §3.1's 3.75 min for the same mix. Decides whether the static grid is ~40 or ~72 GPU-h. _(§4)_
 
 ## 7. Risks & durability
 - **Scratch purge.** The custom datasets + the goldmark worktree live on `/scratch` (Alliance purges on inactivity). goldmark is now on GitHub; the custom-dataset *features* are not backed up (regenerable from WSIs, but expensive). Not blocking for a TCGA-only campaign (TCGA is on durable `/projects`).
 - **Secrets.** `benchmarks/.env` holds a plaintext `HF_TOKEN` + `WANDB_API_KEY`. It's gitignored (not in git), but recommend rotating both and confirming they never entered git history.
-- **Config sprawl.** Dataset YAMLs are split across `main` + `origin/feat/nnmil-survival`; the 15-cohort mutation baseline used configs not all in `main`. Consolidating (Phase 0) prevents pulling from ≥2 branches mid-campaign.
+- **Config sprawl — largely resolved.** All five roster YAMLs are now on `main` (the `feat/nnmil-survival` split is gone). The residual risk is historical: the 15-cohort mutation baseline used configs that were never all in `main`, so its numbers aren't reproducible from `main` alone.
