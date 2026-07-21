@@ -9,6 +9,7 @@ Framework-specific preparation lives in each adapter:
 from __future__ import annotations
 
 import os
+import shutil
 
 import pandas as pd
 
@@ -48,7 +49,15 @@ def create_task_csv(
 
     df = load_all_slides(mapping_csv, ds)
 
+    n_before = len(df)
     df = df.dropna(subset=[label_col]).reset_index(drop=True)
+    if df.empty:
+        raise ValueError(
+            f"Task CSV for {label_col!r} would be empty: all {n_before} rows have a "
+            f"null label. This usually means {label_col!r} was never populated in "
+            f"{mapping_csv}, or a manifest join used the wrong case-id column. "
+            "(An empty CSV would otherwise fail much later inside split generation.)"
+        )
 
     # Handle label values that may be strings (multiclass) or numeric
     slide_col = ds.slide_id_column
@@ -70,6 +79,17 @@ def create_task_csv(
             "slide_id": df[slide_col].apply(ds.get_slide_id),
             "label": df[label_col],
         })
+
+    # A value absent from label_map becomes NaN via .map() and would flow into
+    # the split CSV as a silently-corrupt class. Fail instead — this is how a
+    # new class (e.g. a 4th tumour grade) would otherwise slip in unnoticed.
+    if task_df["label"].isna().any():
+        unmapped = sorted(set(df.loc[task_df["label"].isna(), label_col].unique()))
+        raise ValueError(
+            f"{len(unmapped)} value(s) in {label_col!r} are absent from the task's "
+            f"label_map and became NaN: {unmapped[:10]}. Add them to the dataset "
+            "YAML's label_map, or exclude them upstream in the manifest."
+        )
 
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
     task_df.to_csv(output_csv, index=False)
@@ -182,8 +202,42 @@ def prepare_all(
                     ds=ds,
                 )
         else:
-            print(f"[prep] Task CSV already exists: {csv_path}")
             task_df = pd.read_csv(csv_path)
+            # The cache key is the task NAME only, so a CSV left over from an
+            # earlier roster can be reused under a task whose type has since
+            # changed (e.g. `os` was a Patho-Bench classification task before it
+            # became survival). Validate the cached schema against the task type
+            # and regenerate on mismatch rather than training on the wrong labels.
+            expected = {"status", "time"} if tdef.task_type == "survival" else {"label"}
+            if not expected.issubset(task_df.columns):
+                print(
+                    f"[prep] Stale task CSV for {task_name!r} "
+                    f"(task_type={tdef.task_type}, missing {sorted(expected - set(task_df.columns))}) "
+                    f"— regenerating: {csv_path}"
+                )
+                if tdef.task_type == "survival":
+                    task_df = create_task_csv(
+                        mapping_csv, csv_path, ds=ds,
+                        task_type="survival",
+                        event_col=tdef.event_col,
+                        time_col=tdef.time_col,
+                    )
+                else:
+                    task_df = create_task_csv(
+                        mapping_csv, csv_path,
+                        label_col=tdef.label_col,
+                        label_map=tdef.label_map,
+                        ds=ds,
+                    )
+                # Splits derived from the stale CSV are invalid too.
+                stale_splits = os.path.join(
+                    benchmark_dir, "splits", default_strategy, task_name
+                )
+                if os.path.isdir(stale_splits):
+                    shutil.rmtree(stale_splits)
+                    print(f"[prep] Removed stale splits: {stale_splits}")
+            else:
+                print(f"[prep] Task CSV already exists: {csv_path}")
         all_slide_ids.update(task_df["slide_id"].tolist())
 
         splits_dir = os.path.join(benchmark_dir, "splits", default_strategy, task_name)

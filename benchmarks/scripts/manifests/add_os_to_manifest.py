@@ -42,10 +42,34 @@ def build_os_table(clinical_tsv: str) -> pd.DataFrame:
             f"Found columns: {list(clin.columns)}"
         )
 
-    sub = clin[[_CASE, _VITAL, _DEATH, _FOLLOWUP]].drop_duplicates(_CASE).copy()
-    sub.columns = ["case_id", "vital_status", "days_to_death", "days_to_last_follow_up"]
-    sub["days_to_death"] = pd.to_numeric(sub["days_to_death"], errors="coerce")
-    sub["days_to_last_follow_up"] = pd.to_numeric(sub["days_to_last_follow_up"], errors="coerce")
+    # Reduce PER COLUMN over each case's rows, ignoring nulls.
+    #
+    # A GDC clinical export has several rows per case (one per diagnosis /
+    # treatment), and `diagnoses.days_to_last_follow_up` is a *diagnoses*-level
+    # field that is frequently blank on the first row. Taking `drop_duplicates`
+    # (first row) therefore hands back OS_time=NaN for many living patients,
+    # who are then dropped by the survival task's dropna. Because only *Alive*
+    # cases lose their time this way, the dropout is entirely censored cases —
+    # informative censoring that enriches the cohort for deaths and biases every
+    # Cox / nllsurv fit. Reducing per column over non-null values avoids it.
+    #
+    # `max` is the correct reducer for the two time fields: the longest observed
+    # follow-up, and the latest recorded death day. (On the current TCGA exports
+    # no case has >1 distinct non-null value for either, so max == first-non-null
+    # today; the choice only matters if a future export disagrees.)
+    def _reduce(col: str, how: str = "first") -> pd.Series:
+        s = clin[[_CASE, col]].dropna(subset=[col])
+        g = s.groupby(_CASE)[col]
+        return g.max() if how == "max" else g.first()
+
+    sub = pd.concat(
+        {
+            "vital_status": _reduce(_VITAL),
+            "days_to_death": pd.to_numeric(_reduce(_DEATH, "max"), errors="coerce"),
+            "days_to_last_follow_up": pd.to_numeric(_reduce(_FOLLOWUP, "max"), errors="coerce"),
+        },
+        axis=1,
+    ).rename_axis("case_id").reset_index()
 
     # Vectorized: Dead -> (1, days_to_death); Alive -> (0, days_to_last_follow_up);
     # anything else -> (NaN, NaN).
@@ -80,6 +104,16 @@ def main() -> None:
 
     os_table = build_os_table(args.clinical)
 
+    # Make re-runs idempotent. This script overwrites the manifest in place, so
+    # a second run would merge OS_event/OS_time onto columns that already exist
+    # and pandas would silently emit OS_event_x / OS_event_y — which then fails
+    # far away with a confusing KeyError. Drop the previous values first so a
+    # re-run simply refreshes them.
+    stale = [c for c in ("OS_event", "OS_time") if c in manifest.columns]
+    if stale:
+        print(f"  refreshing existing column(s): {stale}")
+        manifest = manifest.drop(columns=stale)
+
     before = len(manifest)
     merged = manifest.merge(
         os_table.rename(columns={"case_id": case_col}), on=case_col, how="left"
@@ -97,6 +131,13 @@ def main() -> None:
     print(f"  OS_event=1 (Dead):         {n_event}")
     print(f"  OS_event=0 (Alive):        {n_censored}")
     print(f"  OS_event=NaN (Not Rep.):   {n_nan}  <- dropped by survival task dropna")
+    # Report OS_time NaNs separately: an event can be known while its time is
+    # missing, and those rows are dropped too. Counting only OS_event NaNs hides
+    # exactly the censored-case dropout this script's per-column reduce fixes.
+    n_time_nan = int(merged["OS_time"].isna().sum())
+    n_time_nan_censored = int((merged["OS_time"].isna() & (merged["OS_event"] == 0)).sum())
+    print(f"  OS_time=NaN:               {n_time_nan}  "
+          f"({n_time_nan_censored} of them censored)  <- also dropped")
 
     if n_event + n_censored == 0:
         print(

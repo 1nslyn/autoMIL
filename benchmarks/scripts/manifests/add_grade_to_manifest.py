@@ -82,7 +82,6 @@ def main() -> None:
         raise ValueError(f"manifest has no {case_col!r} column; found {list(manifest.columns)}")
 
     grade_table = build_grade_table(args.clinical)
-    raw = grade_table.set_index("case_id")["tumor_grade"]
 
     before = len(manifest)
     merged = manifest.merge(
@@ -113,9 +112,20 @@ def main() -> None:
         )
 
     # Report what was excluded, so the drop is visible rather than silent.
-    excluded = raw[~raw.isin(GRADE_MAP)].value_counts().to_dict()
+    # Scope this to the MANIFEST's cases, not the whole clinical export: the
+    # export usually covers more cases than the manifest, so a clinical-wide
+    # count overstates the loss. Cases with no grade row at all are folded in
+    # here too — build_grade_table drops them, so they cannot appear otherwise.
+    raw_by_case = grade_table.set_index("case_id")["tumor_grade"]
+    scoped = pd.Series(
+        {c: raw_by_case.get(c, None) for c in manifest[case_col].dropna().unique()},
+        dtype="object",
+    )
+    excluded = (
+        scoped[~scoped.isin(GRADE_MAP)].fillna("no grade row").value_counts().to_dict()
+    )
     if excluded:
-        print(f"  excluded non-{{G1,G2,G3}} grades (per case): {excluded}")
+        print(f"  excluded non-{{G1,G2,G3}} cases (manifest-scoped): {excluded}")
 
     out_path = args.output or args.manifest
     merged.to_csv(out_path, index=False)

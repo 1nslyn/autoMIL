@@ -220,6 +220,20 @@ def main() -> None:
         if merged is None:
             merged = df
         else:
+            # Fail loudly on a column collision rather than letting pandas emit
+            # OS_event_x / OS_event_y. Two tasks carrying the same extra_cols
+            # (or re-running after add_os_to_manifest.py has already written
+            # OS_event/OS_time) would otherwise produce suffixed columns that
+            # survive every guard here and only surface much later as a
+            # KeyError deep in the survival task builder.
+            clash = (set(df.columns) & set(merged.columns)) - {"case_id", "slide_id"}
+            if clash:
+                raise ValueError(
+                    f"Task {task!r} would overwrite existing column(s) {sorted(clash)}. "
+                    "Two tasks carry the same extra_cols, or this manifest already has "
+                    "survival columns joined onto it. Rebuild from the Patho-Bench "
+                    "tasks alone, then re-join survival afterwards."
+                )
             merged = merged.merge(df, on=["case_id", "slide_id"], how="outer")
 
     if merged is None:

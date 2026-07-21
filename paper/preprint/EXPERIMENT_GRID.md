@@ -102,16 +102,27 @@ tumor grade — matching each cohort's class structure.
 
   | Dataset | Usable patients | Usable deaths | (vs cohort `n` / raw deaths) |
   |---|--:|--:|---|
-  | TCGA-LUAD | 399 | 162 | 465 / 167 |
-  | TCGA-LGG | 445 | 114 | 491 / 115 |
+  | TCGA-LUAD | 453 | 162 | 465 / 167 |
+  | TCGA-LGG | 488 | 114 | 491 / 115 |
   | CPTAC-GBM | 98 | 72 | 99 / 72 |
   | CPTAC-PDAC | 102 | 81 | 105 / 81 |
-  | TCGA-HNSC | 397 | 204 | 431 / 205 |
+  | TCGA-HNSC | 429 | 204 | 431 / 205 |
 
   **Quote the usable figures in any survival results table** — the OS-deaths
   column above is the cohort-level count, which for LUAD/LGG overstates what
-  actually trains by 5 and 1 deaths. TCGA loses 8–14% of patients to missing
-  follow-up dates; the CPTAC cohorts lose almost none.
+  actually trains by 5 and 1 deaths. Attrition is now small (0.5–2.6%).
+
+  > **Provenance note.** Until 2026-07-21 these cohorts were materially smaller
+  > (LUAD 399, LGG 445, HNSC 397) because `add_os_to_manifest.py` reduced the GDC
+  > clinical export with `drop_duplicates` (first *row* per case) rather than
+  > first *non-null*. `days_to_last_follow_up` is a diagnoses-level field that is
+  > often blank on a case's first row, so living patients received `OS_event=0`
+  > with `OS_time=NaN` and were dropped — **129 patients across the three TCGA
+  > cohorts, every one of them censored, and zero deaths.** That is informative
+  > censoring: it inflated the event rate (LUAD 0.406 → corrected 0.358) and
+  > would have biased every Cox/nllsurv fit and c-index on the TCGA arms. Fixed
+  > by reducing per column over non-null values. Any survival number produced
+  > before that date should be regenerated, not reused.
 - **Provenance:** TCGA-LUAD/LGG mutation counts match the May `task_sizes.csv`
   baseline; CPTAC-GBM/PDAC and TCGA-HNSC counts + all OS-death counts are from
   the roster figure (2026-07-17). `task_sizes.csv` is mutation-only (15-cohort
