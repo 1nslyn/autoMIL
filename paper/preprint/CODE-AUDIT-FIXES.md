@@ -21,7 +21,7 @@ Branch: `fix/audit-2026-07-23`. Updated as each fix lands.
 | CR-5 | Stale/shared results cache defeats data fix + collides across variants | CRIT | ☑ | 4 runners + `run_experiment.py` | gave abmil/dtfd/nnmil/titan an optional `results_dir` param (CLAM already had it) and forwarded `AUTOMIL_RESULTS_DIR` from the dispatch → each experiment isolated. Standalone runs still fall back to the shared dir. 6 new tests, 218 regression green. |
 | H-1 | `run.log`/stdout not firewalled → test leak by printing | HIGH | ☐ | | scrub held-out keys from run.log + error-tail at orchestrator boundary |
 | H-2 | Time-only budget, no eval-count primitive (equal-effort unequal) | HIGH | ☐ | | add eval-count cap primitive in cells/; per memory/automil-equal-effort-budget |
-| H-3 | ABMIL/DTFD/TITAN silently ignore hyperparameter overrides | HIGH | ☐ | | thread exp_cfg.train/model into all arms OR hard-fail on dropped override |
+| H-3 | ABMIL/DTFD/TITAN silently ignore hyperparameter overrides | HIGH | ◐ | | **DEFERRED (needs care):** naive threading of `exp_cfg.train` CHANGES baselines — DTFD default lr/wd (1e-4/1e-4) and ABMIL default dropout (0.0) differ from the shared TrainConfig/ModelConfig defaults (2e-4/1e-5, 0.25). CLI parses these as `default=None`, so the clean fix threads only *explicitly-set* overrides (needs override-vs-default plumbing), not thread-everything. Do properly, not hastily. |
 | H-4 | Frozen substrate unenforced (protected empty; roster unwired) | HIGH | ☐ | | non-empty default protected + check hard-fail on empty for benchmark project |
 | H-6 | `meta.best_node_id` can be a discarded node | HIGH | ☑ | `graph.py`+`terminal_writer.py` | live completion (terminal_writer) + promote now recompute_best() (keep-only) after descendant re-eval; add_executed + both reconcile-recovery branches keep-gate the inline update (preserves D-14). 2 new tests, 68 regression green. |
 | H-7 | `cancel` races daemon → cancelled overwritten to crash | HIGH | ☐ | | daemon detects cancel_reason∈{cap,cli} before promoting |
@@ -50,11 +50,11 @@ Branch: `fix/audit-2026-07-23`. Updated as each fix lands.
 |----|---------|-----|--------|--------|-------|
 | M-9 | missing feature files silently drop val/test slides | MED | ☐ | | assert retained fraction + per-class floor for val/test |
 | M-10 | task-CSV/splits cache content-blind to manifest value change | MED | ☐ | | stamp manifest mtime/hash sidecar; invalidate on change |
-| M-11 | nested-glob dataset lookup picks [0] on stem collision | MED | ☐ | | raise on len(nested)>1 |
+| M-11 | nested-glob dataset lookup picks [0] on stem collision | MED | ☑ | `config.py` | raise on len(nested)>1 with the candidate list. 1 test + regression green. |
 | M-12 | TITAN apples-to-oranges on encoder axis | MED | ⚑ | | reporting/figure decision (own panel + caveat) |
 | M-13 | architecture searchable → "aggregator axis" not fixed | MED | ⚑ | | decide recipe-only vs best-evolved-head; if former add model files to protected |
 | L-1 | run_benchmark roster fallback → 0 experiments silently | LOW | ☐ | | exit with message when requested framework roster empty |
-| L-4 | `${VAR:}`/blank env → "" without fail-fast | LOW | ☐ | | treat empty resolved value as missing → raise |
+| L-4 | `${VAR:}`/blank env → "" without fail-fast | LOW | ☑ | `config.py` | truthiness check → blank env / empty default now raise. 4 tests + regression green. |
 | L-5 | case-level `.first()` label conflict; n_classes miscount | LOW | ☐ | | assert one stratify value/case; count distinct class names |
 | L-10 | cross-framework AUC asymmetry (per-class vs ovr-macro) | LOW | ☐ | | unify AUC computation or document caveat |
 
@@ -94,3 +94,5 @@ These change the science or the paper, not just the code. I will implement the *
 - 2026-07-23: **M-1 ☑ + M-4 ☑** — __init__ backfills every scoring key (no more reconcile-crashing KeyError); visited-set guards in lineage + _reevaluate_descendants (no more parent/child-cycle hang). 2 new tests (SIGALRM-guarded); 63 regression green.
 - 2026-07-23: **Full-suite regression checkpoint** — `pytest tests/`: 1087 passed, 12 failed. Verified all 12 are pre-existing **macOS/build-artifact** failures (Linux-only project): stale `.pyc` tripping the purity grep (passes after clearing bytecode), macOS process-kill semantics in cancel tests, nvidia-smi-absent + 90s subprocess setup-gate/acceptance gates. My 6 changed files appear in **zero** tracebacks → **0 regressions**.
 - 2026-07-23: **H-8 ☑** — `summary_to_result_json` records `n_valid_folds`/`n_folds` and quarantines (status=partial) any run with <2 finite-primary-val folds, so a degenerate 1-fold run can no longer masquerade as a complete K-fold "completed" result. Surfaces M-15. 4 new tests; 57 regression green.
+- 2026-07-23: **M-11 ☑ + L-4 ☑** — `load_dataset_config` raises on an ambiguous bare name (multiple grouped YAMLs) instead of silently taking the first; `_resolve_env_vars` fails fast on a blank env var / empty `${VAR:}` default instead of resolving to "". 5 new tests; 38 regression green.
+- 2026-07-23: **H-3 DEFERRED (◐)** — naive `exp_cfg.train` threading would change DTFD/ABMIL baselines (their paper-exact defaults differ from the shared TrainConfig defaults). Needs explicit override-vs-default detection (CLI already parses as `default=None`). Doing it properly, not hastily.
