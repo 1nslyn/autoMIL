@@ -50,6 +50,7 @@ def run_abmil_experiment(
     benchmark_dir: str,
     device: str = "cuda:0",
     cfg: ABMILConfig | None = None,
+    results_dir: str | None = None,
 ) -> dict:
     """Run all folds for a single ABMIL experiment; return aggregated summary.
 
@@ -63,7 +64,12 @@ def run_abmil_experiment(
         cfg = ABMILConfig()
     torch_device = torch.device(device)
 
-    results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
+    # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
+    # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
+    # never resumed across experiments/seeds/variants. Falls back to the shared
+    # benchmark_dir path for standalone (non-orchestrated) runs.
+    if results_dir is None:
+        results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
     os.makedirs(results_dir, exist_ok=True)
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 

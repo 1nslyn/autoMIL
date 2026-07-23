@@ -300,6 +300,7 @@ def main() -> None:
         )
         summary = run_titan_experiment(
             exp_cfg, benchmark_dir, device=str(device),
+            results_dir=automil_results_dir,  # CR-5: isolate per-experiment results
         )
     else:
         from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
@@ -323,13 +324,16 @@ def main() -> None:
         )
         if framework == Framework.ABMIL:
             from autobench.pipeline.abmil.runner import run_abmil_experiment
-            summary = run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+            summary = run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device),
+                                           results_dir=automil_results_dir)  # CR-5
         elif framework == Framework.DTFD:
             from autobench.pipeline.dtfd import run_dtfd_experiment
-            summary = run_dtfd_experiment(exp_cfg, benchmark_dir, device=str(device))
+            summary = run_dtfd_experiment(exp_cfg, benchmark_dir, device=str(device),
+                                          results_dir=automil_results_dir)  # CR-5
         else:
             from autobench.pipeline.nnmil.runner import run_nnmil_experiment
-            summary = run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+            summary = run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device),
+                                           results_dir=automil_results_dir)  # CR-5
 
     elapsed = time.time() - start_time
 
