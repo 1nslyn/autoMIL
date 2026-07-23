@@ -327,7 +327,10 @@ class ExperimentGraph:
         self.nodes[nid] = node
         self.meta["total_executed"] += 1
 
-        if composite > self.meta["best_composite"]:
+        # H-6 (audit 2026-07-23): only a keep node may become best (this path has
+        # no descendant re-evaluation, so a keep-gated inline update suffices and
+        # avoids an O(N) recompute per insert).
+        if status == "keep" and composite > self.meta["best_composite"]:
             self.meta["best_composite"] = composite
             self.meta["best_node_id"] = nid
 
@@ -405,10 +408,6 @@ class ExperimentGraph:
         self.meta["total_executed"] += 1
         self.meta["total_proposed"] = max(0, self.meta["total_proposed"] - 1)
 
-        if composite > self.meta["best_composite"]:
-            self.meta["best_composite"] = composite
-            self.meta["best_node_id"] = node_id
-
         pid = node.get("parent_id")
         if pid and pid in self.nodes:
             self.nodes[pid]["child_count"] = len([
@@ -420,6 +419,10 @@ class ExperimentGraph:
                                      composite - parent_composite)
 
         self._reevaluate_descendants(node_id)
+        # H-6 (audit 2026-07-23): recompute best from keep nodes only, AFTER
+        # _reevaluate_descendants may have flipped nodes to discard. Replaces the
+        # status-agnostic inline update that could leave best on a discarded node.
+        self.recompute_best()
 
     def _reevaluate_descendants(self, root_id: str) -> None:
         """Recompute keep/discard for executed descendants of root_id.
@@ -807,7 +810,10 @@ class ExperimentGraph:
                         parent_comp = self.nodes[parent_id].get("composite", 0)
                         self.nodes[node_id]["parent_delta"] = metrics["composite"] - parent_comp
                     self.meta["total_executed"] += 1
-                    if metrics["composite"] > self.meta["best_composite"]:
+                    # H-6 (audit 2026-07-23): only a keep node may become best
+                    # (keep-gated inline update preserves the D-14 no-full-recompute
+                    # contract of default reconcile while never selecting a discard).
+                    if graph_status == "keep" and metrics["composite"] > self.meta["best_composite"]:
                         self.meta["best_composite"] = metrics["composite"]
                         self.meta["best_node_id"] = node_id
 
@@ -874,7 +880,8 @@ class ExperimentGraph:
                             "created_at": datetime.now().isoformat(),
                         }
                         self.meta["total_executed"] += 1
-                        if composite > self.meta.get("best_composite", 0):
+                        # H-6 (audit 2026-07-23): only a keep node may become best.
+                        if status == "keep" and composite > self.meta.get("best_composite", 0):
                             self.meta["best_composite"] = composite
                             self.meta["best_node_id"] = node_id_r
                         parent_delta = composite - parent_composite
