@@ -176,6 +176,12 @@ class ExperimentGraph:
         # that predate the Ladder gate) so a predeclared config δ still applies.
         if not isinstance(self._data["meta"].get("scoring"), dict):
             self._data["meta"]["scoring"] = dict(defaults["meta"]["scoring"])
+        # M-1 (audit 2026-07-23): backfill EVERY scoring key (not only
+        # accept_margin) so a legacy / hand-edited scoring block missing
+        # exploration_weight or novelty_weight cannot KeyError in
+        # recalculate_scores() and silently turn every reconcile() into a no-op.
+        for _sk, _sv in defaults["meta"]["scoring"].items():
+            self._data["meta"]["scoring"].setdefault(_sk, _sv)
         self._data["meta"]["scoring"].setdefault("accept_margin", _default_margin)
         if loaded_from_disk and (missing_top or missing_meta):
             # Top-level missing keys are the more alarming signal (file
@@ -254,7 +260,12 @@ class ExperimentGraph:
     def lineage(self, node_id: str) -> list[dict]:
         path = []
         current = node_id
+        visited: set[str] = set()  # M-4 (audit 2026-07-23): guard a parent_id cycle
         while current:
+            if current in visited:
+                logger.warning("lineage: parent_id cycle detected at %s; truncating", current)
+                break
+            visited.add(current)
             node = self.get_node(current)
             if node is None:
                 break
@@ -432,8 +443,12 @@ class ExperimentGraph:
         'keep'. Re-run the check now that root_id has real metrics.
         """
         stack = [root_id]
+        visited: set[str] = set()  # M-4 (audit 2026-07-23): guard a parent/child cycle
         while stack:
             pid = stack.pop()
+            if pid in visited:
+                continue
+            visited.add(pid)
             parent = self.nodes.get(pid)
             if not parent or parent.get("type") != "executed":
                 continue
