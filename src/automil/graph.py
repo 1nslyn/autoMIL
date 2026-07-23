@@ -1076,7 +1076,14 @@ class ExperimentGraph:
         )
         try:
             with os.fdopen(tmp_fd, "w") as f:
-                json.dump(self._data, f, indent=2)
+                # CR-1a / M-3 (audit 2026-07-23): allow_nan=False guarantees
+                # graph.json is standards-valid JSON. A NaN/Infinity would
+                # otherwise serialize as a bare token that breaks every non-Python
+                # reader (viz SSE JSON.parse, jq, serde). Non-finite values are
+                # rejected upstream at result ingestion (validate_result), so this
+                # raises only on a genuine internal invariant violation — loudly,
+                # instead of persisting silent corruption.
+                json.dump(self._data, f, indent=2, allow_nan=False)
                 f.write("\n")
             os.rename(tmp_path, str(self.path))
             os.utime(str(self.path))

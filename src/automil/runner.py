@@ -11,6 +11,19 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _reject_nonfinite_constant(token: str):
+    """``parse_constant`` hook: reject ``Infinity`` / ``-Infinity`` / ``NaN`` tokens.
+
+    CR-1a (audit 2026-07-23): result.json is agent-writable and ``composite`` is
+    trusted verbatim as the val-firewall selection signal. A non-finite composite
+    would rig selection (``Infinity`` captures best_node and forces keep; ``NaN``
+    poisons every ``>`` comparison and persists as an invalid-JSON token). Reject
+    such tokens at the parse boundary — the semantic finite check in
+    ``automil.schemas.validate_result`` is the second line of defense.
+    """
+    raise ValueError(f"non-finite JSON constant {token!r} is not permitted in result.json")
+
+
 class Runner:
     """Manages git worktree lifecycle for experiment execution."""
 
@@ -135,7 +148,25 @@ class Runner:
         sealed_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(result_file, sealed_dir / "result.json")
 
-        return json.loads(result_file.read_text())
+        try:
+            return json.loads(
+                result_file.read_text(), parse_constant=_reject_nonfinite_constant
+            )
+        except ValueError as exc:
+            # CR-1a: a non-finite (Infinity/NaN) or otherwise malformed result.json
+            # cannot be trusted as the selection signal. Degrade to a crash result —
+            # the same outcome as a schema-invalid result at terminal_writer
+            # ingestion — so it never influences keep/discard or best_node.
+            logger.warning(
+                "collect_result: rejected result.json for %s (%s) — treating as crash",
+                archive_dir.name, exc,
+            )
+            return {
+                "status": "crash",
+                "composite": 0.0,
+                "metrics": {},
+                "error": f"result.json rejected at ingestion: {exc}",
+            }
 
     def cleanup_worktree(self, worktree_path: Path) -> None:
         """Remove a git worktree."""
