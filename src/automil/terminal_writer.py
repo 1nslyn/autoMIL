@@ -231,11 +231,14 @@ def write_terminal_state(
                 if raw_status not in ("partial", "crash"):
                     g._reevaluate_descendants(node_id)
 
-                # D-01: only update best_node for non-partial, non-crash results
+                # D-01 + H-6 (audit 2026-07-23): only touch best for non-partial,
+                # non-crash completions, and recompute it from keep nodes only. An
+                # inline ``composite > best`` could set best to a node that is (or
+                # just became, via _reevaluate_descendants above) discarded — e.g.
+                # under a Ladder δ>0 a within-margin child is discarded yet would
+                # win the inline strict-``>`` update.
                 if raw_status not in ("partial", "crash"):
-                    if composite > g.meta.get("best_composite", 0.0):
-                        g.meta["best_composite"] = composite
-                        g.meta["best_node_id"] = node_id
+                    g.recompute_best()
                 # g.save() called automatically on context exit
     except Exception:
         logger.exception(
