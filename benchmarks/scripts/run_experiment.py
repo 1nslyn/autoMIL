@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import time
 
@@ -133,15 +134,34 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
             "test_bacc": round(test_bacc, 4),
         }
 
+    # H-8 (audit 2026-07-23): count folds that produced a finite primary val
+    # metric. compute_confidence_intervals silently drops NaN folds and, with <2
+    # valid, reports a zero-variance point estimate — so a degenerate 1-fold run
+    # would otherwise masquerade as a complete K-fold "completed" result and get
+    # selected as if robust. Surface the count and quarantine it (status=partial,
+    # which autoMIL keeps out of keep/discard) when the CV is too degenerate.
+    primary_val_key = "c_index" if "c_index" in test else "auc_roc"
+    per_fold_val = summary.get("per_fold_val", []) or []
+    n_folds_total = summary.get("n_folds", len(per_fold_val))
+    n_valid_folds = sum(
+        1 for fm in per_fold_val
+        if isinstance(fm, dict)
+        and isinstance(fm.get(primary_val_key), (int, float))
+        and math.isfinite(float(fm.get(primary_val_key, float("nan"))))
+    )
+    status = "completed" if n_valid_folds >= 2 else "partial"
+
     # ``metrics`` is agent-facing (val only); ``held_out`` (test) + ``summary``
     # are sealed into certify.json by terminal_writer — never seen during search.
     return {
-        "status": "completed",
+        "status": status,
         "metrics": metrics,
         "held_out": held_out,
         "composite": round(composite, 4),
         "elapsed_seconds": round(elapsed, 1),
         "peak_vram_mb": round(peak_vram_mb),
+        "n_valid_folds": n_valid_folds,
+        "n_folds": n_folds_total,
         "summary": summary,
     }
 
