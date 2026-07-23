@@ -91,39 +91,47 @@ STRUCTURAL_KINDS = frozenset({"architecture", "ensemble"})
 def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_model: str | None):
     """Add a new experiment proposal to the graph."""
     adir = _find_automil_dir()
-    from automil.graph import ExperimentGraph
-    graph = ExperimentGraph(path=str(adir / "graph.json"), technique_map=_load_technique_map(adir))
+    # CR-2 (audit 2026-07-23): propose is the agent's most frequent write. Do the
+    # whole read-modify-write under locked_update so a concurrent daemon
+    # completion cannot clobber this proposal (or vice versa) via a stale snapshot.
+    from automil.graph import locked_update
 
-    # Duplicate guard: refuse exact-description sibling proposals under the
-    # same parent that are still pending or running. Prevents waste from
-    # accidental double-proposes (the 0063="dup of 0057" case). Exact-match
-    # only — fine-grained hyperparameter sweeps with different descriptions
-    # are unaffected.
     desc_norm = desc.strip()
-    for n in graph.nodes.values():
-        if (n.get("parent_id") == parent
-                and n.get("type") == "proposed"
-                and n.get("status") in ("pending", "running")
-                and (n.get("description", "") or "").strip() == desc_norm):
-            raise click.ClickException(
-                f"Refusing to propose: {n['id']} already exists under "
-                f"--parent {parent} with the same description "
-                f"'{desc_norm[:60]}'. Use a different description, pick a "
-                f"different parent, or wait for {n['id']} to complete."
-            )
+    with locked_update(
+        str(adir / "graph.json"), technique_map=_load_technique_map(adir)
+    ) as graph:
+        # Duplicate guard: refuse exact-description sibling proposals under the
+        # same parent that are still pending or running. Prevents waste from
+        # accidental double-proposes (the 0063="dup of 0057" case). Exact-match
+        # only — fine-grained hyperparameter sweeps with different descriptions
+        # are unaffected.
+        for n in graph.nodes.values():
+            if (n.get("parent_id") == parent
+                    and n.get("type") == "proposed"
+                    and n.get("status") in ("pending", "running")
+                    and (n.get("description", "") or "").strip() == desc_norm):
+                # Raising here exits the context without save() (lock released) —
+                # no partial write.
+                raise click.ClickException(
+                    f"Refusing to propose: {n['id']} already exists under "
+                    f"--parent {parent} with the same description "
+                    f"'{desc_norm[:60]}'. Use a different description, pick a "
+                    f"different parent, or wait for {n['id']} to complete."
+                )
 
-    node_id = graph.add_proposed(
-        parent_id=parent,
-        description=desc,
-        techniques=list(techniques),
-        kind=kind or "unspecified",
-    )
-    if mil_model:
-        from automil.cells.state import normalize_mil_model
-        gnode = graph.get_node(node_id)
-        gnode.setdefault("metadata", {})["mil_model"] = normalize_mil_model(mil_model)
-    graph.recalculate_scores()
-    graph.save()
+        node_id = graph.add_proposed(
+            parent_id=parent,
+            description=desc,
+            techniques=list(techniques),
+            kind=kind or "unspecified",
+        )
+        if mil_model:
+            from automil.cells.state import normalize_mil_model
+            gnode = graph.get_node(node_id)
+            gnode.setdefault("metadata", {})["mil_model"] = normalize_mil_model(mil_model)
+        graph.recalculate_scores()
+        # graph.save() runs on context exit under the lock.
+
     suffix = "" if kind else "  (no --kind; counts as non-structural in portfolio)"
     click.echo(f"Added proposal {node_id} [{kind or 'unspecified'}]: {desc}{suffix}")
 

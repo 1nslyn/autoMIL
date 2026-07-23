@@ -15,7 +15,8 @@ Branch: `fix/audit-2026-07-23`. Updated as each fix lands.
 |----|---------|-----|--------|--------|-------|
 | CR-1a | Non-finite `composite` accepted (Infinity/NaN exploit) + NaN persists as invalid JSON (M-3) | CRIT | ☑ | `_result.py`+`runner.py`+`graph.py` | finite guard in validate_result + parse_constant at ingest + graph.save allow_nan=False; 14 new tests, 69 regression green. **Folds in M-3.** |
 | CR-1b | `composite` trusted verbatim, not recomputed from val block | CRIT | ☐ | | needs config-declared `scoring.formula` reducer; recompute + flag disagreement in terminal_writer |
-| CR-2 | `locked_update` only ~half-adopted → graph write-race loses completions | CRIT | ☐ | | propose/nominate/reconcile-default/promote → lock, or lock-guard save() |
+| CR-2 | `locked_update` only ~half-adopted → graph write-race loses completions | CRIT | ☑ | `propose.py`+`nominate.py`+`reconcile.py` | wrapped the 3 short-transaction writers (propose/nominate/reconcile default+recompute-best) in locked_update; dry-run stays read-only. 4 new tests, 99 regression green. |
+| CR-2b | gate/promote path saves graph unlocked during long held-out eval | CRIT | ☐ | | separate refactor: evaluate UNLOCKED, then short-locked status apply (can't hold lock across evals). Do with the gate module (ties to M-8). |
 | CR-3 | Survival composite = val c-index the code calls "near-random" | CRIT | ☐ | | make survival composite = the checkpoint-selection signal (pooled concordance / val loss) |
 | CR-5 | Stale/shared results cache defeats data fix + collides across variants | CRIT | ☐ | | key results dir on experiment_id; pass AUTOMIL_RESULTS_DIR to all 4 non-CLAM runners |
 | H-1 | `run.log`/stdout not firewalled → test leak by printing | HIGH | ☐ | | scrub held-out keys from run.log + error-tail at orchestrator boundary |
@@ -87,3 +88,4 @@ These change the science or the paper, not just the code. I will implement the *
 
 - 2026-07-23: branch `fix/audit-2026-07-23` created; tracker initialized; starting Gate-1 CR-1a.
 - 2026-07-23: **CR-1a ☑** (+ M-3) — finite guard at `validate_result`, `parse_constant` reject in `runner.collect_result`, `allow_nan=False` in `graph.save`. 14 new tests pass; 69 regression tests (schema/runner/graph/firewall/daemon) green. Next: CR-2 universal locking.
+- 2026-07-23: **CR-2 ☑** — wrapped `propose` / `nominate` / `reconcile` (default + recompute-best) in `locked_update`; `--dry-run` stays read-only. Gate/promote's unlocked save during long held-out evals split off as **CR-2b** (needs evaluate-then-short-lock refactor). 4 new tests; 99 regression (propose/reconcile/recompute-best/nominate/gate/cli/graph) green. Next: CR-3 survival selection signal.
