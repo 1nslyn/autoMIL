@@ -43,10 +43,30 @@ def test_protected_list_returns_tuple(tmp_path):
 
 
 def test_mode_architecture_preserving_accepted(tmp_path):
+    """H-4: the mode now REQUIRES a non-empty protected list.
+
+    It used to be accepted bare — and read by no code at all. Since submit's gate
+    is written `if reg_cfg.protected and ...`, an empty list short-circuits the
+    whole enforcement path to a no-op, so a project could declare that it
+    preserves a substrate and get nothing. See
+    tests/test_frozen_substrate_enforcement.py.
+    """
     from automil.registry.config import load_registry_config
-    adir = _write_config(tmp_path, "registry:\n  mode: architecture-preserving\n")
+    adir = _write_config(
+        tmp_path,
+        "registry:\n  mode: architecture-preserving\n  protected:\n    - \"splits.py\"\n",
+    )
     cfg = load_registry_config(adir)
     assert cfg.mode == "architecture-preserving"
+    assert cfg.protected == ("splits.py",)
+
+
+def test_mode_architecture_preserving_without_protected_is_rejected(tmp_path):
+    import pytest
+    from automil.registry.config import load_registry_config
+    adir = _write_config(tmp_path, "registry:\n  mode: architecture-preserving\n")
+    with pytest.raises(ValueError, match="protected"):
+        load_registry_config(adir)
 
 
 def test_mode_free_explicitly(tmp_path):

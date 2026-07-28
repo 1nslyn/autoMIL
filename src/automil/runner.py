@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -64,8 +65,42 @@ class Runner:
         )
         return wt_path
 
+    @staticmethod
+    def _verify_overlay_manifest(overlay_dir: Path, manifest: dict[str, str]) -> None:
+        """Check every file the manifest claims against its recorded digest.
+
+        Raises:
+            ValueError: a claimed file is missing, its digest does not match, or
+                the recorded digest is malformed. All three are refusals rather
+                than warnings: the manifest is the only record of what the agent
+                actually submitted, so a mismatch means the archive no longer
+                describes the experiment that was queued.
+        """
+        for rel, recorded in sorted(manifest.items()):
+            if not isinstance(recorded, str) or not recorded.startswith("sha256:"):
+                raise ValueError(
+                    f"Overlay rejected: malformed digest for {rel!r} in the "
+                    f"overlay manifest ({recorded!r}); expected 'sha256:<hex>'."
+                )
+            expected = recorded.split(":", 1)[1]
+            src = overlay_dir / rel
+            if not src.is_file():
+                raise ValueError(
+                    f"Overlay rejected: manifest claims {rel!r} but it is missing "
+                    f"from {overlay_dir}."
+                )
+            actual = hashlib.sha256(src.read_bytes()).hexdigest()
+            if actual != expected:
+                raise ValueError(
+                    f"Overlay rejected: digest mismatch for {rel!r} — the archived "
+                    f"file no longer matches what `automil submit` recorded "
+                    f"(expected {expected[:12]}…, got {actual[:12]}…). The archive "
+                    f"was modified after submit; refusing to run it."
+                )
+
     def apply_overlay(self, worktree_path: Path, overlay_dir: Path,
-                      deletions: list[str] | None = None) -> None:
+                      deletions: list[str] | None = None,
+                      *, manifest: dict[str, str] | None = None) -> None:
         """Copy modified files from overlay_dir on top of worktree.
 
         Also removes files listed in ``deletions`` from the worktree to
@@ -77,10 +112,25 @@ class Runner:
         and symlinks pointing outside the worktree so a malicious or
         corrupt overlay (or deletions list) cannot land arbitrary files
         on disk.
+
+        Args:
+            manifest: HASH-0 — the ``{path: "sha256:..."}`` map recorded by
+                ``automil submit``. Until now it was written into every queue
+                spec and verified by nothing, so an archived overlay edited
+                between submit and launch would run unnoticed. Verification
+                happens BEFORE any copy, so a rejected overlay leaves the
+                worktree untouched rather than half-applied. Only files the
+                manifest actually claims are checked — the archive also holds
+                run artifacts (``fold_*_result.json``, ``summary.json``) that
+                were never part of the overlay. ``None`` skips verification, for
+                legacy specs that carry no manifest.
         """
         wt_resolved = worktree_path.resolve()
         ov_resolved = overlay_dir.resolve()
         metadata_files = {Path("spec.json"), Path("run.log"), Path("result.json")}
+
+        if manifest:
+            self._verify_overlay_manifest(overlay_dir, manifest)
 
         for src_file in overlay_dir.rglob("*"):
             if not src_file.is_file():

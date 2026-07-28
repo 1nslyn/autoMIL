@@ -1,22 +1,27 @@
-# autoMIL Configuration, CCRCC (Clear Cell Renal Cell Carcinoma)
-# Benchmark results exist for: pbrm1, high_grade × {hoptimus1, uni_v2, virchow2}
-# Best baseline: clam_mb + uni_v2 on high_grade → AUC 0.790
+# autoMIL configuration — TCGA-LUAD — KRAS mutation (binary) + overall survival
+#
+# Preprint roster cohort (EXPERIMENT_GRID.md §1). Created 2026-07-28 for finding
+# NO-OVERLAY: `benchmarks/experiments/` held only ccrcc / clwd / ovarian_hrd /
+# placeholder, so the agentic layer — the paper's headline — was configured for
+# no preprint cohort at all, which is also why Fig 3's feasibility anchors are
+# off-roster (A-1).
 
 project:
-  name: "ccrcc"
-  description: "CCRCC mutation and grade prediction from WSI features"
+  name: "tcga_luad"
+  description: "TCGA-LUAD — KRAS mutation (binary) + overall survival"
 
 task:
-  name: "high_grade"
+  name: "kras"
   type: "binary"
   num_classes: 2
   label_column: "label"
-  positive_label: 1
 
 data:
-  features_dir: "/home/jma/Documents/yinshuol/autoMIL/datasets/CCRCC/benchmark/features"
-  splits_dir: "/home/jma/Documents/yinshuol/autoMIL/datasets/CCRCC/benchmark/splits/standard"
-  mapping_csv: "/home/jma/Documents/yinshuol/autoMIL/datasets/CCRCC/CCRCC_metadata.csv"
+  # `${...}` is resolved from benchmarks/.env; `automil check` skips path
+  # validation for env-templated values by design (check.py:197).
+  features_dir: "${AUTOBENCH_TCGA_LUAD_ROOT}/benchmark/features"
+  splits_dir: "${AUTOBENCH_TCGA_LUAD_ROOT}/benchmark/splits/standard"
+  mapping_csv: "${AUTOBENCH_TCGA_LUAD_ROOT}/normalized_manifest.csv"
   num_folds: 5
   seed: 42
 
@@ -26,32 +31,31 @@ encoders:
     uni_v2: 1536
     hoptimus1: 1536
     virchow2: 2560
-    conch_v15: 768
-    hibou_l: 1024
-    midnight12k: 1536
-    h0_mini: 768
-
-baseline:
-  model: "clam_mb"
-  framework: "clam"
-  test_auc: 0.790
-  test_bacc: 0.698
-  composite: 0.744
+    conch_v15: 768        # TITAN's input features
 
 metrics:
   primary: "composite"
   composite_formula: "(val_auc + val_bacc) / 2"
   track: ["val_auc", "val_bacc"]
 
-training:
-  learning_rate: 1e-4
-  weight_decay: 1e-5
-  dropout: 0.25
-  num_epochs: 200
-  patience: 20
-  stop_epoch: 50
-  batch_size: 1
-  max_seq_length: null
+# CR-4 / PRELAUNCH_REVIEW O2: the Ladder keep-margin. δ=0.0 (strict dominance) is
+# indefensible here — splits.py carves val at 12.5% of train_val, so selection
+# runs on ~46 validation patients, and the maximum of ~60 discovery candidates
+# drawn from that noise distribution is a large apparent lift that will not
+# survive to the sealed test block. O2's recommendation, scaled to the val SE:
+# δ ≈ 0.05 on the small cohorts (GBM n=99, PDAC n=105) vs ≈ 0.015 on the large
+# ones. This is a predeclared placeholder — CR-4 replaces it with a per-cell
+# δ computed as ≥1 SE of the CV composite.
+scoring:
+  formula: ""
+  technique_map: {}
+  accept_margin: 0.015
+
+# Cohort statistics (EXPERIMENT_GRID.md §1.1), for the agent's context:
+#   patients n=465  ·  OS deaths=167
+cohort:
+  n_patients: 465
+  os_deaths: 167
 
 # H-4 (audit 2026-07-28): the frozen data substrate, ENFORCED.
 # `submit.py` hard-rejects any overlay matching these globs, with no --force
@@ -94,12 +98,6 @@ registry:
     - "benchmarks/src/autobench/data.py"                  # WSI-list CSV feeding TRIDENT
 
 files:
-  # H-4: `run_experiment.py` and `pipeline/config.py` were listed here, and the
-  # no---files branch auto-detects editable files with NO readonly check at all —
-  # so the split entry point, the composite writer and the fold/seed dataclasses
-  # were captured silently. They are now protected instead. Nothing legitimate is
-  # lost: hyperparameters travel through --hparams / a variant's HPARAMS (H-3b),
-  # and model variants belong in automil/variants/*.py.
   editable:
     - "benchmarks/src/autobench/pipeline/clam/train.py"
     - "benchmarks/src/autobench/pipeline/nnmil/train.py"
@@ -111,46 +109,40 @@ files:
     - "benchmarks/lib/CLAM/utils/core_utils.py"
   readonly:
     - "benchmarks/src/autobench/pipeline/evaluate.py"
-    - "benchmarks/src/autobench/pipeline/clam/dataset.py"
-    - "benchmarks/src/autobench/pipeline/clam/runner.py"
     - "benchmarks/src/autobench/pipeline/splits.py"
     - "benchmarks/src/autobench/pipeline/prepare.py"
 
 run:
   script: null
-  command: "python benchmarks/scripts/run_experiment.py --dataset ccrcc --task high_grade --encoder uni_v2 --model clam_mb --framework clam --no_wandb"
+  command: "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model clam_mb --framework clam --no_wandb"
+
+# H-2: the budget. No benchmark config set a `cap:` block at all, so every cell
+# silently ran at the framework's implicit 6h / agent_active default
+# (cells/capconfig.py:17-21). Declared here so the equal-effort claim rests on a
+# predeclared number rather than a default nobody chose.
+cap:
+  budget: 6h
+  safety_buffer: 30m
+  mode: agent_active
+  idle_grace_seconds: 300
 
 orchestrator:
   poll_interval_sec: 5
   safety_margin_gb: 2.0
   default_timeout_min: 150
-  # Saturate GPUs: CLAM bag training peaks at ~0.4 GB per worker and the
-  # GPUs here have ~48 GB. Bin-pack aggressively, the queue must drain in
-  # parallel, not serially. If a worker OOMs, lower this cap; never leave
-  # it at 1 "just in case."
+  # CFG-2: these two belong under `orchestrator:`, NOT under `cap:` — the daemon
+  # reads them from here (_orchestrator_daemon.py:439-444). The shipped template
+  # puts them under `cap:`, where nothing reads them.
   max_concurrent_per_gpu: 4
   default_vram_estimate_gb: 1.0
 
-# CLN-02 / D-04 / D-05: Subprocess env whitelist, ccrcc declares the
-# consumer-specific env vars its training scripts need. The orchestrator's
-# system whitelist (PATH/HOME/LC_*/CUDA_*/NVIDIA_*/AUTOMIL_*/...) is applied
-# automatically; this list is the literal-name passthrough for project-level
-# vars (no globs at the config layer). Phase 8/DEC-01 will remove the
-# orchestrator-side AUTOBENCH_ROOT injection, at which point this passthrough
-# list is the sole mechanism keeping ccrcc's experiments wired. Names here
-# must match the ${...} references in benchmarks/datasets/*.yaml.
 env:
   passthrough:
     - AUTOBENCH_ROOT
-    - AUTOBENCH_CCRCC_ROOT
-    - AUTOBENCH_CLWD_ROOT
-    - AUTOBENCH_HANCOCK_ROOT
-    - AUTOBENCH_OVARIAN_ROOT
-    - AUTOBENCH_PLACEHOLDER_ROOT
     - AUTOBENCH_TCGA_LUAD_ROOT
   dotenv_files:
     - benchmarks/.env
 
 viz:
   port: 8421
-  host: "0.0.0.0"
+  host: "127.0.0.1"

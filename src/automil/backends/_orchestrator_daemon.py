@@ -958,8 +958,13 @@ class ExperimentOrchestrator:
         overlay_dir = spec.get("overlay_dir")
         deletions = spec.get("deletions")
         if overlay_dir:
+            # HASH-0: verify the digests `automil submit` recorded before any
+            # file lands. Until now the manifest was written into every spec and
+            # checked by nothing, so an archive edited between submit and launch
+            # would run under the original node's label.
             self.runner.apply_overlay(
-                wt_path, self.orch_dir / overlay_dir, deletions=deletions
+                wt_path, self.orch_dir / overlay_dir, deletions=deletions,
+                manifest=spec.get("overlay_manifest"),
             )
 
         # CLN-02 / D-04 + DEC-01 / D-199: build env from explicit whitelist +

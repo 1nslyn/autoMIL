@@ -101,6 +101,23 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
             f"got {mode_raw!r}. Set to 'free' (default) or 'architecture-preserving'."
         )
 
+    # H-4: the mode used to be parsed, validated, and then read by no code at
+    # all. Requiring a non-empty protected list makes it self-consistent — a
+    # project cannot announce that it preserves a substrate while naming nothing
+    # to preserve. This matters because submit's gate is written
+    # `if reg_cfg.protected and ...`, so an empty tuple short-circuits the whole
+    # enforcement path (and check.py's drift detection, and revert-baseline) to a
+    # silent no-op.
+    if mode_raw == "architecture-preserving" and not protected:
+        raise ValueError(
+            "automil/config.yaml: registry.mode is 'architecture-preserving' but "
+            "registry.protected is empty. An empty list disables the protected-file "
+            "gate entirely, so the substrate would be declared frozen and not "
+            "enforced. List the paths that must not change (splits/prep/evaluate, "
+            "the composite writer, the feature-extraction entry point), or set "
+            "mode: free."
+        )
+
     repro_tolerance_raw = registry_section.get("repro_tolerance", 0.005)
     try:
         repro_tolerance = float(repro_tolerance_raw)
