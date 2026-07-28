@@ -159,9 +159,17 @@ class TestComputeConfidenceIntervals:
         assert ci["auc_roc"]["mean"] == pytest.approx(0.85, abs=1e-6)
 
     def test_ci_keys(self):
+        """Legacy keys are load-bearing for every caller; H-5a/M-15 added more.
+
+        Asserted as a superset, not an equality: the block is deliberately
+        extensible (``method``, ``n_valid_folds``, ``n_folds``), and every
+        consumer reads a fixed stat tuple rather than iterating the block
+        (``pipeline/results.py:50``, ``pipeline/orchestrator.py:216``).
+        """
         fold_metrics = [{"auc_roc": 0.8}, {"auc_roc": 0.9}]
         ci = compute_confidence_intervals(fold_metrics)
-        assert set(ci["auc_roc"].keys()) == {"mean", "std", "ci_low", "ci_high"}
+        assert {"mean", "std", "ci_low", "ci_high"} <= set(ci["auc_roc"].keys())
+        assert {"method", "n_valid_folds", "n_folds"} <= set(ci["auc_roc"].keys())
 
     def test_ci_ordering(self):
         fold_metrics = [{"auc_roc": v} for v in [0.7, 0.8, 0.9, 0.85, 0.75]]
