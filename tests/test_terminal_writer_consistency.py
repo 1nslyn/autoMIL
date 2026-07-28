@@ -49,11 +49,15 @@ def test_rank_and_tsv_agree_after_terminal_write(tmp_path: Path) -> None:
         with open(results_tsv, "a") as f:
             f.write(f"{nid}\t{composite:.6f}\t{status}\t{description}\n")
 
+    # CR-1b: the composite is derived from the val metrics, so the fixture must be
+    # internally consistent — (0.90 + 0.84) / 2 == 0.87. (It previously declared
+    # 0.87 alongside metrics averaging 0.84; the firewall now overrides such a
+    # mismatch to the val-derived value, which is the point of CR-1b.)
     expected_composite = 0.87
     result = {
         "status": "completed",
         "composite": expected_composite,
-        "metrics": {"val_auc": 0.87, "val_bacc": 0.81},
+        "metrics": {"val_auc": 0.90, "val_bacc": 0.84},
         "elapsed_seconds": 4098,
         "peak_vram_mb": 4500,
     }

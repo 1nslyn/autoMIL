@@ -58,6 +58,9 @@ def _setup_project(tmp_path: Path, monkeypatch) -> tuple[CliRunner, Path]:
     cfg = yaml.safe_load(config_path.read_text()) or {}
     cfg["project"] = {**(cfg.get("project") or {}), "name": "test_ds"}
     cfg["encoders"] = {**(cfg.get("encoders") or {}), "primary": "test_enc"}
+    # M-14: task participates in cell identity — pin it so the ids stay
+    # deterministic (otherwise the init template's task name leaks in).
+    cfg["task"] = {**(cfg.get("task") or {}), "name": "test_task"}
     config_path.write_text(yaml.safe_dump(cfg))
 
     return runner, adir
@@ -90,8 +93,9 @@ def _cells_dir(adir: Path) -> Path:
 
 
 def _cell_id_for(dataset: str = "test_ds", encoder: str = "test_enc",
-                 parent_id: str = "root") -> str:
-    return make_cell_id(dataset, encoder, parent_id)
+                 parent_id: str = "root", task: str | None = "test_task") -> str:
+    # M-14: the task is part of cell identity (see _setup_project).
+    return make_cell_id(dataset, encoder, parent_id, task)
 
 
 def _read_cell_json(adir: Path, cell_id: str) -> dict:
