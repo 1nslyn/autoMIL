@@ -336,8 +336,18 @@ Defense-in-depth, cheapest first:
 4. **Enforce the frozen substrate before the agentic loop (see §5).** Wire
    `registry.protected` into each dataset's `automil/config.yaml`, pre-generate
    splits into the shared `benchmark_dir`, and recompute `composite`
-   orchestrator-side from the val block. The protected list is drafted in §5; **not
-   yet applied to any config** — `registry.protected` is still empty everywhere.
+   orchestrator-side from the val block.
+
+   _Status 2026-07-28._ The composite **is** now recomputed orchestrator-side from
+   the val block (CR-1b, `731cea2`) — with the residual limit that
+   `scoring.recompute_composite` averages whatever is in `metrics`, so a rewritten
+   writer that relabels test as val still passes. The protected list drafted in §5
+   has been applied to **`clwd`, `ovarian_hrd`, `placeholder`** (commit `0b2da55`) —
+   three template projects — but **not to `ccrcc`, the only live one**, which has no
+   `registry:` block at all and therefore no enforcement (the gate is written
+   `if reg_cfg.protected and …`, so an empty tuple is a no-op). None of the five
+   roster cohorts has an `automil/` overlay yet. See
+   [`READINESS-2026-07-28.md`](READINESS-2026-07-28.md) §1.4–1.5.
 
 ## Sources (pivot-specific, in addition to shared background)
 
