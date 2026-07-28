@@ -70,15 +70,25 @@ def overrides_from_exp_cfg(exp_cfg) -> dict:
             out[name] = current
     return out
 
-#: Some arms name the same knob differently (DTFD follows its upstream repo's
-#: ``wd``). Map the canonical CLI/variant name -> the arm's own field name.
+#: Some arms name the same knob differently because each config follows its own
+#: upstream repository (DTFD uses ``wd``; nnMIL's plan uses ``learning_rate`` /
+#: ``num_epochs``). Map the canonical CLI/variant name -> that arm's field name.
+#:
+#: **Every entry must be an unambiguous 1:1 rename of the SAME knob.** Anything
+#: that is a guess is deliberately absent:
+#:   - no ``dropout -> droprate``: DTFD has ``droprate`` (tier-1 classifier) AND
+#:     ``droprate_2`` (tier-2). They are different knobs, so a generic "dropout"
+#:     would silently tune only half the model. Address them by their real names
+#:     (``apply_overrides`` accepts an arm's own field names directly).
+#:   - no ``EPOCH``: no config actually declares it (DTFD's field is
+#:     ``max_epochs``; ``Main:21`` in its docstring is the upstream argparse flag,
+#:     not the field), so the alias was dead and misleading.
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "weight_decay": ("weight_decay", "wd"),
-    "max_epochs": ("max_epochs", "num_epochs", "EPOCH"),
+    "max_epochs": ("max_epochs", "num_epochs"),
     "lr": ("lr", "learning_rate"),
     "patience": ("patience",),
     "early_stopping": ("early_stopping",),
-    "dropout": ("dropout", "droprate"),
 }
 
 
@@ -93,16 +103,28 @@ def explicit_overrides(**kwargs) -> dict:
 
 
 def _resolve_field(cfg_or_plan, name: str) -> str | None:
-    """Return the actual attribute/key on this arm matching the canonical name."""
+    """Return the actual attribute/key on this arm matching the canonical name.
+
+    Raises:
+        ValueError: the canonical name matches MORE THAN ONE field on this arm
+            (e.g. a config declaring both ``weight_decay`` and ``wd``). Picking
+            the first would silently tune one and leave the other stale — the
+            exact class of failure this module exists to remove.
+    """
     candidates = FIELD_ALIASES.get(name, (name,))
     if is_dataclass(cfg_or_plan):
         available = {f.name for f in fields(cfg_or_plan)}
     else:
         available = set(cfg_or_plan)
-    for cand in candidates:
-        if cand in available:
-            return cand
-    # Allow the canonical name itself even if not aliased.
+    matches = [c for c in candidates if c in available]
+    if len(matches) > 1:
+        raise ValueError(
+            f"ambiguous override {name!r}: it matches multiple fields {matches} on "
+            f"this arm. Refusing to guess — address the field by its own name."
+        )
+    if matches:
+        return matches[0]
+    # Allow an arm's own field name to be used directly (e.g. DTFD's droprate_2).
     return name if name in available else None
 
 
