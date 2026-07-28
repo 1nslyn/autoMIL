@@ -171,23 +171,33 @@ def train_abmil_survival_fold(
             return float(_batch_loss(val_samples).item())
 
         @torch.no_grad()
-        def _c_index(samples: list[ABMILSurvivalSlide]) -> float:
+        def _risk_records(samples: list[ABMILSurvivalSlide]) -> dict:
+            """Per-sample risk scores (CR-3: pooled across folds by the runner)."""
             model.eval()
             risks, statuses, times, pids = [], [], [], []
             for s in samples:
                 lg = _bag_logits(model, _read_bag(s.h5_path), device).unsqueeze(0)
                 r = _risk_from_logits(lg, survival_loss)
                 risks.append(float(r.item()))
-                statuses.append(s.status)
-                times.append(s.time)
+                statuses.append(float(s.status))
+                times.append(float(s.time))
                 pids.append(s.patient_id)
+            return {"risks": risks, "statuses": statuses, "times": times,
+                    "patient_ids": pids}
+
+        def _c_index_from(records: dict) -> float:
+            if not records["risks"]:
+                return float("nan")
             ci = survival_c_index(
-                torch.tensor(risks, dtype=torch.float32),
-                torch.tensor(statuses, dtype=torch.float32),
-                torch.tensor(times, dtype=torch.float32),
-                pids,
+                torch.tensor(records["risks"], dtype=torch.float32),
+                torch.tensor(records["statuses"], dtype=torch.float32),
+                torch.tensor(records["times"], dtype=torch.float32),
+                records["patient_ids"],
             )
             return float(ci) if ci is not None else float("nan")
+
+        def _c_index(samples: list[ABMILSurvivalSlide]) -> float:
+            return _c_index_from(_risk_records(samples))
 
         rng = random.Random(seed)
         start = time.time()
@@ -224,9 +234,15 @@ def train_abmil_survival_fold(
         elif getattr(early_stopping, "best_model_state", None) is not None:
             model.load_state_dict(early_stopping.best_model_state)
 
+        # CR-3: export val risk records so the runner can pool concordance
+        # across folds instead of averaging five ~2-event c-indices.
+        _val_records = _risk_records(val_samples) if val_samples else {
+            "risks": [], "statuses": [], "times": [], "patient_ids": []
+        }
         return {
             "test_metrics": {"c_index": _c_index(test_samples) if test_samples else float("nan")},
-            "val_metrics": {"c_index": _c_index(val_samples) if val_samples else float("nan")},
+            "val_metrics": {"c_index": _c_index_from(_val_records)},
+            "val_records": _val_records,
             "elapsed_seconds": elapsed_seconds,
         }
     finally:

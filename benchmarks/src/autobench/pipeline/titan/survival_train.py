@@ -186,6 +186,16 @@ def train_titan_survival_fold(
             return float(_batch_loss(embeddings, status, time_).item())
         return float("nan")
 
+    def _risk_records(loader: DataLoader) -> dict:
+        """Per-sample risk scores (CR-3: pooled across folds by the runner)."""
+        risks, statuses, times, pids = _predict_risks(model, loader, torch_device, survival_loss)
+        return {
+            "risks": [float(r) for r in risks],
+            "statuses": [float(s) for s in statuses],
+            "times": [float(t) for t in times],
+            "patient_ids": list(pids),
+        }
+
     def _c_index(loader: DataLoader) -> float:
         risks, statuses, times, pids = _predict_risks(model, loader, torch_device, survival_loss)
         if not risks:
@@ -233,6 +243,8 @@ def train_titan_survival_fold(
     fold_result = {
         "test_metrics": {"c_index": _c_index(test_loader)},
         "val_metrics": {"c_index": _c_index(val_loader)},
+        # CR-3: pooled cross-fold val concordance is computed by the runner.
+        "val_records": _risk_records(val_loader),
         "fold": fold,
         "elapsed_seconds": elapsed,
     }

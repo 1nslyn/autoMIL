@@ -21,7 +21,7 @@ from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import load_dtfd_split, load_dtfd_survival_split
 from autobench.pipeline.dtfd.survival_train import train_dtfd_survival_fold
 from autobench.pipeline.dtfd.train import train_dtfd_fold
-from autobench.pipeline.evaluate import compute_confidence_intervals
+from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 
 
 def _resolve_h5_dir(benchmark_dir: str, exp_cfg: ExperimentConfig) -> str:
@@ -137,6 +137,8 @@ def run_dtfd_experiment(
         result = {
             "test_metrics": raw["test_metrics"],
             "val_metrics": raw["val_metrics"],
+            # CR-3: carry the val risk records through for pooled concordance.
+            **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
             "fold": fold,
             "elapsed_seconds": elapsed_seconds,
         }
@@ -164,6 +166,8 @@ def run_dtfd_experiment(
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),
         "val": compute_confidence_intervals(val_fold_metrics),
+        # CR-3: pooled cross-fold val concordance (survival only; {} otherwise).
+        "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
     }
