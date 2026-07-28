@@ -73,10 +73,12 @@ def _make_clam_args(
         drop_out=exp_cfg.model.dropout,
         subtyping=(exp_cfg.task.n_classes > 2),
         B=exp_cfg.model.B,
-        inst_loss=None,
-        no_inst_cluster=False,
+        # H-3b: read from ModelConfig instead of hardcoding. Defaults are the
+        # previous literals, so this changes no dispatched experiment.
+        inst_loss=exp_cfg.model.inst_loss,
+        no_inst_cluster=exp_cfg.model.no_inst_cluster,
         bag_weight=exp_cfg.model.bag_weight,
-        bag_loss="ce",
+        bag_loss=exp_cfg.model.bag_loss,
         # Training
         max_epochs=exp_cfg.train.max_epochs,
         opt=exp_cfg.train.optimizer,

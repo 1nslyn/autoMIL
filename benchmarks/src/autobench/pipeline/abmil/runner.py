@@ -21,7 +21,7 @@ from autobench.pipeline.abmil.survival_train import train_abmil_survival_fold
 from autobench.pipeline.abmil.train import train_abmil_fold
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
-from autobench.pipeline.hparams import apply_overrides, overrides_from_exp_cfg
+from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 
@@ -69,7 +69,7 @@ def run_abmil_experiment(
     # silently discarded. ABMILConfig stays the source of truth for defaults;
     # explicitly-set overrides are layered on top (None values are dropped, so an
     # unset flag can never pull this arm onto the shared schedule).
-    cfg = apply_overrides(cfg, overrides_from_exp_cfg(exp_cfg), arm="abmil")
+    cfg = apply_overrides(cfg, all_overrides(exp_cfg), arm="abmil")
     torch_device = torch.device(device)
 
     # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
