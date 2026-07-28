@@ -86,7 +86,9 @@ class TestTrainConfig:
     def test_defaults(self):
         t = TrainConfig()
         assert t.max_epochs == 200
-        assert t.lr == 2e-4
+        # 2026-07-28: returned to CLAM's own upstream default (lib/CLAM/main.py:74);
+        # was 2e-4, a 2x deviation with no recorded rationale (see provenance.py).
+        assert t.lr == 1e-4
         assert t.early_stopping is True
         assert t.weighted_sample is True
         assert t.seed == 42

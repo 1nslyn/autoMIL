@@ -254,7 +254,8 @@ def test_train_field_override_via_train_config(tmp_path):
     _write_applied_variant_json(automil_dir, variant_name=name, parent=parent)
 
     exp_cfg = _minimal_exp_cfg()
-    assert exp_cfg.train.lr == 2e-4  # default
+    # 2026-07-28: TrainConfig.lr default returned to CLAM upstream 1e-4 (was 2e-4).
+    assert exp_cfg.train.lr == 1e-4  # default
 
     apply_model_variant_to_exp_cfg(exp_cfg, automil_dir)
 
