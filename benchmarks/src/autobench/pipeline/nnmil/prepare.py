@@ -1,5 +1,6 @@
 """Generate nnMIL dataset artifacts (dataset.json, dataset.csv, dataset_plan.json).
 
+
 We generate ``dataset_plan.json`` ourselves (not using nnMIL's ExperimentPlanner)
 to control splits precisely -- ensuring they match the shared split CSVs used by
 CLAM.  We DO use nnMIL's ``ClassificationTrainer`` for actual training.
@@ -13,6 +14,8 @@ import os
 import h5py
 import numpy as np
 import pandas as pd
+
+from autobench.pipeline.hparams import apply_overrides_to_plan
 
 
 def nnmil_plan_dir(
@@ -47,6 +50,7 @@ def prepare_nnmil_experiment(
     seed: int = 42,
     n_splits: int = 5,
     *,
+    hparam_overrides: dict | None = None,
     task_type: str = "classification",
     event_col: str | None = None,
     time_col: str | None = None,
@@ -158,7 +162,10 @@ def prepare_nnmil_experiment(
         **dataset_json,
         "feature_statistics": feature_stats,
         "data_splits": data_splits,
-        "training_configuration": _generate_training_config(
+        "training_configuration": apply_overrides_to_plan(
+            # H-3: nnMIL self-configures from data stats; overrides layer on
+            # top so batch size / warmup / conditional wd stay adaptive.
+            _generate_training_config(
             feature_stats,
             len(task_df),
             n_classes=(None if is_survival else len(label_dict)),
@@ -170,6 +177,8 @@ def prepare_nnmil_experiment(
             task_type=task_type,
             survival_loss=survival_loss,
             nll_bins=nll_bins,
+            ),
+            hparam_overrides,
         ),
         "random_seed": seed,
     }

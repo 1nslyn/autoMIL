@@ -21,6 +21,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from autobench import LIB_ROOT
+from autobench.pipeline.hparams import apply_overrides, overrides_from_exp_cfg
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
@@ -124,6 +125,14 @@ def train_titan_survival_fold(
     """
     if head_cfg is None:
         head_cfg = TitanHeadConfig()
+    # H-3: TitanHeadConfig stays the source of truth for lr/weight_decay/
+    # patience; layer on only the explicitly-set overrides. max_epochs and
+    # early_stopping are deliberately excluded — this arm reads those straight
+    # off exp_cfg.train (its documented mixed provenance), so routing them here
+    # would double-apply and trip the fail-loud guard.
+    _titan_ov = {k: v for k, v in overrides_from_exp_cfg(exp_cfg).items()
+                 if k not in ("max_epochs", "early_stopping")}
+    head_cfg = apply_overrides(head_cfg, _titan_ov, arm="titan")
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
