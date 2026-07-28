@@ -18,7 +18,13 @@ import pytest
 pd = pytest.importorskip("pandas")
 pytest.importorskip("matplotlib")
 
-SCRIPT = os.path.join(os.path.dirname(__file__), "make_figures.py")
+# Moved out of paper/preprint/figures/ (2026-07-28): pyproject's testpaths is
+# ["tests"] and benchmarks/tests is the autobench gate, so a test sitting beside
+# the figure scripts was auto-discovered by neither and silently never ran.
+SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "paper", "preprint", "figures", "make_figures.py",
+)
 
 
 def _results_rows():
