@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Generate ILLUSTRATIVE MOCK figures for the autoMIL preprint.
 
+LAYOUT-ONLY (FIG-0): this script is superseded by ``make_figures.py`` for any
+figure that has a real-data producer -- currently ``fig1_leaderboard_heatmap``
+and ``fig4_survival_cindex``. Those two remain here only as the fabricated
+reference layout; regenerate the real versions with
+``python paper/preprint/figures/make_figures.py --results <csv> --per-fold <csv>``.
+``fig2``/``fig3``/``fig5`` have no real-data producer yet (Fig 2's headline
+claim is dropped per ``READINESS-2026-07-28.md``; Fig 3/5 need the agentic
+search layer), so this script is still their only source.
+
 Every number here is fabricated to show *figure layout and intent*, anchored
 only loosely to the May-baseline AUC ranges. NONE of these are real results.
 Regenerate: `python paper/preprint/figures/make_mock_figures.py`.
