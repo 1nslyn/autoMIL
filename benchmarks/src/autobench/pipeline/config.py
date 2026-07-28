@@ -102,6 +102,12 @@ class ExperimentConfig:
     n_folds: int = 5
     framework: Framework = Framework.CLAM
     strategy: str = "standard"
+    # DATA-ID: dataset identity was recorded in NO results artifact — dataset
+    # existed only as a filesystem path, so summary.json / aggregated/*.csv
+    # carried task/encoder/model/framework/seed but never which cohort
+    # produced them. Defaulted to "" so existing constructions (tests, ad-hoc
+    # scripts) do not break.
+    dataset: str = ""
     # Survival loss variant (cox/mse/mae/nllsurv). None for classification —
     # kept None so classification experiment_id / results_subdir are byte-
     # identical to pre-survival behaviour (no result-dir migration).
@@ -163,6 +169,10 @@ class ExperimentConfig:
 
 @dataclass
 class BenchmarkConfig:
+    # DATA-ID: which cohort this benchmark run belongs to (populated from
+    # DatasetConfig.name in from_dataset_config below), threaded into every
+    # generated ExperimentConfig so results are attributable across cohorts.
+    dataset: str = ""
     benchmark_dir: str = ""
     mapping_csv: str = ""
     features_base_dir: str = ""
@@ -191,6 +201,7 @@ class BenchmarkConfig:
     def from_dataset_config(cls, ds: DatasetConfig, **overrides) -> BenchmarkConfig:
         """Create a BenchmarkConfig pre-populated from a DatasetConfig."""
         defaults = {
+            "dataset": ds.name,
             "benchmark_dir": ds.benchmark_dir,
             "mapping_csv": ds.mapping_csv,
             "features_base_dir": ds.features_base_dir,
@@ -434,6 +445,7 @@ def generate_all_experiments(
                                 framework=framework,
                                 strategy=strategy,
                                 survival_loss=survival_loss,
+                                dataset=cfg.dataset,
                             )
                             if exp.experiment_id not in seen_ids:
                                 experiments.append(exp)

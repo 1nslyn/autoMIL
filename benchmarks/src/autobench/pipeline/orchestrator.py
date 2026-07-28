@@ -200,6 +200,7 @@ def aggregate_results(summaries: list[dict]) -> pd.DataFrame:
     rows: list[dict] = []
     for s in summaries:
         row = {
+            "dataset": s.get("dataset", ""),
             "framework": s.get("framework", "clam"),
             "strategy": s["strategy"],
             "task": s["task"],

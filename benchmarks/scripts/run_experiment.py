@@ -309,6 +309,7 @@ def main() -> None:
         strategy=args.strategy,
         survival_loss=survival_loss,
         hparam_overrides=_parse_hparams(args.hparams),
+        dataset=ds.name,  # DATA-ID: prefer the resolved DatasetConfig name over args.dataset
         **_exp_kwargs,
     )
 

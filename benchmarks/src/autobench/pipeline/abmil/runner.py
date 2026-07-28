@@ -143,6 +143,7 @@ def run_abmil_experiment(
     elapsed_seconds_total = sum(fr.get("elapsed_seconds", 0) or 0 for fr in fold_results)
 
     exp_summary = {
+        "dataset": exp_cfg.dataset,
         "experiment_id": exp_cfg.experiment_id,
         "task": exp_cfg.task.name,
         "encoder": exp_cfg.encoder_key,
