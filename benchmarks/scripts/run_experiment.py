@@ -88,9 +88,52 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n_folds", type=int, default=None)
     p.add_argument("--patience", type=int, default=None)
     p.add_argument("--stop_epoch", type=int, default=None)
+    # H-3b: these two had no flag at all, so they were reachable only through a
+    # registered variant's CLAM_ARGS.
+    p.add_argument("--weight_decay", type=float, default=None)
+    p.add_argument("--early_stopping", dest="early_stopping",
+                   action="store_const", const=True, default=None)
+    p.add_argument("--no_early_stopping", dest="early_stopping",
+                   action="store_const", const=False)
+    # H-3b: the opaque per-arm channel. The shared transport is CLAM-shaped, so
+    # DTFD's numGroup, ABMIL's M/L and nnMIL's warmup_epochs have no flag to
+    # travel in — and adding a flag per arm-specific knob would be both endless
+    # and asymmetric. A JSON object keeps the channel arm-agnostic; each name is
+    # checked against that arm's DECLARED search space (search_space.py), so an
+    # undeclared knob fails loudly rather than being silently dropped.
+    #
+    # Note this is a *value*, not a bare flag: `--override "--numGroup 8"` would
+    # reach argparse as an unrecognised flag and SystemExit(2) the run, which is
+    # how this asymmetry stayed invisible.
+    p.add_argument(
+        "--hparams", type=str, default=None,
+        help='JSON object of arm-specific hyperparameter overrides, '
+             'e.g. \'{"numGroup": 8, "grad_clip": 1.0}\'',
+    )
     p.add_argument("--no_wandb", action="store_true")
 
     return p.parse_args()
+
+
+def _parse_hparams(raw: str | None) -> dict:
+    """Parse --hparams, failing loudly on anything that is not a flat JSON object."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--hparams is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SystemExit(
+            f"--hparams must be a JSON object mapping knob -> value, got "
+            f"{type(parsed).__name__}"
+        )
+    bad = [k for k, v in parsed.items() if isinstance(v, (dict, list))]
+    if bad:
+        raise SystemExit(
+            f"--hparams values must be scalars; nested value(s) for {sorted(bad)}"
+        )
+    return parsed
 
 
 def summary_to_result_json(summary: dict, elapsed: float) -> dict:
@@ -239,6 +282,8 @@ def main() -> None:
         "seed": args.seed,
         "patience": args.patience,
         "stop_epoch": args.stop_epoch,
+        "weight_decay": args.weight_decay,
+        "early_stopping": args.early_stopping,
     }.items() if v is not None}
     train_cfg = TrainConfig(**_train_overrides)
 
@@ -263,6 +308,7 @@ def main() -> None:
         framework=framework,
         strategy=args.strategy,
         survival_loss=survival_loss,
+        hparam_overrides=_parse_hparams(args.hparams),
         **_exp_kwargs,
     )
 

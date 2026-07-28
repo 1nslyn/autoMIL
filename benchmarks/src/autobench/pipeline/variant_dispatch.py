@@ -192,7 +192,15 @@ def apply_model_variant_to_exp_cfg(exp_cfg, automil_dir: Path) -> None:
     # Step 4: apply CLAM_ARGS to ExperimentConfig fields (T-10-06: safe,
     # CLAM_ARGS is committed to git — registry-first invariant)
     # ------------------------------------------------------------------
+    # H-3b: a field that is on neither dataclass is no longer dropped to a log
+    # line. The shared transport is CLAM-shaped, so DTFD's `numGroup` and nnMIL's
+    # `warmup_epochs` legitimately live off it; they now route into the opaque
+    # channel, where `hparams.apply_overrides` checks them against that arm's
+    # DECLARED search space and raises if undeclared. Silently skipping was the
+    # H-3 defect — it made an agentic search report an untuned arm under a
+    # variant's label.
     clam_args: dict = getattr(variant_cls, "CLAM_ARGS", {})
+    hparams: dict = dict(getattr(variant_cls, "HPARAMS", {}) or {})
     for field, value in clam_args.items():
         if hasattr(exp_cfg.model, field):
             setattr(exp_cfg.model, field, value)
@@ -205,12 +213,17 @@ def apply_model_variant_to_exp_cfg(exp_cfg, automil_dir: Path) -> None:
                 "apply_model_variant_to_exp_cfg: set exp_cfg.train.%s = %r", field, value
             )
         else:
-            logger.warning(
-                "CLAM_ARGS field %r not found in ModelConfig or TrainConfig;"
-                " skipped (variant=%r)",
+            hparams.setdefault(field, value)
+            logger.debug(
+                "apply_model_variant_to_exp_cfg: %r is not on the shared transport;"
+                " routing to hparam_overrides (variant=%r)",
                 field,
                 variant_name,
             )
+    if hparams:
+        merged = dict(getattr(exp_cfg, "hparam_overrides", None) or {})
+        merged.update(hparams)
+        exp_cfg.hparam_overrides = merged
 
     logger.info(
         "apply_model_variant_to_exp_cfg: applied variant %r (parent=%r),"

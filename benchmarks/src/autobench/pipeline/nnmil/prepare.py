@@ -15,7 +15,6 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from autobench.pipeline.hparams import apply_overrides_to_plan
 
 
 def nnmil_plan_dir(
@@ -50,7 +49,6 @@ def prepare_nnmil_experiment(
     seed: int = 42,
     n_splits: int = 5,
     *,
-    hparam_overrides: dict | None = None,
     task_type: str = "classification",
     event_col: str | None = None,
     time_col: str | None = None,
@@ -162,10 +160,14 @@ def prepare_nnmil_experiment(
         **dataset_json,
         "feature_statistics": feature_stats,
         "data_splits": data_splits,
-        "training_configuration": apply_overrides_to_plan(
-            # H-3: nnMIL self-configures from data stats; overrides layer on
-            # top so batch size / warmup / conditional wd stay adaptive.
-            _generate_training_config(
+        # H-3b: the plan stays the pure self-configuration artifact. An earlier
+        # attempt applied hyperparameter overrides HERE, but the parameter had no
+        # production caller (so nnMIL's coverage was 0/11) and the plan cache keys
+        # on (strategy, task, encoder, survival_loss) with no hyperparameter
+        # component, so a second experiment would have inherited the first's
+        # values. Overrides are now layered in `nnmil/runner.py`, which
+        # materialises a derived plan inside that experiment's own results dir.
+        "training_configuration": _generate_training_config(
             feature_stats,
             len(task_df),
             n_classes=(None if is_survival else len(label_dict)),
@@ -177,8 +179,6 @@ def prepare_nnmil_experiment(
             task_type=task_type,
             survival_loss=survival_loss,
             nll_bins=nll_bins,
-            ),
-            hparam_overrides,
         ),
         "random_seed": seed,
     }

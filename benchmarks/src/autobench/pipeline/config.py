@@ -69,6 +69,14 @@ class ModelConfig:
     dropout: float = 0.25
     bag_weight: float = 0.7
     B: int = 8  # patches sampled for instance-level training
+    # H-3b: CLAM's instance-clustering branch. These were hardcoded in
+    # `_make_clam_args`, so three live upstream knobs (core_utils.py:117 bag_loss,
+    # :141 inst_loss, :185 no_inst_cluster) sat outside the search space while the
+    # rest of CLAM's surface sat inside it. Defaults reproduce the hardcoded
+    # values exactly, so no dispatched experiment changes.
+    bag_loss: str = "ce"              # "ce" | "svm"
+    inst_loss: str | None = None      # None | "svm" | "ce"
+    no_inst_cluster: bool = False     # True disables CLAM's instance-clustering
 
 
 @dataclass
@@ -98,6 +106,13 @@ class ExperimentConfig:
     # kept None so classification experiment_id / results_subdir are byte-
     # identical to pre-survival behaviour (no result-dir migration).
     survival_loss: str | None = None
+    # H-3b: the opaque per-arm override channel. The shared transport above is
+    # CLAM-shaped, so DTFD's `numGroup`, ABMIL's `M`/`L` and nnMIL's
+    # `warmup_epochs` have no field to travel in. This dict carries them by name;
+    # `hparams.apply_overrides` checks each against the arm's DECLARED search
+    # space (search_space.py) and raises on anything undeclared or locked.
+    # Empty by default, so a plain grid run is byte-identical to before.
+    hparam_overrides: dict = field(default_factory=dict)
 
     @property
     def is_survival(self) -> bool:

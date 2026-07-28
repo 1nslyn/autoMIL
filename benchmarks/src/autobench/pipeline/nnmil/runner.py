@@ -8,6 +8,7 @@ import os
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.hparams import all_overrides, apply_overrides_to_plan
 from autobench.pipeline.nnmil.prepare import nnmil_plan_dir
 from autobench.pipeline.nnmil.train import train_nnmil_fold
 from autobench.pipeline.results_cache import resolve_results_dir
@@ -55,10 +56,34 @@ def run_nnmil_experiment(
     # resolve the plan first, then fingerprint the results dir against it. A plan
     # regenerated from different data statistics now invalidates the cache.
     with open(plan_path) as f:
-        _plan_training_cfg = json.load(f).get("training_configuration")
+        _plan = json.load(f)
+    _plan_training_cfg = _plan.get("training_configuration") or {}
+
+    # H-3b: nnMIL was the ONE arm with zero reachable knobs — `prepare_nnmil_
+    # experiment` declared a `hparam_overrides` parameter and forwarded it
+    # internally, but no production caller ever passed one, so all 11 of its
+    # knobs were untunable while CLAM's whole surface was tunable.
+    #
+    # Overrides are layered here rather than at prep time, on purpose. The shared
+    # plan stays the pure *self-configuration* artifact (so its cache key needs no
+    # hyperparameter component, and concurrent experiments cannot fight over it),
+    # and a tuned run materialises its own derived plan inside its own results
+    # directory — which is also where the provenance belongs.
+    _overrides = all_overrides(exp_cfg)
+    if _overrides:
+        _plan_training_cfg = apply_overrides_to_plan(
+            _plan_training_cfg, _overrides, arm="nnmil",
+        )
+
     results_dir = resolve_results_dir(
         exp_cfg, benchmark_dir, results_dir, arm_cfg=_plan_training_cfg,
     )
+
+    if _overrides:
+        _plan["training_configuration"] = _plan_training_cfg
+        plan_path = os.path.join(results_dir, "dataset_plan.json")
+        with open(plan_path, "w") as f:
+            json.dump(_plan, f, indent=2)
 
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 
