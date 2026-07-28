@@ -184,3 +184,79 @@ Four of five runners (nnMIL/ABMIL/DTFD/TITAN) resume a fold from `benchmark_dir/
 ---
 
 *Provenance: 6 adversarial streams (rigor/leakage, fairness, novelty, orchestrator-daemon, graph/scoring, benchmark-pipeline); graph & daemon findings include harness reproductions; CR-1, CR-2, CR-3 additionally hand-verified by the synthesizer. Companion to `paper/preprint/PRELAUNCH_REVIEW.md`.*
+
+---
+
+# Addendum — Claim-level analysis (2026-07-23)
+
+Written after the per-arm search-space audit (H-3b). The findings above are
+code defects; this section maps them onto the **eight figures / claims** in
+`EXPERIMENT_GRID.md §4`, and adds claim-level problems that only appear once the
+code findings are combined with the experiment plan.
+
+## The load-bearing failure: Fig 2's own caveat is broken
+
+`EXPERIMENT_GRID.md §4` states the headline's escape clause verbatim:
+
+> "this claim is only fair **after** the agentic recipe search equalises recipe
+> effort — otherwise a reviewer says the aggregator gap is just under-tuning.
+> Fig 2 + Fig 3 must be read together."
+
+So Fig 2 (headline: encoder ≫ aggregator) is defended by Fig 3 (equal-effort
+search). **H-3b breaks exactly that defence**: search-space coverage is 100% for
+CLAM and 33% for DTFD, so Fig 3 cannot equalise effort. Fig 2 loses its stated
+justification and Fig 3 is itself confounded — the paper's headline AND its
+framework contribution fail together, and the bias direction is *predictable*
+(a ranking flip toward CLAM is the artifact H-3b predicts, not a finding).
+
+## Per-figure status
+
+| Fig | Claim | Blocking problems |
+|---|---|---|
+| **1** | corrected benchmark is complete | hyperparameter provenance (CLAM 2× upstream lr, ABMIL 3 knobs off); H-5a K=5 bootstrap CI; H-5b no multiple-comparison control. H-8 fixed. |
+| **2** | **headline:** encoder ≫ aggregator | O1 (own 210-config data says the reverse); O3 (encoder axis = 3 near-identical PFMs); **H-3b confounds the aggregator axis**; **single-seed mixed-effects cannot separate seed noise from the variance components it reports** |
+| **3** | **framework:** equal-effort search lifts / flips rankings | **H-3b (equal effort not achievable)**; H-2 (time budget, not eval-count); CR-4 (δ=0 winner's curse, +0.1–0.2 = 5–10× the target effect); lift must be reported on sealed test, not val; **anchors invalid — see A-1** |
+| **4** | TITAN wins slide-level | **TITAN is excluded from the agentic search** (§3.3 "omits the 5 TITAN classification arms") → after the search, tile arms improve and TITAN does not, so this claim can reverse for a reason unrelated to model quality — and if it survives, it survives unfairly. TITAN has only 4 knobs, so "equal effort" is meaningless for a linear probe. GBM/PDAC survival cells sit at ~2 events/fold. |
+| **5** | test-quarantine discipline | this figure exists to demonstrate the firewall — but the firewall was **not** intact before this audit (composite trusted verbatim CR-1b; run.log leak H-1). **No pre-fix `graph.json` can be used**; it needs a fresh run on the repaired pipeline. |
+| **7** | reproduces published SOTA | direct contradiction: CLAM runs at **2× its upstream learning rate**, so a protocol-parity claim against GOLDMARK is unsound until that is resolved or disclosed. Data also not yet pulled. |
+
+## New claim-level findings
+
+**A-1 · Fig 3's feasibility anchors are off-roster and pre-fix.**
+Fig 3 leans on the CCRCC / ovarian-HRD agentic runs as anchors. Neither cohort is
+in the post-pivot roster (LUAD/LGG/GBM/PDAC/HNSC), and their `learnings.md` is
+dated 2026-06-24 — **before every fix in this audit** (CR-1b composite
+derivation, CR-3 survival signal, CR-5 results-cache isolation, H-1 log
+firewall). Anchors produced by an unrepaired pipeline cannot support the figure.
+
+**A-2 · The search space is never declared.**
+The plan says "architecture-preserving, recipe-only", but there is no
+machine-readable per-arm searchable set anywhere. The de-facto search space is
+"whatever the transport happens to carry" — accidental, and CLAM-shaped (H-3b).
+The methods section cannot state what was searched. Note the target is a
+*declared* set, not literally 100% coverage: DTFD's `distill` is deliberately
+locked to AFS for a correctness reason, so some knobs should stay unreachable
+**by declaration**.
+
+**A-3 · Equal evaluation count does not equalise search difficulty.**
+Even with coverage fixed, DTFD's 15-dimensional space and TITAN's 4-dimensional
+space do not reach comparable optimisation quality at the same N. "Equal effort"
+measured in evaluations equalises *spend*, not *difficulty*. This needs a stated
+position (scale budget with dimensionality, or report only anytime curves and
+decline the point claim).
+
+**A-4 · The two modification channels contradict each other.**
+Route 1 (CLI / variant args): coverage is asymmetric → unfair search.
+Route 2 (agent edits config files directly): coverage is complete, but
+architecture-preservation is unenforced (`registry.protected` ships empty, no
+roster overlay exists) → the "recipe-only" constraint is unverified.
+**Neither route currently supports the claim.**
+
+## Decisions this forces (research, not code)
+
+1. Fig 4: include TITAN in the search, or state that it is unsearched and drop
+   the head-to-head framing.
+2. Fig 3: re-run the anchors on the repaired pipeline, on roster cohorts.
+3. Fig 2: multi-seed, or stop reporting variance components.
+4. Fig 7 / Fig 1: return CLAM to upstream lr (invalidates the dispatched grid),
+   or keep and disclose — but "reproduces SOTA" is unavailable under the latter.
