@@ -38,6 +38,7 @@ def get_or_create_cell(
     safety_buffer_seconds: int,
     idle_grace_seconds: int = 300,
     mode: str = "agent_active",
+    task: str | None = None,
 ) -> Cell:
     """Return existing cell or create a new one (lazy + idempotent, D-116, REC-04).
 
@@ -56,9 +57,12 @@ def get_or_create_cell(
         safety_buffer_seconds: refusing-new lead time; honored only on creation.
         idle_grace_seconds: agent-active idle grace; honored only on creation.
         mode: "agent_active" or "wall_clock"; honored only on creation.
+        task: M-14 — participates in cell identity so a cohort's classification
+            and survival searches do not share (and starve) one budget. None
+            reproduces the legacy 3-tuple id.
     """
     cells_dir = _cells_dir()
-    cell_id = make_cell_id(dataset, encoder, mil_model)
+    cell_id = make_cell_id(dataset, encoder, mil_model, task)
     path = cells_dir / f"{cell_id}.json"
     if path.exists():
         cell = read_cell(path)

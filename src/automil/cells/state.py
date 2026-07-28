@@ -96,17 +96,28 @@ class Cell:
     evaluated this cell. ``None`` is treated as ``started_at`` on the first tick."""
 
 
-def make_cell_id(dataset: str, encoder: str, mil_model: str) -> str:
-    """Return a 16-char deterministic hex id for the (dataset, encoder, mil_model) triple.
+def make_cell_id(dataset: str, encoder: str, mil_model: str,
+                 task: str | None = None) -> str:
+    """Return a 16-char deterministic hex id for a budget cell.
 
     mil_model must be pre-normalized via normalize_mil_model() before calling (D-14).
     Same input always maps to the same id — re-submits join the existing cell.
     Collision space: ~6.4×10¹⁹ (sha256 prefix, 64-bit).
 
+    M-14 (audit 2026-07-23): ``task`` participates in the identity when supplied.
+    Without it, a cohort's classification search and its survival search shared one
+    budget, so whichever ran first drained the clock and starved the other. ``None``
+    reproduces the legacy 3-tuple id exactly, so existing cells keep their ids.
+
     >>> make_cell_id("ccrcc", "uni-v2", "clam_sb") == make_cell_id("ccrcc", "uni-v2", "clam_sb")
     True
+    >>> make_cell_id("luad", "uni_v2", "clam mb", "kras") != make_cell_id("luad", "uni_v2", "clam mb", "os")
+    True
     """
-    return hashlib.sha256(f"{dataset}|{encoder}|{mil_model}".encode("utf-8")).hexdigest()[:16]
+    key = f"{dataset}|{encoder}|{mil_model}"
+    if task:
+        key = f"{key}|{task}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
 def normalize_mil_model(raw: str) -> str:

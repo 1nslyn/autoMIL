@@ -31,7 +31,7 @@ Branch: `fix/audit-2026-07-23`. Updated as each fix lands.
 | M-5 | orphan recovery writes crash artifacts but never updates graph.json | MED | ☐ | | route through locked_update + mark_failed |
 | M-6 | crash window in _launch (Popen before running-spec persist) | MED | ☐ | | persist running spec before/atomically-with Popen |
 | M-7 | daemon terminal path never maintains total_executed/total_proposed | MED | ☐ | | increment counters in write_terminal_state on first transition |
-| M-14 | budget cell key omits task → classification & OS share budget | MED | ☐ | | include task in make_cell_id |
+| M-14 | budget cell key omits task → classification & OS share budget | MED | ☑ | `cells/state.py`+`cells/registry.py`+`cli/submit.py` | `make_cell_id` takes an optional `task` (submit reads `task.name` from config.yaml). `None`/empty reproduces the legacy 3-tuple id exactly, so existing cells keep their ids. 4 new tests; 136 regression green. |
 
 ## Gate 2 — before any headline claim (statistics/reporting)
 
