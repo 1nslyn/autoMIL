@@ -19,6 +19,8 @@ import tokenize
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from automil.scoring import DEFAULT_FORMULA as _DEFAULT_SCORING_FORMULA
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,6 +68,26 @@ def _config_accept_margin(graph_path) -> float | None:
         return max(0.0, float(raw)) if raw is not None else None   # clamp negative δ
     except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
         logger.warning("Could not read scoring.accept_margin from %s: %s", config_path, exc)
+        return None
+
+
+def _config_scoring_formula(graph_path) -> str | None:
+    """Best-effort read of ``scoring.formula`` from the sibling config.yaml (CR-1b).
+
+    Lets an operator predeclare the composite reducer per-dataset. Returns None
+    when there is no config or the key is absent (callers fall back to the
+    framework default). The graph stays config-agnostic everywhere else.
+    """
+    config_path = Path(graph_path).parent / "config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        import yaml
+        cfg = yaml.safe_load(config_path.read_text()) or {}
+        raw = (cfg.get("scoring") or {}).get("formula")
+        return str(raw) if raw else None
+    except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
+        logger.warning("Could not read scoring.formula from %s: %s", config_path, exc)
         return None
 
 
@@ -148,6 +170,9 @@ class ExperimentGraph:
         )
         _cfg_margin = None if _has_margin else _config_accept_margin(self.path)
         _default_margin = _cfg_margin if _cfg_margin is not None else 0.0
+        # CR-1b: the composite reducer, predeclarable per-dataset in config.yaml.
+        _cfg_formula = _config_scoring_formula(self.path)
+        _default_formula = _cfg_formula if _cfg_formula else _DEFAULT_SCORING_FORMULA
         defaults = {
             "schema_version": 2,
             "meta": {
@@ -161,6 +186,7 @@ class ExperimentGraph:
                     "exploration_weight": 0.005,
                     "novelty_weight": 0.003,
                     "accept_margin": _default_margin,
+                    "formula": _default_formula,
                 },
             },
             "nodes": {},
