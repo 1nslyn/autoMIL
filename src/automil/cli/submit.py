@@ -400,6 +400,11 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     from automil.cells.state import normalize_mil_model
     _mil_model_norm = normalize_mil_model(_mil_model_raw)
 
+    # M-14 (audit 2026-07-23): the task participates in cell identity, so a
+    # cohort's classification and survival searches get separate budgets instead
+    # of the first one to run draining the shared clock. Absent task.name keeps
+    # the legacy 3-tuple identity.
+    _task_name = _cfg_path(_automil_cfg, "task", "name")
     _cell = get_or_create_cell(
         dataset=_dataset_name,
         encoder=_encoder_name,
@@ -408,6 +413,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         safety_buffer_seconds=_cap.safety_buffer_seconds,
         idle_grace_seconds=_cap.idle_grace_seconds,
         mode=_cap.mode,
+        task=_task_name if _task_name != _dataset_name else None,
     )
     if is_refusing_new(_cell):
         raise click.ClickException(
