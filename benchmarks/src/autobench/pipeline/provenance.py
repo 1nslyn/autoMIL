@@ -29,6 +29,20 @@ ABMIL's optimizer are inherited-by-accident rather than chosen, and they sit on
 the aggregator axis — the axis the preprint's headline compares. Whether to
 return them to upstream or keep them and disclose is a decision to make
 deliberately; either is defensible, silence is not.
+
+Resolution (2026-07-28): decided and executed — return to upstream for both.
+CLAM's lr moves 2e-4 -> 1e-4 (lib/CLAM/main.py:74); ABMIL's lr/weight_decay/
+max_epochs move 2e-4/1e-5/200 -> 5e-4/1e-4/20 (lib/AttentionDeepMIL/main.py:
+16-21). Both now report ``matches_upstream=True`` below. This does not retire
+the disclosure obligation: ABMIL's 20-epoch schedule is still upstream's toy
+MNIST-bags value, arguably not transferable to WSI training, and it now makes
+``patience=20`` equal to ``max_epochs``, which effectively disables early
+stopping — see ``abmil/config.py``'s docstring, which states both explicitly.
+Any dispatched CLAM/ABMIL run trained under the old schedule is stale: it must
+be purged and re-run, and CR-5b's results-cache fingerprint guard will refuse
+to silently resume those folds (it raises ``StaleResultsCacheError`` naming
+the changed field and prints the ``rm -rf`` purge command) rather than
+reporting the old numbers back as if nothing changed.
 """
 from __future__ import annotations
 
@@ -52,26 +66,31 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
     ArmProvenance(
         arm="clam",
         source="shared TrainConfig (autobench.pipeline.config)",
-        matches_upstream=False,
+        matches_upstream=True,
         note=(
-            "VERIFIED against lib/CLAM/main.py: lr=2e-4 DEVIATES from upstream "
-            "default 1e-4 (2x) with no recorded rationale. Everything else matches "
-            "upstream: reg/weight_decay 1e-5, max_epochs 200, drop_out 0.25, "
-            "bag_weight 0.7, B=8. So CLAM is upstream-faithful EXCEPT the lr."
+            "RESOLVED 2026-07-28 (was lr=2e-4 DEVIATING from upstream default "
+            "1e-4, lib/CLAM/main.py:74, 2x with no recorded rationale): lr "
+            "changed to 1e-4. Everything else already matched upstream: "
+            "reg/weight_decay 1e-5, max_epochs 200, drop_out 0.25, bag_weight "
+            "0.7, B=8. CLAM is now fully upstream-faithful."
         ),
     ),
     ArmProvenance(
         arm="abmil",
         source="ABMILConfig (abmil/config.py)",
-        matches_upstream=False,
+        matches_upstream=True,
         note=(
-            "VERIFIED against lib/AttentionDeepMIL: architecture is paper-exact "
-            "(M=500, L=128), but ALL THREE optimizer settings deviate — upstream "
-            "lr=5e-4 (here 2e-4), reg=1e-4 (here weight_decay 1e-5), epochs=20 "
-            "(here 200, a 10x change). Note upstream ABMIL is a toy MNIST-bags "
-            "experiment, so its 20 epochs is arguably not transferable to WSI "
-            "training — but that is a rationale to STATE, not to leave implicit. "
-            "This is the largest deviation of any arm."
+            "RESOLVED 2026-07-28 (was deviating on ALL THREE optimizer settings "
+            "— lr=2e-4 vs upstream 5e-4, weight_decay=1e-5 vs upstream 1e-4, "
+            "max_epochs=200 vs upstream 20, a 10x change, lib/AttentionDeepMIL/"
+            "main.py:16-21): all three changed to upstream's own values. "
+            "Architecture stays paper-exact (M=500, L=128) — unaffected either "
+            "way. Caveat carried forward, not resolved: upstream's 20 epochs is "
+            "a toy MNIST-bags value, arguably not transferable to WSI training "
+            "— reproduced faithfully and disclosed (abmil/config.py docstring) "
+            "rather than silently overridden. That also makes patience=20 equal "
+            "max_epochs, effectively disabling early stopping; patience itself "
+            "is unchanged, not a newly chosen value."
         ),
     ),
     ArmProvenance(

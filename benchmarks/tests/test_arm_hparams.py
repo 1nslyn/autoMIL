@@ -45,15 +45,22 @@ class TestNoOverrideLeavesDefaultsExactlyAlone:
 
     def test_dtfd_keeps_its_paper_exact_values_without_an_override(self):
         """The regression that would have been catastrophic: threading the shared
-        defaults through would silently retune DTFD (lr 1e-4 -> 2e-4, wd 1e-4 ->
-        1e-5) and invalidate every dispatched DTFD run."""
+        defaults through would silently retune DTFD's weight decay (wd 1e-4 ->
+        1e-5) and invalidate every dispatched DTFD run. (Post-2026-07-28,
+        TrainConfig.lr is also 1e-4 -- the same as DTFD's own value by
+        coincidence, not because DTFD reads TrainConfig -- so an lr leak would
+        no longer show up as a numeric difference here; wd is what still
+        catches it.)"""
         out = apply_overrides(DTFDConfig(), overrides_from_exp_cfg(_ExpCfgStub(TrainConfig())))
         assert out.lr == 1e-4
         assert out.wd == 1e-4
 
     def test_abmil_keeps_its_own_values_without_an_override(self):
+        """2026-07-28: ABMILConfig's own defaults moved to its upstream values
+        (lr=5e-4, weight_decay=1e-4, lib/AttentionDeepMIL/main.py:18-20) --
+        this asserts they survive a no-op override untouched, same as always."""
         out = apply_overrides(ABMILConfig(), overrides_from_exp_cfg(_ExpCfgStub(TrainConfig())))
-        assert (out.lr, out.weight_decay, out.dropout) == (2e-4, 1e-5, 0.0)
+        assert (out.lr, out.weight_decay, out.dropout) == (5e-4, 1e-4, 0.0)
 
 
 class TestExplicitOverrideReachesEveryArm:

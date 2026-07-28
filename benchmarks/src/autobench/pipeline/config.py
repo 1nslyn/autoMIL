@@ -82,7 +82,11 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     max_epochs: int = 200
-    lr: float = 2e-4
+    # 2026-07-28: returned to CLAM's own upstream default (lib/CLAM/main.py:74,
+    # `--lr default=1e-4`). Was 2e-4, a 2x deviation with no recorded rationale
+    # (see provenance.py). CLAM reads this field directly (clam/train.py); no
+    # other arm consumes TrainConfig.lr, so this is CLAM-only in effect.
+    lr: float = 1e-4
     weight_decay: float = 1e-5
     optimizer: str = "adam"
     early_stopping: bool = True
