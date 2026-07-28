@@ -10,16 +10,25 @@ What this records is the answer to a question a reviewer will ask and the code
 previously could not answer: *where does each arm's schedule come from, and does
 it match that method's published defaults?*
 
-Audit finding (2026-07-23): only DTFD is paper-exact. In particular **CLAM runs at
-2x its own upstream default learning rate** (2e-4 vs ``CLAM/main.py:74`` = 1e-4)
-with no recorded rationale, and nnMIL trains for 100 epochs where every other arm
-uses 200. That is a real confound on the aggregator axis — the axis the preprint's
-headline compares — and it is a decision to be made deliberately, not a default to
-be inherited by accident.
+Audit finding (2026-07-23), after checking every vendored package under
+``benchmarks/lib/`` field by field:
 
-Keep the strings below in sync with the arm configs when a value is changed on
-purpose; ``tests/test_arm_provenance.py`` pins them against the live configs so a
-silent drift fails the suite.
+  DTFD   faithful — every value reproduced from Main_DTFD_MIL.py
+  nnMIL  faithful — 3e-4/1e-4 + 100 epochs ARE nnMIL's own trainer defaults
+  CLAM   deviates on ONE knob: lr=2e-4 vs upstream 1e-4 (2x), no rationale
+  ABMIL  deviates on ALL THREE optimizer settings (lr, reg, epochs 20 -> 200)
+  TITAN  n/a — a linear probe with no upstream training recipe
+
+Two of these correct an earlier, less careful reading: nnMIL was initially
+recorded as deviating (it does not — 100 epochs is its own design, not a
+benchmark choice), and ABMIL's deviation was understated (it is the largest of
+any arm, not a minor schedule difference).
+
+The surviving concern is unchanged in kind but narrower in scope: CLAM's lr and
+ABMIL's optimizer are inherited-by-accident rather than chosen, and they sit on
+the aggregator axis — the axis the preprint's headline compares. Whether to
+return them to upstream or keep them and disclose is a decision to make
+deliberately; either is defensible, silence is not.
 """
 from __future__ import annotations
 
@@ -45,9 +54,10 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
         source="shared TrainConfig (autobench.pipeline.config)",
         matches_upstream=False,
         note=(
-            "lr=2e-4 DEVIATES from upstream CLAM main.py:74 default 1e-4 (2x), with "
-            "no recorded rationale. weight_decay=1e-5 matches upstream --reg "
-            "(main.py:78); max_epochs=200 matches (main.py:72)."
+            "VERIFIED against lib/CLAM/main.py: lr=2e-4 DEVIATES from upstream "
+            "default 1e-4 (2x) with no recorded rationale. Everything else matches "
+            "upstream: reg/weight_decay 1e-5, max_epochs 200, drop_out 0.25, "
+            "bag_weight 0.7, B=8. So CLAM is upstream-faithful EXCEPT the lr."
         ),
     ),
     ArmProvenance(
@@ -55,9 +65,13 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
         source="ABMILConfig (abmil/config.py)",
         matches_upstream=False,
         note=(
-            "Architecture is paper-exact (Ilse et al. 2018: M=500, L=128), but the "
-            "optimizer/schedule deliberately mirrors the shared benchmark schedule "
-            "rather than the paper's own optimizer settings."
+            "VERIFIED against lib/AttentionDeepMIL: architecture is paper-exact "
+            "(M=500, L=128), but ALL THREE optimizer settings deviate — upstream "
+            "lr=5e-4 (here 2e-4), reg=1e-4 (here weight_decay 1e-5), epochs=20 "
+            "(here 200, a 10x change). Note upstream ABMIL is a toy MNIST-bags "
+            "experiment, so its 20 epochs is arguably not transferable to WSI "
+            "training — but that is a rationale to STATE, not to leave implicit. "
+            "This is the largest deviation of any arm."
         ),
     ),
     ArmProvenance(
@@ -65,8 +79,9 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
         source="DTFDConfig (dtfd/config.py)",
         matches_upstream=True,
         note=(
-            "Paper-exact from the DTFD-MIL reference implementation: lr Main:29, "
-            "weight_decay Main:30, EPOCH Main:21. The only fully upstream arm."
+            "VERIFIED field-by-field against lib/DTFD-MIL/Main_DTFD_MIL.py: EPOCH=200, "
+            "lr=1e-4, weight_decay=1e-4, numGroup=4, total_instance=4, mDim=512, "
+            "grad_clipping=5 — all reproduced exactly. Fully upstream-faithful."
         ),
     ),
     ArmProvenance(
@@ -82,13 +97,15 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
     ArmProvenance(
         arm="nnmil",
         source="computed at prep time in nnmil/prepare.py, written to the plan JSON",
-        matches_upstream=False,
+        matches_upstream=True,
         note=(
-            "Self-configuring (nnU-Net style): batch size, warmup_epochs "
-            "(10 if n_train<500 else 5) and weight_decay (0.01 if hidden_dim>=512 "
-            "else 1e-4) are derived from data statistics. Uses 100 epochs where "
-            "every other arm uses 200, and a different lr per task type "
-            "(3e-4 classification / 1e-4 survival)."
+            "CORRECTED after verifying lib/nnMIL: these literals REPRODUCE nnMIL's "
+            "own upstream defaults — classification_trainer.py uses learning_rate "
+            "3e-4 + num_epochs 100; survival_porpoise_trainer.py uses 1e-4 + 100. "
+            "So the 100-epoch schedule and the per-task lr are nnMIL's design, NOT "
+            "a benchmark deviation. Self-configuring (nnU-Net style): batch size, "
+            "warmup_epochs and a conditional weight_decay are derived from data "
+            "statistics, extending upstream's fixed warmup default of 5."
         ),
     ),
 )
