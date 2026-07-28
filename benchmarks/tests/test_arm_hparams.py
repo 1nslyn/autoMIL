@@ -133,3 +133,58 @@ class TestExplicitOverridesHelper:
 
     def test_empty_when_all_none(self):
         assert explicit_overrides(lr=None, patience=None) == {}
+
+
+class TestAliasTableIsUnambiguous:
+    """The alias table must only ever contain 1:1 renames of the SAME knob.
+
+    Two concrete defects this pins down (both found by re-scanning the configs):
+      - ``dropout -> droprate`` silently tuned only DTFD's tier-1 classifier and
+        left ``droprate_2`` stale.
+      - ``EPOCH`` matched no field on any arm — dead and misleading.
+    """
+
+    def _all_arms(self):
+        from autobench.pipeline.titan.config import TitanHeadConfig
+        nnmil_plan = {"learning_rate": 3e-4, "num_epochs": 100, "warmup_epochs": 10,
+                      "weight_decay": 1e-4, "dropout": 0.25, "patience": 10}
+        return [TrainConfig(), ABMILConfig(), DTFDConfig(), TitanHeadConfig(), nnmil_plan]
+
+    def test_no_arm_matches_two_names_for_one_knob(self):
+        from dataclasses import fields as dc_fields, is_dataclass
+        from autobench.pipeline.hparams import FIELD_ALIASES
+        for cfg in self._all_arms():
+            avail = ({f.name for f in dc_fields(cfg)} if is_dataclass(cfg) else set(cfg))
+            for canon, cands in FIELD_ALIASES.items():
+                hits = [c for c in cands if c in avail]
+                assert len(hits) <= 1, f"{canon} ambiguous on {type(cfg).__name__}: {hits}"
+
+    def test_no_dead_aliases(self):
+        from dataclasses import fields as dc_fields, is_dataclass
+        from autobench.pipeline.hparams import FIELD_ALIASES
+        every = set()
+        for cfg in self._all_arms():
+            every |= ({f.name for f in dc_fields(cfg)} if is_dataclass(cfg) else set(cfg))
+        dead = [(c, a) for c, cands in FIELD_ALIASES.items() for a in cands if a not in every]
+        assert not dead, f"alias(es) matching no field anywhere: {dead}"
+
+    def test_generic_dropout_is_refused_on_dtfd(self):
+        """DTFD's droprate and droprate_2 are different knobs — refuse to guess."""
+        with pytest.raises(ValueError, match="cannot accept"):
+            apply_overrides(DTFDConfig(), {"dropout": 0.5}, arm="dtfd")
+
+    def test_dtfd_dropouts_are_tunable_by_their_real_names(self):
+        out = apply_overrides(DTFDConfig(), {"droprate": 0.5, "droprate_2": 0.3}, arm="dtfd")
+        assert (out.droprate, out.droprate_2) == (0.5, 0.3)
+
+    def test_ambiguous_config_raises_rather_than_picking_first(self):
+        from dataclasses import dataclass
+        from autobench.pipeline.hparams import _resolve_field
+
+        @dataclass
+        class Both:          # declares BOTH the canonical name and the alias
+            weight_decay: float = 1e-5
+            wd: float = 1e-4
+
+        with pytest.raises(ValueError, match="ambiguous"):
+            _resolve_field(Both(), "weight_decay")
