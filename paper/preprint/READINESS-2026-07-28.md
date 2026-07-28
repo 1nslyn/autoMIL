@@ -13,6 +13,27 @@ direct verification of every load-bearing claim in the main thread._
 
 ---
 
+> ## Scope — settled 2026-07-28 by Leo
+>
+> **The agentic recipe search IS the paper.** Without it there is no work. The
+> headline is Fig 3 (equal-effort search de-biases the leaderboard) with Fig 5 +
+> the gate as the rigor backbone; Figs 1/4 are the benchmark substrate the search
+> improves on.
+>
+> **The "encoder ≫ aggregator" claim is DROPPED.** It came from the Frontiers
+> precedent, not from us; it is contradicted by our own baseline; and neither axis
+> has a designed dynamic range. Fig 2 survives only as a descriptive variance
+> decomposition with no "≫" assertion, or not at all.
+>
+> **This voids:** A-0 (Fig 2 deferring to Fig 3), O1 (self-contradiction), §1.8
+> AXIS-RANGE, decision 8 (legacy encoder anchor — **no new experiments**), M-12.
+>
+> **This promotes:** CR-4 / H-5a / H-5b / multi-seed. The headline now rests
+> entirely on a per-cell lift selected on ~10 validation patients at δ=0.0 —
+> the winner's-curse case. Interval estimation is no longer optional.
+>
+> Ordering below in §3 is superseded by §3′.
+
 ## 0. Headline
 
 The code fixes on this branch are real and hold up. What this pass establishes is
@@ -332,7 +353,27 @@ Worth stating, because it is the part that does not need re-litigating:
 
 ---
 
-## 3. Critical path
+## 3′. Critical path — ordered by what blocks Fig 3 (settled scope)
+
+1. **CR-5b** (§1.1) — prerequisite for every re-run; today `--seed 43` silently
+   returns seed 42's numbers.
+2. **H-3b + A-2** (§1.2) — per-arm allowlist, connect nnMIL (0/11 today), an
+   override channel that does not `SystemExit(2)` on an arm-specific name, and a
+   **declared** per-arm searchable set. Without this a Fig-3 ranking flip toward
+   CLAM is a channel-width artifact, not a finding.
+3. **H-4 + VARIANT-MENU + HASH-0** (§1.3, §1.4) — the guarded code-level channel.
+   This is both the rigor backbone and the only thing supporting the paper's
+   "code-level search, not menu search" differentiator.
+4. **CELL-1 + H-2 + CAP-1** (§1.9) — "equal effort" must be measurable;
+   `cell_id` does not currently reach `graph.py` at all.
+5. **NO-OVERLAY** (§1.5) — five roster cohorts have no agentic overlay.
+6. **Statistics** — per-cell δ (CR-4), t₄/BCa (H-5a), Holm/BH (H-5b), multi-seed.
+   Promoted from optional: the headline is now a per-cell lift on ~10 val patients.
+7. **FIG-0 + DATA-ID** (§0) — the results→claims layer.
+8. **Upstream defaults** (decision 2, settled) + the grid re-run.
+9. Remaining MED/LOW backlog.
+
+## 3. Critical path (superseded by §3′ — kept for the reasoning)
 
 Ordered by what unblocks the most, not by severity.
 
@@ -356,9 +397,38 @@ Ordered by what unblocks the most, not by severity.
 
 ---
 
-## 4. Decisions required
+## 4. Decisions
 
-Beyond the six already in `HANDOFF.md`, this pass adds four. Marked **new**.
+**Settled 2026-07-28:**
+
+- **#7 Scope — the agentic search is the paper.** Full agentic headline (Fig 3 +
+  Fig 5). Not a static benchmark with a feasibility demo.
+- **#8 O1 — the "encoder ≫ aggregator" claim is dropped**, and **no new
+  experiments** are added (no legacy encoder anchor). This voids O1, A-0, §1.8 and
+  M-12 rather than resolving them.
+- **#1 + #2 Hyperparameter provenance — every arm returns to its own published
+  upstream defaults**, after CR-5b lands. CLAM lr 2e-4 → 1e-4; ABMIL → 5e-4 /
+  1e-4 / 20 epochs. Requires purging and re-running the dispatched grid
+  (≈40 GPU-h, training only). Restores the Fig 7 SOTA-parity claim as available.
+- **#5 Seeds — promoted from optional to required** by the scope decision: the
+  headline is a per-cell lift selected on ~10 validation patients at δ=0.0.
+  Blocked on CR-5b.
+
+**Still open:**
+
+- **#3** Fig 4: include TITAN in the agentic search, or drop the head-to-head
+  framing (A-5). TITAN has 4 knobs, so "equal effort" is ill-defined for it.
+- **#4** Fig 3: re-run the CCRCC / ovarian-HRD anchors (off-roster **and**
+  pre-fix), or replace them with roster cells once the overlays exist (A-1).
+- **#6** A-3: equal eval-count ≠ equal search difficulty (DTFD 13-dim vs TITAN
+  4-dim). Needs a stated position — scale budget with dimensionality, or report
+  anytime curves only.
+- **#9** Keep "code-level search, not menu search" (⇒ H-4 is mandatory, which is
+  the plan) or soften to a declared search space.
+- **#10** Figure ownership: who writes the results→figures layer, and does the
+  system schematic get drawn in-repo.
+
+_Original framing of the ten decisions, kept for the reasoning:_
 
 | # | Decision | Consequence |
 |---|---|---|
