@@ -1306,6 +1306,24 @@ class ExperimentOrchestrator:
 
         result = self._collect_or_synthesize_result(node_id, archive, returncode, wt_path)
 
+        # H-1 (audit 2026-07-23): run.log is the raw training stdout at the
+        # AGENT-VISIBLE archive root, so a script that prints a test metric leaks
+        # the sealed quantity. Redact held-out lines at the orchestrator boundary
+        # (defence-in-depth over per-script gating, which a re-vendored upstream
+        # can silently regress).
+        from automil.firewall import held_out_keys, redact_held_out, redact_log_file
+        _ho_keys = held_out_keys(result)
+        try:
+            _n_redacted = redact_log_file(archive / "run.log", _ho_keys)
+            if _n_redacted:
+                logger.warning(
+                    "val-firewall: redacted %d held-out line(s) from %s/run.log — "
+                    "the training script printed test metrics to stdout",
+                    _n_redacted, node_id,
+                )
+        except Exception:  # noqa: BLE001 — log hygiene must never fail a completion
+            logger.exception("firewall: run.log redaction failed for %s", node_id)
+
         # Include error details in result for better agent visibility before terminal write
         status = result.get("status", "completed")
         if status in ("crash", "oom", "timeout"):
@@ -1315,7 +1333,8 @@ class ExperimentOrchestrator:
                 lines = log_path.read_text().splitlines()
                 error_tail = "\n".join(lines[-20:])
             result = dict(result)
-            result.setdefault("error", error_tail)
+            # The tail lands in the agent-facing result.json — redact it too.
+            result.setdefault("error", redact_held_out(error_tail, _ho_keys))
             result.setdefault("log_location", str(log_path))
 
         # REC-02 / D-09, D-10: delegate all four artifact writes to terminal_writer.
@@ -1541,7 +1560,9 @@ class ExperimentOrchestrator:
                 if termination_reason:
                     result["termination_reason"] = termination_reason
                 if error_tail:
-                    result["error"] = error_tail
+                    # H-1: this tail lands in the agent-facing result.json.
+                    from automil.firewall import redact_held_out
+                    result["error"] = redact_held_out(error_tail)
                 (archive / "result.json").write_text(json.dumps(result, indent=2))
 
         if "status" not in result:
