@@ -62,7 +62,7 @@ _FRAMEWORK_MAP: dict[str, Framework] = {
 }
 
 
-def parse_args() -> argparse.Namespace:
+def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="WSI Classification Benchmark")
 
     # Dataset (required)
@@ -95,14 +95,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--abmil_models", nargs="+", default=None,
                    help="ABMIL model types (default: all from dataset config)")
 
-    # Training
-    p.add_argument("--max_epochs", type=int, default=200)
-    p.add_argument("--lr", type=float, default=2e-4)
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--n_folds", type=int, default=5)
+    # Training. CFG-3 (audit 2026-07-28): default=None, NOT a CLI literal.
+    # These used to duplicate every TrainConfig default here and pass them in
+    # unconditionally, which made the dataclass defaults DEAD on the static-grid
+    # path -- the grid's hyperparameters came from this file, so correcting
+    # TrainConfig.lr to CLAM's upstream 1e-4 would have been silently reset to
+    # 2e-4 on every launch. Same CFG-01 / D-01 pattern run_experiment.py uses.
+    p.add_argument("--max_epochs", type=int, default=None)
+    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--n_folds", type=int, default=None)
     p.add_argument("--no_early_stopping", action="store_true")
-    p.add_argument("--patience", type=int, default=20)
-    p.add_argument("--stop_epoch", type=int, default=50)
+    p.add_argument("--patience", type=int, default=None)
+    p.add_argument("--stop_epoch", type=int, default=None)
     p.add_argument("--no_weighted_sample", action="store_true")
 
     # Logging
@@ -117,7 +122,34 @@ def parse_args() -> argparse.Namespace:
     # Modes
     p.add_argument("--prep_only", action="store_true", help="Only run data preparation")
 
-    return p.parse_args()
+    return p
+
+
+def parse_args() -> argparse.Namespace:
+    return _build_parser().parse_args()
+
+
+def _train_config_from_args(args: argparse.Namespace) -> TrainConfig:
+    """Build a TrainConfig from only the flags that were explicitly supplied.
+
+    CFG-3: unset flags parse as ``None`` and are dropped, so each arm's dataclass
+    default stays the single source of truth. The two ``store_true`` switches are
+    inverted only when actually passed, for the same reason.
+    """
+    explicit = {
+        k: v for k, v in {
+            "max_epochs": args.max_epochs,
+            "lr": args.lr,
+            "seed": args.seed,
+            "patience": args.patience,
+            "stop_epoch": args.stop_epoch,
+        }.items() if v is not None
+    }
+    if args.no_early_stopping:
+        explicit["early_stopping"] = False
+    if args.no_weighted_sample:
+        explicit["weighted_sample"] = False
+    return TrainConfig(**explicit)
 
 
 def main() -> None:
@@ -153,15 +185,7 @@ def main() -> None:
             print(f"Error: unknown strategy '{s}'. Valid: {list(ds.split_strategies.keys())}")
             sys.exit(1)
 
-    train_cfg = TrainConfig(
-        max_epochs=args.max_epochs,
-        lr=args.lr,
-        seed=args.seed,
-        early_stopping=not args.no_early_stopping,
-        patience=args.patience,
-        stop_epoch=args.stop_epoch,
-        weighted_sample=not args.no_weighted_sample,
-    )
+    train_cfg = _train_config_from_args(args)
 
     wandb_project = args.wandb_project or f"{ds.name}-benchmark"
 
@@ -173,7 +197,8 @@ def main() -> None:
         model_types=models,
         tasks=tasks,
         train=train_cfg,
-        n_folds=args.n_folds,
+        # CFG-3: None means "unset" -> BenchmarkConfig's own default (5) applies.
+        n_folds=args.n_folds if args.n_folds is not None else 5,
         gpu=args.gpu,
         wandb_project=None if args.no_wandb else wandb_project,
         experiments_per_gpu=args.experiments_per_gpu,

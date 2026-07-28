@@ -1,10 +1,23 @@
 """CLI default-value tests for ``benchmarks/scripts/run_benchmark.py``.
 
-The CLI argparse defaults must match the config.py dataclass defaults so a
-CLI-side default never silently overrides the config. ``--lr`` stays at the
-CLAM README's 2e-4; ``--n_folds`` is the lab-standard 5-fold (2026-07) — a
-deliberate deviation from CLAM's ``--k 10``, with CLI and config.py both
-defaulting to 5. This guards against a default drifting apart from the config.
+**Contract changed 2026-07-28 (CFG-3).** These tests used to assert that the CLI
+argparse defaults *matched* the ``config.py`` dataclass defaults, so that neither
+could silently override the other. That is the weaker of the two available
+guarantees: it made drift detectable, but only if someone remembered to update
+the test. The CLI now carries **no training defaults at all** — every training
+flag parses as ``None`` and is dropped unless explicitly supplied, so the
+dataclass is the single source of truth and drift is structurally impossible.
+
+The change was forced by a real shadowing: the grid is dispatched through this
+script, so correcting ``TrainConfig.lr`` to CLAM's upstream ``1e-4`` was being
+silently reset to ``2e-4`` on every launch by the CLI literal.
+
+One claim in the original docstring is worth recording as false. It justified
+``--lr 2e-4`` as "the CLAM README's 2e-4". It is not: ``lib/CLAM/main.py:74``
+declares ``--lr default=1e-4``, the README documents no learning rate, and the
+strings ``2e-4`` / ``0.0002`` appear NOWHERE in the vendored CLAM repository. The
+benchmark's 2x learning rate had not merely lost its rationale — it had a stated
+rationale that does not check out. See ``pipeline/provenance.py``.
 """
 
 from __future__ import annotations
@@ -44,13 +57,23 @@ def parser():
     return args
 
 
-def test_default_lr_matches_clam_readme(parser):
-    """CLAM README: ``--lr 2e-4``. CLI default must match."""
-    assert parser.lr == 2e-4, (
-        f"CLI --lr default {parser.lr} drifted from CLAM README's 2e-4. "
-        "If lowering, update config.py TrainConfig.lr and the methods "
-        "section together."
+def test_lr_has_no_cli_default(parser):
+    """CFG-3: unset means unset. The dataclass owns the value.
+
+    Previously this asserted a CLI literal of 2e-4, attributed to the CLAM
+    README — a rationale that does not check out (see module docstring).
+    """
+    assert parser.lr is None, (
+        f"--lr carries a CLI literal ({parser.lr}), which shadows "
+        "TrainConfig.lr on the static-grid path — the exact defect CFG-3 fixed."
     )
+
+
+def test_unset_lr_resolves_to_clams_upstream_value():
+    """The value that actually reaches training must be CLAM's own upstream
+    default (lib/CLAM/main.py:74), not a benchmark invention."""
+    from autobench.pipeline.config import TrainConfig
+    assert TrainConfig().lr == 1e-4
 
 
 def test_default_n_folds_is_lab_standard_five(parser):
@@ -59,11 +82,12 @@ def test_default_n_folds_is_lab_standard_five(parser):
     more stable for the imbalanced mutation tasks (paper/shared/BACKGROUND.md:
     with few events, 10-fold starves per-fold counts). Guards against a silent
     drift back to 10 and keeps the CLI aligned with config.py's default."""
-    assert parser.n_folds == 5, (
-        f"CLI --n_folds default {parser.n_folds} != 5. The benchmark's lab "
-        "standard is 5-fold (config.py ExperimentConfig/BenchmarkConfig also "
-        "default to 5); keep the CLI default aligned."
+    from autobench.pipeline.config import BenchmarkConfig
+    assert parser.n_folds is None, (
+        f"--n_folds carries a CLI literal ({parser.n_folds}); CFG-3 requires "
+        "the dataclass to own it."
     )
+    assert BenchmarkConfig().n_folds == 5
 
 
 def test_early_stopping_on_by_default(parser):
@@ -77,9 +101,20 @@ def test_weighted_sample_on_by_default(parser):
     assert parser.no_weighted_sample is False
 
 
-def test_seed_and_max_epochs_match_config(parser):
-    """Less critical but locked: any drift requires a deliberate update."""
-    assert parser.seed == 42
-    assert parser.max_epochs == 200
-    assert parser.patience == 20
-    assert parser.stop_epoch == 50
+def test_no_training_flag_carries_a_cli_default(parser):
+    """CFG-3, generalised: not one training knob may shadow the dataclass.
+
+    Asserted over the whole set rather than value-by-value, so adding a flag
+    with a literal is caught without anyone remembering to extend this test.
+    """
+    from autobench.pipeline.config import TrainConfig
+    shadowing = {
+        name: getattr(parser, name)
+        for name in ("seed", "max_epochs", "patience", "stop_epoch", "lr")
+        if getattr(parser, name) is not None
+    }
+    assert not shadowing, f"CLI literals shadowing TrainConfig: {shadowing}"
+
+    # ...and the values that actually reach training are the dataclass's.
+    t = TrainConfig()
+    assert (t.seed, t.max_epochs, t.patience, t.stop_epoch) == (42, 200, 20, 50)
