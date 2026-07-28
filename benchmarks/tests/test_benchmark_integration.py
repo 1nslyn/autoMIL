@@ -207,10 +207,12 @@ class TestSingleExperimentIntegration:
         assert "ci_low" in summary["test"]["auc_roc"]
         assert "ci_high" in summary["test"]["auc_roc"]
 
-        # Verify output files -- results/{framework}/{strategy}/{task}/{encoder}/{model}/
+        # Verify output files --
+        # results/{framework}/{strategy}/{task}/{encoder}/{model}/s{seed}/ (CR-5b)
         results_dir = os.path.join(
-            sb["benchmark_dir"], "results", "clam", "standard", "brca", "fake_enc", "clam_sb",
+            sb["benchmark_dir"], "results", exp_cfg.results_subdir,
         )
+        assert results_dir.endswith(os.path.join("clam_sb", f"s{exp_cfg.train.seed}"))
         assert os.path.exists(os.path.join(results_dir, "summary.json"))
         assert os.path.exists(os.path.join(results_dir, "config.json"))
         for fold in range(2):

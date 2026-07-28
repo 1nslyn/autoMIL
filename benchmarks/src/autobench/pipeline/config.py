@@ -114,7 +114,15 @@ class ExperimentConfig:
 
     @property
     def results_subdir(self) -> str:
-        """Relative results path: framework/strategy/task/encoder/model[/loss]."""
+        """Relative results path: framework/strategy/task/encoder/model[/loss]/s{seed}.
+
+        CR-5b: the seed segment is load-bearing. Every trainer resumes a fold from
+        ``<results_dir>/fold_N/metrics.json``, so without it a second seed reads
+        the first seed's folds off disk and a multi-seed variance study reports
+        zero variance. Seeds are meant to coexist, hence a path segment rather
+        than the fingerprint guard used for the other knobs (see
+        ``results_cache.py``).
+        """
         parts = [
             self.framework.value,
             self.strategy,
@@ -124,6 +132,7 @@ class ExperimentConfig:
         ]
         if self.survival_loss is not None:
             parts.append(self.survival_loss)
+        parts.append(f"s{self.train.seed}")
         return os.path.join(*parts)
 
     def to_dict(self) -> dict:

@@ -22,6 +22,7 @@ from autobench.pipeline.abmil.train import train_abmil_fold
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.hparams import apply_overrides, overrides_from_exp_cfg
+from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 
 
@@ -75,9 +76,9 @@ def run_abmil_experiment(
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
     # never resumed across experiments/seeds/variants. Falls back to the shared
     # benchmark_dir path for standalone (non-orchestrated) runs.
-    if results_dir is None:
-        results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
+    # CR-5b: `cfg` is passed too — ABMIL's M/L/dropout live outside exp_cfg, so a
+    # change there must invalidate this cache as surely as a change to lr.
+    results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir, arm_cfg=cfg)
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 
     h5_dir = _resolve_h5_dir(benchmark_dir, exp_cfg)
