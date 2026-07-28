@@ -7,7 +7,7 @@ import os
 
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.runner import _write_fold_result_json
-from autobench.pipeline.evaluate import compute_confidence_intervals
+from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 from autobench.pipeline.nnmil.prepare import nnmil_plan_dir
 from autobench.pipeline.nnmil.train import train_nnmil_fold
 
@@ -81,6 +81,8 @@ def run_nnmil_experiment(
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),
         "val": compute_confidence_intervals(val_fold_metrics),
+        # CR-3: pooled cross-fold val concordance (survival only; {} otherwise).
+        "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
     }

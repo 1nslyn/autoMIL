@@ -115,7 +115,17 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
 
     if "c_index" in test:
         test_ci = test.get("c_index", {}).get("mean", 0.0)
-        val_ci = val.get("c_index", {}).get("mean", 0.0)
+        # CR-3 (audit 2026-07-23): prefer the POOLED cross-fold val concordance as
+        # the selection signal. The per-fold val c-index is computed on ~2 events —
+        # the survival trainers themselves refuse to select checkpoints on it
+        # ("near-random"), yet autoMIL's search was selecting recipes on the mean
+        # of five such values. Pooling scores concordance once over every fold's
+        # val risks (~5x the events); it stays a concordance, so it remains
+        # comparable across recipes and across cox/nllsurv. Falls back to the
+        # fold-mean when a runner has not yet exported val_records.
+        pooled = (summary.get("val_pooled") or {}).get("c_index")
+        fold_mean_ci = val.get("c_index", {}).get("mean", 0.0)
+        val_ci = pooled if isinstance(pooled, float) and math.isfinite(pooled) else fold_mean_ci
         composite = val_ci
         metrics = {"val_c_index": round(val_ci, 4)}
         held_out = {"test_c_index": round(test_ci, 4)}

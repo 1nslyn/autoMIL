@@ -217,6 +217,38 @@ def _val_loss(
     return float(np.mean(losses)) if losses else float("nan")
 
 
+def _risk_records(
+    bundle: DTFDBundle,
+    slides: list[DTFDSurvivalSlide],
+    cfg: DTFDConfig,
+    device: torch.device,
+    seed: int,
+) -> dict:
+    """Per-slide risk scores (CR-3: pooled across folds by the runner)."""
+    bundle.eval()
+    rng = np.random.default_rng(seed)
+    risks, statuses, times, pids = [], [], [], []
+    for slide in slides:
+        logits = _slide_survival_logits(bundle, _read_bag(slide.h5_path), cfg, device, rng)
+        risks.append(float(_nllsurv_risk(logits).item()))
+        statuses.append(float(slide.status))
+        times.append(float(slide.time))
+        pids.append(slide.patient_id)
+    return {"risks": risks, "statuses": statuses, "times": times, "patient_ids": pids}
+
+
+def _c_index_from(records: dict) -> float:
+    if not records["risks"]:
+        return float("nan")
+    ci = survival_c_index(
+        torch.tensor(records["risks"], dtype=torch.float32),
+        torch.tensor(records["statuses"], dtype=torch.float32),
+        torch.tensor(records["times"], dtype=torch.float32),
+        records["patient_ids"],
+    )
+    return float(ci) if ci is not None else float("nan")
+
+
 def _c_index(
     bundle: DTFDBundle,
     slides: list[DTFDSurvivalSlide],
@@ -224,22 +256,7 @@ def _c_index(
     device: torch.device,
     seed: int,
 ) -> float:
-    bundle.eval()
-    rng = np.random.default_rng(seed)
-    risks, statuses, times, pids = [], [], [], []
-    for slide in slides:
-        logits = _slide_survival_logits(bundle, _read_bag(slide.h5_path), cfg, device, rng)
-        risks.append(float(_nllsurv_risk(logits).item()))
-        statuses.append(slide.status)
-        times.append(slide.time)
-        pids.append(slide.patient_id)
-    ci = survival_c_index(
-        torch.tensor(risks, dtype=torch.float32),
-        torch.tensor(statuses, dtype=torch.float32),
-        torch.tensor(times, dtype=torch.float32),
-        pids,
-    )
-    return float(ci) if ci is not None else float("nan")
+    return _c_index_from(_risk_records(bundle, slides, cfg, device, seed))
 
 
 def train_dtfd_survival_fold(
@@ -317,15 +334,19 @@ def train_dtfd_survival_fold(
         if best_snap is not None:
             _restore(bundle, best_snap)
 
+        # CR-3: export val risk records so the runner can pool concordance
+        # across folds instead of averaging five ~2-event c-indices.
+        _val_records = (
+            _risk_records(bundle, val_samples, cfg, device, seed) if val_samples
+            else {"risks": [], "statuses": [], "times": [], "patient_ids": []}
+        )
         return {
             "test_metrics": {
                 "c_index": _c_index(bundle, test_samples, cfg, device, seed)
                 if test_samples else float("nan"),
             },
-            "val_metrics": {
-                "c_index": _c_index(bundle, val_samples, cfg, device, seed)
-                if val_samples else float("nan"),
-            },
+            "val_metrics": {"c_index": _c_index_from(_val_records)},
+            "val_records": _val_records,
             "elapsed_seconds": elapsed_seconds,
         }
     finally:

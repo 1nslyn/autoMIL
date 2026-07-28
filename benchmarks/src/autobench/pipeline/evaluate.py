@@ -66,6 +66,73 @@ def compute_extended_metrics(
     return metrics
 
 
+def pooled_c_index(fold_records: list[dict]) -> float:
+    """Concordance over the POOLED cross-fold validation set (CR-3).
+
+    The per-fold val c-index is computed on ~2 events for the small cohorts —
+    the survival trainers themselves refuse to select checkpoints on it
+    ("near-random", see clam/survival_train.py). Averaging five such near-random
+    numbers does not fix that: the mean of noise is still noise, and autoMIL's
+    agentic search was selecting recipes on it.
+
+    Pooling instead concatenates every fold's validation risk scores and scores
+    concordance ONCE over all comparable pairs (~5x the events). It stays a
+    concordance index — comparable across recipes and across cox/nllsurv losses,
+    unlike a raw validation loss.
+
+    Each record is ``{"risks", "statuses", "times", "patient_ids"}``. Returns NaN
+    when no usable record survives.
+    """
+    # Deferred imports: keeps this module importable without a torch env, and
+    # the vendored nnMIL tree needs LIB_ROOT on sys.path (same setup the survival
+    # trainers use).
+    import sys
+
+    import torch
+
+    from autobench import LIB_ROOT
+    if str(LIB_ROOT) not in sys.path:
+        sys.path.insert(0, str(LIB_ROOT))
+    from nnMIL.training.losses.survival_loss import survival_c_index
+
+    risks: list[float] = []
+    statuses: list[float] = []
+    times: list[float] = []
+    pids: list = []
+    for rec in fold_records or []:
+        if not isinstance(rec, dict) or not rec.get("risks"):
+            continue
+        risks.extend(rec["risks"])
+        statuses.extend(rec["statuses"])
+        times.extend(rec["times"])
+        pids.extend(rec["patient_ids"])
+
+    if not risks:
+        return float("nan")
+
+    ci = survival_c_index(
+        torch.tensor(risks, dtype=torch.float32),
+        torch.tensor(statuses, dtype=torch.float32),
+        torch.tensor(times, dtype=torch.float32),
+        pids,
+    )
+    return float(ci) if ci is not None else float("nan")
+
+
+def pooled_val_block(fold_results: list[dict]) -> dict:
+    """Summary ``val_pooled`` block: pooled val concordance, or {} (CR-3).
+
+    Returns ``{}`` for classification experiments (no ``val_records``), so every
+    runner can call this unconditionally.
+    """
+    records = [
+        fr.get("val_records") for fr in (fold_results or []) if isinstance(fr, dict)
+    ]
+    if not any(records):
+        return {}
+    return {"c_index": pooled_c_index(records)}
+
+
 def compute_confidence_intervals(
     fold_metrics: list[dict[str, float]],
     confidence: float = 0.95,

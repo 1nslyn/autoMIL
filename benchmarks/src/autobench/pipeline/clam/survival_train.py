@@ -191,24 +191,32 @@ def train_survival_fold(
         return float(_batch_loss(val).item())
 
     @torch.no_grad()
-    def _c_index(samples: list[dict]) -> float:
+    def _risk_records(samples: list[dict]) -> dict:
+        """Per-sample risk scores for this split (CR-3: pooled across folds)."""
         model.eval()
         risks, statuses, times, pids = [], [], [], []
         for s in samples:
             lg = _bag_logits(model, _load_feats(s["pt_path"], device)).unsqueeze(0)
             r = _risk_from_logits(lg, loss_type)
             risks.append(float(r.item()))
-            statuses.append(s["status"])
-            times.append(s["time"])
+            statuses.append(float(s["status"]))
+            times.append(float(s["time"]))
             pids.append(s["patient_id"])
+        return {"risks": risks, "statuses": statuses, "times": times,
+                "patient_ids": pids}
+
+    def _c_index_from(records: dict) -> float:
         # survival_c_index aggregates to patient level and is NaN-safe.
         ci = survival_c_index(
-            torch.tensor(risks, dtype=torch.float32),
-            torch.tensor(statuses, dtype=torch.float32),
-            torch.tensor(times, dtype=torch.float32),
-            pids,
+            torch.tensor(records["risks"], dtype=torch.float32),
+            torch.tensor(records["statuses"], dtype=torch.float32),
+            torch.tensor(records["times"], dtype=torch.float32),
+            records["patient_ids"],
         )
         return float(ci) if ci is not None else float("nan")
+
+    def _c_index(samples: list[dict]) -> float:
+        return _c_index_from(_risk_records(samples))
 
     rng = random.Random(exp_cfg.train.seed)
     for epoch in range(exp_cfg.train.max_epochs):
@@ -238,9 +246,14 @@ def train_survival_fold(
     elif getattr(early_stopping, "best_model_state", None) is not None:
         model.load_state_dict(early_stopping.best_model_state)
 
+    # CR-3: export the val risk records so the runner can score concordance over
+    # the POOLED cross-fold validation set. The per-fold c-index below stays for
+    # reporting; the pooled value is what the selection composite uses.
+    _val_records = _risk_records(val)
     fold_result = {
         "test_metrics": {"c_index": _c_index(test)},
-        "val_metrics": {"c_index": _c_index(val)},
+        "val_metrics": {"c_index": _c_index_from(_val_records)},
+        "val_records": _val_records,
         "fold": fold,
     }
     with open(metrics_path, "w") as f:
