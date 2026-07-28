@@ -1,109 +1,135 @@
-"""H-3: one declared hyperparameter source per arm, one override path.
+"""H-3: one uniform override mechanism across arms, defaults untouched.
 
-The FIRST test class is a behaviour-freeze guard: it pins each arm's currently
-effective values against the live config objects the runners actually use. If
-adopting the shared table ever changed a running experiment's hyperparameters,
-these tests fail — that is the property that makes this refactor safe to land
-while a benchmark campaign is already dispatched.
+Design under test (see hparams.py): each arm's own config dataclass stays the
+single source of truth for its defaults — no shared value table, so arm-specific
+knobs (DTFD's numGroup/grad_clip, ABMIL's M/L) keep their full tunable surface and
+nnMIL keeps its data-adaptive self-configuration. Only the *application of an
+explicit override* is unified, and an inapplicable override now fails loudly
+instead of vanishing.
+
+The freeze-guard class is the property that made this safe to land mid-campaign:
+with no explicit override, every arm resolves to exactly its own defaults.
 """
 from __future__ import annotations
 
 import pytest
 
 from autobench.pipeline.abmil.config import ABMILConfig
-from autobench.pipeline.config import TrainConfig
+from autobench.pipeline.config import ModelConfig, TaskConfig, TrainConfig
 from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.hparams import (
-    ARM_HPARAMS,
-    resolve_arm_hparams,
-    provenance_table,
+    apply_overrides,
+    apply_overrides_to_plan,
+    explicit_overrides,
+    overrides_from_exp_cfg,
 )
 
 
-class TestValuesMatchWhatTheBenchmarkAlreadyRan:
-    """Freeze-guard: the table must reproduce today's effective values exactly."""
-
-    def test_clam_matches_shared_trainconfig(self):
-        # CLAM reads exp_cfg.train (clam/train.py:83-84).
-        t = TrainConfig()
-        h = resolve_arm_hparams("clam", "classification")
-        assert (h.lr, h.weight_decay, h.max_epochs, h.patience) == (
-            t.lr, t.weight_decay, t.max_epochs, t.patience
-        )
-
-    def test_abmil_matches_its_own_config(self):
-        c = ABMILConfig()
-        h = resolve_arm_hparams("abmil", "classification")
-        assert (h.lr, h.weight_decay, h.max_epochs, h.patience) == (
-            c.lr, c.weight_decay, c.max_epochs, c.patience
-        )
-
-    def test_dtfd_matches_its_own_paper_exact_config(self):
-        c = DTFDConfig()
-        h = resolve_arm_hparams("dtfd", "classification")
-        assert (h.lr, h.weight_decay, h.max_epochs, h.patience) == (
-            c.lr, c.wd, c.max_epochs, c.patience
-        )
-
-    def test_titan_matches_its_head_config(self):
-        from autobench.pipeline.titan.config import TitanHeadConfig
-        c = TitanHeadConfig()
-        h = resolve_arm_hparams("titan", "classification")
-        assert (h.lr, h.weight_decay, h.patience) == (c.lr, c.weight_decay, c.patience)
-        # max_epochs previously came from the shared TrainConfig — the mixed
-        # provenance this module records.
-        assert h.max_epochs == TrainConfig().max_epochs
-
-    def test_nnmil_task_dependent_lr_is_preserved(self):
-        # nnMIL genuinely uses a different lr per task type (prepare.py literals).
-        assert resolve_arm_hparams("nnmil", "classification").lr == 3e-4
-        assert resolve_arm_hparams("nnmil", "survival").lr == 1e-4
-        # ...and 100 epochs, unlike every other arm's 200.
-        assert resolve_arm_hparams("nnmil", "classification").max_epochs == 100
+class _ExpCfgStub:
+    def __init__(self, train):
+        self.train = train
 
 
-class TestUniformOverridePath:
-    """Every arm honours an explicit override — the H-3 defect."""
+class TestNoOverrideLeavesDefaultsExactlyAlone:
+    """Freeze-guard: a plain run must not move any arm off its own schedule."""
 
-    @pytest.mark.parametrize("fw", ["clam", "abmil", "dtfd", "titan", "nnmil"])
-    def test_explicit_override_reaches_every_arm(self, fw):
-        h = resolve_arm_hparams(fw, "classification", {"lr": 5e-4})
-        assert h.lr == 5e-4, f"{fw} silently discarded an explicit lr override"
+    def test_unset_flags_produce_no_overrides(self):
+        # TrainConfig() == "nothing was passed on the CLI".
+        assert overrides_from_exp_cfg(_ExpCfgStub(TrainConfig())) == {}
 
-    @pytest.mark.parametrize("fw", ["clam", "abmil", "dtfd", "titan", "nnmil"])
-    def test_none_overrides_do_not_disturb_the_arm_default(self, fw):
-        """The CLI parses unset flags as None — those must not flatten arms
-        onto one schedule (that would silently change DTFD's paper-exact lr)."""
-        base = resolve_arm_hparams(fw, "classification")
-        h = resolve_arm_hparams(
-            fw, "classification",
-            {"lr": None, "max_epochs": None, "patience": None, "weight_decay": None},
-        )
-        assert h == base
+    @pytest.mark.parametrize("cfg", [ABMILConfig(), DTFDConfig()],
+                             ids=["abmil", "dtfd"])
+    def test_empty_overrides_return_the_config_unchanged(self, cfg):
+        assert apply_overrides(cfg, {}) is cfg
+        assert apply_overrides(cfg, None) is cfg
 
-    def test_unknown_arm_fails_loud(self):
-        with pytest.raises(KeyError):
-            resolve_arm_hparams("bogus_net", "classification")
+    def test_dtfd_keeps_its_paper_exact_values_without_an_override(self):
+        """The regression that would have been catastrophic: threading the shared
+        defaults through would silently retune DTFD (lr 1e-4 -> 2e-4, wd 1e-4 ->
+        1e-5) and invalidate every dispatched DTFD run."""
+        out = apply_overrides(DTFDConfig(), overrides_from_exp_cfg(_ExpCfgStub(TrainConfig())))
+        assert out.lr == 1e-4
+        assert out.wd == 1e-4
 
-    def test_unknown_override_key_ignored(self):
-        base = resolve_arm_hparams("dtfd", "classification")
-        assert resolve_arm_hparams("dtfd", "classification", {"nonsense": 1}) == base
+    def test_abmil_keeps_its_own_values_without_an_override(self):
+        out = apply_overrides(ABMILConfig(), overrides_from_exp_cfg(_ExpCfgStub(TrainConfig())))
+        assert (out.lr, out.weight_decay, out.dropout) == (2e-4, 1e-5, 0.0)
 
 
-class TestProvenanceIsDeclared:
-    def test_every_arm_declares_provenance(self):
-        for key, h in ARM_HPARAMS.items():
-            assert h.provenance.strip(), f"{key} has no declared provenance"
+class TestExplicitOverrideReachesEveryArm:
+    """The H-3 defect: ABMIL/DTFD silently discarded tuning knobs."""
 
-    def test_upstream_deviations_are_recorded_not_hidden(self):
-        # DTFD is the one arm that is paper-exact today; CLAM is knowingly 2x
-        # its upstream lr. Both facts must be visible in the table.
-        assert ARM_HPARAMS[("dtfd", "classification")].matches_upstream is True
-        clam = ARM_HPARAMS[("clam", "classification")]
-        assert clam.matches_upstream is False
-        assert "1e-4" in clam.provenance  # names the upstream value it deviates from
+    def test_detects_an_explicitly_set_lr(self):
+        t = TrainConfig(lr=5e-4)
+        assert overrides_from_exp_cfg(_ExpCfgStub(t)) == {"lr": 5e-4}
 
-    def test_table_renders_for_the_methods_section(self):
-        md = provenance_table()
-        for fw in ("clam", "abmil", "dtfd", "titan", "nnmil"):
-            assert fw in md
+    def test_abmil_honours_lr_override(self):
+        out = apply_overrides(ABMILConfig(), {"lr": 5e-4}, arm="abmil")
+        assert out.lr == 5e-4
+        assert out.M == 500  # arm-specific knobs untouched
+
+    def test_dtfd_honours_lr_override(self):
+        out = apply_overrides(DTFDConfig(), {"lr": 5e-4}, arm="dtfd")
+        assert out.lr == 5e-4
+        assert out.numGroup == 4  # arm-specific knob survives
+
+    def test_weight_decay_alias_maps_onto_dtfds_wd_field(self):
+        """DTFD follows its upstream repo and calls the field `wd`."""
+        out = apply_overrides(DTFDConfig(), {"weight_decay": 3e-4}, arm="dtfd")
+        assert out.wd == 3e-4
+
+    def test_full_arm_specific_surface_is_tunable(self):
+        """Not flattened to a lowest-common-denominator field set: an agent can
+        tune DTFD's own knobs, which a shared 5-field table could not express."""
+        out = apply_overrides(DTFDConfig(), {"numGroup": 8, "grad_clip": 1.0}, arm="dtfd")
+        assert (out.numGroup, out.grad_clip) == (8, 1.0)
+
+
+class TestInapplicableOverrideFailsLoudly:
+    def test_unknown_knob_raises_instead_of_vanishing(self):
+        with pytest.raises(ValueError, match="cannot accept"):
+            apply_overrides(ABMILConfig(), {"bag_weight": 0.9}, arm="abmil")
+
+    def test_error_names_the_arm_and_the_knob(self):
+        with pytest.raises(ValueError) as exc:
+            apply_overrides(DTFDConfig(), {"nonexistent_knob": 1}, arm="dtfd")
+        assert "dtfd" in str(exc.value)
+        assert "nonexistent_knob" in str(exc.value)
+
+
+class TestNnmilPlanPath:
+    """nnMIL's config is computed from data stats — overrides layer on top."""
+
+    def _plan(self):
+        return {"learning_rate": 3e-4, "num_epochs": 100, "warmup_epochs": 10,
+                "weight_decay": 1e-4, "dropout": 0.25}
+
+    def test_adaptive_values_survive_when_nothing_is_overridden(self):
+        plan = self._plan()
+        assert apply_overrides_to_plan(plan, {}) == plan
+
+    def test_lr_alias_maps_onto_learning_rate(self):
+        out = apply_overrides_to_plan(self._plan(), {"lr": 7e-4})
+        assert out["learning_rate"] == 7e-4
+        assert out["warmup_epochs"] == 10  # self-configured value preserved
+
+    def test_max_epochs_alias_maps_onto_num_epochs(self):
+        out = apply_overrides_to_plan(self._plan(), {"max_epochs": 50})
+        assert out["num_epochs"] == 50
+
+    def test_does_not_mutate_the_caller(self):
+        plan = self._plan()
+        apply_overrides_to_plan(plan, {"lr": 9e-4})
+        assert plan["learning_rate"] == 3e-4
+
+    def test_unknown_key_raises(self):
+        with pytest.raises(ValueError):
+            apply_overrides_to_plan(self._plan(), {"bag_weight": 0.5})
+
+
+class TestExplicitOverridesHelper:
+    def test_drops_none_values(self):
+        assert explicit_overrides(lr=None, max_epochs=50) == {"max_epochs": 50}
+
+    def test_empty_when_all_none(self):
+        assert explicit_overrides(lr=None, patience=None) == {}

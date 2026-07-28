@@ -21,6 +21,7 @@ from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import load_dtfd_split, load_dtfd_survival_split
 from autobench.pipeline.dtfd.survival_train import train_dtfd_survival_fold
 from autobench.pipeline.dtfd.train import train_dtfd_fold
+from autobench.pipeline.hparams import apply_overrides, overrides_from_exp_cfg
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 
 
@@ -68,6 +69,12 @@ def run_dtfd_experiment(
     """
     if cfg is None:
         cfg = DTFDConfig()
+    # H-3 (audit 2026-07-23): DTFD read ONLY `seed` off exp_cfg, so CLI flags and
+    # agentic variant args were silently discarded. DTFDConfig stays the source of
+    # truth for its paper-exact defaults (lr Main:29, wd Main:30); only
+    # explicitly-set overrides are layered on (note: its field is `wd`, mapped by
+    # FIELD_ALIASES so a canonical `weight_decay` override still lands).
+    cfg = apply_overrides(cfg, overrides_from_exp_cfg(exp_cfg), arm="dtfd")
     torch_device = torch.device(device)
 
     # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
