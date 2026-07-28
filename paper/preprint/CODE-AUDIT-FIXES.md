@@ -34,6 +34,20 @@ Branch: `fix/audit-2026-07-23`. Updated as each fix lands.
 | M-7 | daemon terminal path never maintains total_executed/total_proposed | MED | ☐ | | increment counters in write_terminal_state on first transition |
 | M-14 | budget cell key omits task → classification & OS share budget | MED | ☑ | `cells/state.py`+`cells/registry.py`+`cli/submit.py` | `make_cell_id` takes an optional `task` (submit reads `task.name` from config.yaml). `None`/empty reproduces the legacy 3-tuple id exactly, so existing cells keep their ids. 4 new tests; 136 regression green. |
 
+## Claim-level (2026-07-23 addendum) — see CODE-AUDIT-2026-07-23.md "Addendum"
+
+| ID | Finding | Sev | Status | Notes |
+|----|---------|-----|--------|-------|
+| **A-0** | **Fig 2's stated caveat is broken: it defers to Fig 3's equal-effort search, which H-3b makes impossible** | **CRIT** | ☐ | headline + framework contribution fail together; bias direction is predictable (a flip toward CLAM is the H-3b artifact, not a finding). Unblocked by fixing H-3b + H-2. |
+| **A-1** | Fig 3's CCRCC / ovarian-HRD anchors are **off-roster AND pre-fix** (learnings.md dated 2026-06-24, before CR-1b/CR-3/CR-5/H-1) | HIGH | ⚑ | must re-run anchors on the repaired pipeline, on roster cohorts. Research decision + compute. |
+| **A-2** | **Search space is never declared** — no machine-readable per-arm searchable set; de-facto space is "whatever the transport carries" (CLAM-shaped) | HIGH | ☐ | fix together with H-3b: declare a per-arm searchable set. Target is *declared*, not 100% — DTFD's `distill` is deliberately locked to AFS. |
+| **A-3** | **Equal eval-count ≠ equal search difficulty** (DTFD 15-dim vs TITAN 4-dim reach different quality at the same N) | HIGH | ⚑ | needs a stated position: scale budget with dimensionality, or report anytime curves only and decline the point claim. |
+| **A-4** | The two modification channels contradict: CLI/variant = asymmetric coverage; file-editing = full coverage but architecture-preservation unenforced | HIGH | ☐ | resolved by H-3b (channel) + H-4 (enforcement) together. Neither route currently supports the claim. |
+| **A-5** | **Fig 4: TITAN is excluded from the agentic search** → after the search tile arms improve and TITAN does not; "TITAN wins slide-level" can reverse for a non-model reason, or survive unfairly | HIGH | ⚑ | include TITAN in the search, or drop the head-to-head framing. Note TITAN has only 4 knobs — "equal effort" is meaningless for a linear probe. |
+| **A-6** | **Fig 5 cannot use any pre-fix run** — it exists to demonstrate the firewall, which was not intact before this audit | MED | ☐ | needs one fresh cell run on the repaired pipeline. |
+| **A-7** | **Fig 7 "reproduces published SOTA" contradicts CLAM running at 2× upstream lr** | HIGH | ⚑ | unavailable as a claim unless CLAM returns to upstream lr. Ties to the Step-3 decision. |
+| **A-8** | Fig 2's variance decomposition is **single-seed** — cannot separate seed noise from the components it reports | HIGH | ⚑ | same decision as H-5c (how many seeds). |
+
 ## Gate 2 — before any headline claim (statistics/reporting)
 
 | ID | Finding | Sev | Status | Commit | Notes |
