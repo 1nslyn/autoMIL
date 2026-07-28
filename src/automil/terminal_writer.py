@@ -186,6 +186,17 @@ def write_terminal_state(
 
     raw_status = result.get("status", "crash")
 
+    # Step 2b — CR-1b (audit 2026-07-23): derive the selection signal from the
+    # declared VALIDATION metrics instead of trusting the reported scalar.
+    # result.json is written by agent-editable training code, so a composite
+    # computed from the sealed test block would otherwise drive selection
+    # undetected — the exact leak the val-firewall exists to prevent. The
+    # recomputed value is authoritative; a disagreement is logged at ERROR and
+    # recorded on the node so the audit trail survives.
+    # Resolved inside the lock (the formula lives in graph meta.scoring).
+    composite_recomputed: float | None = None
+    composite_disagreement: dict | None = None
+
     # Step 3 — Graph node update via locked_update (D-10, D-01)
     from automil.graph import locked_update, _accept, _accept_margin
     try:
@@ -203,6 +214,34 @@ def write_terminal_state(
                 parent = g.get_node(parent_id) if parent_id else None
                 p_comp = parent.get("composite", 0.0) if parent else 0.0
                 composite = result.get("composite", 0.0)
+
+                # CR-1b: recompute from the val metrics; the val-derived value wins.
+                from automil.scoring import composite_disagrees, recompute_composite
+                _formula = (g.meta.get("scoring") or {}).get("formula")
+                try:
+                    composite_recomputed = recompute_composite(
+                        result.get("metrics") or {}, _formula
+                    )
+                except ValueError as exc:
+                    logger.error("terminal_writer: %s — trusting reported composite", exc)
+                    composite_recomputed = None
+                if composite_recomputed is not None and composite_disagrees(
+                    composite, composite_recomputed
+                ):
+                    logger.error(
+                        "terminal_writer: VAL-FIREWALL — reported composite %.6f for %s "
+                        "disagrees with the value recomputed from its val metrics "
+                        "(%.6f, formula=%r). Using the val-derived value; the reported "
+                        "scalar may have been computed from test.",
+                        composite, node_id, composite_recomputed, _formula,
+                    )
+                    composite_disagreement = {
+                        "reported": composite,
+                        "recomputed": composite_recomputed,
+                        "formula": _formula,
+                    }
+                if composite_recomputed is not None:
+                    composite = composite_recomputed
 
                 # D-01: partial nodes stay quarantined — never get keep/discard
                 # crash nodes stay crash (composite=0.0 should not become discard)
@@ -226,6 +265,12 @@ def write_terminal_state(
                 # Propagate metadata from result (e.g. budget_killed flag)
                 if result.get("metadata"):
                     gnode.setdefault("metadata", {}).update(result["metadata"])
+                # CR-1b: durable audit trail when the reported scalar could not be
+                # explained by the node's own validation metrics.
+                if composite_disagreement is not None:
+                    gnode.setdefault("metadata", {})["composite_disagreement"] = (
+                        composite_disagreement
+                    )
 
                 # Only re-evaluate descendants for non-partial, non-crash completions
                 if raw_status not in ("partial", "crash"):
@@ -245,6 +290,20 @@ def write_terminal_state(
             "terminal_writer: failed to update graph node %s — continuing with other artifacts",
             node_id,
         )
+
+    # CR-1b: keep the downstream artifacts (completed/, archive result.json,
+    # results.tsv) consistent with the graph's authoritative val-derived
+    # composite. Rebuilt immutably — never mutating the caller's dict.
+    if composite_recomputed is not None:
+        result = {**result, "composite": composite_recomputed}
+        if composite_disagreement is not None:
+            result = {
+                **result,
+                "metadata": {
+                    **(result.get("metadata") or {}),
+                    "composite_disagreement": composite_disagreement,
+                },
+            }
 
     # Step 4 — completed/<node>.json (atomic write)
     completion = {
