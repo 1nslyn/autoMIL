@@ -224,7 +224,9 @@ class TestExperimentConfig:
             framework=Framework.CLAM,
             strategy="standard",
         )
-        assert exp.results_subdir == "clam/standard/brca/conch_v15/clam_sb"
+        # CR-5b: the trailing seed segment keeps two seeds from resuming each
+        # other's per-fold metrics.json.
+        assert exp.results_subdir == "clam/standard/brca/conch_v15/clam_sb/s42"
 
     def test_to_dict(self, exp):
         d = exp.to_dict()

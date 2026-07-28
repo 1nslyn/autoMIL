@@ -10,6 +10,7 @@ import torch
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.dataset import create_dataset, load_fold_splits
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.clam.train import train_fold
 
 
@@ -89,9 +90,10 @@ def run_experiment(
     results_dir: str | None = None,
 ) -> dict:
     """Run all folds for a single CLAM experiment and return aggregated results."""
-    if results_dir is None:
-        results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
+    # CR-5b: seed is now a path segment and the rest of the config is
+    # fingerprinted into a sidecar, so a re-run at a different seed or
+    # hyperparameter can no longer resume these folds' metrics.json.
+    results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir)
 
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 

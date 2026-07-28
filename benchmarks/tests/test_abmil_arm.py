@@ -453,7 +453,7 @@ class TestAbmilGrid:
         ds = make_test_ds()
         exps = generate_all_experiments(self._cfg(ds), registries)
         subdirs = {e.results_subdir for e in exps}
-        assert "abmil/standard/brca/conch_v15/abmil" in subdirs
+        assert "abmil/standard/brca/conch_v15/abmil/s42" in subdirs
 
     def test_sweeps_encoders(self, registries):
         ds = make_test_ds()

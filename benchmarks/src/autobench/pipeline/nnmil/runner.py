@@ -10,6 +10,7 @@ from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 from autobench.pipeline.nnmil.prepare import nnmil_plan_dir
 from autobench.pipeline.nnmil.train import train_nnmil_fold
+from autobench.pipeline.results_cache import resolve_results_dir
 
 
 def run_nnmil_experiment(
@@ -35,12 +36,6 @@ def run_nnmil_experiment(
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
     # never resumed across experiments/seeds/variants. Falls back to the shared
     # benchmark_dir path for standalone (non-orchestrated) runs.
-    if results_dir is None:
-        results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
-
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
-
     # Locate the plan file for this (task, encoder, strategy[, survival_loss])
     plan_path = os.path.join(
         nnmil_plan_dir(
@@ -54,6 +49,18 @@ def run_nnmil_experiment(
             f"nnMIL plan not found: {plan_path}. "
             f"Run data preparation first."
         )
+
+    # CR-5b: nnMIL's hyperparameters are *computed* into the plan at prep time
+    # (nnU-Net-style self-configuration), so the plan itself is the arm config —
+    # resolve the plan first, then fingerprint the results dir against it. A plan
+    # regenerated from different data statistics now invalidates the cache.
+    with open(plan_path) as f:
+        _plan_training_cfg = json.load(f).get("training_configuration")
+    results_dir = resolve_results_dir(
+        exp_cfg, benchmark_dir, results_dir, arm_cfg=_plan_training_cfg,
+    )
+
+    exp_cfg.save(os.path.join(results_dir, "config.json"))
 
     fold_results: list[dict] = []
     for fold in range(exp_cfg.n_folds):

@@ -22,6 +22,7 @@ from autobench.pipeline.dtfd.dataset import load_dtfd_split, load_dtfd_survival_
 from autobench.pipeline.dtfd.survival_train import train_dtfd_survival_fold
 from autobench.pipeline.dtfd.train import train_dtfd_fold
 from autobench.pipeline.hparams import apply_overrides, overrides_from_exp_cfg
+from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 
 
@@ -81,9 +82,9 @@ def run_dtfd_experiment(
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
     # never resumed across experiments/seeds/variants. Falls back to the shared
     # benchmark_dir path for standalone (non-orchestrated) runs.
-    if results_dir is None:
-        results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
+    # CR-5b: `cfg` is passed too — DTFD's numGroup/mDim/droprate/grad_clip live
+    # outside exp_cfg, so a change there must invalidate this cache.
+    results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir, arm_cfg=cfg)
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 
     if exp_cfg.is_survival and exp_cfg.survival_loss == "cox":

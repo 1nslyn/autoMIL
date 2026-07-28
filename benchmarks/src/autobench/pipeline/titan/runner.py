@@ -17,6 +17,8 @@ from dataclasses import replace
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.results_cache import resolve_results_dir
+from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import build_split_dataset, build_survival_split_dataset
 from autobench.pipeline.titan.survival_train import train_titan_survival_fold
 from autobench.pipeline.titan.train import train_titan_fold
@@ -61,9 +63,12 @@ def run_titan_experiment(
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
     # never resumed across experiments/seeds/variants. Falls back to the shared
     # benchmark_dir path for standalone (non-orchestrated) runs.
-    if results_dir is None:
-        results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
+    # CR-5b: the head config is built inside the trainer, so stamp its *defaults*
+    # here — the overrides layered on top of them come from exp_cfg, which is
+    # already in the fingerprint. Together that covers TITAN's whole surface.
+    results_dir = resolve_results_dir(
+        exp_cfg, benchmark_dir, results_dir, arm_cfg=TitanHeadConfig(),
+    )
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 
     task_csv = os.path.join(benchmark_dir, "dataset_csv", f"{exp_cfg.task.name}.csv")
