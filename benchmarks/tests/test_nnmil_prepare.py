@@ -51,7 +51,12 @@ def h5_features_dir(tmp_path):
     """Create synthetic H5 feature files."""
     h5_dir = tmp_path / "features_conch_v15"
     h5_dir.mkdir()
-    for i in range(30):
+    # M-9 (nnMIL follow-up, 2026-07-29): the task CSV below has 45 slides. This
+    # used to write only 30 H5 files — a 33% silent drop, which is exactly the
+    # defect the retention guard now refuses. The fixture's purpose is to build a
+    # plan, not to exercise a partially-extracted cohort, so it is now complete;
+    # the drop itself is covered by test_nnmil_prepare_retention.py.
+    for i in range(45):
         n_patches = np.random.randint(50, 200)
         with h5py.File(h5_dir / f"slide_{i:05d}.h5", "w") as f:
             f.create_dataset("features", data=np.random.randn(n_patches, 768).astype(np.float32))
