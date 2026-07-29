@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import time
 from types import SimpleNamespace
 
@@ -19,6 +18,7 @@ import torch
 
 from autobench.pipeline.clam._imports import clam_train, initiate_model, summary
 from autobench.pipeline.config import ExperimentConfig
+from autobench.pipeline.determinism import seed_everything
 from autobench.pipeline.evaluate import compute_extended_metrics
 
 # CLAM's core_utils and utils.utils use a module-level ``device`` variable.
@@ -38,23 +38,9 @@ def _set_clam_device(device: torch.device) -> None:
 # Reproducibility
 # CLAM has an identical seed_torch() in main.py, but it's defined after
 # module-level parser.parse_args() and captures a module-level device
-# variable — importing it triggers argparse side effects.  We replicate
-# the same logic here.
-# ---------------------------------------------------------------------------
-
-
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-
-
+# variable — importing it triggers argparse side effects. We use the shared
+# autobench.pipeline.determinism.seed_everything (L-2), which replicates the
+# same logic and is the canonical copy every other trainer imports too.
 # ---------------------------------------------------------------------------
 # Build the args namespace that CLAM's train() expects
 # ---------------------------------------------------------------------------

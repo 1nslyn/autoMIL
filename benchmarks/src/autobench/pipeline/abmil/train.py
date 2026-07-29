@@ -18,15 +18,8 @@ import torch
 from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSlide
 from autobench.pipeline.abmil.model import build_abmil_model
+from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import compute_extended_metrics
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 def _train_one_epoch(

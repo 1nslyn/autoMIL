@@ -11,7 +11,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import random
 import time
 
 import numpy as np
@@ -21,19 +20,11 @@ from torch.utils.data import DataLoader
 
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
+from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import compute_extended_metrics
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSlideDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 @torch.no_grad()
