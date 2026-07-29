@@ -1,4 +1,17 @@
-"""Extended evaluation metrics and cross-fold confidence intervals."""
+"""Extended evaluation metrics and cross-fold confidence intervals.
+
+L-10: this module's multi-class AUC (below) is the CLAM-style per-class
+``roc_curve`` + ``nanmean`` formula, used by CLAM/ABMIL/DTFD/TITAN. nnMIL
+instead calls ``sklearn.roc_auc_score(multi_class="ovr", average="macro")``
+inside its own vendored trainer, which RAISES when a class is absent from a
+fold rather than degrading gracefully. See
+``autobench/pipeline/nnmil/evaluate.py`` module docstring for the full
+provenance and rationale (documented rather than unified: unifying would
+require patching nnMIL's vendored trainer or exposing raw probabilities it
+does not currently pass out), and
+``tests/test_benchmark_evaluate.py::TestMultiClassAUC::test_L10_missing_class_asymmetry_is_pinned``
+for the pinned regression test.
+"""
 
 from __future__ import annotations
 
