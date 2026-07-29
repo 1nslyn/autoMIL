@@ -1,63 +1,56 @@
 # Preprint — Experiment Grid & Estimation
 
-> ## ⚠ Cluster reality check — 2026-07-29, verified on `fir`
+> ## Cluster state — verified 2026-07-29 on `fir`
 >
-> Two statements in this document are **wrong** against what is actually on disk,
-> in opposite directions. Read this before planning compute.
+> _This block replaces an earlier version that was **wrong**. It was written from
+> `<cohort>/benchmark/results`, which holds the May–June 15-cohort mutation
+> sweep. The preprint campaign writes to
+> `.../Pathology/autoMIL/phase2/<dataset>/benchmark_5fold/`, one directory per
+> lab member. Scanning the wrong tree produced a "campaign never launched"
+> conclusion that is the opposite of the truth._
 >
-> **TITAN is no longer a launch gate.** §3.2 calls `conch_v15` extraction "the
-> bottleneck" and "not confirmed extracted on any TCGA cohort". In fact
-> `20x_512px_0px_overlap/slide_features_titan` exists for **four of five**
-> cohorts — LUAD 465, LGG 491, PDAC 242, HNSC 431 — symlinked to
-> `features_titan` as PRELAUNCH §4 describes. Only **CPTAC-GBM** is missing it.
-> Patch features (`uni_v2`/`virchow2`/`hoptimus1`) are complete on all five, at
-> counts matching §1.1's cohort sizes. The long pole is one cohort, not five.
+> **The 5-fold grid is complete.** 195 experiments on disk; all 165 roster cells
+> present, verified cell-by-cell against §2.1:
 >
-> **Almost nothing usable has been run.** The queue is empty; the cluster
-> checkout is on `main` @ `0b2da55`. There are 60 `summary.json` files, of which
-> **18 are on-roster**:
+> | Cohort | roster task | classification | survival | owner |
+> |---|---|--:|--:|---|
+> | tcga_luad | `kras` | 13/13 | 20/20 | yinshuol |
+> | tcga_lgg | `idh1` | 13/13 | 20/20 | yws0322 |
+> | cptac_gbm | `tp53` | 13/13 | 20/20 | kcuoft |
+> | cptac_pdac | `immune_class` | 13/13 | 20/20 | atatc |
+> | tcga_hnsc | `grade` | 13/13 | 20/20 | ryanwk |
 >
-> | Cohort | roster task | on disk | off-roster also present |
-> |---|---|:--:|---|
-> | TCGA-LUAD | `kras` | ✅ 6 | `egfr` 6 |
-> | TCGA-LGG | `idh1` | **✗** | `pik3ca` 6 |
-> | CPTAC-GBM | `tp53` | ✅ 6 | `egfr` 6, `immune_class` 6 |
-> | CPTAC-PDAC | `immune_class` | ✅ 6 | `smad4` 6 |
-> | TCGA-HNSC | `grade` | **✗** | `hras` 6, `pik3ca` 6 |
+> All five arms ran (clam · nnmil · abmil · dtfd · titan); all 100 survival
+> experiments exist. TCGA-LUAD carries 30 extra experiments beyond the roster
+> (an `egfr` task, plus `clam_sb`/`mil`/`trans_mil`) and a separate 10-fold tree.
+> Newest result 2026-07-26. §3.2's "conch_v15 not confirmed extracted on any
+> cohort" is also stale — TITAN ran on all five.
 >
-> Only `clam` and `nnmil` ran — **zero** `abmil` / `dtfd` / `titan`. **Zero
-> survival**: no `cox` or `nllsurv` directory exists anywhere on the shared
-> tree, against 100 planned. TCGA-HNSC has no `grade` splits at all; TCGA-LGG
-> has `idh1` splits but no results.
+> **Validation of those 195 (2026-07-29):**
 >
-> So against the planned 165: **18 on-roster experiments exist (11%)**, all
-> classification, at 2 of 5 arms, produced by pre-fix code — and all of them are
-> superseded anyway by the CLAM/ABMIL upstream-default correction and CR-5b's
-> seed-bearing results path (the sample path on disk is
-> `clam/standard/tp53/uni_v2/clam_mb/summary.json`, with no `s42` segment).
+> - **Fold integrity: clean.** No fold-count anomaly; **zero non-finite values in
+>   any primary metric** (`auc_roc` / `c_index` / `balanced_accuracy`) across
+>   8,440 per-fold records. The 880 NaNs that do exist are all `sensitivity` /
+>   `specificity` — undefined for the two 3-class tasks by construction, plus an
+>   nnMIL-only asymmetry on binary tasks (the L-10 family). No composite is
+>   affected.
+> - **No cache collision.** 195 experiments produced 195 distinct per-fold
+>   signatures. The CR-5 / CR-5b shared-cache hazard did **not** materialise here.
+> - **Survival postdates the censoring fix.** Every `os` result is ≥ 2026-07-22
+>   01:55; the fix landed 2026-07-21 ~21:20. Splits are 5-fold everywhere, so the
+>   10-fold cache-reuse hazard did not fire either.
+> - **⚠ `config.json` misreports the hyperparameters for 3 of 5 arms.** Every
+>   config records `lr=2e-4, weight_decay=1e-5, max_epochs=200` — the shared
+>   `TrainConfig`. Only CLAM and ABMIL actually used those. DTFD trained at its
+>   own 1e-4/1e-4, nnMIL at its plan's 3e-4 (cls) / 1e-4 (surv) with 100 epochs,
+>   TITAN at 1e-3/1e-4. That is finding H-3 made concrete: **102 of 195 configs
+>   describe a recipe that did not run.** Do not build a methods table from
+>   `config.json` for these results; use `pipeline/provenance.py`.
 >
-> **The practical consequence is good news, not bad.** Since the campaign starts
-> essentially from zero, the fixes on `fix/audit-2026-07-23` do not invalidate
-> existing work — there is almost none to invalidate. The "re-run cost" that
-> gated decisions 1 and 2 in `HANDOFF.md` does not exist.
->
-> Any earlier note claiming a substantially complete grid (e.g. "LUAD 30/33")
-> has no counterpart on disk. Either it was purged or it counted dispatched jobs
-> rather than landed results; it should not be relied on.
-
-> **Before launching, read [`PRELAUNCH_REVIEW.md`](PRELAUNCH_REVIEW.md)** — the
-> 2026-07-21 adversarial verification. It records two blocking bugs (now fixed,
-> incl. informative censoring that biased every TCGA survival arm) and two open
-> strategic decisions that gate the campaign.
-
-_Companion to [`PLAN.md`](PLAN.md) (strategy) and [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md)
-(campaign). Compiled 2026-07-14, **roster pivoted 2026-07-17** (LUAD/LGG/GBM/
-PDAC/HNSC — see §1), re-verified against `main` 2026-07-21. Counts below come from running
-`autobench.pipeline.config.generate_all_experiments` against the five committed
-dataset YAMLs on `main`. Where this disagrees with older notes, this file wins —
-see §6._
-
----
+> **Re-run cost is real, not zero.** `fix/audit-2026-07-23` returns CLAM to
+> upstream `lr=1e-4` and ABMIL to upstream `5e-4 / 1e-4 / 20 epochs`, so **93 of
+> the 195** (45 CLAM + 48 ABMIL) would produce different numbers. DTFD (33),
+> nnMIL (54) and TITAN (15) are untouched by those changes and should reproduce.
 
 ## 0. TL;DR
 
