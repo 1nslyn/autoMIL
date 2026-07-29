@@ -38,6 +38,26 @@ from automil.cells import blocks_new_work, get_cell  # noqa: E402
 _TERMINAL_STATES = {"completed", "crashed", "cancelled", "budget_killed"}
 
 
+
+def _persist_gate_child(graph, child_id: str, node: dict) -> None:
+    """Write one gate-eval child to graph.json under a short lock (CR-2b).
+
+    Best-effort: a persistence failure must not abandon a job that has already
+    been submitted to the backend. The in-memory node stays authoritative for
+    this run either way.
+    """
+    from automil.graph import locked_update
+
+    try:
+        with locked_update(
+            str(graph.path),
+            technique_map=getattr(graph, "_technique_map", None),
+        ) as g:
+            g.nodes.setdefault(child_id, dict(node))
+    except Exception:  # noqa: BLE001 — the job is already submitted
+        logger.exception("gate-eval: could not persist child node %s", child_id)
+
+
 def evaluate_candidate(
     candidate_node_id: str,
     manifest: "GateManifest",
@@ -152,6 +172,14 @@ def evaluate_candidate(
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        # CR-2b: persist this child under a SHORT lock, as it is created.
+        # Previously the only write was promote_candidate's single graph.save()
+        # after every held-out evaluation had finished — minutes later — which
+        # meant (a) these nodes existed nowhere on disk while their jobs ran, and
+        # (b) that final whole-snapshot save clobbered any daemon completion that
+        # landed in the meantime. The lock cannot be held across the evaluations
+        # themselves, so the write is split into short transactions instead.
+        _persist_gate_child(graph, child_id, graph.nodes[child_id])
 
         handles[cell_id] = (handle, child_id, hc)
 
