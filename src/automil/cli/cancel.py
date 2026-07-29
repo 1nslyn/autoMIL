@@ -104,6 +104,24 @@ def cancel(node_id: str, timeout: int) -> None:
     _pgid: int | None = metadata.get("pgid")
     _starttime: int | None = metadata.get("starttime_ticks")  # absent on non-Linux
 
+    # H-7: record the intent in the RUNNING SPEC before the kill, mirroring the
+    # cap path's ordering (D-124 / Pitfall 4). The graph annotation at the end of
+    # this command is not enough: the daemon observes a dead process with no
+    # result.json and, seeing no reason recorded where it looks, overwrites
+    # `cancelled` with `crash` — so an operator stop became indistinguishable
+    # from a training bug and inflated the failure statistics the gate's health
+    # diagnostic reads. Best-effort: a failure here must not block the kill,
+    # which is the part the operator actually asked for.
+    try:
+        _annotated = dict(running_spec)
+        _annotated["metadata"] = {**metadata, "cancel_reason": "cli"}
+        running_path.write_text(json.dumps(_annotated, indent=2))
+    except OSError as exc:
+        click.echo(
+            f"Warning: could not annotate {running_path} with cancel_reason "
+            f"(the daemon may record this stop as a crash): {exc}"
+        )
+
     if not opaque_id and not (_pid and _pgid):
         raise click.ClickException(
             f"Running spec at {running_path} has neither 'opaque_id' nor "
