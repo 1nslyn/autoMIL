@@ -44,7 +44,9 @@ _ALLOWLIST: dict[str, str] = {
     # 1. Informational comment about consumer-specific vars; documents the
     #    env.passthrough seam without auto-injecting any value.
     #    Line shifted to :60 by DBT-03 (14-02): removed 2-line deferral comment block.
-    "src/automil/backends/_orchestrator_daemon.py:60":
+    #    Line shifted to :61 by L-6 (audit 2026-07-23): added `import fcntl` for
+    #    cmd_submit's id-allocation lock.
+    "src/automil/backends/_orchestrator_daemon.py:61":
         "Consumer-specific vars (e.g. AUTOBENCH_*_ROOT)",
     # 2. Comment in verify_repro about the clean env not leaking AUTOBENCH_*.
     "src/automil/cli/lifecycle/verify_repro.py:84":

@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -2456,30 +2457,75 @@ class ExperimentOrchestrator:
             self.pid_file.unlink()
 
     def cmd_submit(self, spec_path: str):
-        """Submit an experiment spec to the queue."""
+        """Submit an experiment spec to the queue.
+
+        L-6 (audit 2026-07-23): this is the legacy in-daemon submit path
+        (``automil.backends._orchestrator_daemon.main()``'s ``submit``
+        subcommand). The supported path is ``automil submit`` ->
+        ``cli/submit.py``, which allocates ids from graph.json under
+        ``locked_update``. This path instead derives the next id from
+        ``gpu_state.json``'s ``"counter"`` field, which only the daemon's
+        main tick loop (``_save_state``) persists -- ``cmd_submit`` never
+        advances it itself. Two near-simultaneous calls on this path
+        (including one racing a daemon tick) could therefore read the same
+        stale counter, compute the same id, and the second call's
+        unconditional write would silently overwrite the first's queue
+        spec -- the first submission lost with no error.
+
+        Fixed with two independent guards:
+          1. The id read + write is serialized under the SAME lock
+             graph.json writers use (``locked_update``'s
+             ``<graph_path>.lock`` sidecar). This path never touches
+             graph.json's contents, but sharing its lock file makes id
+             allocation mutually exclusive with every other allocator in
+             the process, including a concurrent legacy submit.
+          2. The write itself refuses (does not overwrite) when the target
+             queue file already exists -- so any collision that still
+             slips through (e.g. a caller-supplied id, or a lock-holder
+             that crashed mid-write on a prior run) fails loudly instead
+             of silently discarding the earlier submission.
+        """
         src = Path(spec_path)
         if not src.exists():
             print(f"File not found: {spec_path}")
             sys.exit(1)
 
         spec = json.loads(src.read_text())
-        if not spec.get("id"):
-            # Auto-assign ID from counter
-            counter = 0
-            if self.gpu_state_file.exists():
-                try:
-                    counter = json.loads(self.gpu_state_file.read_text()).get("counter", 0)
-                except Exception:
-                    pass
-            counter += 1
-            spec["id"] = f"{counter:04d}"
 
-        if not spec.get("submitted_at"):
-            spec["submitted_at"] = datetime.now().isoformat()
+        lock_path = self.graph.path.with_suffix(self.graph.path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_f = open(lock_path, "w")
+        try:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
 
-        dst = self.queue_dir / f"{spec['id']}.json"
-        dst.write_text(json.dumps(spec, indent=2) + "\n")
-        print(f"Submitted experiment {spec['id']}: {spec.get('description', '?')}")
+            if not spec.get("id"):
+                # Auto-assign ID from counter
+                counter = 0
+                if self.gpu_state_file.exists():
+                    try:
+                        counter = json.loads(self.gpu_state_file.read_text()).get("counter", 0)
+                    except Exception:
+                        pass
+                counter += 1
+                spec["id"] = f"{counter:04d}"
+
+            if not spec.get("submitted_at"):
+                spec["submitted_at"] = datetime.now().isoformat()
+
+            dst = self.queue_dir / f"{spec['id']}.json"
+            if dst.exists():
+                print(
+                    f"Refusing to submit: a queue spec already exists for id "
+                    f"{spec['id']!r} ({dst}). Not overwriting it."
+                )
+                sys.exit(1)
+            dst.write_text(json.dumps(spec, indent=2) + "\n")
+            print(f"Submitted experiment {spec['id']}: {spec.get('description', '?')}")
+        finally:
+            try:
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_f.close()
 
 
 def main():
