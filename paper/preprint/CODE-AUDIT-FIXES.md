@@ -46,7 +46,7 @@ Branch: `fix/audit-2026-07-23`. Updated as each fix lands.
 | **A-5** | **Fig 4: TITAN is excluded from the agentic search** → after the search tile arms improve and TITAN does not; "TITAN wins slide-level" can reverse for a non-model reason, or survive unfairly | HIGH | ⚑ | include TITAN in the search, or drop the head-to-head framing. Note TITAN has only 4 knobs — "equal effort" is meaningless for a linear probe. |
 | **A-6** | **Fig 5 cannot use any pre-fix run** — it exists to demonstrate the firewall, which was not intact before this audit | MED | ☐ | needs one fresh cell run on the repaired pipeline. |
 | **A-7** | **Fig 7 "reproduces published SOTA" contradicts CLAM running at 2× upstream lr** | HIGH | ⚑ | unavailable as a claim unless CLAM returns to upstream lr. Ties to the Step-3 decision. |
-| **A-8** | Fig 2's variance decomposition is **single-seed** — cannot separate seed noise from the components it reports | HIGH | ⚑ | same decision as H-5c (how many seeds). |
+| **A-8** | Fig 2's variance decomposition is **single-seed** — cannot separate seed noise from the components it reports | HIGH | ◐ | Half-void, half-landed. The **claim** it undermined (encoder ≫ aggregator) is dropped, so Fig 2 no longer carries a decomposition that has to separate seed noise. The **capability** landed anyway (H-5c: `BenchmarkConfig.seeds`), because the settled headline — a per-cell lift — needs it more than Fig 2 ever did: the first question asked of any lift is whether it clears the noise of simply rerunning the same recipe. Remaining: how many seeds (compute, Leo). |
 
 ## Gate 2 — before any headline claim (statistics/reporting)
 
