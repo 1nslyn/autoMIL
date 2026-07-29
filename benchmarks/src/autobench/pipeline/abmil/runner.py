@@ -79,7 +79,9 @@ def run_abmil_experiment(
     # CR-5b: `cfg` is passed too — ABMIL's M/L/dropout live outside exp_cfg, so a
     # change there must invalidate this cache as surely as a change to lr.
     results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir, arm_cfg=cfg)
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
+    # H-3: ABMIL trains off ABMILConfig (lr 5e-4 / wd 1e-4 / 20 epochs), not the
+    # shared TrainConfig that config.json also carries.
+    exp_cfg.save(os.path.join(results_dir, "config.json"), arm_cfg=cfg)
 
     h5_dir = _resolve_h5_dir(benchmark_dir, exp_cfg)
     task_csv = os.path.join(benchmark_dir, "dataset_csv", f"{exp_cfg.task.name}.csv")

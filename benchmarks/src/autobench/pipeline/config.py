@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from enum import Enum
 
 from autobench.config import DatasetConfig
@@ -96,6 +96,46 @@ class TrainConfig:
     seed: int = 42
 
 
+def _arm_as_dict(arm_cfg) -> dict | None:
+    """Arm config dataclass / nnMIL plan mapping -> plain dict; ``None`` if absent."""
+    if arm_cfg is None:
+        return None
+    if is_dataclass(arm_cfg) and not isinstance(arm_cfg, type):
+        return asdict(arm_cfg)
+    if isinstance(arm_cfg, dict):
+        return dict(arm_cfg)
+    raise TypeError(
+        f"arm_cfg must be a dataclass instance or a mapping, got {type(arm_cfg).__name__}"
+    )
+
+
+def _train_fields_superseded_by_arm(arm: dict | None) -> list[str]:
+    """Which ``train`` fields this arm's OWN config governs instead (H-3).
+
+    ``TrainConfig`` is the shared transport, but only CLAM actually trains off
+    it: DTFD, nnMIL and TITAN each carry their own ``lr``/``wd``/epoch count.
+    ``config.json`` recorded the shared block regardless, so 102 of the 195
+    campaign configs described a recipe that never ran -- a methods table built
+    from that artifact would be fiction.
+
+    Recording the arm block alone is not enough, because the stale ``train``
+    block sits right next to it and a reader cannot tell which one governed.
+    This list names, per run, exactly which ``train`` entries are superseded.
+    Computed from the arm's real field names (via ``hparams.FIELD_ALIASES``, so
+    DTFD's ``wd`` and nnMIL's ``learning_rate`` resolve correctly), never
+    asserted from a hand-maintained table that could drift.
+    """
+    if not arm:
+        return []
+    from autobench.pipeline.hparams import FIELD_ALIASES
+
+    return sorted(
+        canonical
+        for canonical, aliases in FIELD_ALIASES.items()
+        if any(alias in arm for alias in aliases)
+    )
+
+
 @dataclass
 class ExperimentConfig:
     task: TaskConfig
@@ -161,14 +201,40 @@ class ExperimentConfig:
         return os.path.join(*parts)
 
     def to_dict(self) -> dict:
+        """The shared transport, verbatim.
+
+        Deliberately NOT widened by ``save``'s H-3 fields: ``results_cache.
+        fingerprint_payload`` is built on this, so an extra key here would change
+        every stored digest and make every existing results directory raise
+        ``StaleResultsCacheError`` on resume. The provenance fields belong to the
+        human-facing artifact only.
+        """
         d = asdict(self)
         d["framework"] = self.framework.value
         return d
 
-    def save(self, path: str) -> None:
+    def save(self, path: str, arm_cfg=None) -> None:
+        """Write ``config.json``: the configuration that ACTUALLY governed the run.
+
+        H-3: the shared ``train`` block is what every arm's ``config.json``
+        recorded, but only CLAM trains off it. Pass the arm's own config
+        (``DTFDConfig``, ``ABMILConfig``, ``TitanHeadConfig``, or nnMIL's computed
+        plan dict) and it is recorded under ``arm``, with
+        ``train_fields_superseded_by_arm`` naming which ``train`` entries it
+        overrides. ``arm: null`` with an empty list is CLAM's honest answer -- the
+        shared block really did govern -- and is written explicitly so an absent
+        arm config reads as a fact rather than as an omission.
+        """
+        arm = _arm_as_dict(arm_cfg)
+        payload = self.to_dict()
+        payload["arm"] = arm
+        payload["train_fields_superseded_by_arm"] = _train_fields_superseded_by_arm(arm)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
+            # default=str mirrors the fingerprint sidecar: nnMIL's plan dict is
+            # externally produced, and a human-facing record is better written
+            # with a stringified value than not written at all.
+            json.dump(payload, f, indent=2, default=str)
 
 
 @dataclass

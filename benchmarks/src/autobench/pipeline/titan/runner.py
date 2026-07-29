@@ -66,10 +66,16 @@ def run_titan_experiment(
     # CR-5b: the head config is built inside the trainer, so stamp its *defaults*
     # here — the overrides layered on top of them come from exp_cfg, which is
     # already in the fingerprint. Together that covers TITAN's whole surface.
+    _head_cfg = TitanHeadConfig()
     results_dir = resolve_results_dir(
-        exp_cfg, benchmark_dir, results_dir, arm_cfg=TitanHeadConfig(),
+        exp_cfg, benchmark_dir, results_dir, arm_cfg=_head_cfg,
     )
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
+    # H-3: TITAN is genuinely MIXED -- the probe's lr/weight_decay/patience come
+    # from TitanHeadConfig (1e-3 / 1e-4), while max_epochs and seed are read off
+    # the shared TrainConfig. The emitted `train_fields_superseded_by_arm` names
+    # exactly which side won for each field, so the split is readable from the
+    # artifact instead of only from this comment.
+    exp_cfg.save(os.path.join(results_dir, "config.json"), arm_cfg=_head_cfg)
 
     task_csv = os.path.join(benchmark_dir, "dataset_csv", f"{exp_cfg.task.name}.csv")
     task_df = pd.read_csv(task_csv)
