@@ -458,10 +458,19 @@ def main() -> None:
 
     elapsed = time.time() - start_time
 
-    # Write result.json (autoMIL contract)
+    # Write result.json (autoMIL contract).
+    #
+    # L-3: split-written across the val-firewall boundary. The FULL payload —
+    # `held_out` included — goes to the sealed AUTOMIL_RESULTS_DIR; the copy
+    # that lands in the worktree is stripped. Writing it here directly, as this
+    # did, left the test metrics sitting in `.automil_worktrees/<node>/result.json`
+    # for the entire run, in a directory with no access control of its own —
+    # readable by anything that can read the project tree, including the agent
+    # driving the search, without waiting for `automil certify`.
     result = summary_to_result_json(summary, elapsed)
-    with open("result.json", "w") as f:
-        json.dump(result, f, indent=2)
+    from automil.runtime_helpers import write_result_json
+
+    write_result_json(result)
 
     print(f"\nExperiment complete in {elapsed:.0f}s")
     # val-firewall: surface only the validation selection signal to stdout/run.log;
