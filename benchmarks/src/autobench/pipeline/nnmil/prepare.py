@@ -92,6 +92,33 @@ def prepare_nnmil_experiment(
     n_missing = (~has_h5).sum()
     if n_missing > 0:
         print(f"  Skipping {n_missing} slides without H5 features for {encoder_key}")
+        # M-9 (nnMIL follow-up): the drop happens ONCE here, at plan time, for the
+        # whole cohort — before any fold exists — which is why the per-split guard
+        # in the other arms' loaders cannot see it. The consequence is the same:
+        # a partially-extracted cohort silently trains, validates and reports on
+        # whatever survived. Guard the cohort as one "split", and additionally on
+        # the per-class floor, so a minority class wiped out by a partial
+        # extraction fails loudly instead of producing a confident number.
+        #
+        # The plan is CACHED (`if os.path.exists(plan_path): return` above), so
+        # without this an under-extracted cohort would be baked in and reused by
+        # every later experiment on that (strategy, task, encoder).
+        from autobench.pipeline.dataset_guards import check_split_retention
+
+        _label_col = "label" if "label" in task_df.columns else None
+        _expected_by_class = _retained_by_class = None
+        if _label_col is not None:
+            _full = pd.read_csv(task_csv_path)
+            _expected_by_class = _full[_label_col].value_counts().to_dict()
+            _retained_by_class = _full[has_h5][_label_col].value_counts().to_dict()
+        check_split_retention(
+            context=f"nnmil plan {dataset_name}/{task_name}/{encoder_key}",
+            split="cohort",
+            expected_total=int(len(task_df)),
+            retained_total=int(has_h5.sum()),
+            expected_by_class=_expected_by_class,
+            retained_by_class=_retained_by_class,
+        )
         task_df = task_df[has_h5].reset_index(drop=True)
 
     # --- dataset.json ---
