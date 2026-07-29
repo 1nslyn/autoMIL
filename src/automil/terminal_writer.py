@@ -259,6 +259,17 @@ def write_terminal_state(
                         else "discard"
                     )
 
+                # M-7: the daemon's terminal path never maintained the counters.
+                # `meta.total_executed` is the UCB exploration denominator
+                # (graph.py: sqrt(log(total) / (1 + child_count))), so a campaign
+                # driven entirely by the daemon explored against a frozen count
+                # while every CLI path kept it moving. Idempotent on `type`: a
+                # re-processed completion must not double-count.
+                if gnode.get("type") != "executed":
+                    g.meta["total_executed"] = g.meta.get("total_executed", 0) + 1
+                    g.meta["total_proposed"] = max(
+                        0, g.meta.get("total_proposed", 0) - 1
+                    )
                 gnode["type"] = "executed"
                 gnode["status"] = graph_status
                 gnode["composite"] = composite

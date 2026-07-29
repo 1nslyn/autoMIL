@@ -677,7 +677,20 @@ class ExperimentOrchestrator:
                 node_id = spec.get("id", f.stem)
                 logger.info(f"Orphaned experiment {node_id} found, marking as crashed")
 
-                self._sigkill_orphan_pg(node_id, spec)
+                _meta = spec.get("metadata") or {}
+                if _meta.get("launch_phase") == "launching":
+                    # M-6: the daemon died between Popen and the running-spec
+                    # write, so no pid was ever recorded. The node is recoverable;
+                    # the process is not. Name the worktree so it can be found.
+                    logger.warning(
+                        "Orphan %s died mid-launch with no pid recorded: a training "
+                        "process may still be alive and holding GPU %s. Worktree: %s. "
+                        "Check for it manually — recovery cannot signal an "
+                        "unrecorded process group.",
+                        node_id, _meta.get("gpu"), _meta.get("worktree"),
+                    )
+                else:
+                    self._sigkill_orphan_pg(node_id, spec)
 
                 archive = self.archive_dir / node_id
                 archive.mkdir(parents=True, exist_ok=True)
@@ -688,6 +701,11 @@ class ExperimentOrchestrator:
                     "status": "crash",
                     "completed_at": datetime.now().isoformat(),
                 }, indent=2))
+                # M-5: same reasoning as _mark_crashed — the graph must not be
+                # left describing a node that is still "running".
+                self._mark_node_terminal_in_graph(
+                    node_id, "crash", "Orchestrator restarted while running",
+                )
 
                 f.unlink()
 
@@ -1100,6 +1118,71 @@ class ExperimentOrchestrator:
                 cell.cell_id[:8], spec.get("id"),
             )
 
+    def _mark_node_terminal_in_graph(self, node_id: str, status: str,
+                                     error: str = "") -> None:
+        """Record a terminal status on the graph node (M-5, M-7).
+
+        Both crash paths used to write ``archive/result.json`` and
+        ``completed/<id>.json`` and stop there, leaving ``graph.json`` describing
+        a node that is still queued or running. ``reconcile`` would eventually
+        repair it — but only if somebody ran it, which on a daemon-driven
+        campaign may be never, so ``automil rank`` and ``automil status`` showed
+        a node that never resolves.
+
+        Routed through ``mark_failed`` rather than assigning fields here, because
+        that is also where ``meta.total_executed`` / ``total_proposed`` are
+        maintained (M-7): ``total_executed`` is the UCB exploration denominator
+        (``graph.py``: ``sqrt(log(total) / (1 + child_count))``), so a daemon that
+        never incremented it explored against a frozen count.
+
+        Idempotent. Orphan recovery and ``_mark_crashed`` can both fire for one
+        node, and double-counting the denominator would be its own distortion, so
+        a node already marked executed is left alone.
+        """
+        from automil.graph import locked_update
+
+        try:
+            with locked_update(
+                str(self.graph.path),
+                technique_map=getattr(self.graph, "_technique_map", None),
+            ) as g:
+                node = g.get_node(node_id)
+                if node is None:
+                    return          # Backend.submit path the graph never saw
+                if node.get("type") == "executed":
+                    return          # already terminal — do not re-bill the counters
+                g.mark_failed(node_id, status, error)
+        except Exception:  # noqa: BLE001 — a graph failure must not wedge the daemon
+            logger.exception("could not mark %s as %s in the graph", node_id, status)
+
+    def _write_launch_intent(self, spec: dict, gpu_id: int, worktree) -> Path:
+        """Record the intent to launch BEFORE spawning the process (M-6).
+
+        The running spec proper cannot be written before ``Popen`` — it carries
+        the pid. So the window between the spawn and that write was one in which
+        a daemon death left the node queued forever AND the training process
+        alive, holding its GPU, invisible to orphan recovery.
+
+        Writing an intent record first cannot recover the pid; nothing can. What
+        it does is split the failure in two and fix the half that is fixable: the
+        node is now correctly marked crashed on the next start, and the leak is
+        REPORTED with the worktree that identifies it, instead of being silent.
+        ``_launch`` overwrites this file with the real running spec moments later.
+        """
+        path = self._backend_running_dir("local") / f"{spec.get('id')}.json"
+        payload = {k: v for k, v in spec.items() if k != "_file"}
+        meta = dict(payload.get("metadata") or {})
+        meta.update({
+            "launch_phase": "launching",
+            "pid": None,
+            "gpu": gpu_id,
+            "worktree": str(worktree),
+            "intent_at": datetime.now().isoformat(),
+        })
+        payload["metadata"] = meta
+        path.write_text(json.dumps(payload, indent=2))
+        return path
+
     def _launch(self, spec: dict, gpu_id: int):
         """Launch an experiment in an isolated git worktree."""
         node_id = spec["id"]
@@ -1185,6 +1268,9 @@ class ExperimentOrchestrator:
             override_str = spec.get("run_command_override")
             if override_str:
                 cmd = cmd + shlex.split(override_str)
+            # M-6: intent BEFORE the side effect. Overwritten with the real
+            # running spec (pid/pgid/starttime) a few lines below.
+            self._write_launch_intent(spec, gpu_id, wt_path)
             process = subprocess.Popen(
                 cmd,
                 cwd=str(wt_path),
@@ -1958,6 +2044,9 @@ class ExperimentOrchestrator:
         (self.completed_dir / f"{node_id}.json").write_text(
             json.dumps(result, indent=2) + "\n"
         )
+        # M-5 / M-7: the artifacts above are what `reconcile` rebuilds from, but
+        # the graph must not wait for a reconcile that may never be run.
+        self._mark_node_terminal_in_graph(node_id, "crash", error)
 
     _TSV_TRAILING = ("composite", "vram_gb", "elapsed_min", "status", "description")
 
