@@ -914,9 +914,199 @@ class ExperimentOrchestrator:
                     len(new_parts), wt_path,
                 )
 
+    # --- Cell cap enforcement at the launch path (CAP-1 / H-2) ---
+
+    def _cell_for_spec(self, spec: dict, *, warn: bool = True):
+        """Return the Cell this spec is billed to, or None if it has no identity.
+
+        Resolves ``cells/`` from ``self.automil_dir`` rather than through
+        ``cells.get_cell`` — the registry's cwd-walking ``_find_automil_dir()``
+        fallback would find the host project's overlay when the daemon runs from
+        another cwd (same reasoning as ``_tick_cells``).
+
+        ``warn=False`` suppresses the unresolvable-cell warning for repeat
+        lookups within one launch, so the operator sees it once, not per call.
+        """
+        from automil.cells import read_cell
+
+        cell_id = (spec.get("metadata") or {}).get("cell_id")
+        if not cell_id:
+            return None
+        path = self.automil_dir / "cells" / f"{cell_id}.json"
+        if not path.exists():
+            if warn:
+                logger.warning(
+                    "Spec %s references cell %s which has no cells/<id>.json; "
+                    "launching UNCAPPED (this evaluation is billed to no budget).",
+                    spec.get("id"), str(cell_id)[:8],
+                )
+            return None
+        try:
+            return read_cell(path)
+        except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
+            if warn:
+                logger.warning(
+                    "Could not read cell %s for spec %s (%s); launching UNCAPPED.",
+                    str(cell_id)[:8], spec.get("id"), exc,
+                )
+            return None
+
+    def _refuse_closed_cell_spec(self, spec: dict) -> bool:
+        """Refuse a queued spec whose budget cell has closed. True iff refused (CAP-1).
+
+        Until this existed, only ``automil submit`` was gated: any spec already
+        sitting in ``queue/`` when its cell flipped to REFUSING_NEW still
+        launched, so the cap bounded the front door and nothing else.
+
+        Refusal mirrors ``automil dequeue`` — unlink ``queue/<node>.json`` and
+        ``graph.cancel()`` the node. The spec is NOT left queued: the cap state
+        machine is monotone, so a closed cell never re-opens and the spec would
+        strand its node id forever (submit refuses a duplicate queue entry, and
+        children refuse a still-running parent). It is not marked crashed either
+        — nothing ran, so a crash row would poison the failure statistics and,
+        via ``completed/``, would have ``reconcile`` promote a phantom executed
+        node with composite 0.0.
+
+        Specs with no ``metadata.cell_id`` (or a dangling one) are NOT refused:
+        ``Backend.submit`` is a first-class submission path — the gate uses it —
+        and dropping its work would be destructive. They are reported by
+        ``_record_cell_launch`` instead, once per dispatch rather than once per
+        poll: an evaluation billed to no cell dilutes the equal-effort
+        accounting, so it must never be silent.
+
+        This method is called on every poll for every pending spec, so it stays
+        silent unless it actually refuses.
+        """
+        from automil.cells import blocks_new_work
+
+        node_id = spec.get("id")
+        cell = self._cell_for_spec(spec, warn=False)
+        if cell is None or not blocks_new_work(cell):
+            return False
+
+        logger.warning(
+            "Refusing to launch %s: cell %s is %s (consumed_evals=%d/%s). Dequeuing "
+            "the spec and cancelling the node — a closed cell never re-opens.",
+            node_id, cell.cell_id[:8], cell.status.value, cell.consumed_evals,
+            cell.eval_budget if cell.eval_budget is not None else "-",
+        )
+
+        src_file = spec.get("_file")
+        if src_file and Path(src_file).exists():
+            try:
+                Path(src_file).unlink()
+            except OSError as exc:
+                logger.warning("Could not remove refused queue spec %s: %s", src_file, exc)
+
+        # Audit trail: the archived spec records why this node never ran.
+        try:
+            archive = self.archive_dir / node_id
+            archive.mkdir(parents=True, exist_ok=True)
+            spec_clean = {k: v for k, v in spec.items() if k != "_file"}
+            spec_clean["metadata"] = {
+                **(spec_clean.get("metadata") or {}),
+                "cancel_reason": "cap",
+                "cap_refused": True,
+            }
+            (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2))
+        except OSError:
+            logger.exception("Could not archive refused spec for %s", node_id)
+
+        self._cancel_node_for_cap_refusal(node_id, cell.cell_id)
+        return True
+
+    def _cancel_node_for_cap_refusal(self, node_id: str, cell_id: str) -> None:
+        """Mark a cap-refused node cancelled in graph.json (same shape as dequeue)."""
+        from automil.graph import locked_update
+
+        try:
+            with locked_update(
+                str(self.graph.path),
+                technique_map=getattr(self.graph, "_technique_map", None),
+            ) as g:
+                node = g.get_node(node_id)
+                if node is None:
+                    logger.debug(
+                        "cap refusal: %s is not in the graph; nothing to cancel", node_id
+                    )
+                    return
+                g.cancel(node_id)
+                node["cancel_reason"] = "cap"
+                node.setdefault("metadata", {})["cap_refused"] = True
+                node.setdefault("cell_id", cell_id)
+        except Exception:  # noqa: BLE001 — a graph failure must not wedge the loop
+            logger.exception("cap refusal: could not cancel graph node %s", node_id)
+
+    def _record_cell_launch(self, spec: dict) -> None:
+        """Bill one evaluation to the dispatching cell (H-2).
+
+        Called once the process is actually spawned. A launch that never got that
+        far (missing base_commit, worktree failure, Popen error) dispatched
+        nothing and is therefore not billed: it is an infrastructure fault, not
+        an attempt by the agent. Everything that DID start counts — crashed,
+        partial and budget-killed alike — because equal effort means equal
+        attempts, not equal successes.
+
+        Also the single place an unbillable launch is reported: exactly once per
+        dispatch, so the operator can find (and the paper can quantify) every
+        evaluation that no cell budget paid for.
+        """
+        if not (spec.get("metadata") or {}).get("cell_id"):
+            logger.warning(
+                "Launched %s with no metadata.cell_id: this evaluation is billed to "
+                "no cell budget and is invisible to per-cell effort accounting "
+                "(legacy spec, or a submission path other than `automil submit`).",
+                spec.get("id"),
+            )
+            return
+        if self._cell_for_spec(spec, warn=True) is None:
+            return  # unresolvable cell — already reported by _cell_for_spec
+        self._bump_cell_counters(spec, consumed_delta=1)
+
+    def _record_cell_completion(self, spec: dict, status: str) -> None:
+        """Record a usable result against the cell (H-2, reported secondary).
+
+        Only ``completed`` / ``partial`` count. This is never the cap — if
+        crashes were free retries the budget would stop being a budget — it
+        exists so per-cell effort can be quoted as both attempts and usable
+        results.
+        """
+        if status not in ("completed", "partial"):
+            return
+        self._bump_cell_counters(spec, completed_delta=1)
+
+    def _bump_cell_counters(self, spec: dict, *, consumed_delta: int = 0,
+                            completed_delta: int = 0) -> None:
+        """Immutable read-modify-write of a cell's eval counters."""
+        from dataclasses import replace
+
+        from automil.cells import write_cell
+
+        cell = self._cell_for_spec(spec, warn=False)
+        if cell is None:
+            return
+        try:
+            write_cell(
+                replace(
+                    cell,
+                    consumed_evals=cell.consumed_evals + consumed_delta,
+                    completed_evals=cell.completed_evals + completed_delta,
+                ),
+                self.automil_dir / "cells",
+            )
+        except OSError:
+            logger.exception(
+                "Could not update eval counters for cell %s (node %s)",
+                cell.cell_id[:8], spec.get("id"),
+            )
+
     def _launch(self, spec: dict, gpu_id: int):
         """Launch an experiment in an isolated git worktree."""
         node_id = spec["id"]
+        # CAP-1: the cap must bind here, not only at submit time. Idempotent with
+        # the pre-check in tick() — a refused spec is already gone from queue/.
+        if self._refuse_closed_cell_spec(spec):
+            return
         archive = self.archive_dir / node_id
         archive.mkdir(parents=True, exist_ok=True)
 
@@ -1025,6 +1215,11 @@ class ExperimentOrchestrator:
             estimated_vram_gb=estimated_vram,
         )
         self.gpu_allocations.setdefault(gpu_id, []).append(node_id)
+
+        # H-2: the experiment is dispatched — bill it to its cell. Done here (not
+        # at completion) so crashed and budget-killed attempts cost the same as
+        # successful ones.
+        self._record_cell_launch(spec)
 
         # Copy spec to running dir for orphan recovery.
         # Use _backend_running_dir to ensure running/local/ exists (created on demand
@@ -1357,6 +1552,10 @@ class ExperimentOrchestrator:
             gpu_id=gpu_id,
         )
 
+        # H-2: record a usable result against the cell (reported secondary; the
+        # attempt was already billed at launch).
+        self._record_cell_completion(spec, result.get("status", ""))
+
         # D-170: cross-backend log unification (no-op for local backend).
         self._drain_remote_backend_log(node_id, archive)
 
@@ -1457,6 +1656,9 @@ class ExperimentOrchestrator:
             node_id, payload["status"], payload["composite"],
             payload.get("partial_folds", 0), payload.get("expected_folds", 0),
         )
+        # H-2: a budget-killed run that produced folds still yielded a usable
+        # result. The discriminator is the terminal status, not the cause.
+        self._record_cell_completion(spec, payload.get("status", ""))
         # Clean running spec and worktree — use backend-aware path (WR-02 fix / D-169).
         _backend_name_cap = self._read_backend_name_for_node(node_id)
         running_spec = self._backend_running_dir(_backend_name_cap) / f"{node_id}.json"
@@ -1891,6 +2093,12 @@ class ExperimentOrchestrator:
                 if not spec.get("id"):
                     self.counter += 1
                     spec["id"] = f"{self.counter:04d}"
+
+                # CAP-1: decide admission BEFORE the GPU search, so a spec whose
+                # cell has closed is withdrawn immediately instead of lingering
+                # in the queue for as long as the cluster stays busy.
+                if self._refuse_closed_cell_spec(spec):
+                    continue
 
                 needed_gb = spec.get("estimated_vram_gb", self.default_vram)
                 gpu = self._find_best_gpu(needed_gb)

@@ -20,6 +20,11 @@ DEFAULT_IDLE_GRACE_SECONDS = 300
 DEFAULT_MODE = "agent_active"
 VALID_MODES = ("agent_active", "wall_clock")
 
+# H-2: the eval-count cap is an ORTHOGONAL SECOND AXIS, not a third mode —
+# VALID_MODES stays time-only. ``None`` means "no eval cap", which reproduces
+# the pre-H-2 time-only behaviour for every consumer that does not opt in.
+DEFAULT_EVAL_BUDGET: int | None = None
+
 _DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*$", re.IGNORECASE)
 _UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -64,6 +69,7 @@ class CapResolved:
     safety_buffer_seconds: int
     idle_grace_seconds: int
     mode: str
+    eval_budget: int | None = DEFAULT_EVAL_BUDGET
 
 
 def _resolve_seconds(cap: dict, dur_key: str, legacy_key: str, default: int,
@@ -77,15 +83,44 @@ def _resolve_seconds(cap: dict, dur_key: str, legacy_key: str, default: int,
     return default
 
 
+def parse_eval_budget(value: object) -> int | None:
+    """Parse ``cap.eval_budget`` into a positive int, or ``None`` for no eval cap.
+
+    A count, NOT a duration: ``"6h"`` is rejected rather than silently read as
+    21600 evaluations. ``None`` (an omitted key or an explicit YAML ``null``)
+    means the cell is time-only — today's behaviour.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):  # bool is an int subclass — reject explicitly
+        raise ValueError(f"cap.eval_budget must be a positive integer, got bool {value!r}")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        parsed = int(value.strip())
+    else:
+        raise ValueError(
+            f"cap.eval_budget must be a positive integer count of evaluations "
+            f"(or null for no eval cap), got {value!r}"
+        )
+    if parsed <= 0:
+        raise ValueError(
+            f"cap.eval_budget must be > 0 (got {parsed}); use null to disable the eval cap"
+        )
+    return parsed
+
+
 def resolve_cap_config(
     automil_cfg: object,
     *,
     budget_override: int | None = None,
     buffer_override: int | None = None,
+    eval_budget_override: int | None = None,
 ) -> CapResolved:
     """Resolve the effective cap parameters from a parsed config.yaml dict.
 
-    Raises ``ValueError`` on an invalid duration or an unknown ``cap.mode``.
+    Raises ``ValueError`` on an invalid duration, an unknown ``cap.mode``, or a
+    non-positive / non-integer ``cap.eval_budget``.
     """
     cap = automil_cfg.get("cap", {}) if isinstance(automil_cfg, dict) else {}
     if not isinstance(cap, dict):
@@ -102,9 +137,19 @@ def resolve_cap_config(
         raise ValueError(
             f"cap.mode must be one of {VALID_MODES}, got {mode!r}"
         )
+
+    # H-2: second axis, resolved independently of ``mode`` (which only meters
+    # seconds). An explicit override wins; otherwise the config key; otherwise
+    # no eval cap.
+    if eval_budget_override is not None:
+        eval_budget = parse_eval_budget(eval_budget_override)
+    else:
+        eval_budget = parse_eval_budget(cap.get("eval_budget", DEFAULT_EVAL_BUDGET))
+
     return CapResolved(
         budget_seconds=budget,
         safety_buffer_seconds=buffer,
         idle_grace_seconds=idle_grace,
         mode=mode,
+        eval_budget=eval_budget,
     )

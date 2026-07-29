@@ -102,19 +102,29 @@ def budget_show() -> None:
     click.echo(f"mode:          {cap.mode}")
     if cap.mode == "agent_active":
         click.echo(f"idle_grace:    {format_duration(cap.idle_grace_seconds)} ({cap.idle_grace_seconds}s)")
+    # H-2: the eval axis is the primary equal-effort comparison axis; time is the
+    # safety wall. Report it first-class so an operator can see which one binds.
+    click.echo(
+        f"eval_budget:   {cap.eval_budget if cap.eval_budget is not None else 'none (time-only)'}"
+    )
 
     cells = list_cells()
     if not cells:
         return
     click.echo("")
-    click.echo(f"{'cell_id':<10}{'status':<14}{'consumed':<11}{'remaining':<11}")
-    click.echo("-" * 46)
+    click.echo(
+        f"{'cell_id':<10}{'status':<14}{'consumed':<11}{'remaining':<11}"
+        f"{'evals':<10}{'usable':<8}"
+    )
+    click.echo("-" * 64)
     for c in cells:
         consumed = consumed_seconds(c)
         remaining = max(0.0, c.budget_seconds - consumed)
+        evals = f"{c.consumed_evals}/{c.eval_budget if c.eval_budget is not None else '-'}"
         click.echo(
             f"{c.cell_id[:8]:<10}{c.status.value:<14}"
             f"{_fmt_hms(consumed):<11}{_fmt_hms(remaining):<11}"
+            f"{evals:<10}{c.completed_evals:<8}"
         )
 
 
@@ -126,14 +136,17 @@ def budget_show() -> None:
 @click.option("--idle-grace", default=None,
               help="agent_active idle grace, e.g. 5m (how long after the agent's "
                    "last action the clock keeps running).")
+@click.option("--eval-budget", default=None,
+              help="Evaluations a cell may launch — the primary equal-effort axis "
+                   "(H-2). An integer count, or 'none' for time-only.")
 def budget_set(duration: str, safety_buffer: str | None, mode: str | None,
-               idle_grace: str | None) -> None:
+               idle_grace: str | None, eval_budget: str | None) -> None:
     """Set cap.budget in config.yaml, e.g. `automil budget set 6h`.
 
     Applies to cells opened AFTER this change (existing cells keep their budget
     per D-134). 6h is just the autoMIL-paper default — set whatever fits.
     """
-    from automil.cells.capconfig import parse_duration
+    from automil.cells.capconfig import parse_duration, parse_eval_budget
 
     adir = _find_automil_dir()
     cfg_path = adir / "config.yaml"
@@ -160,6 +173,11 @@ def budget_set(duration: str, safety_buffer: str | None, mode: str | None,
             updates["idle_grace"] = idle_grace
             drop.add("idle_grace_seconds")
             parse_duration(idle_grace)
+        if eval_budget is not None:
+            if eval_budget.strip().lower() in ("none", "null", ""):
+                updates["eval_budget"] = "null"
+            else:
+                updates["eval_budget"] = str(parse_eval_budget(eval_budget))
     except ValueError as exc:
         raise click.ClickException(str(exc))
 

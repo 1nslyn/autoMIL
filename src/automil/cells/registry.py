@@ -13,7 +13,9 @@ from pathlib import Path
 
 import click
 
+from automil.cells.cap import evals_exhausted
 from automil.cells.state import (
+    BLOCKING_STATUSES,
     Cell,
     CellStatus,
     make_cell_id,
@@ -39,6 +41,7 @@ def get_or_create_cell(
     idle_grace_seconds: int = 300,
     mode: str = "agent_active",
     task: str | None = None,
+    eval_budget: int | None = None,
 ) -> Cell:
     """Return existing cell or create a new one (lazy + idempotent, D-116, REC-04).
 
@@ -60,6 +63,9 @@ def get_or_create_cell(
         task: M-14 — participates in cell identity so a cohort's classification
             and survival searches do not share (and starve) one budget. None
             reproduces the legacy 3-tuple id.
+        eval_budget: H-2 — evaluation-count cap (the primary equal-effort axis);
+            honored only on creation, same as every other cap parameter. None
+            leaves the cell time-only.
     """
     cells_dir = _cells_dir()
     cell_id = make_cell_id(dataset, encoder, mil_model, task)
@@ -69,13 +75,16 @@ def get_or_create_cell(
         if (cell.budget_seconds != budget_seconds
                 or cell.safety_buffer_seconds != safety_buffer_seconds
                 or cell.idle_grace_seconds != idle_grace_seconds
-                or cell.mode != mode):
+                or cell.mode != mode
+                or cell.eval_budget != eval_budget):
             logger.info(
-                "Cell %s already open (budget=%ds buffer=%ds idle_grace=%ds mode=%s); "
-                "ignoring override (budget=%ds buffer=%ds idle_grace=%ds mode=%s) per D-134.",
+                "Cell %s already open (budget=%ds buffer=%ds idle_grace=%ds mode=%s "
+                "eval_budget=%s); ignoring override (budget=%ds buffer=%ds "
+                "idle_grace=%ds mode=%s eval_budget=%s) per D-134.",
                 cell_id[:8], cell.budget_seconds, cell.safety_buffer_seconds,
-                cell.idle_grace_seconds, cell.mode,
+                cell.idle_grace_seconds, cell.mode, cell.eval_budget,
                 budget_seconds, safety_buffer_seconds, idle_grace_seconds, mode,
+                eval_budget,
             )
         return cell
 
@@ -93,11 +102,16 @@ def get_or_create_cell(
         idle_grace_seconds=idle_grace_seconds,
         consumed_active_seconds=0.0,
         last_tick_at=None,
+        eval_budget=eval_budget,
+        consumed_evals=0,
+        completed_evals=0,
     )
     write_cell(cell, cells_dir)
     logger.info(
-        "Opened cell %s: dataset=%s encoder=%s mil_model=%s budget=%ds buffer=%ds mode=%s",
-        cell_id[:8], dataset, encoder, mil_model, budget_seconds, safety_buffer_seconds, mode,
+        "Opened cell %s: dataset=%s encoder=%s mil_model=%s budget=%ds buffer=%ds "
+        "mode=%s eval_budget=%s",
+        cell_id[:8], dataset, encoder, mil_model, budget_seconds, safety_buffer_seconds,
+        mode, eval_budget,
     )
     return cell
 
@@ -153,9 +167,24 @@ def list_cells(cells_dir: Path | None = None) -> list[Cell]:
 
 
 def is_refusing_new(cell: Cell) -> bool:
-    """True iff cell's status blocks new submits (D-116)."""
-    return cell.status in (
-        CellStatus.REFUSING_NEW,
-        CellStatus.TERMINATING,
-        CellStatus.FINALIZED,
-    )
+    """True iff cell's *status* blocks new submits (D-116).
+
+    Status-only, and therefore as fresh as the last daemon tick. Callers
+    deciding whether to admit new work should prefer ``blocks_new_work``.
+    """
+    return cell.status in BLOCKING_STATUSES
+
+
+def blocks_new_work(cell: Cell) -> bool:
+    """True iff this cell must refuse a new experiment — either cap axis (H-2).
+
+    The single admission predicate shared by ``automil submit``, the
+    orchestrator launch path (CAP-1) and the gate's held-out evaluations.
+
+    Consults the eval COUNTER as well as the status because the two advance at
+    different moments: ``consumed_evals`` increments at launch, while ``status``
+    only advances on the next daemon tick. A status-only check would let a whole
+    batch of already-queued specs launch past an exhausted eval budget in the
+    window between the two.
+    """
+    return is_refusing_new(cell) or evals_exhausted(cell)

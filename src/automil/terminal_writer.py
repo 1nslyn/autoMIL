@@ -260,6 +260,12 @@ def write_terminal_state(
                 gnode["type"] = "executed"
                 gnode["status"] = graph_status
                 gnode["composite"] = composite
+                # CELL-1: backfill budget-cell membership for nodes that did not
+                # come through `automil submit` (Backend.submit paths stamp the
+                # spec but never touch the graph). Submit-time identity wins.
+                _spec_cell_id = (spec.get("metadata") or {}).get("cell_id")
+                if _spec_cell_id and not gnode.get("cell_id"):
+                    gnode["cell_id"] = _spec_cell_id
                 if result.get("metrics"):
                     gnode["metrics"] = dict(result["metrics"])
                 # Propagate metadata from result (e.g. budget_killed flag)
