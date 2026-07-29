@@ -94,6 +94,28 @@ def _splits_standard_cv(
     nllsurv's quantile bins). Avoids StratifiedGroupKFold's minimum-stratum-
     size limitation.
     """
+    # L-5: a case whose slides DISAGREE on the stratification value would
+    # otherwise be resolved by whichever slide `.first()` (below) happens to
+    # sort first -- an arbitrary, silent choice the operator has no way to
+    # detect from the output (it changes neither the row count nor the
+    # schema). Assert one distinct value per case before that dedup runs.
+    conflict_counts = df.groupby("case_id")[stratify_col].nunique(dropna=False)
+    conflicted = conflict_counts[conflict_counts > 1].index.tolist()
+    if conflicted:
+        detail = {
+            case_id: sorted(
+                df.loc[df["case_id"] == case_id, stratify_col].unique().tolist(),
+                key=str,
+            )
+            for case_id in conflicted[:10]
+        }
+        raise ValueError(
+            f"{len(conflicted)} case(s) have conflicting {stratify_col!r} "
+            "values across their slides -- case-level stratification "
+            f"requires exactly one value per case_id: {detail}"
+            + (f" ... +{len(conflicted) - 10} more" if len(conflicted) > 10 else "")
+        )
+
     # One row per case with its stratification key (slides of the same case
     # share it — mutations and survival outcomes are both case-level).
     case_table = df.groupby("case_id", sort=True)[stratify_col].first().reset_index()

@@ -219,6 +219,49 @@ class TestPatientLevelStratification:
                 str(csv_path), splits_dir, strategy_cfg, n_splits=10, seed=42,
             )
 
+    def test_raises_when_a_case_has_conflicting_labels(self, tmp_path, registries):
+        """L-5: case-level stratification dedupes to one row per case_id via
+        ``.groupby("case_id")[stratify_col].first()``. If a case's slides
+        disagree on the stratification value (e.g. a data-entry conflict),
+        ``.first()`` silently picks whichever slide happened to sort first --
+        an arbitrary, undetectable resolution. Must raise instead, naming the
+        offending case(s).
+        """
+        rows = [
+            {"case_id": "a0", "slide_id": "a0_s0", "label": "pos"},
+            # a0's second slide disagrees with its first.
+            {"case_id": "a0", "slide_id": "a0_s1", "label": "neg"},
+            {"case_id": "a1", "slide_id": "a1_s0", "label": "pos"},
+            {"case_id": "a2", "slide_id": "a2_s0", "label": "neg"},
+            {"case_id": "a3", "slide_id": "a3_s0", "label": "neg"},
+        ]
+        csv_path = tmp_path / "conflict.csv"
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        splits_dir = str(tmp_path / "splits_conflict")
+        strategy_cfg = registries.strategy_registry["standard"]
+        with pytest.raises(ValueError, match=r"a0"):
+            create_strategy_splits(
+                str(csv_path), splits_dir, strategy_cfg, n_splits=2, seed=42,
+            )
+
+    def test_no_false_positive_when_all_cases_agree(self, tmp_path, registries):
+        """The new conflict guard must not reject ordinary, consistent data."""
+        rows = []
+        for i in range(20):
+            label = "pos" if i % 2 == 0 else "neg"
+            for slide_idx in range(2):
+                rows.append({
+                    "case_id": f"a{i}", "slide_id": f"a{i}_s{slide_idx}", "label": label,
+                })
+        csv_path = tmp_path / "consistent.csv"
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        splits_dir = str(tmp_path / "splits_consistent")
+        strategy_cfg = registries.strategy_registry["standard"]
+        paths = create_strategy_splits(
+            str(csv_path), splits_dir, strategy_cfg, n_splits=2, seed=42,
+        )
+        assert len(paths) == 2
+
     def test_raises_when_inner_val_infeasible(self, tmp_path, registries):
         """After the outer fold removes ~1/n cases, the train_val side
         of the smallest class must still have >= 2 cases so stratified
