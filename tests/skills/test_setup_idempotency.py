@@ -131,7 +131,7 @@ def test_skill_idempotency_detects_results_tsv_change(tmp_git_repo, monkeypatch)
 
     cfg_path = tmp_git_repo / "automil" / "config.yaml"
     cfg_v1 = yaml.safe_load(cfg_path.read_text())
-    v1_default = cfg_v1["cap"]["default_vram_estimate_gb"]
+    v1_default = cfg_v1["orchestrator"]["default_vram_estimate_gb"]
 
     # Seed results.tsv with 30 rows that produce a different quantile_95.
     automil_dir = tmp_git_repo / "automil"
@@ -142,7 +142,7 @@ def test_skill_idempotency_detects_results_tsv_change(tmp_git_repo, monkeypatch)
     assert result_2.exit_code == 0
 
     cfg_v2 = yaml.safe_load(cfg_path.read_text())
-    v2_default = cfg_v2["cap"]["default_vram_estimate_gb"]
+    v2_default = cfg_v2["orchestrator"]["default_vram_estimate_gb"]
 
     # The empirical path produces a different value than the conservative path.
     assert v2_default != v1_default, (

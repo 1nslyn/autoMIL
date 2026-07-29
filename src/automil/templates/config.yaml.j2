@@ -66,8 +66,14 @@ orchestrator:
   poll_interval_sec: 5
   safety_margin_gb: 2.0
   default_timeout_min: 150
-  max_concurrent_per_gpu: 1
-  default_vram_estimate_gb: 0.5
+  # CFG-2: these are the ONLY copies. They used to be declared here as literals
+  # AND again under `cap:` as the Jinja expressions `automil init`'s hardware
+  # healthcheck fills in — but the daemon reads `orchestrator:`
+  # (_orchestrator_daemon.py:439-444), so the measured values landed in a dead
+  # block and these literals were what ran. Fallbacks stay conservative, so a
+  # project with no healthcheck data is unchanged.
+  max_concurrent_per_gpu: {{ max_concurrent_per_gpu | default(1) }}
+  default_vram_estimate_gb: {{ default_vram_estimate_gb | default(0.5) }}
   scheduling_policy: "best_fit"   # best_fit | round_robin | least_loaded
 
 viz:
@@ -198,8 +204,6 @@ cap:
   idle_grace_seconds: 300  # agent_active only: gap (s) since the agent's last
                            # action that still counts as "working" before the
                            # clock pauses. Set ≥ your longest think/edit gap.
-  default_vram_estimate_gb: {{ default_vram_estimate_gb | default(8.0) }}
-  max_concurrent_per_gpu: {{ max_concurrent_per_gpu | default(4) }}
 
 hardware:
   accelerator: {{ healthcheck_accelerator | default("cpu") }}
