@@ -117,6 +117,7 @@ def run_experiment(
         for fold in range(exp_cfg.n_folds):
             train_split, val_split, test_split = load_fold_splits(
                 dataset, benchmark_dir, splits_subdir, fold,
+                task_csv_name=exp_cfg.task.name,
             )
             result = train_fold(
                 exp_cfg, train_split, val_split, test_split,
