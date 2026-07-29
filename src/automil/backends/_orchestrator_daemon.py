@@ -1669,14 +1669,19 @@ class ExperimentOrchestrator:
 
     # --- _handle_completion helpers (each independently testable) ---
 
-    def _was_cap_killed_completion(self, node_id: str) -> bool:
-        """True iff the running or archive spec has metadata.cancel_reason == 'cap'.
+    def _recorded_cancel_reason(self, node_id: str) -> str | None:
+        """The ``metadata.cancel_reason`` recorded for this node, if any (H-7).
 
-        Reads running/<backend>/<node>.json first (annotation written by
-        _tick_cells BEFORE backend.cancel() is called — Pitfall 4 ordering
-        guarantee). Uses the backend-aware path so SLURM/Ray annotations in
-        running/slurm/ or running/ray/ are found correctly (WR-02 fix / D-169).
-        Falls back to archive/<node>/spec.json if running/ was already cleaned.
+        ``'cap'`` is stamped by ``_tick_cells`` and ``_refuse_closed_cell_spec``;
+        ``'cli'`` by ``automil cancel``. Both are written into the running spec
+        BEFORE the kill, so a completion that finds one knows the process did not
+        die of its own accord.
+
+        This exists because a deliberate stop and a real failure are the same
+        observation from the daemon's side — a dead process and no result.json.
+        Without the annotation both became ``crash``, which poisons the failure
+        statistics the gate's health diagnostic reads and makes an operator's
+        cancel indistinguishable from a bug in the training code.
         """
         _backend = self._read_backend_name_for_node(node_id)
         for _spec_path in (
@@ -1686,11 +1691,23 @@ class ExperimentOrchestrator:
             if _spec_path.exists():
                 try:
                     _raw = json.loads(_spec_path.read_text())
-                    if _raw.get("metadata", {}).get("cancel_reason") == "cap":
-                        return True
+                    reason = (_raw.get("metadata") or {}).get("cancel_reason")
+                    if reason:
+                        return str(reason)
                 except (json.JSONDecodeError, OSError):
                     pass
-        return False
+        return None
+
+    def _was_cap_killed_completion(self, node_id: str) -> bool:
+        """True iff the running or archive spec has metadata.cancel_reason == 'cap'.
+
+        Reads running/<backend>/<node>.json first (annotation written by
+        _tick_cells BEFORE backend.cancel() is called — Pitfall 4 ordering
+        guarantee). Uses the backend-aware path so SLURM/Ray annotations in
+        running/slurm/ or running/ray/ are found correctly (WR-02 fix / D-169).
+        Falls back to archive/<node>/spec.json if running/ was already cleaned.
+        """
+        return self._recorded_cancel_reason(node_id) == "cap"
 
     def _handle_cap_killed_completion(
         self,
@@ -1837,7 +1854,18 @@ class ExperimentOrchestrator:
                 # status="crash". The tight enum is:
                 # [completed, crash, budget_killed, cancelled, partial].
                 termination_reason: str | None = None
-                if "CUDA out of memory" in log_text or "OutOfMemoryError" in log_text:
+                # H-7: a deliberate stop looks exactly like a failure from here —
+                # dead process, no result.json. `automil cancel` records its
+                # intent in the running spec before the kill, so honour it rather
+                # than overwriting `cancelled` with `crash`: a cancel counted as a
+                # failure poisons the crash statistics the gate's health
+                # diagnostic reads, and makes an operator stop indistinguishable
+                # from a bug in the training code.
+                _cancel_reason = self._recorded_cancel_reason(node_id)
+                if _cancel_reason == "cli":
+                    status = "cancelled"
+                    termination_reason = "cancelled_by_operator"
+                elif "CUDA out of memory" in log_text or "OutOfMemoryError" in log_text:
                     status = "crash"
                     termination_reason = "oom"
                 elif self._timed_out.get(node_id):
