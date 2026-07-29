@@ -94,8 +94,16 @@ def test_framework_purity_no_autobench_refs():
       1 = no matches (success path)
       2 = grep error
     """
+    # Source only. Without these two flags the scan also walks __pycache__, and a
+    # .pyc embeds its module's docstrings and string literals -- so every
+    # ALLOWLISTED source line reappears as a `Binary file ... matches` line with
+    # no line number, which _is_allowlisted can never match. pytest compiles the
+    # modules during collection, so the test could not pass in a normal run and
+    # was permanently deselected -- which is worse than useless, because a
+    # deselected purity test hides real violations too.
     result = subprocess.run(
-        ["grep", "-rEn", "autobench|AUTOBENCH_|benchmarks/", str(_SRC_AUTOMIL)],
+        ["grep", "-rEn", "--exclude-dir=__pycache__", "--binary-files=without-match",
+         "autobench|AUTOBENCH_|benchmarks/", str(_SRC_AUTOMIL)],
         capture_output=True, text=True,
     )
 
@@ -193,3 +201,20 @@ def test_purity_test_does_not_execute_consumer_code():
             f"from the construction block). Extra occurrences indicate a real "
             f"consumer import was added."
         )
+
+
+def test_the_scan_is_source_only():
+    """Guard the fix above: the scan must not walk compiled bytecode.
+
+    A .pyc embeds its module's docstrings and string literals, so scanning
+    __pycache__ makes every allowlisted source line reappear as an unmatchable
+    `Binary file ... matches` row. That made this test fail on any run where the
+    modules had been imported -- i.e. every run, since pytest compiles them
+    during collection -- so it was permanently deselected, and a deselected
+    purity test also stops catching the real violations it exists for.
+    """
+    import inspect
+
+    src = inspect.getsource(test_framework_purity_no_autobench_refs)
+    assert "--exclude-dir=__pycache__" in src
+    assert "--binary-files=without-match" in src
