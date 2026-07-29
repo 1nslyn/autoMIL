@@ -163,6 +163,15 @@ scoring:
   formula: ""
   technique_map: {}
   accept_margin: 0.0   # Ladder keep-margin δ: child kept iff composite > parent + δ. Predeclare per-dataset (0.0 = strict dominance). Read from graph.json meta.scoring.
+  # CR-4: the margin ACTUALLY applied is max(accept_margin, se_multiplier x the
+  #   PARENT's measured cross-fold SE). The noise floor can only ever raise the
+  #   bar, never lower a predeclared δ, and it is derived from the incumbent —
+  #   if it came from the child, taking the argmax over screened candidates would
+  #   also be taking the argmin over their margins.
+  #   1.0 = one SE. 0.0 disables the noise floor and reverts to the bare δ.
+  #   This is a conservative screen during search, NOT a significance test: the
+  #   paired inference lives in the Stage-B gate (gate/stats.py).
+  se_multiplier: 1.0
 
 # --- Variant selection (D-35, REG-07) ---
 # The framework resolves these via registry.resolve_model(parent, variant) etc.

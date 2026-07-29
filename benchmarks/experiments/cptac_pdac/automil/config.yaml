@@ -50,6 +50,11 @@ scoring:
   formula: ""
   technique_map: {}
   accept_margin: 0.05
+  # CR-4: the applied margin is max(accept_margin, se_multiplier x the parent's
+  #   measured cross-fold SE). accept_margin above is the PREDECLARED floor
+  #   (PRELAUNCH_REVIEW O2: ~0.05 on the ~10-val-patient cohorts, ~0.015 on the
+  #   large ones); the measured noise can raise it at run time but never lower it.
+  se_multiplier: 1.0
 
 # Cohort statistics (EXPERIMENT_GRID.md §1.1), for the agent's context:
 #   patients n=105  ·  OS deaths=81

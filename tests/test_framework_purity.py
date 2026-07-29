@@ -59,15 +59,18 @@ _ALLOWLIST: dict[str, str] = {
     #    consumers to the CHANGELOG 8.0.0 BREAKING section. Informational only;
     #    not a code path. Retained by 08-04 executor.
     #    Line shifted +1 by 12-02 (added scheduling_policy key above it),
-    #    +4 by the run.mil_model addition to the run: block.
-    "src/automil/templates/config.yaml.j2:114":
+    #    +4 by the run.mil_model addition to the run: block,
+    #    +6 by the H-4 registry block, -2 by CFG-2 (dead cap: duplicates removed),
+    #    +9 by CR-4's se_multiplier documentation in the scoring: block.
+    "src/automil/templates/config.yaml.j2:120":
         "autobench-shaped consumers",
     # 5. Inline example comment in the scoring.formula block showing what an
     #    autobench consumer formula looks like. Documentation only. Retained by
     #    08-04 executor.
     #    Line shifted +1 by 12-02 (added scheduling_policy key to orchestrator block),
-    #    +4 by the run.mil_model addition to the run: block.
-    "src/automil/templates/config.yaml.j2:140":
+    #    +4 by the run.mil_model addition to the run: block,
+    #    +6 by H-4, -2 by CFG-2, +9 by CR-4 (see entry 4).
+    "src/automil/templates/config.yaml.j2:146":
         "autobench consumer",
 }
 
