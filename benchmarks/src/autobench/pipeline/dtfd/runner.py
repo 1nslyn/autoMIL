@@ -85,7 +85,9 @@ def run_dtfd_experiment(
     # CR-5b: `cfg` is passed too — DTFD's numGroup/mDim/droprate/grad_clip live
     # outside exp_cfg, so a change there must invalidate this cache.
     results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir, arm_cfg=cfg)
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
+    # H-3: DTFD trains off DTFDConfig (lr 1e-4 / wd 1e-4), not the shared
+    # TrainConfig that config.json also carries.
+    exp_cfg.save(os.path.join(results_dir, "config.json"), arm_cfg=cfg)
 
     if exp_cfg.is_survival and exp_cfg.survival_loss == "cox":
         raise ValueError(

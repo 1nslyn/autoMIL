@@ -95,6 +95,11 @@ def run_experiment(
     # hyperparameter can no longer resume these folds' metrics.json.
     results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir)
 
+    # H-3: no `arm_cfg` here, and that is the honest record rather than an
+    # omission -- CLAM is the ONE arm that genuinely trains off the shared
+    # ModelConfig + TrainConfig (they were designed around it). config.json
+    # therefore carries `arm: null` and an empty superseded-fields list, which is
+    # exactly what a reader needs to trust its `train` block.
     exp_cfg.save(os.path.join(results_dir, "config.json"))
 
     fold_results: list[dict] = []

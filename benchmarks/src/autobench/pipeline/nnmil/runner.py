@@ -85,7 +85,11 @@ def run_nnmil_experiment(
         with open(plan_path, "w") as f:
             json.dump(_plan, f, indent=2)
 
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
+    # H-3: nnMIL trains off its self-configured plan (learning_rate 3e-4 / 1e-4
+    # survival, 100 epochs, data-adaptive hidden_dim/batch_size), not the shared
+    # TrainConfig that config.json also carries. Records the plan AFTER any
+    # override was applied above, so it is the recipe that actually ran.
+    exp_cfg.save(os.path.join(results_dir, "config.json"), arm_cfg=_plan_training_cfg)
 
     fold_results: list[dict] = []
     for fold in range(exp_cfg.n_folds):
