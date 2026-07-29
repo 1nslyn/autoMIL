@@ -1,0 +1,150 @@
+"""TSV-1: results.tsv locked its metric columns from the first row and dropped the rest.
+
+``_append_results_tsv`` derived the header from the first result's ``metrics``
+keys — deliberately, to avoid hardcoding MIL vocabulary — and then aligned every
+later row to that header, filling missing keys with blanks. A key the header did
+not already have was **silently dropped**.
+
+The preprint campaign is exactly the case that breaks: 65 classification
+experiments emit ``val_auc`` / ``val_bacc`` and 100 survival experiments emit
+``val_c_index``. Whichever finishes first defines the header, so one of those
+two groups loses its only metric — every survival row reading blank, with no
+error anywhere. ``composite`` still lands, so the file looks populated.
+
+The fix keeps the no-hardcoded-vocabulary property: on meeting a genuinely new
+metric key, widen the header and rewrite the file, backfilling earlier rows with
+blanks (they really had no value for that column).
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture
+def orch(tmp_path, monkeypatch):
+    """A minimally-constructed orchestrator with results_tsv pointed at tmp."""
+    from automil.backends._orchestrator_daemon import ExperimentOrchestrator
+
+    o = object.__new__(ExperimentOrchestrator)
+    o.results_tsv = tmp_path / "results.tsv"
+    return o
+
+
+def _rows(path: Path) -> list[list[str]]:
+    return [ln.split("\t") for ln in path.read_text().strip().splitlines()]
+
+
+def _cls(composite=0.8):
+    return {"metrics": {"val_auc": 0.81, "val_bacc": 0.79}, "composite": composite,
+            "status": "completed", "elapsed_seconds": 60, "peak_vram_mb": 1024}
+
+
+def _surv(composite=0.66):
+    return {"metrics": {"val_c_index": 0.66}, "composite": composite,
+            "status": "completed", "elapsed_seconds": 60, "peak_vram_mb": 1024}
+
+
+class TestMixedCampaignKeepsEveryMetric:
+    def test_survival_after_classification_is_not_dropped(self, orch):
+        orch._append_results_tsv("0001", _cls(), "clam kras")
+        orch._append_results_tsv("0002", _surv(), "clam os")
+
+        header, *rows = _rows(orch.results_tsv)
+        assert "val_c_index" in header, (
+            "the survival metric was dropped because the header was locked by "
+            "the first (classification) row"
+        )
+        col = header.index("val_c_index")
+        assert rows[1][col] == "0.6600"
+
+    def test_classification_after_survival_is_not_dropped(self, orch):
+        orch._append_results_tsv("0001", _surv(), "clam os")
+        orch._append_results_tsv("0002", _cls(), "clam kras")
+
+        header, *rows = _rows(orch.results_tsv)
+        assert {"val_auc", "val_bacc"} <= set(header)
+        assert rows[1][header.index("val_auc")] == "0.8100"
+
+    def test_earlier_rows_are_backfilled_not_corrupted(self, orch):
+        orch._append_results_tsv("0001", _cls(), "a")
+        orch._append_results_tsv("0002", _surv(), "b")
+
+        header, r1, r2 = _rows(orch.results_tsv)
+        assert len(r1) == len(header) == len(r2)
+        # Row 1 genuinely had no c-index: blank, not zero.
+        assert r1[header.index("val_c_index")] == ""
+        assert r2[header.index("val_auc")] == ""
+
+    def test_every_row_keeps_its_own_composite(self, orch):
+        orch._append_results_tsv("0001", _cls(composite=0.80), "a")
+        orch._append_results_tsv("0002", _surv(composite=0.66), "b")
+
+        header, r1, r2 = _rows(orch.results_tsv)
+        c = header.index("composite")
+        assert (r1[c], r2[c]) == ("0.800000", "0.660000")
+
+    def test_the_trailing_columns_stay_at_the_end(self, orch):
+        """Widening must not shuffle composite/status/description into the
+        middle — anything parsing by position would silently misread."""
+        orch._append_results_tsv("0001", _cls(), "a")
+        orch._append_results_tsv("0002", _surv(), "b")
+        header = _rows(orch.results_tsv)[0]
+        assert header[0] == "node_id"
+        assert header[-5:] == ["composite", "vram_gb", "elapsed_min", "status", "description"]
+
+    def test_node_ids_and_descriptions_survive_the_rewrite(self, orch):
+        orch._append_results_tsv("0001", _cls(), "first idea")
+        orch._append_results_tsv("0002", _surv(), "second idea")
+        header, r1, r2 = _rows(orch.results_tsv)
+        assert (r1[0], r2[0]) == ("0001", "0002")
+        d = header.index("description")
+        assert (r1[d], r2[d]) == ("first idea", "second idea")
+
+
+class TestNoNeedlessRewrites:
+    def test_a_matching_schema_appends_without_rewriting(self, orch, monkeypatch):
+        orch._append_results_tsv("0001", _cls(), "a")
+        before = orch.results_tsv.read_text()
+        orch._append_results_tsv("0002", _cls(), "b")
+        after = orch.results_tsv.read_text()
+        assert after.startswith(before), "an append must not rewrite existing bytes"
+
+    def test_a_subset_of_known_metrics_does_not_widen(self, orch):
+        orch._append_results_tsv("0001", _cls(), "a")
+        orch._append_results_tsv("0002", {"metrics": {"val_auc": 0.5}, "composite": 0.5,
+                                          "status": "completed"}, "b")
+        header = _rows(orch.results_tsv)[0]
+        assert header.count("val_auc") == 1
+        assert "val_bacc" in header
+
+
+class TestDegenerateInputs:
+    def test_a_result_with_no_metrics_still_writes_a_row(self, orch):
+        orch._append_results_tsv("0001", {"composite": 0.0, "status": "crash"}, "boom")
+        header, row = _rows(orch.results_tsv)
+        assert row[0] == "0001"
+        assert row[header.index("status")] == "crash"
+
+    def test_a_crash_row_before_any_metric_row_does_not_lock_an_empty_header(self, orch):
+        """A crash arriving first used to fix the header at zero metric columns,
+        so the whole campaign's metrics vanished."""
+        orch._append_results_tsv("0001", {"composite": 0.0, "status": "crash"}, "boom")
+        orch._append_results_tsv("0002", _cls(), "a")
+        header = _rows(orch.results_tsv)[0]
+        assert {"val_auc", "val_bacc"} <= set(header)
+
+    def test_a_metric_name_containing_a_tab_is_rejected(self, orch):
+        """A tab in a key would silently shift every column right of it."""
+        with pytest.raises(ValueError, match="tab"):
+            orch._append_results_tsv(
+                "0001", {"metrics": {"bad\tkey": 1.0}, "composite": 0.5}, "a",
+            )
+
+    def test_a_description_with_a_newline_is_flattened(self, orch):
+        orch._append_results_tsv(
+            "0001", _cls(), "line one\nline two",
+        )
+        assert len(orch.results_tsv.read_text().strip().splitlines()) == 2

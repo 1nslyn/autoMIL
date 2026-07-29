@@ -1959,16 +1959,27 @@ class ExperimentOrchestrator:
             json.dumps(result, indent=2) + "\n"
         )
 
+    _TSV_TRAILING = ("composite", "vram_gb", "elapsed_min", "status", "description")
+
     def _append_results_tsv(self, node_id: str, result: dict, description: str = ""):
         """Append a row to results.tsv (sole writer, no locking needed).
 
-        Metric columns are derived from the keys of ``result["metrics"]``
-        on first write — no hardcoded MIL-vocabulary. The header is
-        ``node_id, <metric_keys sorted>, composite, vram_gb, elapsed_min,
-        status, description``. Subsequent rows are aligned to the
-        existing header by parsing it from disk; missing keys are filled
-        with empty strings so the file remains a valid TSV across
-        schema drift.
+        Metric columns come from the keys of ``result["metrics"]`` — no hardcoded
+        MIL vocabulary. Header shape is
+        ``node_id, <metric keys sorted>, composite, vram_gb, elapsed_min, status,
+        description``.
+
+        TSV-1: the header used to be locked by the FIRST row, and any later key it
+        did not already carry was silently dropped. The preprint campaign is
+        precisely the breaking case — 65 classification experiments emit
+        ``val_auc``/``val_bacc``, 100 survival experiments emit ``val_c_index``,
+        and whichever finished first decided which group lost its only metric.
+        ``composite`` still landed, so the file looked populated.
+
+        A genuinely new key now WIDENS the header and rewrites the file,
+        backfilling earlier rows with blanks (they really had no value for that
+        column). The rewrite is atomic and only happens on a schema change; a row
+        whose keys the header already covers is a plain append.
         """
         metrics = result.get("metrics", {})
         composite = result.get("composite", 0.0)
@@ -1976,20 +1987,37 @@ class ExperimentOrchestrator:
         elapsed_s = result.get("elapsed_seconds", 0)
         vram_mb = result.get("peak_vram_mb", 0)
 
-        if not self.results_tsv.exists() or self.results_tsv.stat().st_size == 0:
-            metric_cols = sorted(metrics.keys())
-            header_cols = ["node_id"] + metric_cols + [
-                "composite", "vram_gb", "elapsed_min", "status", "description",
-            ]
-            self.results_tsv.write_text("\t".join(header_cols) + "\n")
+        bad = [k for k in metrics if "\t" in str(k) or "\n" in str(k)]
+        if bad:
+            raise ValueError(
+                f"metric name(s) {bad} contain a tab or newline; that would shift "
+                f"every column to their right in results.tsv"
+            )
+
+        trailing = list(self._TSV_TRAILING)
+        existing_rows: list[list[str]] = []
+        if self.results_tsv.exists() and self.results_tsv.stat().st_size:
+            lines = self.results_tsv.read_text().splitlines()
+            header_cols = lines[0].split("\t")
+            metric_cols = [c for c in header_cols
+                           if c != "node_id" and c not in set(trailing)]
+            existing_rows = [ln.split("\t") for ln in lines[1:] if ln]
         else:
-            first_line = self.results_tsv.read_text().split("\n", 1)[0]
-            header_cols = first_line.split("\t")
-            metric_cols = [
-                c for c in header_cols
-                if c not in {"node_id", "composite", "vram_gb",
-                             "elapsed_min", "status", "description"}
-            ]
+            header_cols, metric_cols = [], []
+
+        new_metrics = [k for k in sorted(metrics) if k not in metric_cols]
+        if new_metrics or not header_cols:
+            # Schema change (or first write): widen and rewrite, backfilling the
+            # rows that predate the new column(s) with blanks.
+            old_metric_cols = list(metric_cols)
+            metric_cols = sorted(set(metric_cols) | set(metrics))
+            header_cols = ["node_id"] + metric_cols + trailing
+            rebuilt = ["\t".join(header_cols)]
+            for row in existing_rows:
+                old_header = ["node_id"] + old_metric_cols + trailing
+                by_name = dict(zip(old_header, row))
+                rebuilt.append("\t".join(by_name.get(c, "") for c in header_cols))
+            self._write_tsv_atomic("\n".join(rebuilt) + "\n")
 
         def _fmt(v) -> str:
             if v is None or v == "":
@@ -2006,10 +2034,33 @@ class ExperimentOrchestrator:
             f"{vram_mb / 1024:.1f}",
             f"{elapsed_s / 60:.1f}",
             status,
-            description or node_id,
+            # A newline or tab in a free-text description would forge a row or a
+            # column; the agent writes this text, so flatten rather than trust it.
+            (description or node_id).replace("\n", " ").replace("\r", " ").replace("\t", " "),
         ])
         with open(self.results_tsv, "a") as f:
             f.write("\t".join(cells) + "\n")
+
+    def _write_tsv_atomic(self, text: str) -> None:
+        """Replace results.tsv in one step.
+
+        The schema-widening rewrite is the only path that touches bytes already
+        on disk, and the viz dashboard reads this file unlocked (L-8), so a
+        partial write would be observable as a truncated table.
+        """
+        import tempfile
+
+        directory = self.results_tsv.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".results-", suffix=".tsv")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(text)
+            os.replace(tmp, self.results_tsv)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
     # --- Main loop ---
 
