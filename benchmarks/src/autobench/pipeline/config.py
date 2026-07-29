@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 
 from autobench.config import DatasetConfig
@@ -200,6 +200,18 @@ class BenchmarkConfig:
     # 768-d); ``_prepare_titan_plans`` is responsible for validating/updating
     # it against the actual feature file, never hard-coding it downstream.
     titan_embed_dim: int = 768
+    # H-5c: the seed axis. EMPTY means "one run at train.seed" — exactly the
+    # single-seed grid, so a config that says nothing is unchanged. A non-empty
+    # list turns the grid into a repeated-measures design: the SAME folds
+    # (splits are cached and not seed-keyed) trained from different
+    # initialisations, which isolates training stochasticity from partition
+    # variance. That is the component the reported cross-fold std cannot see,
+    # and it is the one the headline's per-cell lift has to clear.
+    #
+    # Safe only because CR-5b put the seed in the results path: before that, a
+    # second seed silently resumed the first seed's per-fold metrics.json and a
+    # variance study would have reported exactly zero variance.
+    seeds: list[int] = field(default_factory=list)
 
     @classmethod
     def from_dataset_config(cls, ds: DatasetConfig, **overrides) -> BenchmarkConfig:
@@ -439,20 +451,27 @@ def generate_all_experiments(
                                 and survival_loss != "nllsurv"
                             ):
                                 continue
-                            exp = ExperimentConfig(
-                                task=task_cfg,
-                                encoder_key=encoder_key,
-                                embed_dim=embed_dim,
-                                model=model_cfg,
-                                train=cfg.train,
-                                n_folds=cfg.n_folds,
-                                framework=framework,
-                                strategy=strategy,
-                                survival_loss=survival_loss,
-                                dataset=cfg.dataset,
-                            )
-                            if exp.experiment_id not in seen_ids:
-                                experiments.append(exp)
-                                seen_ids.add(exp.experiment_id)
+                            # H-5c: one experiment per seed. `cfg.seeds` empty
+                            # reproduces the single-seed grid exactly.
+                            for _seed in (cfg.seeds or [cfg.train.seed]):
+                                _train = (
+                                    cfg.train if _seed == cfg.train.seed
+                                    else replace(cfg.train, seed=_seed)
+                                )
+                                exp = ExperimentConfig(
+                                    task=task_cfg,
+                                    encoder_key=encoder_key,
+                                    embed_dim=embed_dim,
+                                    model=model_cfg,
+                                    train=_train,
+                                    n_folds=cfg.n_folds,
+                                    framework=framework,
+                                    strategy=strategy,
+                                    survival_loss=survival_loss,
+                                    dataset=cfg.dataset,
+                                )
+                                if exp.experiment_id not in seen_ids:
+                                    experiments.append(exp)
+                                    seen_ids.add(exp.experiment_id)
 
     return experiments

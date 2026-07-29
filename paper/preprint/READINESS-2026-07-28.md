@@ -461,3 +461,64 @@ is purged.**
   and re-run the status check.
 - Whether CPTAC-PDAC's underlying continuous infiltration score is recoverable
   (PLAN.md §4 open item — still unchecked).
+
+---
+
+## 6. Positions taken on the reporting findings (M-13, L-9)
+
+Two findings were carried as "needs a decision" but did not actually need a new
+one — the decision existed and had not been written down where it binds.
+
+### M-13 — the aggregator axis is a LINEAGE, not a fixed architecture
+
+`PLAN.md` §5 (resolved 2026-07-15) already places *"Architecture / aggregator
+internals / training hyperparams / loss"* in the **searchable** column. That is
+the de-biasing objective; narrowing the search to recipe-only would remove the
+thing the paper claims. So the position is **best-evolved-head**, and M-13's
+alternative — freeze the architecture and add the model files to
+`registry.protected` — is rejected as inconsistent with the settled scope.
+
+**The consequence has to be stated in the paper, not just in the code.** If
+architecture evolves, then "CLAM-MB" in a results table does not mean CLAM-MB. It
+means *the best variant descended from CLAM-MB under an equal-effort search*.
+Printing the bare model name would be a straightforward misattribution: a reader
+would take it as a statement about a published method when it is a statement
+about a lineage.
+
+Concretely, for the write-up:
+
+- Figures 1 and 4 (the **default-recipe** leaderboard) may use bare arm names —
+  those really are the published architectures at their own defaults.
+- Figure 3 (the **searched** result) must label arms as lineages, and the methods
+  section must say what an arm label denotes.
+- `search_space.py` is what makes this auditable: it declares, per arm, exactly
+  which knobs the search could move and which were locked and why.
+
+### L-9 — the `certify/` quarantine is a convention, and the paper should say so
+
+`archive/<node>/certify/` holds the sealed test block. What actually enforces the
+firewall, in descending order of strength:
+
+1. **The orchestrator never copies `certify/` into a worktree**
+   (`runner.apply_overlay` skips the whole subtree). This is real: the agent's
+   filesystem view does not contain it.
+2. **`terminal_writer` strips `held_out` and `summary`** from every agent-facing
+   artifact, and **`firewall.py` redacts `run.log` and both error tails** (H-1) —
+   so test values do not leak through the channels an agent does read.
+3. **The composite is recomputed from the val block** (CR-1b), so a writer that
+   reported a test-derived scalar is caught.
+4. **Directory convention.** `certify/` is not permission-protected. An agent
+   running as the same user, with shell access outside its worktree, could read
+   it.
+
+Layer 4 is the honest limit and it should be disclosed rather than implied away.
+The threat model this defends against is **an agent that follows its instructions
+and the tooling it is given** — the plausible failure is inadvertent leakage
+(printing test metrics into a log, folding test into the reported composite), not
+an adversary deliberately reading a path it was told not to. Every such
+inadvertent route is closed by layers 1–3.
+
+The structural fix that would close layer 4 — withhold the test split from the
+worktree entirely and have the orchestrator evaluate the frozen model
+out-of-process — is `PLAN.md` §5's layer 3, deferred to Phase 2. State the
+current boundary in the methods section; do not claim the stronger one.
