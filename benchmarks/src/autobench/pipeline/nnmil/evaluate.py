@@ -28,6 +28,18 @@ Each path matches its own upstream's published behaviour. Numbers
 should agree to floating-point noise unless a minority class is
 literally absent from some test fold, in which case CLAM's path
 degrades gracefully while sklearn's would have crashed upstream too.
+
+L-10 decision: DOCUMENT this caveat (this docstring), don't unify the two
+formulas. Unifying would mean either patching nnMIL's vendored trainer
+(``lib/nnMIL/utilities/utils.py`` -- out of scope for a consumer-side fix)
+or restructuring this module to receive raw per-class probabilities that
+the vendored trainer does not currently expose to it -- a structural change
+disproportionate to a LOW-severity finding, and one that would change
+already-dispatched numbers on one arm but not the others. The asymmetry is
+pinned by
+``tests/test_benchmark_evaluate.py::TestMultiClassAUC::test_L10_missing_class_asymmetry_is_pinned``,
+which exercises both formulas on the same missing-class data so a change to
+either is caught rather than silently drifting.
 """
 
 from __future__ import annotations

@@ -145,6 +145,59 @@ class TestMultiClassAUC:
         assert not np.isnan(m["auc_roc"])
         assert 0.0 <= m["auc_roc"] <= 1.0
 
+    def test_L10_missing_class_asymmetry_is_pinned(self):
+        """L-10: pin BOTH halves of the cross-framework AUC asymmetry on the
+        SAME data, not just assert one side in a comment.
+
+        CLAM/ABMIL/DTFD/TITAN all go through ``compute_extended_metrics``
+        (this module's CLAM-style per-class nanmean). nnMIL instead calls
+        ``sklearn.metrics.roc_auc_score(multi_class="ovr", average="macro")``
+        directly inside its own vendored trainer
+        (``lib/nnMIL/utilities/utils.py``, mirrored here for the pin since
+        that trainer code is out of this package's reach) and is normalized
+        by ``nnmil/evaluate.py::normalize_nnmil_metrics``, whose module
+        docstring already documents this divergence in detail.
+
+        Decision recorded here (see also that docstring): DOCUMENT, don't
+        unify. Unifying would mean either patching nnMIL's vendored trainer
+        (out of scope for a consumer-side fix -- lib/ is a third-party
+        dependency) or restructuring nnmil/evaluate.py to receive raw
+        per-class probabilities the vendored trainer does not currently
+        expose to it, which would be a much larger structural change than
+        this finding's severity (LOW) warrants. So: same model quality can
+        legitimately yield two different AUC numbers depending on the arm
+        when a class is absent from a fold, and the nnMIL arm crashes
+        (ValueError) in exactly the case CLAM's arms degrade gracefully
+        (nanmean over present classes). This test locks that gap in place so
+        a change to either formula is caught, instead of silently drifting
+        the two closer together or further apart.
+        """
+        from sklearn.metrics import roc_auc_score
+
+        # Same fixture as test_missing_class_yields_nanmean_over_present:
+        # 3-class problem where class 2 has zero positives in y_true.
+        y_true = np.array([0, 0, 1, 1, 0, 1])
+        y_probs = np.array(
+            [
+                [0.7, 0.2, 0.1],
+                [0.6, 0.3, 0.1],
+                [0.2, 0.7, 0.1],
+                [0.3, 0.6, 0.1],
+                [0.8, 0.1, 0.1],
+                [0.1, 0.8, 0.1],
+            ]
+        )
+        y_pred = y_probs.argmax(axis=1)
+
+        # CLAM/ABMIL/DTFD/TITAN path: degrades gracefully to a real number.
+        clam_side = compute_extended_metrics(y_true, y_probs, y_pred, 3)["auc_roc"]
+        assert not np.isnan(clam_side)
+        assert 0.0 <= clam_side <= 1.0
+
+        # nnMIL path: the exact sklearn call nnMIL's trainer makes. Raises.
+        with pytest.raises(ValueError):
+            roc_auc_score(y_true, y_probs, multi_class="ovr", average="macro")
+
 
 class TestComputeConfidenceIntervals:
     def test_basic_ci(self):
