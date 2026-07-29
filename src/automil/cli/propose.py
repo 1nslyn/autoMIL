@@ -127,8 +127,12 @@ def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_mod
         )
         if mil_model:
             from automil.cells.state import normalize_mil_model
+            from automil.graph import merged_metadata
             gnode = graph.get_node(node_id)
-            gnode.setdefault("metadata", {})["mil_model"] = normalize_mil_model(mil_model)
+            # L-8a: copy-on-write (see graph.merged_metadata docstring) — a
+            # plain setdefault+assign mutates node["metadata"] in place,
+            # which is reachable from another writer via aliasing.
+            gnode["metadata"] = merged_metadata(gnode, {"mil_model": normalize_mil_model(mil_model)})
         graph.recalculate_scores()
         # graph.save() runs on context exit under the lock.
 

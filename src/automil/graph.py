@@ -3,6 +3,31 @@
 Provides atomic read/write to graph.json. Concurrent writers (daemon +
 CLI) coordinate through an advisory ``flock`` on a sidecar ``.lock``
 file; see ``locked_update``.
+
+Immutability (L-8a, audit 2026-07-23): this module's own methods
+(``add_executed``, ``promote``, ``mark_failed``, ``reconcile``, ...)
+mutate node dicts stored in ``self._data`` in place, field by field —
+they do NOT rebuild and reassign a fresh dict per update. This is a
+deliberate, pragmatic choice, not an oversight: ``self._data`` is
+single-owner for the lifetime of one ``locked_update`` transaction (the
+flock above serializes every writer), and it is serialized wholesale on
+``save()``, so there is no aliasing surface between transactions — every
+``locked_update`` call constructs a brand-new ``ExperimentGraph`` from a
+fresh ``json.loads`` of the file, so no Python object outlives its lock.
+Converting every one of those in-place field assignments to copy-on-write
+would be a sweeping rewrite of this module for no correctness gain, so it
+is deliberately NOT done.
+
+The one nested structure that genuinely IS reachable from two writers is
+a node's ``metadata`` sub-dict: ``gate/evaluate.py`` creates a gate-eval
+child node via a SHALLOW ``dict(node)`` copy, which leaves the child's
+``metadata`` key aliased to the same dict object as its source. A caller
+that then mutates ``gnode["metadata"]`` in place (``.setdefault(...)
+.update(...)``) could silently corrupt whichever node it is aliased
+with. ``merged_metadata`` below is the copy-on-write fix for exactly that
+structure, used by ``terminal_writer``, ``cli/cancel``, ``cli/propose``,
+``cli/reconcile``, and the daemon's cap-refusal path — the sites where a
+node read via ``get_node()`` needs to add or change ``metadata`` keys.
 """
 from __future__ import annotations
 
@@ -41,6 +66,41 @@ def node_cell_id(node: dict | None) -> str | None:
         meta = node.get("metadata")
         cell_id = meta.get("cell_id") if isinstance(meta, dict) else None
     return cell_id if isinstance(cell_id, str) and cell_id else None
+
+
+def merged_metadata(node: dict | None, updates: dict) -> dict:
+    """Copy-on-write merge into a node's ``metadata`` sub-dict (L-8a).
+
+    Several call sites (``terminal_writer``, ``cli/cancel``, ``cli/propose``,
+    ``cli/reconcile``, the daemon's cap-refusal path) read a node via
+    ``get_node()`` and then need to add or change a few ``metadata`` keys.
+    The naive way — ``gnode.setdefault("metadata", {}).update(updates)`` or
+    ``gnode.setdefault("metadata", {})[k] = v`` — mutates whatever dict
+    object is already stored at ``node["metadata"]``, in place.
+
+    That is reachable from two writers: ``gate/evaluate.py`` creates a
+    gate-eval child node via a SHALLOW copy of a node dict (``dict(node)``),
+    which leaves the child's ``metadata`` key pointing at the exact same
+    dict object as its source node's. An in-place mutation through either
+    alias would silently corrupt the other — a plain dict has no
+    copy-on-write semantics of its own.
+
+    Callers use this as ``gnode["metadata"] = merged_metadata(gnode,
+    {...})``: the OUTER node dict is still updated by direct key assignment
+    (matching every other field mutation in this codebase — self._data is
+    single-owner per flock-guarded ``locked_update`` transaction and
+    serialized wholesale on save, so that part has no aliasing surface and
+    converting it too would be a much larger, unrelated rewrite). Only this
+    specific NESTED, cross-writer-reachable structure is made copy-on-write.
+
+    Tolerates ``node=None`` and a non-dict ``metadata`` value (legacy/corrupt
+    data) by treating the base as empty, matching ``node_cell_id``'s
+    defensiveness above.
+    """
+    base = (node or {}).get("metadata")
+    if not isinstance(base, dict):
+        base = {}
+    return {**base, **updates}
 
 
 def _accept_margin(meta: dict | None) -> float:

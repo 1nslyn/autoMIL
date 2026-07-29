@@ -43,6 +43,73 @@ LOG_FILE: Path = Path("viz_server.log")
 
 DEFAULT_PORT = 8420
 
+# L-8b (audit 2026-07-23): retry budget for a graph.json read that races a
+# write. See _read_graph_json's docstring for why this is a bounded,
+# non-blocking retry rather than the fcntl lock graph.py's writers use.
+_GRAPH_READ_RETRIES = 3
+_GRAPH_READ_RETRY_DELAY_S = 0.05
+
+
+def _load_graph_json_text(path: Path) -> dict:
+    """Read + parse graph.json once. Raises FileNotFoundError / JSONDecodeError.
+
+    Split out from _read_graph_json as its own function so tests can patch
+    just the "one read attempt" step without faking filesystem races.
+    """
+    return json.loads(path.read_text())
+
+
+async def _read_graph_json(
+    path: Path,
+    *,
+    retries: int = _GRAPH_READ_RETRIES,
+    retry_delay_s: float = _GRAPH_READ_RETRY_DELAY_S,
+) -> dict | None:
+    """Read graph.json, retrying briefly on a parse failure (L-8b).
+
+    ``graph.py``'s ``ExperimentGraph.save()`` writes via tempfile +
+    ``os.rename``, which is atomic at the filesystem level: a reader's
+    ``open()`` resolves to either the fully-old or fully-new inode, never a
+    half-written blend, so a true torn read should not be possible on a
+    local POSIX filesystem. This retry is defence-in-depth for anything that
+    could still surface as a transient ``JSONDecodeError`` (e.g. a
+    non-atomic-rename filesystem such as some network mounts).
+
+    Deliberate trade-off, chosen over taking graph.json's fcntl lock (the
+    same ``<path>.lock`` sidecar ``graph.locked_update`` uses): this
+    function is called from the SSE broadcast loop on every filesystem
+    event, and from every new client connection. If it took that lock, the
+    dashboard's read path would synchronize with every daemon/CLI write —
+    and if the dashboard ever hung while holding it (a slow client, a bug in
+    this process), it would block the ORCHESTRATOR's writers waiting on the
+    very same lock. A read-only, best-effort dashboard must never be able to
+    do that. Retrying a plain, unlocked read instead bounds the worst case
+    to ``retries * retry_delay_s`` seconds, entirely local to this process
+    (``asyncio.sleep`` between attempts yields the event loop rather than
+    blocking it), and cannot block anything outside this coroutine.
+
+    Returns ``None`` on a missing file (no retry — that is the ordinary
+    "no graph yet" case, not a race) or after exhausting the retry budget
+    (logged as a warning so a persistent problem is not silent).
+    """
+    last_exc: json.JSONDecodeError | None = None
+    for attempt in range(retries):
+        try:
+            return _load_graph_json_text(path)
+        except FileNotFoundError:
+            return None
+        except json.JSONDecodeError as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                await asyncio.sleep(retry_delay_s)
+    logging.warning(
+        "viz: graph.json failed to parse after %d attempt(s) (%s); the "
+        "writer's atomic rename should prevent this — if it persists, check "
+        "for a non-atomic-rename filesystem under %s",
+        retries, last_exc, path,
+    )
+    return None
+
 
 class GraphWatcher(FileSystemEventHandler):
     def __init__(self):
@@ -93,9 +160,8 @@ class GraphWatcher(FileSystemEventHandler):
         self._maybe_notify(event.src_path)
 
     async def _notify(self):
-        try:
-            data = json.loads(GRAPH_FILE.read_text())
-        except (json.JSONDecodeError, FileNotFoundError):
+        data = await _read_graph_json(GRAPH_FILE)
+        if data is None:
             return
 
         self._overlay_running_status(data)
@@ -139,9 +205,8 @@ class GraphWatcher(FileSystemEventHandler):
             self.subscribers.remove(q)
 
     async def get_initial(self) -> str:
-        try:
-            data = json.loads(GRAPH_FILE.read_text())
-        except (json.JSONDecodeError, FileNotFoundError):
+        data = await _read_graph_json(GRAPH_FILE)
+        if data is None:
             data = {"nodes": {}, "meta": {}, "technique_stats": {}}
         self._overlay_running_status(data)
         self._prev_data = data

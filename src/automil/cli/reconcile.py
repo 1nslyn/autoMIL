@@ -53,7 +53,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
     if from_archive is not None:
         import json as _json
         from automil.graph import (locked_update, _accept, _accept_margin,
-                           effective_accept_margin)
+                           effective_accept_margin, merged_metadata)
         archive_dir = adir / "orchestrator" / "archive"
         graph_path = adir / "graph.json"
 
@@ -113,7 +113,10 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                         ) else "discard")
                     # else: unknown status value — leave gnode["status"] unchanged
                     # Preserve raw result status for traceability (operator-visible).
-                    gnode.setdefault("metadata", {})["result_status"] = raw_result_status
+                    # L-8a: copy-on-write (graph.merged_metadata) — node["metadata"]
+                    # can be aliased with another node's dict (gate/evaluate.py
+                    # creates gate-eval children via a shallow dict(node) copy).
+                    gnode["metadata"] = merged_metadata(gnode, {"result_status": raw_result_status})
 
                 if payload.get("metrics"):
                     gnode["metrics"] = payload["metrics"]

@@ -350,7 +350,7 @@ def cancel(node_id: str, timeout: int) -> None:
     # decrements meta.total_proposed — a running/pending node was counted as
     # proposed (mark_running does NOT decrement), so the raw write previously
     # drifted the proposed counter on every cancel.
-    from automil.graph import locked_update  # noqa: PLC0415
+    from automil.graph import locked_update, merged_metadata  # noqa: PLC0415
     from automil.cli._helpers import _load_technique_map  # noqa: PLC0415
 
     graph_path = adir / "graph.json"
@@ -359,10 +359,14 @@ def cancel(node_id: str, timeout: int) -> None:
             node = graph.get_node(node_id)
             if node:
                 graph.cancel(node_id)  # decrements total_proposed + sets status
-                node.setdefault("metadata", {})["cancelled_at"] = datetime.now(
-                    timezone.utc
-                ).isoformat()
-                node["metadata"]["cancel_reason"] = "cli"
+                # L-8a: copy-on-write — node["metadata"] can be aliased with
+                # another node's dict (gate/evaluate.py creates gate-eval
+                # children via a shallow dict(node) copy); mutating it in
+                # place would silently corrupt whatever it is shared with.
+                node["metadata"] = merged_metadata(node, {
+                    "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                    "cancel_reason": "cli",
+                })
             else:
                 logger.warning(
                     "cancel: node %s vanished from graph during lock", node_id

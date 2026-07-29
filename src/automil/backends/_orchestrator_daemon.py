@@ -1062,7 +1062,7 @@ class ExperimentOrchestrator:
 
     def _cancel_node_for_cap_refusal(self, node_id: str, cell_id: str) -> None:
         """Mark a cap-refused node cancelled in graph.json (same shape as dequeue)."""
-        from automil.graph import locked_update
+        from automil.graph import locked_update, merged_metadata
 
         try:
             with locked_update(
@@ -1077,7 +1077,10 @@ class ExperimentOrchestrator:
                     return
                 g.cancel(node_id)
                 node["cancel_reason"] = "cap"
-                node.setdefault("metadata", {})["cap_refused"] = True
+                # L-8a: copy-on-write (graph.merged_metadata) — node["metadata"]
+                # can be aliased with another node's dict (gate/evaluate.py
+                # creates gate-eval children via a shallow dict(node) copy).
+                node["metadata"] = merged_metadata(node, {"cap_refused": True})
                 node.setdefault("cell_id", cell_id)
         except Exception:  # noqa: BLE001 — a graph failure must not wedge the loop
             logger.exception("cap refusal: could not cancel graph node %s", node_id)
