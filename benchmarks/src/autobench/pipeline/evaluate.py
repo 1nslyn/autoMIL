@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.stats import t as student_t
 from sklearn.metrics import (
     accuracy_score,
     auc as sk_auc,
@@ -145,8 +146,6 @@ CI_METHOD_DEGENERATE = "degenerate"
 
 def _t_interval(valid: np.ndarray, confidence: float) -> tuple[float, float]:
     """Student-t interval on n-1 df: ``mean +/- t_(1-a/2, n-1) * s / sqrt(n)``."""
-    from scipy.stats import t as student_t
-
     n = len(valid)
     crit = float(student_t.ppf(1 - (1 - confidence) / 2, df=n - 1))
     half_width = crit * float(np.std(valid, ddof=1)) / np.sqrt(n)
