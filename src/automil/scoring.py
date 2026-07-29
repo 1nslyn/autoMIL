@@ -80,3 +80,43 @@ def composite_disagrees(reported: float, recomputed: float,
         return abs(float(reported) - float(recomputed)) > tolerance
     except (TypeError, ValueError):
         return True
+
+
+def cross_fold_se(fold_values) -> float | None:
+    """Standard error of a cross-fold mean: sample SD (ddof=1) / sqrt(n) (CR-4).
+
+    This is the number the Ladder keep-margin is supposed to exceed and that
+    nothing in the codebase previously measured. It matters most exactly where
+    the selection is weakest: the validation split is 12.5% of train_val, so on
+    CPTAC-GBM (n=99) and CPTAC-PDAC (n=105) the composite is a mean over folds
+    scored on ~10 patients, and a discovery sweep screening ~60 candidates keeps
+    the maximum of 60 draws from that distribution.
+
+    Returns ``None`` — never 0.0 — when fewer than two folds carry a finite
+    numeric value. 0.0 would read downstream as "measured, and noise-free",
+    which is the opposite of "not estimable"; the caller must fall back to the
+    predeclared margin instead. Zero spread across two or more folds IS 0.0,
+    because that is a real (if degenerate) measurement.
+
+    Non-numeric and non-finite folds are dropped rather than raising: a partial
+    run legitimately carries NaN folds (see H-8 / M-15), and booleans are
+    excluded because ``bool`` is an ``int`` subclass and would otherwise be
+    silently averaged in as 0/1.
+    """
+    values: list[float] = []
+    for v in fold_values or []:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        f = float(v)
+        if math.isfinite(f):
+            values.append(f)
+    n = len(values)
+    if n < 2:
+        return None
+    if len(set(values)) == 1:
+        # Exact, rather than the ~1e-17 that (x - mean) leaves behind: identical
+        # folds are a real measurement of zero spread and should read as 0.0.
+        return 0.0
+    mean = sum(values) / n
+    variance = sum((x - mean) ** 2 for x in values) / (n - 1)
+    return math.sqrt(variance) / math.sqrt(n)

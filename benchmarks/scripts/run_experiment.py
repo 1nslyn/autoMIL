@@ -136,6 +136,38 @@ def _parse_hparams(raw: str | None) -> dict:
     return parsed
 
 
+def _per_fold_composites(per_fold_val: list, is_survival: bool) -> list[float]:
+    """The composite recomputed per fold — the input to its cross-fold SE (CR-4).
+
+    The composite reported at the top of ``summary_to_result_json`` is a mean of
+    fold MEANS, so its own spread is not recoverable from that number alone. Here
+    the same formula is applied fold by fold, which is what makes the noise
+    measurable at all.
+
+    A fold missing ANY component of the composite is dropped whole rather than
+    contributing a half-composite: averaging a fold's AUC with a missing balanced
+    accuracy would report a value on a different scale from every other fold and
+    inflate the spread.
+    """
+    out: list[float] = []
+    for fm in per_fold_val or []:
+        if not isinstance(fm, dict):
+            continue
+        keys = ("c_index",) if is_survival else ("auc_roc", "balanced_accuracy")
+        vals = []
+        for k in keys:
+            v = fm.get(k)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                break
+            f = float(v)
+            if not math.isfinite(f):
+                break
+            vals.append(f)
+        else:
+            out.append(sum(vals) / len(vals))
+    return out
+
+
 def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     """Convert autobench summary dict to autoMIL result.json format.
 
@@ -204,6 +236,17 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     )
     status = "completed" if n_valid_folds >= 2 else "partial"
 
+    # CR-4: measure the noise the Ladder keep-margin is supposed to exceed.
+    # `composite_se` is TOP-LEVEL, deliberately: CR-1b recomputes the composite as
+    # the mean of `metrics`, so an extra key in there would corrupt the very
+    # selection signal this is meant to protect. None (not 0.0) when fewer than
+    # two folds are estimable — 0.0 would read as "measured, noise-free".
+    from automil.scoring import cross_fold_se
+
+    composite_se = cross_fold_se(
+        _per_fold_composites(per_fold_val, is_survival="c_index" in test)
+    )
+
     # ``metrics`` is agent-facing (val only); ``held_out`` (test) + ``summary``
     # are sealed into certify.json by terminal_writer — never seen during search.
     return {
@@ -211,6 +254,7 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
         "metrics": metrics,
         "held_out": held_out,
         "composite": round(composite, 4),
+        "composite_se": composite_se,
         "elapsed_seconds": round(elapsed, 1),
         "peak_vram_mb": round(peak_vram_mb),
         "n_valid_folds": n_valid_folds,

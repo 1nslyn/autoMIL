@@ -68,6 +68,74 @@ def _accept(child_composite: float, parent_composite: float, margin: float = 0.0
     return child_composite > parent_composite + margin
 
 
+#: One SE. The point of CR-4 is that the bar is the measured noise; a default of
+#: 0 would ship the feature switched off, which is how it got missed the first time.
+DEFAULT_SE_MULTIPLIER = 1.0
+
+
+def node_composite_se(node: dict | None) -> float | None:
+    """Cross-fold SE of a node's composite, or ``None`` if it was never measured.
+
+    ``None`` covers three real cases and they must not be conflated with zero:
+    a legacy node written before CR-4, a partial run with fewer than two finite
+    folds (H-8 / M-15), and a corrupt or negative value. A caller seeing ``None``
+    falls back to the predeclared δ; a caller seeing 0.0 is being told the folds
+    genuinely agreed.
+    """
+    if not isinstance(node, dict):
+        return None
+    raw = node.get("composite_se")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    val = float(raw)
+    if not math.isfinite(val) or val < 0:
+        return None
+    return val
+
+
+def _se_multiplier(meta: dict | None) -> float:
+    """How many SEs a child must clear, from ``meta.scoring.se_multiplier``.
+
+    Clamped at 0: a negative multiplier would turn the noise floor into a
+    discount, letting a noisy parent be beaten by *less* than nothing.
+    """
+    try:
+        raw = ((meta or {}).get("scoring") or {}).get("se_multiplier", DEFAULT_SE_MULTIPLIER)
+        if raw is None:
+            return DEFAULT_SE_MULTIPLIER
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_SE_MULTIPLIER
+
+
+def effective_accept_margin(meta: dict | None, parent_node: dict | None) -> float:
+    """The margin actually applied: ``max(predeclared δ, k × parent SE)`` (CR-4).
+
+    Two invariants, both load-bearing:
+
+    **Monotone.** The measured noise can only ever RAISE the bar. A campaign that
+    predeclared δ=0.05 must not silently drop to 0.01 because one parent happened
+    to have a tight CV — the predeclared value is a pre-registration commitment,
+    not an opening bid.
+
+    **The bar belongs to the incumbent.** It is derived from the PARENT's SE, not
+    the child's. If it came from the child's, then taking the argmax over ~60
+    screened candidates would simultaneously be taking the argmin over their
+    margins: the search would be selecting on the gate itself.
+
+    This is a conservative single-arm screen, **not a test**. Parent and child
+    share folds, so the SE of their difference is not the SE of either one. The
+    honest paired inference happens at the Stage-B gate (``gate/stats.py``:
+    paired Wilcoxon + BCa on per-cell deltas). Do not report this margin as
+    significance.
+    """
+    delta = _accept_margin(meta)
+    se = node_composite_se(parent_node)
+    if se is None:
+        return delta
+    return max(delta, _se_multiplier(meta) * se)
+
+
 def _config_accept_margin(graph_path) -> float | None:
     """Best-effort read of ``scoring.accept_margin`` from the sibling config.yaml.
 
@@ -87,6 +155,28 @@ def _config_accept_margin(graph_path) -> float | None:
         return max(0.0, float(raw)) if raw is not None else None   # clamp negative δ
     except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
         logger.warning("Could not read scoring.accept_margin from %s: %s", config_path, exc)
+        return None
+
+
+def _config_se_multiplier(graph_path) -> float | None:
+    """Best-effort read of ``scoring.se_multiplier`` from the sibling config.yaml (CR-4).
+
+    Predeclared per-dataset alongside δ, and clamped at 0 for the same reason
+    ``_se_multiplier`` clamps: a negative multiplier would turn the measured
+    noise floor into a discount. Returns None when there is no config or the key
+    is absent, so the caller falls back to ``DEFAULT_SE_MULTIPLIER`` (one SE)
+    rather than to 0, which would ship the gate switched off.
+    """
+    config_path = Path(graph_path).parent / "config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        import yaml
+        cfg = yaml.safe_load(config_path.read_text()) or {}
+        raw = (cfg.get("scoring") or {}).get("se_multiplier")
+        return max(0.0, float(raw)) if raw is not None else None
+    except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
+        logger.warning("Could not read scoring.se_multiplier from %s: %s", config_path, exc)
         return None
 
 
@@ -189,6 +279,16 @@ class ExperimentGraph:
         )
         _cfg_margin = None if _has_margin else _config_accept_margin(self.path)
         _default_margin = _cfg_margin if _cfg_margin is not None else 0.0
+        # CR-4: the SE multiplier is predeclared alongside δ and frozen the same
+        # way — once in graph.json the stored value wins, so a campaign cannot
+        # loosen its own gate halfway through.
+        _has_mult = (
+            isinstance(_meta, dict)
+            and isinstance(_meta.get("scoring"), dict)
+            and "se_multiplier" in _meta["scoring"]
+        )
+        _cfg_mult = None if _has_mult else _config_se_multiplier(self.path)
+        _default_mult = _cfg_mult if _cfg_mult is not None else DEFAULT_SE_MULTIPLIER
         # CR-1b: the composite reducer, predeclarable per-dataset in config.yaml.
         _cfg_formula = _config_scoring_formula(self.path)
         _default_formula = _cfg_formula if _cfg_formula else _DEFAULT_SCORING_FORMULA
@@ -205,6 +305,7 @@ class ExperimentGraph:
                     "exploration_weight": 0.005,
                     "novelty_weight": 0.003,
                     "accept_margin": _default_margin,
+                    "se_multiplier": _default_mult,
                     "formula": _default_formula,
                 },
             },
@@ -379,6 +480,10 @@ class ExperimentGraph:
         parent = self.get_node(parent_id) if parent_id else None
         parent_composite = parent.get("composite", 0.0) if parent else 0.0
         composite = metrics.get("composite", 0.0)
+        # CR-4: the cross-fold SE is a framework-owned scalar like `composite`, so
+        # it is lifted to the top level rather than left inside the opaque consumer
+        # metrics dict — where CR-1b's mean-of-metrics reducer would average it in.
+        composite_se = node_composite_se({"composite_se": metrics.get("composite_se")})
         techniques = self._auto_extract_if_empty(description, techniques)
 
         node = {
@@ -390,10 +495,11 @@ class ExperimentGraph:
             "techniques": techniques,
             # Framework-owned scalars (D-200): preserved at top level.
             "composite": composite,
+            "composite_se": composite_se,
             "global_delta": metrics.get("global_delta", metrics.get("delta", 0.0)),
             "parent_delta": composite - parent_composite,
             # Consumer metrics stored as opaque dict (D-200 / DEC-04).
-            "metrics": dict(metrics),
+            "metrics": {k: v for k, v in metrics.items() if k != "composite_se"},
             # Orchestrator-measured scalars (kept top-level for ergonomics; read
             # by init.py for empirical default_vram_estimate_gb).
             "vram_gb": metrics.get("vram_gb", 0.0),
@@ -477,10 +583,19 @@ class ExperimentGraph:
         node["type"] = "executed"
         node["status"] = status
         node["composite"] = composite
+        # CR-4: keep the measured noise attached when a node is promoted from a
+        # reconcile artifact, or the recovered incumbent would set its children's
+        # bar from the bare predeclared margin instead of its own CV spread.
+        _se = node_composite_se({"composite_se": metrics.get("composite_se")})
+        if _se is not None or "composite_se" not in node:
+            node["composite_se"] = _se
         node["global_delta"] = metrics.get("global_delta", metrics.get("delta", 0.0))
         node["parent_delta"] = composite - parent_composite
-        # D-200: store consumer metrics as opaque dict.
-        node["metrics"] = dict(metrics)
+        # D-200: store consumer metrics as opaque dict. `composite_se` is a
+        # framework-owned scalar (lifted above), so it is excluded here for the
+        # same reason as in add_executed: CR-1b recomputes the composite as the
+        # mean of `metrics`, and an SE averaged in would corrupt it.
+        node["metrics"] = {k: v for k, v in metrics.items() if k != "composite_se"}
         # Orchestrator-measured scalars stay top-level.
         node["vram_gb"] = metrics.get("vram_gb", 0.0)
         node["elapsed_min"] = metrics.get("elapsed_min", 0.0)
@@ -540,7 +655,7 @@ class ExperimentGraph:
                 # D-200 Option B: composite-only dominance, gated by the Ladder
                 # keep-margin (δ=0.0 → strict dominance). The composite is the
                 # consumer-computed validation selection signal (val-firewall).
-                keep = _accept(c_comp, p_comp, _accept_margin(self.meta))
+                keep = _accept(c_comp, p_comp, effective_accept_margin(self.meta, parent))
                 child["status"] = "keep" if keep else "discard"
                 child["parent_delta"] = c_comp - p_comp
                 stack.append(child["id"])
@@ -805,6 +920,7 @@ class ExperimentGraph:
                     graph_status = orch_status
                 elif orch_status == "completed":
                     composite = completion.get("composite", 0.0)
+                    composite_se = node_composite_se(completion)   # CR-4
                     comp_metrics = completion.get("metrics", {})
                     gm = completion.get("graph_metadata", {})
                     if not gm:
@@ -822,7 +938,8 @@ class ExperimentGraph:
                     if parent_node:
                         p_comp = parent_node.get("composite", 0)
                         # D-200 Option B: composite-only dominance + Ladder margin.
-                        keep = _accept(composite, p_comp, _accept_margin(self.meta))
+                        keep = _accept(composite, p_comp,
+                                       effective_accept_margin(self.meta, parent_node))
                         graph_status = "keep" if keep else "discard"
                     else:
                         graph_status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
@@ -837,6 +954,7 @@ class ExperimentGraph:
                 metrics["gpu"] = completion.get("gpu", -1)
                 metrics["status"] = graph_status
                 metrics["global_delta"] = completion.get("composite", 0) - self.meta.get("best_composite", 0)
+                metrics["composite_se"] = composite_se   # CR-4: lifted by add_executed
 
                 config_hash = completion.get("config_hash")
                 if not config_hash:
@@ -932,6 +1050,7 @@ class ExperimentGraph:
                         gm = spec.get("graph_metadata", {})
                         r_metrics = result.get("metrics", {})
                         composite = result.get("composite", 0.0)
+                        composite_se = node_composite_se(result)   # CR-4
                         num = int(node_id_r.split("_")[1])
                         if num >= self.meta["next_id"]:
                             self.meta["next_id"] = num + 1
@@ -944,7 +1063,8 @@ class ExperimentGraph:
                             if parent:
                                 p_comp = parent.get("composite", 0)
                                 # D-200 Option B: composite-only dominance + Ladder margin.
-                                keep = _accept(composite, p_comp, _accept_margin(self.meta))
+                                keep = _accept(composite, p_comp,
+                                              effective_accept_margin(self.meta, parent))
                                 status = "keep" if keep else "discard"
                             else:
                                 status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
@@ -957,6 +1077,7 @@ class ExperimentGraph:
                             "type": "executed", "status": status,
                             "description": spec.get("description", f"recovered {node_id_r}"),
                             "techniques": techniques, "composite": composite,
+                            "composite_se": composite_se,   # CR-4
                             "global_delta": composite - self.meta.get("best_composite", 0),
                             "parent_delta": composite - parent_composite,
                             # D-200: consumer metrics opaque dict.

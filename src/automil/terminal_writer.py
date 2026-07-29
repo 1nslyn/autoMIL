@@ -198,7 +198,8 @@ def write_terminal_state(
     composite_disagreement: dict | None = None
 
     # Step 3 — Graph node update via locked_update (D-10, D-01)
-    from automil.graph import locked_update, _accept, _accept_margin
+    from automil.graph import (locked_update, _accept, _accept_margin,
+                           effective_accept_margin, node_composite_se as _node_se_reader)
     try:
         # _technique_map is the internal attribute on ExperimentGraph
         _tm = getattr(graph, "_technique_map", None)
@@ -253,13 +254,18 @@ def write_terminal_state(
                     # completed, budget_killed, cancelled — Ladder-gated dominance
                     graph_status = (
                         "keep"
-                        if _accept(composite, p_comp, _accept_margin(g.meta) if parent else 0.0)
+                        if _accept(composite, p_comp,
+                                   effective_accept_margin(g.meta, parent) if parent else 0.0)
                         else "discard"
                     )
 
                 gnode["type"] = "executed"
                 gnode["status"] = graph_status
                 gnode["composite"] = composite
+                # CR-4: the measured cross-fold SE travels with the composite, so
+                # this node can serve as an incumbent whose noise sets the bar for
+                # its own children. None when <2 folds were estimable.
+                gnode["composite_se"] = _node_se_reader({"composite_se": result.get("composite_se")})
                 # CELL-1: backfill budget-cell membership for nodes that did not
                 # come through `automil submit` (Backend.submit paths stamp the
                 # spec but never touch the graph). Submit-time identity wins.
@@ -316,6 +322,10 @@ def write_terminal_state(
         "id": node_id,
         "status": result.get("status", "crash"),
         "composite": result.get("composite", 0.0),
+        # CR-4: reconcile() rebuilds nodes from this artifact, so the measured
+        # noise has to survive the round trip or a recovered node would silently
+        # revert to the bare predeclared margin.
+        "composite_se": _node_se_reader({"composite_se": result.get("composite_se")}),
         "metrics": result.get("metrics", {}),
         "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
         "peak_vram_mb": result.get("peak_vram_mb", 0),
