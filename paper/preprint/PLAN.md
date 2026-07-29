@@ -263,7 +263,12 @@ PathBench-MIL is the lone exception, and it exposes tiling/normalization as a
 procedure (lr, schedule, optimizer, regularization, loss). "Anything including
 prep" is too broad — it collapses the headline. The frozen substrate is the line.
 
-**Enforcement — the protected list is necessary but not sufficient.** Today
+**Enforcement — the protected list is necessary but not sufficient.**
+*(Item 1 below landed 2026-07-28 in `be01096` / H-4b: all nine projects now carry
+an 18-entry `protected` list, and `registry.mode: architecture-preserving` now
+REQUIRES a non-empty list ([`registry/config.py:111`](../../src/automil/registry/config.py)),
+so the gate can no longer be silently disabled by an empty tuple. The paragraph
+below records the state that motivated the fix.)* Today
 `registry.protected` ships empty ([`registry/config.py:37`](../../src/automil/registry/config.py)),
 `files.readonly` is warning-only and bypassed by explicit `--files`, and
 `run_experiment.py` (split entry point + composite writer) is `files.editable`.
@@ -309,6 +314,83 @@ Defense-in-depth, cheapest first:
    `(train, val, test)` in-process ([`clam/runner.py:119`](../../benchmarks/src/autobench/pipeline/clam/runner.py)),
    so layers 1–2 rest on the agent not mislabeling test as val; layer 3 removes the
    leak at its root.
+
+### 6. Framework vs. consumer — what "plug-and-play" may claim
+
+**The question (2026-07-29).** §5 fixes *where* the line is for this benchmark.
+It does not answer the structural one: every arm exposes a different set of
+tunable knobs (CLAM 15, DTFD 13, nnMIL 10, ABMIL 8, TITAN 5 —
+[`search_space.py:64-145`](../../benchmarks/src/autobench/pipeline/search_space.py)),
+so if autoMIL needs per-arm adaptation to know what an agent may tune, in what
+sense is it a plug-and-play optimization framework? Verified by reading the
+permission chain end to end.
+
+**Resolved: the agent's permission is FILE-level, not parameter-level.** The
+framework never enumerates hyperparameters. It gates *files*, and there are
+exactly two channels into a run:
+
+| Channel | How the agent uses it | What gates it |
+|---|---|---|
+| **1. Source edit** (primary) | edit project files, then `automil submit --files …` | `files.editable` supplies the auto-detect scope ([`submit.py:208`](../../src/automil/cli/submit.py)); `registry.protected` glob-matches every submitted path and **hard-rejects** ([`submit.py:263`](../../src/automil/cli/submit.py)) |
+| **2. Arg append** (secondary) | `automil submit --override "--lr 1e-4"`, suffix-appended to `run.command` in the worktree ([`submit.py:43`](../../src/automil/cli/submit.py)) | reaches `run_experiment.py` → `apply_overrides(…, arm=…)`, which raises on any knob not in that arm's declared space |
+
+**The declared search space is enforced on channel 2 only.** Channel 1's boundary
+is entirely the file white/black list. This matters for how the freeze is
+described: the substrate is protected because `splits.py` / `prepare.py` /
+`evaluate.py` / `*/runner.py` / `run_experiment.py` are *unwritable*, not because
+some parameter was withheld.
+
+**The framework/consumer boundary is real, and it is tested.**
+`search_space.py` and `hparams.py` live under
+`benchmarks/src/autobench/pipeline/` — **consumer side**. `src/automil/` contains
+no hyperparameter or MIL vocabulary in any code path (only docstring examples),
+and [`tests/test_framework_purity.py`](../../tests/test_framework_purity.py)
+greps the package on every run so a future commit cannot quietly reintroduce one.
+Per-arm adaptation is therefore autobench's cost, not the framework's:
+
+| Task | Cost | Where |
+|---|--:|---|
+| Add a 6th MIL aggregator to autobench | ~15 lines: one `SEARCH_SPACE` entry, one `apply_overrides(…, arm=…)` in its runner ([`abmil/runner.py:72`](../../benchmarks/src/autobench/pipeline/abmil/runner.py), [`dtfd/runner.py:78`](../../benchmarks/src/autobench/pipeline/dtfd/runner.py), [`titan/train.py:84`](../../benchmarks/src/autobench/pipeline/titan/train.py), [`nnmil/runner.py:74`](../../benchmarks/src/autobench/pipeline/nnmil/runner.py)), one `files.editable` line | consumer |
+| Attach autoMIL to a new project | **0 lines of code** — `config.yaml` only (`run.command`, `files.editable`, `registry.protected`, `scoring`) | consumer config |
+
+**The layering already matches the fairness rule.** The two independent advisory
+passes on the baseline question (2026-07-29) converged on the same three-tier
+partition, and it maps one-to-one onto config keys that already exist:
+
+| Tier | Content | Declared where | Enforced by |
+|---|---|---|---|
+| **0 — measurement apparatus**, identical across arms | splits, folds, features, labels, composite, val/test firewall | `registry.protected` | **framework**, at submit |
+| **1 — budget**, equalized by quantity not value | eval count, wall-clock, keep-margin δ and `se_multiplier`, declared-knob count | `cap`, `scoring` | **framework** |
+| **2 — method**, free per arm | lr, wd, epochs, schedule, batch, architecture width | `files.editable` + each arm's own config | **consumer declares** |
+
+The test that decides a knob's tier: *would varying it change what is being
+measured, or which method is being measured?* Tier 0 if the former. This is why
+per-arm difference in Tier 2 is not a gap in the framework — it is the intended
+shape.
+
+**What the paper may claim, and what it may not.**
+
+- ❌ Do **not** claim autoMIL determines an arbitrary model's tunable parameters,
+  or ships a declared search space out of the box. It does neither. The framework
+  supplies the *lock*; the consumer supplies the *key list*.
+- ✅ Claim plug-and-play at the **mechanism** layer — worktree overlay with
+  manifest hash verification, file-level freeze enforced at submit, val-firewall
+  with born-sealed test, noise-calibrated keep/discard, budget cells. None of it
+  knows what a learning rate is, and attaching it to a new repo is config-only.
+- ✅ Claim rigor at the **instance** layer — this benchmark's declared space is
+  published per arm with a recorded reason for every lock, and requests for an
+  undeclared knob raise rather than being silently dropped.
+
+Both halves are independently checkable (0-lines-of-code attachment; the
+published per-arm table), which is why they should be stated separately rather
+than merged into one sentence that overclaims.
+
+**The honest weakness, stated before a reviewer states it.** Channel 1 is
+source-level editing, so *by default* the search space is "whatever the editable
+files allow" — unbounded and unauditable. `search_space.py` is what made this
+campaign's space finite and declared, and that artifact is per-consumer work.
+Plug-and-play buys the harness and the freeze; it does not buy the declaration.
+Say so.
 
 ## Open / pending — to confirm
 
