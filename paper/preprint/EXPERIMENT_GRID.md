@@ -1,5 +1,50 @@
 # Preprint — Experiment Grid & Estimation
 
+> ## ⚠ Cluster reality check — 2026-07-29, verified on `fir`
+>
+> Two statements in this document are **wrong** against what is actually on disk,
+> in opposite directions. Read this before planning compute.
+>
+> **TITAN is no longer a launch gate.** §3.2 calls `conch_v15` extraction "the
+> bottleneck" and "not confirmed extracted on any TCGA cohort". In fact
+> `20x_512px_0px_overlap/slide_features_titan` exists for **four of five**
+> cohorts — LUAD 465, LGG 491, PDAC 242, HNSC 431 — symlinked to
+> `features_titan` as PRELAUNCH §4 describes. Only **CPTAC-GBM** is missing it.
+> Patch features (`uni_v2`/`virchow2`/`hoptimus1`) are complete on all five, at
+> counts matching §1.1's cohort sizes. The long pole is one cohort, not five.
+>
+> **Almost nothing usable has been run.** The queue is empty; the cluster
+> checkout is on `main` @ `0b2da55`. There are 60 `summary.json` files, of which
+> **18 are on-roster**:
+>
+> | Cohort | roster task | on disk | off-roster also present |
+> |---|---|:--:|---|
+> | TCGA-LUAD | `kras` | ✅ 6 | `egfr` 6 |
+> | TCGA-LGG | `idh1` | **✗** | `pik3ca` 6 |
+> | CPTAC-GBM | `tp53` | ✅ 6 | `egfr` 6, `immune_class` 6 |
+> | CPTAC-PDAC | `immune_class` | ✅ 6 | `smad4` 6 |
+> | TCGA-HNSC | `grade` | **✗** | `hras` 6, `pik3ca` 6 |
+>
+> Only `clam` and `nnmil` ran — **zero** `abmil` / `dtfd` / `titan`. **Zero
+> survival**: no `cox` or `nllsurv` directory exists anywhere on the shared
+> tree, against 100 planned. TCGA-HNSC has no `grade` splits at all; TCGA-LGG
+> has `idh1` splits but no results.
+>
+> So against the planned 165: **18 on-roster experiments exist (11%)**, all
+> classification, at 2 of 5 arms, produced by pre-fix code — and all of them are
+> superseded anyway by the CLAM/ABMIL upstream-default correction and CR-5b's
+> seed-bearing results path (the sample path on disk is
+> `clam/standard/tp53/uni_v2/clam_mb/summary.json`, with no `s42` segment).
+>
+> **The practical consequence is good news, not bad.** Since the campaign starts
+> essentially from zero, the fixes on `fix/audit-2026-07-23` do not invalidate
+> existing work — there is almost none to invalidate. The "re-run cost" that
+> gated decisions 1 and 2 in `HANDOFF.md` does not exist.
+>
+> Any earlier note claiming a substantially complete grid (e.g. "LUAD 30/33")
+> has no counterpart on disk. Either it was purged or it counted dispatched jobs
+> rather than landed results; it should not be relied on.
+
 > **Before launching, read [`PRELAUNCH_REVIEW.md`](PRELAUNCH_REVIEW.md)** — the
 > 2026-07-21 adversarial verification. It records two blocking bugs (now fixed,
 > incl. informative censoring that biased every TCGA survival arm) and two open
