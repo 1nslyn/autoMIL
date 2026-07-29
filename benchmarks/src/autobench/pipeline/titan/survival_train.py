@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import sys
 import time
 
@@ -23,6 +22,7 @@ from torch.utils.data import DataLoader
 from autobench import LIB_ROOT
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
+from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
@@ -34,15 +34,6 @@ if str(LIB_ROOT) not in sys.path:
 from nnMIL.training.losses.survival_loss import SurvivalLoss, survival_c_index  # noqa: E402
 from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss  # noqa: E402
 from nnMIL.training.callbacks.early_stopping import EarlyStoppingSurvival  # noqa: E402
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 def _event_time_bin_edges(times, statuses, n_bins: int) -> np.ndarray:

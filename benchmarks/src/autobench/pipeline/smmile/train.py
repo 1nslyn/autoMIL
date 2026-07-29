@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 
 import numpy as np
 import pandas as pd
@@ -18,22 +17,11 @@ import torch
 import torch.nn.functional as F
 from torch.optim import lr_scheduler
 
+from autobench.pipeline.determinism import seed_everything
 from autobench.pipeline.smmile._imports import SMMILe_SINGLE
 from autobench.pipeline.smmile.config import SMMILeConfig
 from autobench.pipeline.smmile.dataset import make_smmile_loader
 from autobench.pipeline.smmile.evaluate import evaluate_smmile_model
-
-
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
 
 
 def _create_model(fea_dim: int, cfg: SMMILeConfig, device: torch.device) -> SMMILe_SINGLE:

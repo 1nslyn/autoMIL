@@ -25,18 +25,11 @@ import random
 import numpy as np
 import torch
 
+from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import DTFDSlide, min_bag_size
 from autobench.pipeline.dtfd.eval import evaluate_dtfd, val_auc
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 def _pseudo_bag_forward(

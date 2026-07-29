@@ -26,6 +26,7 @@ import numpy as np
 import torch
 
 from autobench import LIB_ROOT
+from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import DTFDSurvivalSlide, _read_bag, min_bag_size
 from autobench.pipeline.dtfd.eval import _split_pseudo_bags
@@ -38,14 +39,6 @@ if str(LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(LIB_ROOT))
 from nnMIL.training.losses.survival_loss import survival_c_index  # noqa: E402
 from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss  # noqa: E402
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 def _event_time_bin_edges(times, statuses, n_bins: int) -> np.ndarray:
