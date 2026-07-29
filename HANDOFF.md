@@ -1,169 +1,232 @@
 # Handoff — audit remediation branch
 
-**Branch:** `fix/audit-2026-07-23` (21 commits on top of `0b2da55`)
-**Date:** 2026-07-23 · **Status:** code fixes landed and green; several decisions pending
+**Branch:** `fix/audit-2026-07-23` (40 commits on top of `0b2da55`)
+**Updated:** 2026-07-29 · **Status:** scope settled; the agentic layer's blockers are cleared
 
 ---
 
 ## TL;DR
 
-A six-stream adversarial audit of the whole pipeline found 39 issues. **All 5
-CRITICAL code defects are fixed, tested, and committed.** Along the way a
-**new CRITICAL** surfaced that is not yet fixed (**H-3b**) and which currently
-blocks the paper's headline. Nothing here is a blocker for *running* the static
-grid; it is a blocker for the **agentic layer** and for two of the paper's
-figures.
+A six-stream adversarial audit (2026-07-23) found 39 issues; a second full pass
+against the paper plan (2026-07-28) found 14 more, corrected two of the first
+pass's own conclusions, and forced a scope decision. **Everything on the critical
+path is now fixed and green.** What remains is a short list of research decisions
+and a mid-priority backlog, both enumerated below.
 
-**Read these three docs before touching anything:**
+**Read these four docs before touching anything:**
 
 | Doc | What it is |
 |---|---|
-| [`paper/preprint/CODE-AUDIT-2026-07-23.md`](paper/preprint/CODE-AUDIT-2026-07-23.md) | the full 39-finding audit + a **claim-level addendum** mapping findings onto the paper's 8 figures |
-| [`paper/preprint/CODE-AUDIT-FIXES.md`](paper/preprint/CODE-AUDIT-FIXES.md) | **living tracker** — every finding with status ☐/◐/☑/⚑, commit, and notes |
-| [`paper/preprint/PRELAUNCH_REVIEW.md`](paper/preprint/PRELAUNCH_REVIEW.md) | the earlier (pre-existing) review; O1/O2/O3 referenced throughout |
+| [`paper/preprint/READINESS-2026-07-28.md`](paper/preprint/READINESS-2026-07-28.md) | the second-pass analysis — **start here**; it opens with the settled scope |
+| [`paper/preprint/CODE-AUDIT-FIXES.md`](paper/preprint/CODE-AUDIT-FIXES.md) | **living tracker** — every finding with status ☐/◐/☑/⚑/⊘, commit, notes |
+| [`paper/preprint/CODE-AUDIT-2026-07-23.md`](paper/preprint/CODE-AUDIT-2026-07-23.md) | the original 39-finding audit + the claim-level addendum |
+| [`paper/preprint/PRELAUNCH_REVIEW.md`](paper/preprint/PRELAUNCH_REVIEW.md) | the pre-existing review; O1/O2/O3 referenced throughout |
 
 ---
 
-## What is fixed (all tested, all committed)
+## The scope decision (settled by Leo, 2026-07-28)
+
+This is the frame everything else hangs from, so it goes first.
+
+**The agentic recipe search IS the paper.** Without it there is no work. The
+headline is Fig 3 (an equal-effort search de-biases the leaderboard), with Fig 5
+and the pre-registered gate as the rigor backbone; Figs 1 and 4 are the benchmark
+substrate the search improves on.
+
+**The "encoder ≫ aggregator" claim is dropped.** It came from the Frontiers
+precedent rather than from us, it is contradicted by our own 210-config baseline,
+and neither axis has a designed dynamic range. **No new experiments** are added to
+rescue it — no legacy encoder anchor. Fig 2 survives only as a descriptive
+variance decomposition with no "≫" assertion, or not at all.
+
+This **voids** four findings rather than resolving them: A-0, O1, AXIS-RANGE,
+M-12. It **promotes** four others from optional to required — CR-4, H-5a, H-5b and
+multi-seed — because the headline now rests entirely on a per-cell lift selected
+on ~10 validation patients.
+
+---
+
+## What is fixed
+
+Grouped by what it protects. Every row is code + test + commit.
+
+**The selection signal.**
 
 | ID | Fix | Commit |
 |---|---|---|
 | CR-1a | non-finite `composite` rejected at 3 layers (blocks an `Infinity` best-node exploit) | `bf7ef14` |
-| CR-1b | **composite derived from val metrics**, not trusted from the agent-written file | `731cea2` |
-| CR-2 | `propose`/`nominate`/`reconcile` now write `graph.json` under the lock | `2506489` |
-| CR-3 | **survival selection uses pooled cross-fold concordance** (was a ~2-event/fold signal the code itself calls "near-random") | `ff7a55e` |
-| CR-5 | per-fold results cache isolated per experiment (was defeating the OS fix + colliding across variants) | `e695304` |
-| H-1 | `run.log` + error tails redacted (firewall no longer depends on a vendored hand-patch) | `73908f6` |
-| H-3 | **uniform hyperparameter override across all 5 arms** (3 of 4 aggregators previously discarded tuning silently) | `b50873a` `7f65718` `101ab35` `91d741a` |
+| CR-1b | composite **derived from val metrics**, not trusted from the agent-written file | `731cea2` |
+| CR-3 | survival selection uses **pooled cross-fold concordance** (was a ~2-event/fold signal the code itself calls "near-random") | `ff7a55e` |
 | H-6 | `best_node` recomputed from keep-nodes only | `e5d0d56` |
 | H-8 | `n_valid_folds` recorded; degenerate CV quarantined as `partial` | `bb6a276` |
-| M-1, M-4 | scoring-key backfill; parent/child cycle guards | `da9805a` |
-| M-11, L-4 | ambiguous dataset name + blank env now fail fast | `2a09890` |
-| M-14 | task included in budget-cell identity | `550c0c7` |
+| M-15 | valid-fold denominators surfaced rather than silently averaged over | `e9b19d7` |
 
-### Verification status — what "green" means here
+**The val-firewall.**
+
+| ID | Fix | Commit |
+|---|---|---|
+| H-1 | `run.log` + error tails redacted (no longer depends on a vendored hand-patch) | `73908f6` |
+| M-8 | `certify --top-k` K>1 requires `--unseal-multiple`; comparing K test blocks *is* selection on test | `aaa2c3e` |
+
+**The results cache — two silent-wrong-number bugs.**
+
+| ID | Fix | Commit |
+|---|---|---|
+| CR-5 | per-fold cache isolated per experiment on the orchestrated path | `e695304` |
+| CR-5b | **the static grid too**: seed is now a path segment and the rest of the config is fingerprinted; `--seed 43` used to return seed 42's numbers verbatim | `75e7e78` |
+| CFG-3 | `run_benchmark.py` declared a CLI literal for every training knob and passed them in unconditionally, so the dataclass defaults were **dead on the static-grid path** | `9be9ef9` |
+
+**The search space — the equal-effort precondition.**
+
+| ID | Fix | Commit |
+|---|---|---|
+| H-3 | uniform hyperparameter override across all 5 arms (3 of 4 aggregators silently discarded tuning) | `b50873a` `7f65718` `101ab35` `91d741a` |
+| H-3b + A-2 | **declared per-arm search space** + an opaque `hparam_overrides` channel; coverage was CLAM 12/15 vs **nnMIL 0/11** | `46725e7` |
+| — | CLAM and ABMIL returned to their **upstream** defaults | `d86bdce` |
+
+**The frozen substrate.**
+
+| ID | Fix | Commit |
+|---|---|---|
+| H-4 + H-4b | `registry.protected` populated on the **live** project (`0b2da55` patched only the three templates); `architecture-preserving` now requires a non-empty list | `be01096` |
+| HASH-0 | the overlay manifest sha256 is verified before any file lands | `be01096` |
+| NO-OVERLAY | agentic overlays created for all five roster cohorts | `be01096` |
+| — | end-to-end proof that H-3b and H-4 **compose** | `4ad90ad` |
+
+**Equal effort, measurable.**
+
+| ID | Fix | Commit |
+|---|---|---|
+| H-2 | **eval-count budget** as an orthogonal second axis (time stays as the safety wall) | `8642fdd` |
+| CELL-1 | `cell_id` reaches `graph.py`, so per-cell effort is answerable at all | `8642fdd` |
+| CAP-1 | the launch path consults the cap; queued specs no longer slip through a closed cell | `8642fdd` |
+
+**Results → claims.**
+
+| ID | Fix | Commit |
+|---|---|---|
+| FIG-0 | a real-data cross-cohort collector + Figs 1/4 that read it (nothing in git read real results before) | `0838194` |
+| DATA-ID | dataset identity recorded in every results artifact | `be01096` |
+| TSV-1 | `results.tsv` no longer locks its metric columns on the first row | `e0cd416` |
+
+**Statistics.**
+
+| ID | Fix | Commit |
+|---|---|---|
+| H-5a | Student-t cross-fold intervals (the K=5 percentile bootstrap resamples five numbers) | `e9b19d7` |
+| H-5b | Holm–Bonferroni and Benjamini–Hochberg adjustment for the grid-wide family | `a9890c0` |
+
+**Correctness and hygiene.** CR-2 `2506489` · M-1/M-4 `da9805a` · M-11/L-4
+`2a09890` · M-14 `550c0c7` · CFG-1/CFG-2 `e0cd416` · purity scan `b93f3e2`.
+
+---
+
+## Verification — what "green" means
 
 ```bash
-uv run pytest benchmarks/tests/ -q          # 518 passed
-uv run pytest tests/ -q --ignore=tests/skills --ignore=tests/acceptance \
-  --deselect tests/test_cli_cancel_resubmit.py::test_cancel_local_direct_kill \
-  --deselect tests/test_cli_cancel_resubmit.py::test_cancel_no_starttime_ticks \
-  --deselect tests/test_framework_purity.py::test_framework_purity_no_autobench_refs
-                                            # 1082 passed
+uv run pytest benchmarks/tests/ -q
 ```
+→ **738 passed, 1 skipped**
 
-The three deselected + two skipped dirs are **pre-existing failures, verified by
-running them on base `0b2da55` in an isolated worktree**:
-- 3 purity tests fail only on a stale `.pyc` (the grep scans `__pycache__`) —
-  they pass after `find src -name __pycache__ -type d -exec rm -rf {} +`
-- the other 9 (clause_08, clause_11, cancel ×2, iris end-to-end, phase7 setup
-  gate, setup_dry_run_gate ×3) **fail identically on base** — macOS process-kill
-  semantics, absent nvidia-smi, 90 s subprocess gates. This project is Linux-only.
+```bash
+uv run pytest tests/ -q --ignore=tests/skills --ignore=tests/acceptance --deselect tests/test_cli_cancel_resubmit.py::test_cancel_local_direct_kill --deselect tests/test_cli_cancel_resubmit.py::test_cancel_no_starttime_ticks
+```
+→ **1234 passed, 54 skipped**
+
+The deselect list is now **two tests**, down from three. The framework-purity test
+used to be deselected as "pre-existing"; it turned out to be structurally unable
+to pass — it grepped `__pycache__`, and a `.pyc` embeds its module's string
+literals, so every *allowlisted* source line reappeared as an unmatchable
+`Binary file … matches` row. pytest compiles the modules during collection, so it
+failed on every run. Fixed in `b93f3e2`; a deselected purity test was also not
+catching the real violations it exists for.
+
+The two remaining deselects and `tests/skills` (4 failures) are genuinely
+platform-specific and **verified failing identically on base `0b2da55`**: macOS
+process-kill semantics, absent `nvidia-smi`, and 90-second subprocess gates. This
+project is Linux-only.
 
 **→ 0 regressions from this branch.**
 
 ---
 
-## The blocker: H-3b (NEW CRITICAL, not fixed)
+## Open work
 
-Search-space coverage is **CLAM-shaped**. Measured per arm:
+**Two agents were mid-flight when this was written** — CR-4 (per-cell keep margin
+derived from CV noise) and the daemon robustness group (CR-2b, H-7, M-5, M-6,
+M-7). Check `git log` before assuming either is unlanded.
 
-| Arm | tunable knobs | reachable | coverage |
-|---|--:|--:|--:|
-| CLAM | 12 | 12 | **100%** |
-| TITAN | 4 | 3 | 75% |
-| ABMIL | 8 | 5 | 62% |
-| nnMIL | 11 | 4 | **36%** |
-| DTFD | 15 | 5 | **33%** |
-
-Root cause: the transport is `ModelConfig` + `TrainConfig`, which were designed
-around CLAM (`bag_weight`, `B`, `model_size` are CLAM concepts). CLAM's whole
-surface is natively in the channel; nobody else's is. DTFD cannot receive
-`numGroup`, `total_instance`, `mDim`, `numLayer_Res`, `droprate`, `droprate_2`,
-`grad_clip`, `lr_decay_ratio`, `lr_decay_step` — i.e. **its own paper's
-contributions**. nnMIL cannot receive `warmup_epochs`, `dropout`, `batch_size`,
-`batch_sampler`, `hidden_dim`, `max_seq_length`.
-
-**Why it blocks the paper (finding A-0):** `EXPERIMENT_GRID.md §4` defends the
-headline (Fig 2, encoder ≫ aggregator) by pointing at Fig 3's equal-effort
-search — *"Fig 2 + Fig 3 must be read together"*. H-3b breaks exactly that
-defence. A ranking flip toward CLAM in Fig 3 is **the artifact H-3b predicts**,
-not a finding. Headline and framework contribution fail together.
-
-### The fix (designed, not implemented)
-
-1. An **opaque key/value override channel** — e.g. `hparam_overrides: {numGroup: 8,
-   grad_clip: 1.0}` in the spec/config — threaded to `apply_overrides` /
-   `apply_overrides_to_plan`. **Those already accept arbitrary field names**
-   (verified: `droprate` / `droprate_2` are individually settable); they just have
-   nothing feeding them.
-2. Widen `hparams.OVERRIDABLE` beyond the 5 canonical names so `exp_cfg` fields an
-   arm recognises (`dropout`, `optimizer`, `weighted_sample`, `stop_epoch`) are
-   forwarded too.
-3. **Declare a per-arm searchable set** (finding A-2). The target is a *declared*
-   set, **not** literal 100% — DTFD's `distill` is deliberately locked to `AFS`
-   for a correctness reason documented in its config.
+Remaining after those: M-9, M-10, M-13, L-1, L-2, L-3, L-5, L-6, L-7, L-8, L-9,
+L-10. All MED/LOW; none blocks a claim. See the tracker.
 
 ---
 
-## Recommended order for the next session
-
-1. **H-3b + A-2** — the override channel and the declared search space. Unblocks A-0.
-2. **H-4** — enforce the frozen substrate (`registry.protected` ships empty; no
-   roster overlay exists). Resolves A-4: today the agent can reach full coverage
-   only by editing config files, which is the same hole that lets it edit
-   `splits.py`.
-3. **H-2** — eval-count budget primitive (`cells/` is time-only today). See the
-   memory note `automil-equal-effort-budget`: this was settled on rigor grounds —
-   eval-count is the comparison axis, agent-worktime is a reported secondary.
-4. Then: CR-2b, M-5/6/7, M-8/9/10, and the Gate-2 statistics helpers
-   (t₄/BCa intervals, Holm/BH correction, per-cell δ).
-
----
-
-## Decisions pending — Leo only, do not guess
+## Decisions still open — Leo only
 
 | # | Decision | Consequence |
 |---|---|---|
-| 1 | **CLAM back to upstream `lr=1e-4`?** (currently 2e-4, i.e. 2×, no recorded rationale) | invalidates the dispatched static grid → re-run. Also gates the Fig 7 "reproduces published SOTA" claim (A-7). |
-| 2 | **ABMIL back to upstream optimizer?** (all three differ: lr 5e-4→2e-4, reg 1e-4→1e-5, epochs 20→200) | same. Note upstream ABMIL is a toy MNIST-bags experiment, so deviating is defensible **if stated**. |
-| 3 | Fig 4: include TITAN in the agentic search, or drop the head-to-head framing (A-5) | as-is, tile arms improve after the search and TITAN does not — the claim can reverse for a non-model reason |
-| 4 | Fig 3: re-run the CCRCC / ovarian-HRD anchors — they are off-roster **and** predate every fix here (A-1) | compute + coordination |
-| 5 | Seeds: multi-seed, or stop reporting variance components (A-8 / H-5c) | Fig 2's decomposition is single-seed and cannot separate seed noise |
-| 6 | A-3: equal eval-count does not equalise search *difficulty* (DTFD 15-dim vs TITAN 4-dim) | needs a stated position: scale budget with dimensionality, or report anytime curves only |
+| 3 | Fig 4: include TITAN in the agentic search, or drop the head-to-head framing (A-5) | as-is, tile arms improve after the search and TITAN does not, so the claim can reverse for a non-model reason. TITAN has ~5 declared knobs, so "equal effort" is ill-defined for it |
+| 4 | Fig 3's anchors: re-run CCRCC / ovarian-HRD, or replace them with roster cells now that the overlays exist (A-1) | they are off-roster **and** predate every fix here |
+| 5 | Seeds: how many, and does Fig 2 keep a variance decomposition at all (A-8 / H-5c) | **unblocked** — CR-5b means a second seed now actually retrains. Promoted to required by the scope decision |
+| 6 | A-3: equal eval-count ≠ equal search difficulty (DTFD 13 declared knobs vs TITAN 5) | needs a stated position: scale budget with dimensionality, or report anytime curves only |
+| 10 | Who writes the remaining figures, and does the system schematic (intended paper Fig 1) get drawn in-repo | Figs 1 and 4 exist; 2, 3, 5, 6, 7, 8 do not |
 
-**Cost note for 1 & 2:** re-running the static grid costs only *training*.
-Features, `.pt` conversions, splits and the TITAN `conch_v15` extraction all
-survive — ≈40 GPU-h total, ~½–1 day on 4×H100 per the grid doc. It is much
-cheaper now than after the agentic layer, whose headline metric is
-lift-over-baseline.
+**Operational consequence of the landed work:** the dispatched static grid must be
+**purged and re-run**. CLAM and ABMIL train at different hyperparameters now, and
+CR-5b's fingerprint guard will refuse to resume the old folds — it raises naming
+the changed field and prints the `rm -rf`. That is the intended behaviour: a
+re-run fails loudly rather than quietly reporting stale numbers. Cost is training
+only (~40 GPU-h); features, `.pt` conversions, splits and any TITAN extraction all
+survive.
 
-**Verified upstream comparison** (checked field-by-field against every package
-under `benchmarks/lib/`, see `provenance.py`): DTFD **faithful**; nnMIL
-**faithful** (3e-4/1e-4 + 100 epochs are nnMIL's own trainer defaults, not a
-benchmark deviation); CLAM off by one knob; ABMIL off by three; TITAN n/a.
-SMMILe is vendored but unreachable from `--framework`, so it is off the paper path.
+**Also note:** a newly initialised project now gets `max_concurrent_per_gpu` and
+`default_vram_estimate_gb` from the hardware healthcheck rather than the static
+1 / 0.5 (CFG-2). `init` always computed those values; it wrote them into a block
+nothing read.
 
 ---
 
-## Conventions used here
+## Not verified
+
+**Cluster state is unknown.** SSH to `fir` failed at authentication (control
+master expired; both agent keys rejected, only `keyboard-interactive` offered — an
+MFA prompt that cannot be answered non-interactively). Queue state, the cluster's
+checkout commit, per-dataset completion counts and `sacct` GPU-hours have not been
+checked since this branch began. Rebuild the master from an interactive terminal:
+
+```bash
+ssh -fN -M -S ~/.ssh/cm/fir-master.sock -o ControlPersist=12h -o ServerAliveInterval=60 yinshuol@login3.fir.alliancecan.ca
+```
+
+Also still unchecked: whether CPTAC-PDAC's underlying continuous infiltration
+score is recoverable (`PLAN.md` §4 open item).
+
+---
+
+## Conventions
 
 - One finding (or one tight group) per commit; conventional-commit subject with
-  the finding ID; body explains the failure mode, not just the change.
-- Every fix ships a test that **reproduces the defect**, plus a targeted
-  regression run. Nothing marked ☑ in the tracker without both.
+  the finding ID; the body explains the failure mode, not just the change.
+- Every fix ships a test that **reproduces the defect**. Nothing is marked ☑
+  without both the test and a targeted regression run.
 - Update `CODE-AUDIT-FIXES.md` in the same commit as the fix.
 - No co-author trailer (disabled globally in `~/.claude/settings.json`).
 
-## Gotchas worth knowing
+## Gotchas
 
 - `tasks/` is **gitignored** — audit docs live in `paper/preprint/` so they travel
-  with the branch.
-- The purity test greps `__pycache__`; clear bytecode before trusting it.
-- `uv run pytest tests/` takes ~18 min; the deselect list above runs in ~90 s.
-- `benchmarks/lib/` holds 6 vendored upstreams (CLAM, DTFD-MIL,
-  AttentionDeepMIL, nnMIL, SMMILe, TRIDENT) — they are the ground truth for any
-  "does this match upstream?" question.
-- `hparams.apply_overrides` **raises** on an inapplicable knob by design. When
-  wiring a new arm, route only the knobs that arm actually owns — this is how the
-  TITAN `max_epochs` mixed-provenance case was caught during wiring.
+  with the branch. The baseline-report correction (BASE-DOC) is therefore local
+  only; the finding itself is recorded in the tracker.
+- `benchmarks/lib/` holds 6 vendored upstreams (CLAM, DTFD-MIL, AttentionDeepMIL,
+  nnMIL, SMMILe, TRIDENT). They are ground truth for any "does this match
+  upstream?" question — and `test_provenance.py` now parses their argparse
+  defaults with AST rather than trusting a transcription.
+- `hparams.apply_overrides` **raises** on a knob outside the arm's declared search
+  space, with the lock's reason when there is one. When wiring a new arm, declare
+  its knobs in `search_space.py` first; the honesty test fails if the declaration
+  does not match the arm's real fields.
+- `run_experiment.py` and `pipeline/config.py` are **protected** now. That is
+  affordable only because H-3b gave every arm a real hyperparameter channel — the
+  two fixes are load-bearing for each other (`4ad90ad` proves it).
+- Full `tests/` run ≈ 95 s; `benchmarks/tests/` ≈ 30 s; `tests/skills/` alone is
+  ≈ 10 min of subprocess gates.
