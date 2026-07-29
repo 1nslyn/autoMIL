@@ -379,6 +379,30 @@ def _symlink_slurm_logs(automil_dir: Path, archive_node_dir: Path, spec_data: di
             logger.warning("D-171 stderr symlink failed: %s", exc)
 
 
+def _submitted_at_key(spec: dict) -> str:
+    """Stable, always-comparable sort key for a queue spec's ``submitted_at`` (L-7).
+
+    ``submitted_at`` is normally an ISO-8601 string written by ``automil
+    submit``, but ``_get_pending`` also has to sort specs where it is absent
+    (older or hand-written specs), explicitly ``null`` (a present key reads
+    back as ``None``, which ``dict.get(..., default)`` does NOT paper over —
+    the default only applies when the key is missing), or — from a malformed
+    producer — some other JSON type. Python 3 raises ``TypeError`` comparing
+    ``None``/``str`` or ``int``/``str``, and that exception previously
+    propagated out of ``list.sort()`` inside ``_get_pending``, which is
+    called every ``tick()`` — one bad queue file stalled scheduling for
+    every pending spec, not just its own.
+
+    Coercing to ``str`` makes every comparison well-defined. Specs with no
+    usable timestamp (falsy: absent, ``None``, ``""``) collapse to ``""``,
+    which sorts before every real ISO-8601 timestamp — so they are treated
+    as "submitted before anything timestamped" and fall back to queue
+    (filename) order among themselves via Python's stable sort.
+    """
+    raw = spec.get("submitted_at")
+    return str(raw) if raw else ""
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -768,8 +792,10 @@ class ExperimentOrchestrator:
                 pending.append(spec)
             except (json.JSONDecodeError, Exception) as e:
                 logger.error(f"Bad spec {f}: {e}")
-        # Sort by priority ASC, then submitted_at ASC
-        pending.sort(key=lambda s: (s.get("priority", 2), s.get("submitted_at", "")))
+        # Sort by priority ASC, then submitted_at ASC. submitted_at is coerced
+        # via _submitted_at_key (L-7) so a mix of string / absent / explicit-None
+        # / malformed-type values across the queue can never raise TypeError here.
+        pending.sort(key=lambda s: (s.get("priority", 2), _submitted_at_key(s)))
         return pending
 
     def _find_best_gpu(self, needed_gb: float) -> int | None:
