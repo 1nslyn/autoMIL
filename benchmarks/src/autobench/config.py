@@ -201,11 +201,17 @@ def _parse_tasks(raw: dict[str, Any]) -> dict[str, TaskDef]:
             )
         else:
             label_map = {int(k): v for k, v in tdef["label_map"].items()}
+            # L-5: label_map is raw-value -> class-name and may be many-to-one
+            # (e.g. {0: "low", 1: "low", 2: "high"} collapsing two raw grades
+            # into one class). len(label_map) counts raw KEYS, not distinct
+            # class names, and silently over-counts n_classes whenever the
+            # map collapses -- count the distinct names instead.
+            n_classes = tdef.get("n_classes", len(set(label_map.values())))
             tasks[name] = TaskDef(
                 name=name,
                 label_col=tdef["label_col"],
                 label_map=label_map,
-                n_classes=tdef.get("n_classes", len(label_map)),
+                n_classes=n_classes,
             )
     return tasks
 
