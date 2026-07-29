@@ -61,6 +61,47 @@ _FRAMEWORK_MAP: dict[str, Framework] = {
     "abmil": Framework.ABMIL,
 }
 
+# L-1: source name shown in the empty-roster error, per framework. TITAN is
+# deliberately absent -- it has no model-type axis (generate_all_experiments
+# pins the "titan" pseudo-model unconditionally), so an empty roster is not
+# reachable for it.
+_ROSTER_SOURCE_NAMES: dict[Framework, str] = {
+    Framework.CLAM: "--models / clam_models",
+    Framework.DTFD: "--dtfd_models / dtfd_models",
+    Framework.ABMIL: "--abmil_models / abmil_models",
+    Framework.NNMIL: "--nnmil_models / nnmil_models",
+}
+
+
+def _empty_rosters(
+    frameworks: list[Framework],
+    *,
+    models: list[str],
+    dtfd_models: list[str],
+    abmil_models: list[str],
+    nnmil_models: list[str],
+) -> list[tuple[Framework, str]]:
+    """Requested frameworks whose resolved model roster is empty (L-1).
+
+    ``generate_all_experiments``'s ``for model_type in model_types:`` loop
+    simply doesn't iterate when a framework's roster is empty -- e.g. a
+    dataset YAML that never set ``nnmil_models`` (defaults to ``[]``). The
+    run then "succeeds" having launched zero experiments for that framework,
+    indistinguishable from "there was nothing to do". Returns the offending
+    (framework, source-name) pairs so the caller can fail loudly instead.
+    """
+    rosters = {
+        Framework.CLAM: models,
+        Framework.DTFD: dtfd_models,
+        Framework.ABMIL: abmil_models,
+        Framework.NNMIL: nnmil_models,
+    }
+    return [
+        (fw, _ROSTER_SOURCE_NAMES[fw])
+        for fw in frameworks
+        if fw in rosters and not rosters[fw]
+    ]
+
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="WSI Classification Benchmark")
@@ -184,6 +225,24 @@ def main() -> None:
         if s not in ds.split_strategies:
             print(f"Error: unknown strategy '{s}'. Valid: {list(ds.split_strategies.keys())}")
             sys.exit(1)
+
+    # L-1: validate every requested framework's model roster is non-empty
+    # BEFORE any experiment generation -- otherwise the grid generator's
+    # per-framework loop silently contributes zero experiments and the run
+    # exits 0 having done nothing.
+    empty = _empty_rosters(
+        frameworks,
+        models=models, dtfd_models=dtfd_models,
+        abmil_models=abmil_models, nnmil_models=nnmil_models,
+    )
+    if empty:
+        for fw, source in empty:
+            print(
+                f"Error: framework '{fw.value}' has an empty model roster "
+                f"({source} resolved to []). Configure it in the dataset "
+                "YAML or pass it explicitly on the CLI."
+            )
+        sys.exit(1)
 
     train_cfg = _train_config_from_args(args)
 
