@@ -181,26 +181,57 @@ class Runner:
                     target.unlink()
 
     def collect_result(self, worktree_path: Path, archive_dir: Path) -> dict | None:
-        """Persist the worktree result.json and return the parsed payload (or None).
+        """Persist the sealed result.json and return the parsed payload (or None).
 
-        Val-firewall (Scope B): the raw result.json carries the sealed ``held_out``
-        (test) block, so the durable copy is written into the off-limits
+        Val-firewall (Scope B): the FULL result payload carries the sealed
+        ``held_out`` (test) block, so the durable copy lives in the off-limits
         ``archive/<node>/certify/`` subdir, never the agent-visible node-archive
         root. terminal_writer is the sole writer of the root ``result.json`` and
         strips test before writing it. The raw dict is still returned (held_out
         intact) so terminal_writer can route held_out into certify.json.
-        """
-        result_file = worktree_path / "result.json"
-        if not result_file.exists():
-            return None
 
+        L-3 (audit 2026-07-23): two shapes are handled here, because two
+        writers exist for the worktree's result.json:
+
+          - NEW: the training script called ``automil.runtime_helpers.
+            write_result_json``, which already wrote the FULL payload
+            directly into ``AUTOMIL_RESULTS_DIR`` (== ``sealed_dir`` below)
+            and a STRIPPED (val-only, no ``held_out``/``summary``) sibling
+            into the worktree. Before that helper existed, the worktree copy
+            carried the full payload -- test metrics included -- for the
+            entire run, and anything reading the project directory during
+            search (including the coding agent driving it) could read the
+            sealed metrics straight off disk. Now, at most, it can read the
+            same validation-only view already shown in the final,
+            agent-facing ``archive/<node>/result.json``. Because the sealed
+            copy is already correct and authoritative in this case, it is
+            read as-is -- the stripped worktree copy is NOT copied over it,
+            which would silently overwrite the sealed ``held_out`` with
+            nothing.
+          - LEGACY: an older script wrote the FULL payload straight into the
+            worktree and no sealed copy exists yet. Preserves the original
+            behaviour byte-for-byte: copy the worktree file into
+            ``sealed_dir`` and read it back from there.
+
+        Neither file existing means the process produced no result at all
+        (crash before any write) -- returns None, as before.
+        """
         sealed_dir = archive_dir / "certify"
-        sealed_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(result_file, sealed_dir / "result.json")
+        sealed_file = sealed_dir / "result.json"
+        result_file = worktree_path / "result.json"
+
+        if sealed_file.exists():
+            source = sealed_file
+        elif result_file.exists():
+            sealed_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(result_file, sealed_file)
+            source = sealed_file
+        else:
+            return None
 
         try:
             return json.loads(
-                result_file.read_text(), parse_constant=_reject_nonfinite_constant
+                source.read_text(), parse_constant=_reject_nonfinite_constant
             )
         except ValueError as exc:
             # CR-1a: a non-finite (Infinity/NaN) or otherwise malformed result.json
