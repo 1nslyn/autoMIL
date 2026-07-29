@@ -199,7 +199,8 @@ def write_terminal_state(
 
     # Step 3 — Graph node update via locked_update (D-10, D-01)
     from automil.graph import (locked_update, _accept, _accept_margin,
-                           effective_accept_margin, node_composite_se as _node_se_reader)
+                           effective_accept_margin, merged_metadata,
+                           node_composite_se as _node_se_reader)
     try:
         # _technique_map is the internal attribute on ExperimentGraph
         _tm = getattr(graph, "_technique_map", None)
@@ -285,14 +286,18 @@ def write_terminal_state(
                     gnode["cell_id"] = _spec_cell_id
                 if result.get("metrics"):
                     gnode["metrics"] = dict(result["metrics"])
-                # Propagate metadata from result (e.g. budget_killed flag)
+                # Propagate metadata from result (e.g. budget_killed flag).
+                # L-8a: copy-on-write via merged_metadata — a plain setdefault+
+                # update/assign would mutate node["metadata"] in place, and that
+                # dict object can be aliased with another node's (gate/evaluate.py
+                # creates gate-eval children via a shallow dict(node) copy).
                 if result.get("metadata"):
-                    gnode.setdefault("metadata", {}).update(result["metadata"])
+                    gnode["metadata"] = merged_metadata(gnode, result["metadata"])
                 # CR-1b: durable audit trail when the reported scalar could not be
                 # explained by the node's own validation metrics.
                 if composite_disagreement is not None:
-                    gnode.setdefault("metadata", {})["composite_disagreement"] = (
-                        composite_disagreement
+                    gnode["metadata"] = merged_metadata(
+                        gnode, {"composite_disagreement": composite_disagreement}
                     )
 
                 # Only re-evaluate descendants for non-partial, non-crash completions
