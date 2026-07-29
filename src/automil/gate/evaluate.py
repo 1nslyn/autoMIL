@@ -7,7 +7,10 @@ promote logic) can identify gate-eval children.
 
 Cap interaction (D-150 / Pitfall 1): cells in REFUSING_NEW / TERMINATING /
 FINALIZED states are SKIPPED — promote.py uses the skipped list to
-adjust K_effective.
+adjust K_effective. Since H-2 a cell that has spent its EVAL budget is skipped
+on the same footing, so an eval budget set too tight relative to K lowers
+K_effective and can push a candidate into the ``inconclusive`` branch (which is
+the intended failure mode: conclude on less evidence is not an option).
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ logger = logging.getLogger(__name__)
 # (automil.gate.evaluate.get_cell and the cap-check helper).
 # Lazy imports inside evaluate_candidate are removed in favour of this top-level
 # import to support deterministic monkeypatching in the test suite.
-from automil.cells import get_cell, is_refusing_new  # noqa: E402
+from automil.cells import blocks_new_work, get_cell  # noqa: E402
 
 # Terminal job states — match the JobState enum from backends/base.py.
 # Use string values so we don't have to import the enum at module load.
@@ -86,11 +89,16 @@ def evaluate_candidate(
 
         # D-150: cap-exhausted cells skip the eval (promote.py reduces K).
         # get_cell returns None on missing per cells/registry.py — no try/except needed.
+        # H-2: exhaustion is now either axis — a cell with no evaluations left
+        # cannot pay for a held-out eval any more than one with no seconds left,
+        # and the gate must not quietly borrow one.
         cell = get_cell(cell_id)
-        if cell is not None and is_refusing_new(cell):
+        if cell is not None and blocks_new_work(cell):
             logger.info(
-                "gate-eval: skipping cell %s (status=%s, cap-exhausted)",
-                cell_id, cell.status,
+                "gate-eval: skipping cell %s (status=%s, consumed_evals=%d/%s, "
+                "cap-exhausted)",
+                cell_id, cell.status, cell.consumed_evals,
+                cell.eval_budget if cell.eval_budget is not None else "-",
             )
             skipped.append(cell_id)
             continue

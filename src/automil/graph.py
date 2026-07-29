@@ -24,6 +24,25 @@ from automil.scoring import DEFAULT_FORMULA as _DEFAULT_SCORING_FORMULA
 logger = logging.getLogger(__name__)
 
 
+def node_cell_id(node: dict | None) -> str | None:
+    """Return the budget-cell id a graph node belongs to, or ``None`` (CELL-1).
+
+    Two shapes are accepted because two writers exist: ``automil submit`` stamps
+    a top-level ``cell_id`` (parallel to ``config_hash``), while gate-eval
+    children are created with the id under ``metadata`` (``gate/evaluate.py``).
+
+    ``None`` is the legacy answer — nodes created before cells existed carry no
+    identity and must simply never match a lookup.
+    """
+    if not isinstance(node, dict):
+        return None
+    cell_id = node.get("cell_id")
+    if not cell_id:
+        meta = node.get("metadata")
+        cell_id = meta.get("cell_id") if isinstance(meta, dict) else None
+    return cell_id if isinstance(cell_id, str) and cell_id else None
+
+
 def _accept_margin(meta: dict | None) -> float:
     """Predeclared Ladder keep-margin δ from ``meta.scoring.accept_margin``.
 
@@ -304,6 +323,35 @@ class ExperimentGraph:
         return self.technique_stats_data.get(technique, {
             "times_tried": 0, "best_parent_delta": 0.0, "avg_parent_delta": 0.0,
         })
+
+    # --- Budget-cell membership (CELL-1) ---
+    def nodes_in_cell(self, cell_id: str) -> list[dict]:
+        """Return the nodes belonging to budget cell ``cell_id``, ordered by id.
+
+        The join between the experiment tree (``graph.json``) and the budget
+        cells (``automil/cells/<cell_id>.json``). Legacy nodes carry no cell
+        identity and never match — including for a falsy ``cell_id`` query,
+        which must not sweep every untagged node in.
+        """
+        if not cell_id:
+            return []
+        return [
+            node for _, node in sorted(self.nodes.items())
+            if node_cell_id(node) == cell_id
+        ]
+
+    def count_in_cell(self, cell_id: str, *, executed_only: bool = False) -> int:
+        """Count the nodes in a budget cell.
+
+        ``executed_only=True`` counts evaluations (proposals are not evaluations),
+        which is the graph-side cross-check for ``Cell.consumed_evals``. The cell
+        counter remains authoritative — it also bills nodes the graph never got
+        (e.g. a spec launched by a non-CLI submission path).
+        """
+        nodes = self.nodes_in_cell(cell_id)
+        if executed_only:
+            nodes = [n for n in nodes if n.get("type") == "executed"]
+        return len(nodes)
 
     # --- Writing ---
     def _auto_extract_if_empty(self, description: str, techniques: list[str]) -> list[str]:

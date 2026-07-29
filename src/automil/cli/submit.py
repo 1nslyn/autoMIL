@@ -351,7 +351,11 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
 
     # D-116: Cell refusal hook — call get_or_create_cell BEFORE writing the queue spec.
     # metadata.cell_id is the cap-membership tag the daemon reads to count in-cell experiments.
-    from automil.cells import get_or_create_cell, is_refusing_new, consumed_seconds  # noqa: E402
+    from automil.cells import (  # noqa: E402
+        blocks_new_work,
+        consumed_seconds,
+        get_or_create_cell,
+    )
 
     # Cell identity: key the cap-cell by the optimization target. Real configs
     # expose this via project.name (dataset+task) and encoders.primary — NOT
@@ -414,11 +418,19 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         idle_grace_seconds=_cap.idle_grace_seconds,
         mode=_cap.mode,
         task=_task_name if _task_name != _dataset_name else None,
+        eval_budget=_cap.eval_budget,
     )
-    if is_refusing_new(_cell):
+    if blocks_new_work(_cell):
+        # H-2: name whichever axis is binding. The eval axis can bind while the
+        # status still reads ACTIVE (status only advances on the next daemon tick).
+        _evals_msg = (
+            f", {_cell.consumed_evals}/{_cell.eval_budget} evaluations consumed"
+            if _cell.eval_budget is not None else ""
+        )
         raise click.ClickException(
             f"Cell {_cell.cell_id[:8]} is {_cell.status.value}: budget exhausted "
-            f"({consumed_seconds(_cell):.0f}/{_cell.budget_seconds}s consumed). "
+            f"({consumed_seconds(_cell):.0f}/{_cell.budget_seconds}s consumed"
+            f"{_evals_msg}). "
             f"Wait for cell to finalize, or submit with a different "
             f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
         )
@@ -520,6 +532,10 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 # Carry over the config_hash that was computed for this
                 # submit. add_proposed doesn't take it as an argument.
                 graph.nodes[allocated]["config_hash"] = config_hash
+                # CELL-1: record budget-cell membership on the node itself, not
+                # only on the queue spec, so per-cell evaluation counts are
+                # answerable from graph.json alone.
+                graph.nodes[allocated]["cell_id"] = _cell.cell_id
                 # Transition to running through the official state-machine
                 # path so the counter math stays consistent.
                 graph.mark_running(allocated)
@@ -533,6 +549,10 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 # it logs a warning and returns False for any other state, so
                 # this branch is safe to call unconditionally on any existing node.
                 existing = graph.get_node(node)
+                if existing is not None:
+                    # CELL-1: tag the pre-existing proposal too — `propose` runs
+                    # before the cell is known, so this is the first chance.
+                    existing["cell_id"] = _cell.cell_id
                 if (
                     existing
                     and existing.get("type") == "proposed"

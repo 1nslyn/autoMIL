@@ -99,6 +99,13 @@ def migrate_cells(
                     merged = dataclasses.replace(existing, started_at=cell.started_at)
                 else:
                     merged = existing  # existing already has the earlier started_at
+            # H-2: the eval counters are mode-independent, so they are summed in
+            # both branches — a re-key must never hand back spent evaluations.
+            merged = dataclasses.replace(
+                merged,
+                consumed_evals=cell.consumed_evals + existing.consumed_evals,
+                completed_evals=cell.completed_evals + existing.completed_evals,
+            )
             summaries.append({"old_id": cell.cell_id, "new_id": new_id, "action": "merge"})
             if not dry_run:
                 # T-09-09: write merged cell first (atomic), then unlink old.

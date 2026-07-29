@@ -178,6 +178,17 @@ policy:
 cap:
   budget: 6h               # agent-active working budget; e.g. 6h, 30m, 90s
   safety_buffer: 30m       # pre-termination warning window; must be < budget
+  # eval_budget: how many experiments a cell may LAUNCH. This is the primary
+  #   equal-effort axis — an evaluation count is portable across agent runtimes,
+  #   whereas wall-clock is not, so a count is what another lab can reproduce.
+  #   It is a SECOND AXIS, not a mode: the time budget above stays on as the
+  #   safety wall, and whichever runs out first stops new work.
+  #   Counted at launch, so crashed / partial / budget-killed runs all count:
+  #   equal effort means equal ATTEMPTS, not equal successes (otherwise buggy
+  #   code would earn unlimited free retries). Usable results are reported
+  #   separately per cell as `usable` in `automil budget show`.
+  #   null = no eval cap (time-only). Set an integer to enable, e.g. 40.
+  eval_budget: null
   # mode: how the budget clock is metered.
   #   agent_active (default), bills only while the agent is actually working
   #     (PostToolUse activity); the clock PAUSES while experiments run and the
