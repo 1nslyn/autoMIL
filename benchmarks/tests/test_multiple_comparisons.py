@@ -2,8 +2,8 @@
 
 The only correction in the repo was ``src/automil/gate/stats.py::bonferroni_correct``,
 applied to ``K_effective`` held-out cells inside a *single* gate decision
-(default 2). Across the grid -- and across the per-cell lifts the headline now
-rests on -- nothing was corrected at all.
+(default 2). Across the grid -- and across the per-cell lift breakdown
+supporting C3 -- nothing was corrected at all.
 
 Expected values below are hand-computed and cross-checked against R's
 ``p.adjust`` semantics. Both procedures have tie/monotonicity rules that are
@@ -190,7 +190,7 @@ class TestDispatcher:
         assert adjust(p_values, method="bh") == benjamini_hochberg(p_values)
 
     def test_default_method_is_holm(self):
-        """The recommended family control for the headline per-cell lift table."""
+        """The recommended family control for C3's per-cell lift breakdown."""
         p_values = {"a": 0.01, "b": 0.04, "c": 0.03}
         assert adjust(p_values) == holm_bonferroni(p_values)
 

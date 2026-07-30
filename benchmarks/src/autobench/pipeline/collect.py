@@ -42,12 +42,14 @@ from autobench.pipeline.orchestrator import aggregate_results
 __all__ = ["collect_summaries", "summaries_to_frame", "per_fold_frame"]
 
 
-def collect_summaries(roots: list[str]) -> list[dict]:
+def collect_summaries(roots: list[str] | list[tuple[str, str]]) -> list[dict]:
     """Load every ``summary.json`` under ``results/**/`` for each root.
 
     Each ``root`` is a ``benchmark_dir`` (e.g. one per dataset cohort) -- this
     lets one call pool cohorts that each have their own ``benchmark_dir``
     (the roster spans TCGA *and* CPTAC; never filter/assume a shared prefix).
+    A root may be given either as a plain path or as a ``(label, path)`` pair;
+    see the cohort-identity note below for why the pair form is the safe one.
 
     A single recursive glob (``results/**/summary.json``) is used instead of
     depth-hardcoded patterns, because the ``survival_loss`` level is optional:
@@ -58,19 +60,40 @@ def collect_summaries(roots: list[str]) -> list[dict]:
     Unreadable or absent files are skipped rather than raising: a half-written
     ``summary.json`` (mid-write on a live results tree), a corrupt one, or a
     root with no ``results/`` directory at all must not crash a collection run.
+
+    **Cohort identity is stamped from the root, because the runners do not
+    record it.** No framework runner writes a ``dataset`` key into
+    ``summary.json`` -- verified against the completed phase-2 campaign, where
+    0 of 195 real summaries carry one. Since ``aggregate_results`` reads
+    ``s.get("dataset", "")``, an unstamped pooled collection gives every
+    experiment the same empty cohort, and any per-cohort figure silently
+    averages all five cohorts into one row. Each summary therefore gets
+    ``dataset`` filled in from its root's label (or, unlabelled, the root
+    directory's basename) -- but **only when the summary does not already carry
+    a non-empty one**, so a runner that does record it always wins.
+
+    Stamping returns new dicts and never rewrites the file on disk; the results
+    tree is read-only to this module.
     """
     summaries: list[dict] = []
-    for root in roots:
+    for entry in roots:
+        label, root = entry if isinstance(entry, tuple) else (None, entry)
         results_root = os.path.join(root, "results")
         if not os.path.isdir(results_root):
             continue
+        fallback = label or os.path.basename(os.path.normpath(root))
         pattern = os.path.join(results_root, "**", "summary.json")
         for path in sorted(glob.glob(pattern, recursive=True)):
             try:
                 with open(path) as f:
-                    summaries.append(json.load(f))
+                    summary = json.load(f)
             except (OSError, json.JSONDecodeError):
                 continue
+            if not isinstance(summary, dict):
+                continue
+            if not summary.get("dataset"):
+                summary = {**summary, "dataset": fallback}
+            summaries.append(summary)
     return summaries
 
 

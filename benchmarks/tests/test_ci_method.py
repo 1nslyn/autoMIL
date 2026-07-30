@@ -5,8 +5,8 @@ bootstrap over five numbers draws from at most C(9,5) = 126 distinct resample
 multisets, and — the defect these tests pin — the percentile interval of a mean
 can never leave the convex hull of the observed folds. It is therefore
 structurally incapable of expressing the uncertainty of a 5-fold mean, and it
-under-covers exactly when the headline needs it most (a per-cell lift selected
-on ~10 validation patients).
+under-covers exactly when C3's within-lineage lift analysis needs it most
+(selection on ~10 validation patients).
 
 The fix makes a Student-t interval on K-1 = 4 df the default, keeps the
 bootstrap behind an explicit ``method="bootstrap"``, and stamps every emitted

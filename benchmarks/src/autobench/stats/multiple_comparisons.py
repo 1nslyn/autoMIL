@@ -16,10 +16,11 @@ An adjusted p-value is meaningless without saying which set of tests it was
 adjusted over. That set is chosen, not derived, so the options are laid out
 here and the recommendation is argued rather than silently applied.
 
-The headline is a **per-cell lift**: for each cell (dataset, task, encoder,
-aggregator — ``automil.cells.state.make_cell_id``), the difference between the
-default recipe and the equal-effort searched recipe, reported on sealed test.
-The candidate families:
+C3 has two linked estimands: the searched cross-lineage leaderboard/reranking
+and the **within-lineage per-cell lift** from default to equal-effort search,
+reported on sealed test. This module concerns multiplicity for the per-cell
+lift breakdown only; it does not define the cross-lineage ranking analysis or
+the paper's C1 framework contribution. The candidate families:
 
 **(A) Per-dataset, across arms.** One family per cohort (~3-12 cells each).
     Cheap to pass. But nothing about the *claim* is per-dataset: the paper
@@ -32,15 +33,14 @@ The candidate families:
 **(B) The whole grid at once.** Every comparison anyone might draw from the
     ~165-experiment grid in a single family. Maximally conservative and
     superficially safest, but wrong in a different direction: it charges the
-    headline for encoder-vs-aggregator comparisons the paper (post-2026-07-28
-    scope) no longer claims. Correcting over tests you do not report is not
-    rigour, it is self-sabotage.
+    lift subclaim for the dropped encoder-vs-aggregator directional
+    decomposition. The cross-lineage searched leaderboard remains part of C3
+    and needs its own pre-declared analysis.
 
-**(C) One family per claim — RECOMMENDED.** The family is exactly the set of
-    per-cell lift tests behind the headline figure, and nothing else. Purely
-    descriptive benchmark comparisons (Figs 1/4) either carry no p-values at
-    all or form their own separately-corrected family, labelled as such. Never
-    pool the two: they answer different questions.
+**(C) One family per claim — RECOMMENDED FOR THE LIFT BREAKDOWN.** The family
+    is exactly the set of per-cell lift tests and nothing else. Cross-lineage
+    ranking, default benchmark summaries, and lift answer different questions
+    and require separately declared estimands.
 
 Recommended procedure: **Holm-Bonferroni** on family (C), at alpha = 0.05.
 
@@ -60,16 +60,12 @@ Report BH as a clearly-labelled secondary column when the table is offered as
 a screen ("which cells look promising") rather than as confirmed findings. It
 belongs in an appendix, never in the abstract's count of significant cells.
 
-**The primary inference should need no correction at all.** The strongest form
-of the headline is a single paired test across cells — the same shape as the
-generalization gate's one-sided Wilcoxon on per-cell deltas
-(``src/automil/gate/stats.py::paired_wilcoxon_with_bootstrap``). That is m = 1;
-multiplicity does not arise. Per-cell p-values are then a descriptive
-breakdown, and Holm's role is to stop that breakdown from being read as N
-independent confirmations. Given CR-4 (delta = 0 winner's curse inflating the
-val lift by an estimated +0.1 to +0.2), leaning on the pooled paired test
-rather than on a count of individually-significant cells is also the more
-defensible reading of the same data.
+**Primary C3 inference remains to be frozen.** An earlier recommendation used
+one paired test across cells, but INDEP-1 established that cells sharing a
+cohort are not independent problem instances. Do not treat that pooled test as
+the paper-level inference until a cohort-aware estimand is pre-declared.
+Per-cell p-values remain a descriptive breakdown, with Holm preventing that
+breakdown from being read as N independent confirmations.
 
 Related: ``src/automil/gate/stats.py::bonferroni_correct`` corrects *within one
 gate decision* over ``K_effective`` held-out cells (default 2). It is a
