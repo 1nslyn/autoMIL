@@ -5,6 +5,14 @@ _Compiled 2026-07-01; last reconciled against `main` on 2026-07-21. This is the 
 [`../journal/PLAN.md`](../journal/PLAN.md) (Phase 2, provisional) — read this
 first, then the phase-specific doc for what's actually happening now._
 
+> **Contribution authority.** The active preprint's contribution hierarchy,
+> evidence requirements, and claim boundaries live in
+> [`../preprint/CONTRIBUTIONS.md`](../preprint/CONTRIBUTIONS.md). In short:
+> C1 = the autoMIL auditable research-operations framework, including its
+> matched-evaluation and sealed-certification contract; C2 = the result-neutral
+> pathology-MIL ranking audit. C3 is deliberately unassigned; C4/C5 remain
+> candidates until their promotion gates are met.
+
 ## Target
 
 - **Venue:** Nature Biomedical Engineering (long-horizon target).
@@ -16,8 +24,10 @@ first, then the phase-specific doc for what's actually happening now._
 ## Two layers of this project
 
 1. **Framework layer — `autoMIL`.** The agent-driven experiment-orchestration
-   tool itself (`src/automil/`). This is engineering, not a paper claim on its
-   own; it's the infrastructure the empirical work runs on.
+   tool itself (`src/automil/`) and the paper's primary system contribution.
+   Its implementation alone is not sufficient evidence; the empirical layer
+   must validate that the claimed research mechanism works under the stated
+   boundaries.
    - **Core value** (`.planning/PROJECT.md`): an agent can autonomously discover
      model improvements — architecture and training-recipe — for any user's
      training code under a 6-hour-per-cell budget, with variants that are
@@ -32,9 +42,10 @@ first, then the phase-specific doc for what's actually happening now._
      scope and evaluation, not the core claim.
 
 2. **Empirical layer — `autobench` + cluster experiments.** MIL benchmarking
-   across TCGA/CPTAC cohorts — the evidence base. Moved through Phases A–C
-   below as shared groundwork; Phase 1 (preprint) and Phase 2 (journal) each
-   build on top of this differently.
+   across TCGA/CPTAC cohorts — the validation of C1's framework/protocol
+   contract and the source of the result-neutral empirical C2.
+   Moved through Phases A–C below as shared groundwork; Phase 1 (preprint) and
+   Phase 2 (journal) each build on top of this differently.
 
 ## Empirical trajectory (how the plan got here)
 

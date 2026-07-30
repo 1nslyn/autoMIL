@@ -1,56 +1,87 @@
 # Preprint — Experiment Grid & Estimation
 
-> ## Cluster state — verified 2026-07-29 on `fir`
+> ## Cluster state — verified 2026-07-30 on `fir`
 >
-> _This block replaces an earlier version that was **wrong**. It was written from
-> `<cohort>/benchmark/results`, which holds the May–June 15-cohort mutation
-> sweep. The preprint campaign writes to
-> `.../Pathology/autoMIL/phase2/<dataset>/benchmark_5fold/`, one directory per
-> lab member. Scanning the wrong tree produced a "campaign never launched"
-> conclusion that is the opposite of the truth._
+> Full report, per-cell tables and raw census:
+> [`GRID-CENSUS-2026-07-30.md`](GRID-CENSUS-2026-07-30.md) ·
+> [`data/grid_census_2026-07-30.tsv`](data/grid_census_2026-07-30.tsv).
+> Every `summary.json` under
+> `.../Pathology/autoMIL/phase2/<cohort>/benchmark_5fold/results/` was parsed
+> (237 files, 0 unreadable) and cross-checked against 975 fold-level
+> `metrics.json`. This supersedes the 2026-07-29 block, whose survival column
+> double-counted the loss axis.
 >
-> **The 5-fold grid is complete.** 195 experiments on disk; all 165 roster cells
-> present, verified cell-by-cell against §2.1:
+> **The grid is complete. Every roster cell is present.**
 >
-> | Cohort | roster task | classification | survival | owner |
-> |---|---|--:|--:|---|
-> | tcga_luad | `kras` | 13/13 | 20/20 | yinshuol |
-> | tcga_lgg | `idh1` | 13/13 | 20/20 | yws0322 |
-> | cptac_gbm | `tp53` | 13/13 | 20/20 | kcuoft |
-> | cptac_pdac | `immune_class` | 13/13 | 20/20 | atatc |
-> | tcga_hnsc | `grade` | 13/13 | 20/20 | ryanwk |
+> | Cohort | roster task | classification | survival (`nllsurv`) | `cox` extras | owner |
+> |---|---|--:|--:|--:|---|
+> | tcga_luad | `kras` | **13/13** | **13/13** | +7 | yinshuol |
+> | tcga_lgg | `idh1` | **13/13** | **13/13** | +7 | yws0322 |
+> | cptac_gbm | `tp53` | **13/13** | **13/13** | +7 | kcuoft |
+> | cptac_pdac | `immune_class` | **13/13** | **13/13** | +7 | atatc |
+> | tcga_hnsc | `grade` | **13/13** | **13/13** | +7 | ryanwk |
 >
-> All five arms ran (clam · nnmil · abmil · dtfd · titan); all 100 survival
-> experiments exist. TCGA-LUAD carries 30 extra experiments beyond the roster
-> (an `egfr` task, plus `clam_sb`/`mil`/`trans_mil`) and a separate 10-fold tree.
-> Newest result 2026-07-26. §3.2's "conch_v15 not confirmed extracted on any
-> cohort" is also stale — TITAN ran on all five.
+> **Survival is `nllsurv`-only from here (2026-07-30 decision).** The earlier
+> `20/20` counted both survival losses: 20 = `13 nllsurv + 7 cox`. Dropping `cox`
+> makes the roster **26 experiments/cohort → 130 total / 650 fold-trainings**
+> (was 33 → 165/825). §2.1 and §2.2 are restated accordingly; the YAMLs still
+> declare `survival_losses: [cox, nllsurv]` and must be narrowed to `[nllsurv]`.
 >
-> **Validation of those 195 (2026-07-29):**
+> **`cox` was never reportable anyway.** `clam_mb` and `dtfd_mil` have **zero**
+> `cox` runs on any cohort (7/13 present, identical pattern all five) — closing
+> that arm would take 30 more experiments. Where both losses do exist (35 paired
+> cells) `nllsurv` wins **27/35**, mean Δ c-index **+0.0147**. So `nllsurv`-only
+> is defensible on the evidence, not just on scope.
 >
-> - **Fold integrity: clean.** No fold-count anomaly; **zero non-finite values in
->   any primary metric** (`auc_roc` / `c_index` / `balanced_accuracy`) across
->   8,440 per-fold records. The 880 NaNs that do exist are all `sensitivity` /
->   `specificity` — undefined for the two 3-class tasks by construction, plus an
->   nnMIL-only asymmetry on binary tasks (the L-10 family). No composite is
->   affected.
-> - **No cache collision.** 195 experiments produced 195 distinct per-fold
+> **Validation of the 130 roster cells (recomputed 2026-07-30):**
+>
+> - **Fold integrity: perfect.** 975 fold directories = 195 × 5 exactly; on-disk
+>   `fold_*/` count matches `n_folds` for **every** experiment, zero mismatches.
+> - **Zero non-finite values in any primary metric** (`auc_roc` / `c_index` /
+>   `balanced_accuracy`) across all 975 fold files and all 237 summaries. The 880
+>   NaNs that do exist are all `sensitivity` / `specificity` — undefined for the
+>   two 3-class tasks by construction, plus an nnMIL-only asymmetry on binary
+>   tasks (the L-10 family). No composite is affected.
+> - **No cache collision.** 237 experiments produced **237 distinct** per-fold
 >   signatures. The CR-5 / CR-5b shared-cache hazard did **not** materialise here.
-> - **Survival postdates the censoring fix.** Every `os` result is ≥ 2026-07-22
->   01:55; the fix landed 2026-07-21 ~21:20. Splits are 5-fold everywhere, so the
->   10-fold cache-reuse hazard did not fire either.
-> - **⚠ `config.json` misreports the hyperparameters for 3 of 5 arms.** Every
->   config records `lr=2e-4, weight_decay=1e-5, max_epochs=200` — the shared
+> - **Survival postdates the censoring fix.** Oldest `os` result is 2026-07-22
+>   16:55; the fix landed 2026-07-21 ~21:20. All survival is 5-fold, and the
+>   10-fold tree contains none, so the 10-fold cache-reuse hazard did not fire.
+> - **Single seed.** All 237 are `seed=42`, `strategy=standard`. Every mean±std in
+>   the results is **fold variance at one seed, not seed variance** — say so
+>   wherever it appears.
+> - **⚠ `kappa` is emitted by nnMIL alone.** 120/120 of nnMIL's classification
+>   folds carry it; `clam` (0/150), `abmil` (0/90), `dtfd` (0/90) and `titan`
+>   (0/25) never do — it exists only in
+>   [`nnmil/evaluate.py:55`](../../benchmarks/src/autobench/pipeline/nnmil/evaluate.py)'s
+>   metric map. **Kappa is unusable cross-arm**, which costs most on
+>   `immune_class` and `grade`. For those two the comparable set is `auc_roc`,
+>   `accuracy`, `balanced_accuracy`, `f1`. (Multi-class AUC *is* consistent —
+>   both evaluators use `multi_class="ovr", average="macro"`.)
+> - **⚠ `config.json` misreports the hyperparameters for 3 of 5 arms.** All 195
+>   configs record `lr=2e-4, weight_decay=1e-5, max_epochs=200` — the shared
 >   `TrainConfig`. Only CLAM and ABMIL actually used those. DTFD trained at its
 >   own 1e-4/1e-4, nnMIL at its plan's 3e-4 (cls) / 1e-4 (surv) with 100 epochs,
 >   TITAN at 1e-3/1e-4. That is finding H-3 made concrete: **102 of 195 configs
 >   describe a recipe that did not run.** Do not build a methods table from
 >   `config.json` for these results; use `pipeline/provenance.py`.
 >
+> **⚠ Off-roster material must be excluded by filter, not by directory sweep.**
+> TCGA-LUAD carries **72** experiments beyond its 26 roster cells: an `egfr` task
+> (21), extra aggregators `clam_sb`/`mil`/`trans_mil` on `kras` (9), and a
+> separate `benchmark_10fold` tree (42 exps, 340 GPU-h, no survival). A naive
+> `find` over LUAD returns 105 experiments where the roster is 26. Pin the filter:
+> 5-fold trees only · roster task per cohort · `surv_loss == "nllsurv"` ·
+> `model ∈ {clam_mb, simple_mil, abmil, dtfd_mil, titan}`.
+>
 > **Re-run cost is real, not zero.** `fix/audit-2026-07-23` returns CLAM to
 > upstream `lr=1e-4` and ABMIL to upstream `5e-4 / 1e-4 / 20 epochs`, so **93 of
-> the 195** (45 CLAM + 48 ABMIL) would produce different numbers. DTFD (33),
-> nnMIL (54) and TITAN (15) are untouched by those changes and should reproduce.
+> the 195** on disk would produce different numbers — **50 of the 130 roster
+> cells** (25 CLAM + 25 ABMIL). DTFD, nnMIL and TITAN are untouched by those
+> changes and should reproduce.
+>
+> Oldest result 2026-07-10, newest **2026-07-27 09:30**. §3.2's "conch_v15 not
+> confirmed extracted on any cohort" is stale — TITAN ran on all five.
 
 ## 0. TL;DR
 
@@ -61,17 +92,22 @@
 | MIL aggregators | **4** — `clam_mb`, `simple_mil`, `abmil`, `dtfd_mil` |
 | Patch encoders | **3** — `uni_v2`, `virchow2`, `hoptimus1` |
 | Slide-encoder arm | **TITAN** (its own encoder + aggregator, linear probe) |
-| **Experiments / dataset** | **33** (30 tile-encoder + 3 TITAN) — but **30 today**: the 3 TITAN arms cannot run until `conch_v15` is extracted (§3.2) |
-| **Total experiments** | **165** |
-| **Total fold-trainings** (×5-fold) | **825** |
-| Static-grid compute | **≈ 40 GPU-hours ≈ ½–1 day on 4×H100** (possibly ~55 GPU-h — see the §3.1 caveat) |
-| Real long pole | **`conch_v15` feature extraction for TITAN** (~1 day wall) |
-| **Not yet budgeted** | **the agentic recipe-search layer** — the paper's headline; ~15–20× the static grid at full scope (§3.3) |
+| Survival loss | **`nllsurv` only** (2026-07-30 decision — `cox` dropped, §2.1) |
+| **Experiments / dataset** | **26** (24 tile-encoder + 2 TITAN) — 13 classification + 13 survival |
+| **Total experiments** | **130** |
+| **Total fold-trainings** (×5-fold) | **650** |
+| Static-grid compute | **~300–350 GPU-hours — measured, not estimated** (≥261 GPU-h over 115 of 130 cells; 15 untimed — §3.1) |
+| Real long pole | **~~`conch_v15` feature extraction for TITAN~~ — done, TITAN ran on all five cohorts** |
+| Status | **complete on `fir`** — all 130 roster cells present and validated (cluster-state block above) |
+| **Not yet budgeted** | **the agentic recipe-search layer** — required C1 validation and C2 empirical campaign; ~15–20× the static grid at full scope (§3.3) |
 
-The static grid is cheap. The paper's actual contribution — the equal-effort
-**agentic recipe search on top of each cell** — is the expensive part and is not
-yet scoped in any preprint doc. That is the one decision that changes the compute
-picture by an order of magnitude.
+The static grid is **not** as cheap as this doc long assumed — ~300–350 measured
+GPU-hours against a ≈40 GPU-h estimate (§3.1). The primary contribution is the autoMIL framework
+(C1), including its matched-evaluation contract; the expensive equal-effort
+**agentic recipe search on top of each cell** validates C1 and produces planned
+empirical C2. It is not yet fully
+scoped in this compute plan and changes the compute picture by an order of
+magnitude. Contribution authority: [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md).
 
 ---
 
@@ -193,9 +229,21 @@ changes: `compute_extended_metrics` computes per-class one-vs-rest AUC via
 `label_binarize` + `nanmean` ([`pipeline/evaluate.py`](../../benchmarks/src/autobench/pipeline/evaluate.py)),
 every model head (CLAM/nnMIL/DTFD/ABMIL/TITAN) is built to `n_classes`, and
 splits use `StratifiedKFold` — all class-count-agnostic. Verified by running
-`generate_all_experiments` over all five YAMLs: **33 experiments each,
-regardless of `n_classes`**, so the totals below are unchanged from the earlier
+`generate_all_experiments` over all five YAMLs: **the same count each, regardless
+of `n_classes`** (33 as currently configured, 26 once `survival_losses` is narrowed
+to `[nllsurv]` — §2.1), so the totals below are unchanged from the earlier
 binary-only roster.
+
+> ⚠ **One metric is not class-count-transparent after all.** Cohen's `kappa` is
+> emitted only by the nnMIL evaluator
+> ([`nnmil/evaluate.py:55`](../../benchmarks/src/autobench/pipeline/nnmil/evaluate.py)) —
+> 120/120 of its classification folds carry it, and `clam`/`abmil`/`dtfd`/`titan`
+> never do. So on the two 3-class tasks, where kappa is the natural agreement
+> statistic, it **cannot be used cross-arm**. Same caveat as
+> `sensitivity`/`specificity`, which are undefined for 3-class by construction. The
+> cross-arm comparable set on `immune_class` and `grade` is `auc_roc`, `accuracy`,
+> `balanced_accuracy`, `f1`. Multi-class AUC itself *is* consistent — both
+> evaluators use `multi_class="ovr", average="macro"`.
 
 ### 2.1 How the grid expands — per dataset
 
@@ -203,39 +251,74 @@ The expansion is **not** a clean 4×3×2; survival loss-eligibility differs per
 framework (`generate_all_experiments`, [`pipeline/config.py:296`](../../benchmarks/src/autobench/pipeline/config.py)).
 Rendered version: [`figures/mock/table2_grid_breakdown.png`](figures/mock/table2_grid_breakdown.png).
 
-| Framework · model | Classification (1 gene × 3 enc) | Survival OS (× 3 enc) | Row total |
-|---|--:|--:|--:|
-| CLAM · `clam_mb` | 3 | **nllsurv only** → 3 | 6 |
-| nnMIL · `simple_mil` | 3 | **cox + nllsurv** → 6 | 9 |
-| ABMIL · `abmil` | 3 | **cox + nllsurv** → 6 | 9 |
-| DTFD · `dtfd_mil` | 3 | **nllsurv only** → 3 | 6 |
-| **TITAN** (1 pseudo-encoder) | 1 | **cox + nllsurv** → 2 | 3 |
-| **Per-dataset total** | **13** | **20** | **33** |
+**Restated 2026-07-30: survival is `nllsurv`-only, so the expansion is now a clean
+4×3 + 1 on both axes.**
 
-Why the survival column is uneven (all enforced in code, not by hand):
+| Framework · model | Classification (1 gene × 3 enc) | Survival OS — `nllsurv` (× 3 enc) | Row total |
+|---|--:|--:|--:|
+| CLAM · `clam_mb` | 3 | 3 | 6 |
+| nnMIL · `simple_mil` | 3 | 3 | 6 |
+| ABMIL · `abmil` | 3 | 3 | 6 |
+| DTFD · `dtfd_mil` | 3 | 3 | 6 |
+| **TITAN** (1 pseudo-encoder) | 1 | 1 | 2 |
+| **Per-dataset total** | **13** | **13** | **26** |
+
+**Why `cox` is dropped.** The YAMLs declare `survival_losses: [cox, nllsurv]`, and
+loss-eligibility is filtered per framework in code, which made the survival column
+uneven — `clam_mb` and `dtfd_mil` are cox-ineligible, so the configured grid was
+`13 nllsurv + 7 cox = 20` per dataset:
+
 - **`clam_mb` — nllsurv only.** `cox` needs a single-risk output that only
   `clam_sb` exposes; `clam_mb` is multi-branch → cox is skipped (`config.py:374`).
 - **`dtfd_mil` — nllsurv only.** Cox's partial-likelihood needs a cross-patient
   risk set that doesn't exist within one slide's pseudo-bags (`config.py:397`).
 - **`simple_mil` / `abmil` / TITAN — both losses.** Attention/linear heads take
-  either loss (arbitrary output width), so cox + nllsurv both run.
+  either loss (arbitrary output width), so cox + nllsurv both ran.
+
+That asymmetry is exactly why `cox` is not reportable: **a complete cox arm is
+7/13 by construction**, and closing it would take 30 extra experiments to give
+`clam_mb`/`dtfd_mil` a cox path they cannot have. On the 35 cells where both
+losses ran, `nllsurv` wins 27/35 (mean Δ c-index +0.0147). `nllsurv`-only is
+therefore both the cheaper and the better-supported choice.
+
+> **Action:** narrow `survival_losses: [cox, nllsurv]` → `[nllsurv]` in all five
+> roster YAMLs ([`tcga_luad`](../../benchmarks/datasets/tcga/tcga_luad.yaml:23) ·
+> [`tcga_lgg`](../../benchmarks/datasets/tcga/tcga_lgg.yaml:23) ·
+> [`cptac_gbm`](../../benchmarks/datasets/cptac/cptac_gbm.yaml:23) ·
+> [`cptac_pdac`](../../benchmarks/datasets/cptac/cptac_pdac.yaml:30) ·
+> [`tcga_hnsc`](../../benchmarks/datasets/tcga/tcga_hnsc.yaml:29)) so
+> `generate_all_experiments` emits 26/dataset and the configured grid matches the
+> reported one. The 35 `cox` runs already on disk stay as a supplementary
+> loss-ablation note; they are not deleted.
 
 ### 2.2 Totals
 
-| Scope | Experiments | Fold-trainings (×5) |
-|---|--:|--:|
-| Per dataset | 33 | 165 |
-| Classification only (5 ds) | 65 | 325 |
-| Survival only (5 ds) | 100 | 500 |
-| **Campaign (5 datasets)** | **165** | **825** |
+| Scope | Experiments | Fold-trainings (×5) | Measured GPU-h |
+|---|--:|--:|--:|
+| Per dataset | 26 | 130 | ~52 (≥) |
+| Classification only (5 ds) | 65 | 325 | 137.5 |
+| Survival only (5 ds, `nllsurv`) | 65 | 325 | ≥123.5 ⚠ |
+| **Campaign (5 datasets)** | **130** | **650** | **≥261.0 → ~300–350** |
 
-> **Configured vs. runnable today.** The 165/825 figures are the *configured*
-> grid — what `generate_all_experiments` emits from the committed YAMLs. Until
-> `conch_v15` features exist (§3.2), the TITAN arm has no inputs, so a launch
-> today yields **30 exps/dataset = 150 experiments / 750 fold-trainings** with an
-> empty TITAN row. TITAN is therefore a **launch gate for the encoder axis**, not
-> an optional extra: without it the encoder axis is three near-identical modern
-> ViT foundation models (see PRELAUNCH_REVIEW §3, items O1 and O3).
+> **Superseded numbers.** This table previously read 33/165/825 — that counted the
+> `cox` axis now dropped (§2.1). The `cox`-inclusive configured grid was 165
+> experiments / 825 fold-trainings; **35 of those 165 were cox** and remain on
+> disk as a supplementary ablation.
+
+> ⚠ **GPU-hours are a lower bound.** Measured from `elapsed_seconds_total`, but the
+> **`clam_mb` survival arm (15 cells / 75 fold-trainings) records no timing at
+> all** — not in `summary.json`, not in any of its 75 fold `metrics.json`. It is
+> the only affected group; elsewhere the summary field and the fold-level sum agree
+> exactly. Metrics are complete and valid; only compute accounting is missing.
+> Pricing those 75 fold-trainings at `clam_mb`'s own classification rate
+> (68.6 min/fold) adds ≈86 GPU-h → **≈347 GPU-h** all-in. Fix the writer before any
+> re-run: equal-effort budgeting is a C1 claim and depends on trustworthy timings.
+
+> **Everything is already run.** All 130 roster cells exist and are validated on
+> `fir` (cluster-state block). The old "runnable today = 150 experiments, TITAN
+> blocked on `conch_v15`" caveat is **obsolete** — TITAN ran on all five cohorts,
+> so the encoder axis is not degenerate and PRELAUNCH_REVIEW §3 items O1/O3 are
+> resolved on the facts.
 
 > Reproduce: the `validate config` block inside
 > [`submit_benchmark.sh`](../../benchmarks/scripts/slurm/submit_benchmark.sh:78)
@@ -255,58 +338,75 @@ Why the survival column is uneven (all enforced in code, not by hand):
 
 ### 3.1 Static-grid compute
 
-Anchored to EXECUTION_PLAN §4 (120 CLAM-heavy fold-trainings = 10.5 h single-GPU)
-and the fact that nnMIL/ABMIL/DTFD/TITAN heads are all lighter than CLAM.
-Order-of-magnitude per-head single-GPU cost (to be replaced by the campaign's own
-instrumented timings):
+**Measured, 2026-07-30, from the completed campaign** — this replaces the earlier
+estimate, which anchored to EXECUTION_PLAN §4 (120 CLAM-heavy fold-trainings =
+10.5 h single-GPU) and assumed nnMIL/ABMIL/DTFD/TITAN were all lighter than CLAM.
+Per-head cost over the **130 roster cells only** (off-roster LUAD and `cox`
+excluded), from `summary.json:elapsed_seconds_total`:
 
-| Head | Fold-trainings (5 ds × 5-fold) | ~min / fold-training | GPU-hours |
-|---|--:|--:|--:|
-| `clam_mb` (instance loss, heaviest) | 150 | ~5 | ~12.5 |
-| `simple_mil` | 225 | ~2.5 | ~9.4 |
-| `abmil` | 225 | ~2.5 | ~9.4 |
-| `dtfd_mil` (two-tier pseudo-bag) | 150 | ~3 | ~7.5 |
-| TITAN (linear probe, 1 vec/slide) | 75 | ~0.5 | ~0.6 |
-| **Total** | **825** | — | **≈ 40 GPU-h** |
+| Head | Roster exps | Fold-trainings | min / fold-training | GPU-hours |
+|---|--:|--:|--:|--:|
+| `clam_mb` — classification | 15 | 75 | 68.6 | 85.7 |
+| `clam_mb` — survival | 15 | 75 | **untimed** | **—** |
+| `simple_mil` | 30 | 150 | 38.3 | 95.7 |
+| `abmil` | 30 | 150 | 14.6 | 36.5 |
+| `dtfd_mil` (two-tier pseudo-bag) | 30 | 150 | 17.0 | 42.6 |
+| TITAN (linear probe, 1 vec/slide) | 10 | 50 | 0.5 | 0.4 |
+| **Total instrumented** | **115** | **575** | **27.2** | **261.0** |
+| **All-in estimate** | **130** | **650** | ~32 | **≈ 347** |
 
-On 4×H100 with the best-fit orchestrator → **≈ 10–13 h wall-clock** for the whole
-5-dataset static grid (or ~2–3 h each if the five datasets run as parallel jobs).
-Consistent with EXECUTION_PLAN's "~1 day in one self-resubmitting job."
+> ⚠ **The old estimate was low by ~7.5–8.75×, not the 1.4× its own caveat
+> anticipated.** It predicted 2.5–5 min/fold-training for the tile-encoder heads;
+> measured is **14.6–68.6**. Only TITAN's linear probe was estimated correctly.
+> The ranking was also wrong: `clam_mb` is indeed the most expensive on
+> classification (68.6 min/fold), but `simple_mil` — assumed half CLAM's cost — is
+> the single largest line item at 95.7 GPU-h, and `abmil` is the cheapest real
+> aggregator, not equal to `simple_mil`.
 
-> ⚠ **This may be ~1.4× optimistic against its own anchor — unreconciled.** The
-> EXECUTION_PLAN §4 reference point (120 runs / 10.5 h) is an **equal-count
-> `clam_mb`/`simple_mil`** mix, i.e. **~5.25 min/fold-training measured**. The
-> per-head rates above predict **3.75 min** for that same equal-count mix — so
-> they run ~1.4× fast. Scaling every head by that factor gives **~55 GPU-h ≈
-> ~14 h on 4×H100**, not ≈40 GPU-h ≈ 10–13 h. (Pricing all 825 fold-trainings at
-> the flat 5.25 min gives ~72 GPU-h, but that overstates — it charges TITAN's
-> linear probe at CLAM's rate.) Both are placeholders until the campaign's
-> instrumented timings land (§5, item 5) — but plan against the pessimistic end.
-> This propagates to the §0 TL;DR and §3.4.
+> ⚠ **15 of 130 roster cells are untimed.** The `clam_mb` × `nllsurv` arm records
+> no `elapsed_seconds` in `summary.json` or in any of its 75 fold `metrics.json`;
+> every other group is internally consistent (summary field = fold sum, to the
+> decimal). Metrics are valid — only timing is absent. The **≈347 GPU-h** all-in
+> figure prices those 75 fold-trainings at `clam_mb`'s own measured classification
+> rate; the cheapest-survival-arm anchor (DTFD, 29.8 min/fold) gives ≈298 GPU-h, so
+> the defensible band is **~300–350 GPU-h**. Fix the writer before any re-run —
+> equal-effort budgeting is a C1 claim and depends on trustworthy timings.
+
+At 261+ GPU-h the static grid is **~2½–3 days on 4×H100**, not the "≈10–13 h" this
+section previously claimed, and not EXECUTION_PLAN's "~1 day in one
+self-resubmitting job." The campaign in fact ran 2026-07-10 → 07-27 across five
+lab members' allocations, which is consistent with the measured total.
 
 ### 3.2 Feature extraction — the real long pole
 
+> **✅ Resolved — this section is historical.** Both dependencies below were
+> satisfied during the campaign: all 130 roster cells ran, which requires
+> `conch_v15` for the 10 TITAN cells and all three patch encoders on all five
+> cohorts. Training was **not** cheap relative to extraction (§3.1: ~300–350 GPU-h),
+> so the "features gate it" framing no longer holds for this grid. Retained for the
+> record and for any cohort added later.
+
 Training is cheap; **features gate it.**
 
-- **TITAN dependency — `conch_v15` @ 20×/512px**, all 5 cohorts. Not confirmed
-  extracted on any TCGA cohort as of the 07-03 audit. ~24 GPU-h/cohort,
-  parallelizable → **~1 day wall** across 5 GPUs. **This is the bottleneck.**
-- **Patch features** (`uni_v2`/`virchow2`/`hoptimus1`): likely present for
-  TCGA-LUAD/LGG; **CPTAC-GBM, CPTAC-PDAC, and TCGA-HNSC are new to the roster** —
-  confirm/extract per cohort (~24 GPU-h each). CPTAC cohorts extract via the
-  Patho-Bench/TRIDENT path; TCGA-HNSC additionally needs the GDC grade column
-  joined into its manifest (same clinical-join pattern as `add_os_to_manifest.py`).
+- **TITAN dependency — `conch_v15` @ 20×/512px**, all 5 cohorts. ~~Not confirmed
+  extracted on any TCGA cohort as of the 07-03 audit.~~ **Extracted and used —
+  TITAN ran on all five cohorts** (10 roster cells, 2026-07-25 → 07-26).
+  ~24 GPU-h/cohort, parallelizable → ~1 day wall across 5 GPUs.
+- **Patch features** (`uni_v2`/`virchow2`/`hoptimus1`): **all present on all five
+  cohorts** — every one of the 120 tile-encoder roster cells produced results, which
+  is only possible with the features in place. TCGA-HNSC's GDC grade join also
+  landed (its `grade` task has 13/13 cells).
 
 **Preflight (do first):** on the cluster, verify per-cohort feature presence
 before launching training, or the grid stalls on missing inputs.
 
-### 3.3 The agentic recipe-search layer — headline, and NOT yet budgeted
+### 3.3 The agentic recipe-search layer — C1/C2 campaign, and NOT yet budgeted
 
 The static grid above is the **"default recipe" leaderboard** — the *before*
-numbers. autoMIL's actual claim (BACKGROUND.md: "the auto pipeline is the main
-contribution") is that **every cell gets an equal-effort agentic recipe search**,
-producing the *corrected* leaderboard. That layer multiplies compute massively and
-**appears in no preprint doc's budget yet.**
+numbers. autoMIL itself is C1; the campaign asks what happens when **every
+matched tile-level cell gets an equal-evaluation agentic search**, producing the
+searched leaderboard required for the result-neutral C2 comparison. That layer
+multiplies compute massively and **appears in no preprint doc's budget yet.**
 
 Using the proposal's protocol ([`references/…proposal…`](../references/automil-proposal-2026-04-29.md) §6.3)
 as the cost model — a *cell* = (dataset, task, encoder, aggregator):
@@ -327,8 +427,19 @@ as the cost model — a *cell* = (dataset, task, encoder, aggregator):
 > discovery candidates or fewer inner folds) or the cap is raised for the
 > campaign — as written the plan is not executable under the enforced budget.
 
-- **One dataset, classification only** (3 enc × 4 agg = 12 cells): ~2,800 fold-trainings — already **~3.4× the entire static 5-dataset grid**.
-- **All tile-encoder classification cells** (5 ds × 3 enc × 4 agg = 60 cells): ~14,000 fold-trainings ≈ **~700 GPU-h ≈ ~7 days on 4×H100** — journal-scale.
+- **One dataset, classification only** (3 enc × 4 agg = 12 cells): ~2,800 fold-trainings — already **~4.3× the entire static 5-dataset grid** (650 fold-trainings).
+- **All tile-encoder classification cells** (5 ds × 3 enc × 4 agg = 60 cells): ~14,000 fold-trainings.
+
+> ⚠ **Re-priced 2026-07-30 — the wall-clock here was built on the old ≈40 GPU-h
+> base and is far too low.** At the campaign's **measured** classification rates
+> (§3.1), 14,000 fold-trainings is not ~700 GPU-h. Weighting the four aggregators
+> by their measured classification cost (`clam_mb` 68.6 · `simple_mil` 35.0 ·
+> `abmil` 1.9 · `dtfd_mil` 4.3 min/fold — mean ≈27.5 min/fold) gives
+> **≈6,400 GPU-h ≈ 67 days on 4×H100.** Even the cheapest-aggregator-only variant
+> is ~450 GPU-h. Sanity-check against the ratio rule: the full audit is 15–20× the
+> static grid, and the static grid is now ~325 GPU-h, so **≈4,900–6,500 GPU-h** —
+> the two derivations agree. **The 60-cell full audit is out of reach**, not merely
+> "journal-scale"; only a pilot is feasible.
 
 > Two exclusions to state plainly, since "all classification cells" reads broader
 > than it is: this 60-cell count **omits the 5 TITAN classification arms** (1 per
@@ -338,24 +449,39 @@ as the cost model — a *cell* = (dataset, task, encoder, aggregator):
 > multiple on top.
 
 **Implication for the preprint:** a paper about an agentic framework needs *some*
-agentic result, but the full 60-cell search is out of scope for "ship fast." The
-realistic preprint options are **(a)** a pilot-scale agentic demo (12–18 cells, ~1–2
-days on 4×H100) plus the existing CCRCC/ovarian-HRD feasibility anchors, or **(b)**
-static grid + feasibility anchors only, deferring the full audit to Phase 2. **This
-is the single biggest open scoping decision** and it dominates the compute plan.
+agentic result, but the full 60-cell search is out of scope for "ship fast."
+Static-only plus off-roster feasibility anchors is no longer an acceptable C2.
+The remaining scope decision is a balanced, matched pilot (12–18 roster cells,
+~1–2 days on 4×H100) versus the full 60-cell classification audit. The pilot
+must predeclare coverage across cohorts and lineages and can support only a
+narrower C2 than the full audit. This is the biggest open compute decision.
 
 ### 3.4 Rough end-to-end (preprint = static grid + pilot agentic)
 
-| Component | Wall-clock (4×H100) |
-|---|---|
-| `conch_v15` extraction (5 cohorts, parallel) | ~1 day |
-| Static grid (825 fold-trainings) | ~½–1 day |
-| Pilot agentic search (12–18 cells) | ~1–2 days |
-| Aggregate + figures | hours |
-| **Total** | **~3–4 days** (extraction + pilot dominate) |
+**Restated 2026-07-30 — the first two rows are done, and the third is the only
+remaining pole.**
 
-Full-audit (60-cell) variant → add ~5–7 days. TITAN code is already merged
-(`pipeline/titan/` on `main`), so it is **not** a dev-time pole anymore.
+| Component | Status | Wall-clock (4×H100) |
+|---|---|---|
+| `conch_v15` extraction (5 cohorts, parallel) | ✅ **done** | — |
+| Static grid (650 fold-trainings, 130 cells) | ✅ **done** — ~300–350 GPU-h | ~2½–3 days *(spent)* |
+| Pilot agentic search (12–18 cells) | ⬜ not started | **~7–10 days** (re-priced) |
+| Aggregate + figures | ⬜ in progress | hours |
+| **Remaining to preprint** | | **~7–10 days** |
+
+> ⚠ **The pilot's "~1–2 days" was derived from the old ≈40 GPU-h base.** At ~235
+> fold-trainings/cell (§3.3) and the measured ~27.5 min/fold classification mean,
+> **12–18 cells is ≈1,290–1,940 GPU-h ≈ 13–20 days on 4×H100** — not 1–2 days. To
+> land a pilot in ~7–10 days either the cell count drops to ~6–9, the per-cell
+> search protocol shrinks (fewer discovery candidates or inner folds — which §3.3's
+> callout already flags as necessary to fit the 6-hour cap), or the pilot is
+> restricted to the cheap aggregators (`abmil` at 1.9 min/fold makes a 12-cell pilot
+> ~90 GPU-h, which *is* ~1 day — but an `abmil`-only pilot cannot support a
+> cross-aggregator C2). **This is now the binding scope decision for the preprint.**
+
+Full-audit (60-cell) variant → ≈4,900–6,500 GPU-h, i.e. **months** on 4×H100, not
+"+5–7 days". TITAN code is already merged (`pipeline/titan/` on `main`), so it is
+**not** a dev-time pole anymore.
 
 ---
 
@@ -375,10 +501,10 @@ seven PNGs: five mocks **plus two real tables**. Mind the distinction — the
 
 | # | Figure | Claim it serves | Source data | Status |
 |---|---|---|---|---|
-| **1** | Classification leaderboard heatmap (5 ds × 4 agg×3 enc + TITAN) | The corrected benchmark exists & is complete | static grid `results.tsv` | **mock drafted** |
-| **2** | Encoder-vs-aggregator variance (decomposition + per-dataset spread) | **Headline:** encoder ≫ aggregator | mixed-effects on grid | **mock drafted** |
-| **3** | autoMIL recipe-search effect (ranking bump + per-cell lift) | **Framework contribution:** equal-effort search flips rankings / lifts composite (RQ1–2) | agentic layer + CCRCC/HRD anchors | **mock drafted** |
-| **4** | Survival OS c-index (5 ds × 5 arms) | Second task axis works; TITAN wins slide-level | survival grid | **mock drafted** |
+| **1** | Classification leaderboard heatmap (5 ds × 4 agg×3 enc + TITAN) | Published/native-default starting comparison; final status awaits the corrected baseline | static grid `results.tsv` | **mock drafted** |
+| **2** | Encoder-vs-aggregator variance (decomposition + per-dataset spread) | Descriptive variance decomposition; no directional conclusion is frozen before the completed analysis | mixed-effects on grid | **mock drafted** |
+| **3** | autoMIL recipe-search effect (cross-lineage ranks + per-cell lift) | **Main C2 empirical result; validates C1:** measure ranking change or stability under equal effort (RQ1–2) | corrected agentic campaign | **mock drafted** |
+| **4** | Survival OS c-index (5 ds × 5 arms) | Measure the second task axis; label TITAN as a distinct slide-level regime | survival grid | **mock drafted** |
 | **5** | autoMIL search trajectory (one cell, val-only) | *How* the agent explores; test-quarantine discipline | `graph.json` of a real run | **mock drafted** |
 | 6 | Competitive/coverage table (vs PathBench-MIL / Patho-Bench / EVA) | Positioning | PLAN.md §3 (already filled) | table — reuse PLAN.md |
 | 7 | Protocol-parity panel (our honest test vs GOLDMARK) | "reproduces published SOTA" | `goldmark_exact/COMPARISON.csv` | needs cluster pull |
@@ -396,36 +522,72 @@ seven PNGs: five mocks **plus two real tables**. Mind the distinction — the
 - **`fig1_leaderboard_heatmap.png`** — the core results table as a heatmap; rows =
   dataset/gene, columns grouped by aggregator then encoder, TITAN as its own
   column. This is Table-1-as-a-figure.
-- **`fig2_encoder_vs_aggregator_variance.png`** — the paper's headline in two
-  panels: (A) variance-component bar showing encoder % ≫ aggregator %, (B)
-  per-dataset AUC spread when you swap encoder vs swap aggregator. **Note the
-  de-biasing caveat:** this claim is only fair *after* the agentic recipe search
-  equalises recipe effort — otherwise a reviewer says the aggregator gap is just
-  under-tuning. Fig 2 + Fig 3 must be read together.
-- **`fig3_recipe_search_effect.png`** — the framework's money figure: (A) bump
-  chart, aggregator ranking flips from default → equal-effort searched recipe; (B)
-  per-cell dumbbell lift, with **CCRCC (0.744→0.807)** and **ovarian HRD
-  (0.814→0.851)** as the *real* feasibility anchors already on record.
+- **`fig2_encoder_vs_aggregator_variance.png`** — a historical mock for the
+  dropped *encoder ≫ aggregator* claim. It may survive only as a descriptive
+  variance decomposition with no directional headline.
+- **`fig3_recipe_search_effect.png`** — the planned main C2 empirical figure:
+  (A) compare default and equal-effort searched cross-lineage ranks without
+  presupposing a flip; (B) per-cell lift. Replace the off-roster, pre-fix
+  CCRCC/ovarian anchors with corrected roster evidence.
 - **`fig4_survival_cindex.png`** — grouped bars, OS c-index per dataset × arm,
-  death counts annotated, random-0.5 reference line; TITAN drawn as the
-  slide-level winner (matches the Frontiers precedent).
+  death counts annotated, random-0.5 reference line; TITAN visually separated
+  as a slide-level regime, with no winner presupposed.
 - **`fig5_search_trajectory.png`** — candidate composites + running-best staircase
   over the UCB experiment tree for one cell, validation-only, with the frozen→test
   hand-off annotated (the anti-test-leakage story).
 
-> ⚠ Every number in **the five `fig*.png` mocks** is fabricated for layout only,
-> loosely anchored to the May-baseline AUC ranges. Each carries a red "MOCK DATA"
-> tag and a "(MOCK)" title. Swap in `results.tsv` / `graph.json` once the campaign
-> runs. **This warning does not cover `table1_dataset_stats.png` and
+> ✅ **Fig 1 and Fig 4 are now built from real data** (2026-07-30) — see
+> `figures/real/`, produced by `make_figures.py` from the 130 baseline roster
+> cells. Reproduce with the two commands in §4.1. The versions in `figures/mock/`
+> are superseded for these two.
+>
+> ⚠ **Figs 2, 3 and 5 remain fabricated for layout only**, loosely anchored to the
+> May-baseline AUC ranges; each carries a red "MOCK DATA" tag and a "(MOCK)"
+> title. Fig 3 and Fig 5 need the agentic-search layer, which has not run. Fig 2
+> is a historical mock for the dropped *encoder ≫ aggregator* claim — and §5.3 of
+> [`GRID-CENSUS-2026-07-30.md`](GRID-CENSUS-2026-07-30.md) finds the real data does
+> **not** establish that ordering, so it must not be revived as a directional
+> claim. **This warning does not cover `table1_dataset_stats.png` and
 > `table2_grid_breakdown.png`** — those are real cohort counts and the verified
 > grid, produced by `make_dataset_table.py`, and carry no MOCK tag.
+
+### 4.1 Reproducing the real figures
+
+The results trees live on `fir` under
+`/home/yinshuol/projects/rrg-jma/shared/Pathology/autoMIL/phase2/<cohort>/benchmark_5fold`.
+Collect, then plot. **Pass `LABEL=PATH` roots** — real `summary.json` files carry
+no `dataset` field, so without labels every cohort collapses into one blank row:
+
+```bash
+python benchmarks/scripts/collect_results.py \
+  --roots tcga_luad=<phase2>/tcga_luad/benchmark_5fold \
+          tcga_lgg=<phase2>/tcga_lgg/benchmark_5fold \
+          cptac_gbm=<phase2>/cptac_gbm/benchmark_5fold \
+          cptac_pdac=<phase2>/cptac_pdac/benchmark_5fold \
+          tcga_hnsc=<phase2>/tcga_hnsc/benchmark_5fold \
+  --out /tmp/results.csv --per-fold-out /tmp/per_fold.csv
+```
+
+```bash
+python paper/preprint/figures/make_figures.py \
+  --results /tmp/results.csv --per-fold /tmp/per_fold.csv \
+  --out-dir paper/preprint/figures/real
+```
+
+`make_figures.py` applies the baseline roster filter
+([`figures/roster.py`](figures/roster.py)) by default: 130 of the 195 collected
+experiments are kept, and it **fails loudly** rather than plotting if any cohort is
+short of its 26 cells. It prints exactly what it dropped (35 `cox` + 30 off-roster
+LUAD). `--no-roster-filter` and `--allow-incomplete-roster` exist as deliberate
+escape hatches; neither should be used for paper figures.
 
 ---
 
 ## 5. Open decisions / gaps (that affect the grid)
 
-1. **Agentic-search scope (§3.3).** Pilot (12–18 cells) vs full audit (60 cells)
-   vs none. Dominates compute; needed for the paper's headline. **Decide first.**
+1. **Agentic-search scope (§3.3).** Balanced matched pilot (12–18 roster cells)
+   vs full classification audit (60 cells). Static-only is no longer in scope.
+   Dominates compute; needed to validate C1 and establish C2. **Decide first.**
 2. **Val-based selection — DONE; enforcement is the remaining gap.** The
    keep/discard composite is now **validation-based** as of `bf9a2d6`
    ([`clam/runner.py:58,68`](../../benchmarks/src/autobench/pipeline/clam/runner.py):

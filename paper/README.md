@@ -4,6 +4,12 @@ Planning material for the autoMIL/autobench paper. Two phases, kept in
 separate folders since they have different scope, timeline, and (mostly)
 different open questions:
 
+- **[`preprint/CONTRIBUTIONS.md`](preprint/CONTRIBUTIONS.md)** — **authoritative
+  contribution register for the active preprint**. C1 is the autoMIL auditable
+  research-operations framework, including the equal-evaluation and
+  sealed-certification contract; C2 is the result-neutral pathology-MIL ranking
+  audit. C3 is deliberately unassigned, while C4/C5 retain their explicit
+  candidate promotion gates.
 - **[`shared/BACKGROUND.md`](shared/BACKGROUND.md)** — context common to both
   phases: target venue/strategy, the two layers of the project (framework vs.
   empirical), the empirical trajectory so far (Phases A–C), and the full

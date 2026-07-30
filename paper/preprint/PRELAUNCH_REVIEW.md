@@ -125,7 +125,7 @@ classes — divergent behaviour that current class supports should not trigger.
 
 ## 3. Open — strategic decisions (not yet actioned)
 
-### O1. The headline claim is contradicted by our own prior evidence
+### O1. Resolved — the directional claim was dropped
 
 `tasks/baseline_summary/REPORT.md` (210 configs, 35 task-pairs) measured this
 exact contrast:
@@ -144,11 +144,11 @@ encoder spread partly from **ResNet50** and a slide-level encoder; we removed
 both ends of the range and kept the compressed middle. As designed the encoder
 axis cannot exhibit variance.
 
-**Options:** (a) restore dynamic range with a legacy encoder (ResNet50 /
-CTransPath — cheap to extract); or (b) reframe honestly as a non-replication:
-*"among modern patch foundation models, once recipe effort is equalised, encoder
-choice does not dominate aggregator choice."* Option (b) is supported by data we
-already hold and makes the agentic de-biasing layer load-bearing.
+**Resolution (2026-07-28):** do not restore a legacy encoder merely to rescue
+the direction. Retire `encoder ≫ aggregator`; keep any variance decomposition
+descriptive. The active C2 instead measures ranking change or stability under
+equal effort, without presupposing either direction. See
+[`CONTRIBUTIONS.md`](CONTRIBUTIONS.md).
 
 ### O2. The agentic search would select on ~10 validation patients
 
@@ -237,10 +237,11 @@ Items are kept in their original numbering so earlier references still resolve._
    `dtfd_mil` both as from-scratch training. The same pass corrected the model
    name (`abmil`, not `ab_mil`) and the claim that either was wired into
    `nnmil_models`; they are separate frameworks.
-3. **OPEN — the important one.** `PLAN.md` §3/§4 assert encoder ≫ aggregator with
-   no acknowledgement of O1. A banner now points here from `PLAN.md`, but the
-   §3/§4 body text is unchanged and the underlying decision (restore dynamic
-   range vs. reframe as a non-replication) is still unmade.
+3. **RESOLVED 2026-07-28; reconciled 2026-07-30.** The directional
+   `encoder ≫ aggregator` claim was dropped. `PLAN.md` now treats the
+   encoder/aggregator analysis descriptively and makes the result-neutral
+   default-vs-equal-effort comparison C2. See
+   [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md).
 4. ~~HNSC `n` is quoted as **431**; the gradeable n is **414**.~~ **FIXED** —
    `EXPERIMENT_GRID.md` §1.1's grade row now reads `431 (414 gradeable)`.
    The same pass corrected HNSC's raw OS deaths from **204 to 205** (47.3% →

@@ -7,13 +7,13 @@ material: [`../references/`](../references/). Compiled 2026-07-01; §5 resolved
 2026-07-21. **Counts are owned by [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md)** —
 where this file disagrees on a number, that one wins._
 
-> **Open item gating the campaign — see [`PRELAUNCH_REVIEW.md`](PRELAUNCH_REVIEW.md).**
-> One decision in this document is contradicted by our own evidence and is
-> **not yet resolved**: §3/§4's *encoder ≫ aggregator* headline — our 210-config
-> baseline measured the reverse on classification (encoder spread 2.0 pts vs
-> aggregator 3.0 pts). See PRELAUNCH_REVIEW §3, item O1. That review also flagged §2's
-> `ab_mil` "free re-aggregation" claim; **that one is now fixed** — §2 below
-> budgets both additions as from-scratch training.
+> **Contribution authority.** See [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md):
+> C1 = the autoMIL auditable research-operations framework, including its
+> matched-evaluation and sealed-certification contract; C2 = the result-neutral
+> pathology-MIL ranking audit. Fig. 3 is the planned main empirical result, not
+> the whole paper. C3 is deliberately unassigned; C4/C5 remain candidates until
+> their promotion gates are met. The older *encoder ≫ aggregator* headline is
+> dropped by the settled 2026-07-28 scope decision.
 
 ## Status: confirmed pivot
 
@@ -113,9 +113,8 @@ differentiator. The two benchmarks named:
   cohort picks (2 of its 6 cohorts — TCGA-HNSC and CPTAC-CCRCC — overlap with
   the survival configs now on `main`; the earlier "4 of 6" count assumed
   TCGA-BLCA/BRCA configs that were never merged — see shared background
-  Phase C) and is also the direct
-  precedent for the encoder>aggregator claim surfaced in the
-  citation-ranking review.
+  Phase C) and was also the direct precedent for the subsequently dropped
+  encoder>aggregator claim surfaced in the citation-ranking review.
 
 **The reference table format.** It's the PathBench-MIL paper's own **Table 1**
 (arXiv:2512.17517), comparing itself against **Patho-Bench**
@@ -133,7 +132,7 @@ from the source image; PathBench-MIL cross-checked against its repo):
 | Regression | ✓ | ✗ | ✗ | ✗ → **Phase 2 (§4)** |
 | Deep continuous survival | ✓ | ✗ *(Cox linear probe, not deep)* | ✗ | ✓ *(Cox, shared background Phase C)* |
 | Deep discrete survival | ✓ | ✓ | ✗ | ✓ *(discrete-time NLL, shared background Phase C)* |
-| AutoML capabilities | ✓ | ✗ | ✗ | ✓ *(but ours is agentic code-level recipe search, not config/hyperparameter menu search — a different, stronger category; worth its own row in the real table)* |
+| AutoML capabilities | ✓ | ✗ | ✗ | ✓ *(ours is agentic code-level recipe search rather than config/hyperparameter menu search; it needs its own row or footnote in the real table)* |
 | Interactive visualization | ✓ | ✗ | ✗ | ✓ *(live 3D SSE dashboard)* |
 | CPU multiprocessing | ✓ | ✓ | ✓ | ✓ *(likely — not explicitly verified, check before claiming)* |
 | GPU parallelization | ✓ | ✓ | ✗ | ✓ *(multi-GPU best-fit bin-packing orchestrator)* |
@@ -148,26 +147,36 @@ format hides them:
   is Optuna-style search over a configured pipeline/menu. Ours is an LLM
   agent modifying training-recipe **code** directly, in isolated git
   worktrees, with every candidate's diff, logs, and result archived. This is
-  the paper's actual headline claim and doesn't fit in a single checkmark —
-  it needs its own comparison row or a footnote in the real table.
+  the mechanism behind C1 and doesn't fit in a single checkmark — it needs its
+  own comparison row or a footnote in the real table.
 - **Published-SOTA protocol-parity validation** — none of these three papers
   claim this. The GOLDMARK exact-protocol reproduction (shared background
   Phase B) is evidence our pipeline reproduces published SOTA numbers under
   identical training logic, not just "runs the models." Worth a row.
 
+**Separate system-novelty comparison required.** The MIL capability table above
+cannot establish C1's novelty because PathBench-MIL, Patho-Bench, and EVA are
+not the closest autonomous-research systems. The paper must separately compare
+autoMIL with AIDE, MLAgentBench, AI Scientist-v2, AIRA/AIRA2, RE-Bench,
+MLRC-Bench, and AMID on repository scope, candidate representation,
+parent-linked reconstruction, budget accounting, protected source surfaces,
+held-out non-interference, and backend semantics. Source-level code editing,
+tree search, memory, budgets, hidden evaluation, and isolation are prior art;
+[`RELATED_WORK.md`](RELATED_WORK.md) records the resulting boundary. C1 rests on
+the auditable lineage-comparison substrate, not on claiming those ingredients
+individually.
+
 **Positioning note — encoder vs. MIL benchmark.** autobench is a *full-pipeline*
 benchmark: it varies both the **encoder** axis (patch + slide foundation models)
-and the **MIL aggregator** axis. That two-axis design isn't optional — the
-headline *encoder > aggregator* finding is a statement about the relative
-variance of those two axes, so a single-axis benchmark couldn't make it. But
-covering both is **table-stakes, not the edge**: PathBench-MIL already spans
-both axes (Patho-Bench and EVA are encoder-centric — the "covers entire MIL
-pipeline" row above), and the Frontiers study does it at small scale. The wedge
-is therefore *not* "first to cover both" — it's **recipe-bias control**:
+and the **MIL aggregator** axis. Covering both is **table-stakes, not the edge**:
+PathBench-MIL already spans both axes (Patho-Bench and EVA are encoder-centric
+— the "covers entire MIL pipeline" row above), and the Frontiers study does it
+at small scale. The wedge is therefore *not* "first to cover both" or a
+predeclared directional variance claim — it is **recipe-bias control**.
 PathBench-MIL varies both axes with fixed/menu-configured recipes, whereas we
-give every cell an equal-effort agentic recipe search, so our encoder-vs-
-aggregator comparison is de-biased in a way theirs isn't. Frame the paper on
-that, not on coverage.
+give every cell an equal-effort agentic search and measure whether the
+cross-method ranking changes or remains stable. Frame empirical C2 on that
+result-neutral comparison.
 
 ### 4. Two capability gaps — status
 
@@ -175,10 +184,12 @@ Two gaps identified: slide-level PFM coverage and regression. **Priority split:
 TITAN is in the preprint; regression is deferred to Phase 2.**
 
 The reasoning: TITAN is the higher-value, lower-risk move for a fast preprint —
-it directly serves the headline *encoder > aggregator* claim (it's the encoder
-that won the Frontiers slide-level comparison), it's table-stakes vs. the two
-closest competitors (PathBench-MIL and Patho-Bench both have slide-level PFMs),
-and it reuses the existing task types, metrics, and `result.json` contract.
+it adds the distinct slide-level regime needed for credible full-pipeline
+coverage, it's table-stakes vs. the two closest competitors (PathBench-MIL and
+Patho-Bench both have slide-level PFMs), and it reuses the existing task types,
+metrics, and `result.json` contract. Because TITAN does not receive the same
+search regime as the tile-level arms, C2 must label it separately rather than
+treat it as a fully matched cross-method comparison.
 Regression is the opposite: it's the actual *differentiator* vs. Patho-Bench /
 EVA (both lack it), but it's a new task type with **no continuous target wired
 into any dataset today**, needs new loss + metrics + a re-thought composite
@@ -234,16 +245,18 @@ items.)
   **Action: check the CPTAC-PDAC source for the continuous score before treating
   the regression deferral as final.**
 
-### 5. Agent search-space scope — the frozen data substrate
+### 5. Agent search-space scope — frozen measurement, method identity, programmatic recipe
 
-**Resolved (2026-07-15): the agent's equal-effort recipe search runs on a frozen
-data substrate — it may not change data preparation.** This is what makes the
-headline *encoder ≫ aggregator* decomposition interpretable: a two-axis variance
-claim is only valid if the third axis (data prep) is held constant across every
-cell. That is exactly what the neighbors do — Patho-Bench, EVA, and the Frontiers
-embedding paper (the very paper this claim argues with) all freeze mag/patch/
-splits and let no search touch preprocessing; the Frontiers paper even disables
-stain-norm on purpose "to avoid preprocessing-induced biases across cohorts."
+**Resolved (2026-07-15; boundary completed 2026-07-30): the agent's equal-effort
+search runs on a frozen data/evaluation substrate and inside a predeclared
+method-identity contract.** This is what makes C2's cross-method comparison
+interpretable: recipe effects cannot be separated from data-preparation effects
+if the latter changes independently in each cell, and a searched result cannot
+be attributed to a published method if its defining mechanism was removed or
+replaced. Patho-Bench, EVA, and the Frontiers embedding paper all freeze
+mag/patch/splits and let no search touch preprocessing; the Frontiers paper even
+disables stain-norm on purpose "to avoid preprocessing-induced biases across
+cohorts."
 PathBench-MIL is the lone exception, and it exposes tiling/normalization as a
 *declared, compared* menu axis — not a hidden per-cell optimization run under an
 "isolate the encoder" claim. Freezing the substrate is also on-brand for the
@@ -254,66 +267,58 @@ PathBench-MIL is the lone exception, and it exposes tiling/normalization as a
 | Layer | Agent may change? | Rationale |
 |---|---|---|
 | Splits / folds / test-set identity / labels | **No — frozen** | The evaluation protocol; mutable → cross-cell incomparable + test-leak surface |
-| Feature extraction (mag, patch size, tiling, segmentation, stain-norm policy) | **No — shared substrate** | This *is* the encoder axis; per-cell change confounds the headline |
+| Feature extraction (mag, patch size, tiling, segmentation, stain-norm policy) | **No — shared substrate** | This defines the encoder input; per-cell change confounds C2's cross-method comparison |
 | Encoder-spec-dictated prep (native mpp / patch size / channel-norm) | Standardized per encoder, not searched | Field norm; standardization, not tuning |
-| Train-only feature handling (norm fit-on-train, bag sampling, dropout, aug, class weighting) | **Optional — declare it** | Downstream of fixed features; doesn't touch test identity |
-| Architecture / aggregator internals / training hyperparams / loss | **Yes — the search target** | The de-biasing objective |
+| Method-defining inference operator, forward branch, and core training mechanism | **No — frozen per arm** | Removing or replacing these changes which published method is being measured |
+| Declared scalar configuration (lr, wd, epochs, dropout, width, etc.) | **Yes** | Valid configuration of the same method class |
+| Programmatic train-only recipe (sampling, adaptive schedule, optimizer/gradient policy, additive regularization, stopping) | **Yes — the primary code-level surface** | Changes the training program without replacing the method's defining mechanism |
+| Identity-breaking architecture or objective change | **No for C2** | Archive separately as an evolved lineage; never attribute it to the published method |
 
-"Model-only" is too narrow — the recipe legitimately includes the training
-procedure (lr, schedule, optimizer, regularization, loss). "Anything including
-prep" is too broad — it collapses the headline. The frozen substrate is the line.
+The boundary is therefore semantic, not "HP versus code." For arm \(a\), the
+consumer freezes the inference method \(f_a\) and every defining mechanism in
+\(L_a^{core}\). The searched recipe may be an executable program: it can define
+train-only sampling \(S_r(D_{train}, history)\), parameter updates
+\(U_r(\theta,\nabla L,t,stats)\), schedules, gradient transforms, and additive
+regularization. It may not add or replace inference-time operators, introduce a
+new learnable forward branch, or delete/bypass/zero a defining core mechanism.
+A correctness bug is not an agentic gain: discovery pauses the campaign, fixes
+and versions the common protocol, and regenerates the affected baseline.
 
-**Enforcement — the protected list is necessary but not sufficient.**
-*(Item 1 below landed 2026-07-28 in `be01096` / H-4b: all nine projects now carry
-an 18-entry `protected` list, and `registry.mode: architecture-preserving` now
-REQUIRES a non-empty list ([`registry/config.py:111`](../../src/automil/registry/config.py)),
-so the gate can no longer be silently disabled by an empty tuple. The paragraph
-below records the state that motivated the fix.)* Today
-`registry.protected` ships empty ([`registry/config.py:37`](../../src/automil/registry/config.py)),
-`files.readonly` is warning-only and bypassed by explicit `--files`, and
-`run_experiment.py` (split entry point + composite writer) is `files.editable`.
-Defense-in-depth, cheapest first:
+**Decision — M-13 resolved.** The C2 searched leaderboard is
+**method-identity-preserving but programmatic-recipe-searchable**. It is neither
+best-evolved-head nor recipe-only in the sense of a finite hyperparameter menu.
+Candidates are classified as `config-only`, `programmatic-recipe`,
+`identity-breaking`, or `invalid`; only the first two enter C2. The selected
+winner need not contain a source edit, but the campaign must genuinely execute
+and archive the programmatic-recipe surface rather than merely advertise it.
 
-1. **`registry.protected` — config-only, do this now.** Add to each dataset's
-   `automil/config.yaml` (schema per `registry/config.py`; globs are project-root
-   relative; a submit that overlays any match is hard-rejected at
-   [`submit.py:263-274`](../../src/automil/cli/submit.py), independent of the soft
-   `readonly` list):
+**Enforcement status — the scientific decision is made; the code does not yet
+implement it.** The 18-entry `registry.protected` substrate list landed across
+all projects in `be01096`, and orchestrator-side composite recomputation landed
+in `731cea2`. Those controls freeze measurement, not method identity:
 
-   ```yaml
-   registry:
-     mode: "architecture-preserving"   # optional; complements the list below
-     protected:
-       # --- evaluation protocol: splits + metrics ---
-       - "benchmarks/src/autobench/pipeline/splits.py"
-       - "benchmarks/src/autobench/pipeline/prepare.py"
-       - "benchmarks/src/autobench/pipeline/evaluate.py"
-       - "benchmarks/src/autobench/pipeline/*/dataset.py"   # clam/nnmil/abmil/dtfd/titan/smmile split+feature consumers
-       # --- composite writers (the val-selection guarantee) ---
-       - "benchmarks/src/autobench/pipeline/*/runner.py"    # shared writer lives in clam/runner.py; nnmil/abmil/dtfd/titan/smmile all import it
-       - "benchmarks/scripts/run_experiment.py"             # entry point + summary_to_result_json
-       # --- feature extraction / encoder inputs ---
-       - "benchmarks/scripts/run_feature_extraction.py"
-       - "benchmarks/src/autobench/data.py"                 # WSI-list CSV feeding TRIDENT
-   ```
+1. `registry.mode: architecture-preserving` currently requires only a non-empty
+   protected list; it does not encode per-arm defining mechanisms.
+2. The roster configs still signpost CLAM model/core files as editable, while
+   no other arm receives an equivalent model-file surface.
+3. `search_space.py` declares the scalar override channel, but arbitrary source
+   edits bypass that declaration.
+4. The structured `PolicyVariant` and `LossVariant` paths hard-fail, so there is
+   no runnable bounded programmatic-recipe channel between scalar HPO and
+   unrestricted source editing.
 
-   (Protecting `run_experiment.py` blocks the dispatch entry point — acceptable,
-   since model variants belong in `automil/variants/*.py`. If a recipe ever needs
-   the entry point, first extract `summary_to_result_json` into its own protected
-   module and keep dispatch editable.)
-2. **Operational — do before launching the loop.** (a) Pre-generate all split
-   CSVs into the shared `benchmark_dir`; generation is idempotent, so the `seed`/
-   `n_folds` that live in the editable `pipeline/config.py` + consumer `data:`
-   block become **inert during search**. (b) Have the orchestrator **recompute
-   `composite` from the val `metrics` block** rather than trusting the scalar
-   ([`terminal_writer.py:205`](../../src/automil/terminal_writer.py)), so an edited
-   writer cannot fold test into selection.
-3. **Structural — airtight, larger refactor (Phase 2).** Withhold the test split
-   from the worktree during search entirely; the orchestrator evaluates the frozen,
-   selected model on test out-of-process. `train.py` currently receives
-   `(train, val, test)` in-process ([`clam/runner.py:119`](../../benchmarks/src/autobench/pipeline/clam/runner.py)),
-   so layers 1–2 rest on the agent not mislabeling test as val; layer 3 removes the
-   leak at its root.
+Before the confirmatory campaign:
+
+1. Protect every arm's model/forward implementation and defining loss/training
+   stages symmetrically; lock degeneracies such as CLAM
+   `no_inst_cluster=true` and `bag_weight=1`.
+2. Add a consumer-side `RecipePolicy` module called from protected trainers,
+   with programmable hooks for optimizer, scheduler, train-only sampling,
+   additive regularization, gradient transforms, and epoch/stopping policy.
+3. Enforce machine-readable per-arm method invariants on every submission and
+   persist the four-way candidate classification in the archive.
+4. Keep the data/evaluation firewall already described above; Phase 2 may still
+   strengthen it by withholding the test split from the worktree entirely.
 
 ### 6. Framework vs. consumer — what "plug-and-play" may claim
 
@@ -325,20 +330,23 @@ so if autoMIL needs per-arm adaptation to know what an agent may tune, in what
 sense is it a plug-and-play optimization framework? Verified by reading the
 permission chain end to end.
 
-**Resolved: the agent's permission is FILE-level, not parameter-level.** The
-framework never enumerates hyperparameters. It gates *files*, and there are
-exactly two channels into a run:
+**Resolved: the framework's permission is FILE-level, not parameter-level.**
+The generic framework never enumerates hyperparameters. The consumer currently
+declares three channels into a run, but only the first two are broadly usable:
 
 | Channel | How the agent uses it | What gates it |
 |---|---|---|
 | **1. Source edit** (primary) | edit project files, then `automil submit --files …` | `files.editable` supplies the auto-detect scope ([`submit.py:208`](../../src/automil/cli/submit.py)); `registry.protected` glob-matches every submitted path and **hard-rejects** ([`submit.py:263`](../../src/automil/cli/submit.py)) |
 | **2. Arg append** (secondary) | `automil submit --override "--lr 1e-4"`, suffix-appended to `run.command` in the worktree ([`submit.py:43`](../../src/automil/cli/submit.py)) | reaches `run_experiment.py` → `apply_overrides(…, arm=…)`, which raises on any knob not in that arm's declared space |
+| **3. Structured variant** (declared, incomplete) | register a model/loss/policy module | model variants currently collapse to a CLAM-shaped argument menu; loss and policy variants hard-fail (`VAR-1`) |
 
 **The declared search space is enforced on channel 2 only.** Channel 1's boundary
-is entirely the file white/black list. This matters for how the freeze is
+is entirely the file white/black list, and channel 3 does not yet supply the
+programmatic-recipe seam settled in §5. This matters for how the freeze is
 described: the substrate is protected because `splits.py` / `prepare.py` /
-`evaluate.py` / `*/runner.py` / `run_experiment.py` are *unwritable*, not because
-some parameter was withheld.
+`evaluate.py` / `*/runner.py` / `run_experiment.py` are *unwritable*, while
+method identity and the allowed training-program surface remain a consumer-side
+contract that still needs implementation.
 
 **The framework/consumer boundary is real, and it is tested.**
 `search_space.py` and `hparams.py` live under
@@ -350,7 +358,8 @@ Per-arm adaptation is therefore autobench's cost, not the framework's:
 
 | Task | Cost | Where |
 |---|--:|---|
-| Add a 6th MIL aggregator to autobench | ~15 lines: one `SEARCH_SPACE` entry, one `apply_overrides(…, arm=…)` in its runner ([`abmil/runner.py:72`](../../benchmarks/src/autobench/pipeline/abmil/runner.py), [`dtfd/runner.py:78`](../../benchmarks/src/autobench/pipeline/dtfd/runner.py), [`titan/train.py:84`](../../benchmarks/src/autobench/pipeline/titan/train.py), [`nnmil/runner.py:74`](../../benchmarks/src/autobench/pipeline/nnmil/runner.py)), one `files.editable` line | consumer |
+| Add a 6th MIL aggregator for config-only search | ~15 lines: one `SEARCH_SPACE` entry, one `apply_overrides(…, arm=…)` in its runner ([`abmil/runner.py:72`](../../benchmarks/src/autobench/pipeline/abmil/runner.py), [`dtfd/runner.py:78`](../../benchmarks/src/autobench/pipeline/dtfd/runner.py), [`titan/train.py:84`](../../benchmarks/src/autobench/pipeline/titan/train.py), [`nnmil/runner.py:74`](../../benchmarks/src/autobench/pipeline/nnmil/runner.py)), one scope declaration | consumer |
+| Add that arm to the C2 programmatic-recipe audit | declare method invariants and connect the protected trainer to the shared `RecipePolicy` hooks; exact adapter cost must be reported, not hidden inside the framework claim | consumer |
 | Attach autoMIL to a new project | **0 lines of code** — `config.yaml` only (`run.command`, `files.editable`, `registry.protected`, `scoring`) | consumer config |
 
 **The layering already matches the fairness rule.** The two independent advisory
@@ -360,13 +369,14 @@ partition, and it maps one-to-one onto config keys that already exist:
 | Tier | Content | Declared where | Enforced by |
 |---|---|---|---|
 | **0 — measurement apparatus**, identical across arms | splits, folds, features, labels, composite, val/test firewall | `registry.protected` | **framework**, at submit |
-| **1 — budget**, equalized by quantity not value | eval count, wall-clock, keep-margin δ and `se_multiplier`, declared-knob count | `cap`, `scoring` | **framework** |
-| **2 — method**, free per arm | lr, wd, epochs, schedule, batch, architecture width | `files.editable` + each arm's own config | **consumer declares** |
+| **1 — method identity**, fixed per arm | inference operator family, defining forward branches, core loss/training mechanisms | per-arm invariant contract + protected core files | **consumer declares; framework must enforce** |
+| **2 — budget**, equalized by quantity not value | eval count, wall-clock, keep-margin δ and `se_multiplier` | `cap`, `scoring` | **framework** |
+| **3 — recipe program**, free per arm within Tier 1 | scalar configuration plus train-only sampling, optimization, gradient, regularization, and stopping programs | declared knobs + `RecipePolicy` hook | **consumer declares** |
 
-The test that decides a knob's tier: *would varying it change what is being
-measured, or which method is being measured?* Tier 0 if the former. This is why
-per-arm difference in Tier 2 is not a gap in the framework — it is the intended
-shape.
+The classification test is semantic: *would varying it change the measurement
+apparatus, the published method being measured, or only how that method is
+trained?* Those map to Tiers 0, 1, and 3 respectively. Per-arm recipe
+differences are intended; silent differences in enforcement are not.
 
 **What the paper may claim, and what it may not.**
 
@@ -377,9 +387,10 @@ shape.
   manifest hash verification, file-level freeze enforced at submit, val-firewall
   with born-sealed test, noise-calibrated keep/discard, budget cells. None of it
   knows what a learning rate is, and attaching it to a new repo is config-only.
-- ✅ Claim rigor at the **instance** layer — this benchmark's declared space is
-  published per arm with a recorded reason for every lock, and requests for an
-  undeclared knob raise rather than being silently dropped.
+- ✅ Claim rigor at the **instance** layer only after this benchmark publishes
+  each arm's method invariants and programmatic-recipe contract, records a reason
+  for every lock, and rejects both undeclared knobs and identity-breaking source
+  edits rather than silently accepting or dropping them.
 
 Both halves are independently checkable (0-lines-of-code attachment; the
 published per-arm table), which is why they should be stated separately rather
@@ -387,10 +398,11 @@ than merged into one sentence that overclaims.
 
 **The honest weakness, stated before a reviewer states it.** Channel 1 is
 source-level editing, so *by default* the search space is "whatever the editable
-files allow" — unbounded and unauditable. `search_space.py` is what made this
-campaign's space finite and declared, and that artifact is per-consumer work.
-Plug-and-play buys the harness and the freeze; it does not buy the declaration.
-Say so.
+files allow" — unbounded and unauditable. `search_space.py` makes only the scalar
+override channel finite; it does not govern source edits. The §5
+method-invariant contract and `RecipePolicy` seam are therefore prerequisites
+for the strongest C2 claim. Plug-and-play buys the harness and the
+measurement freeze; it does not buy the consumer's scientific declaration.
 
 ## Open / pending — to confirm
 

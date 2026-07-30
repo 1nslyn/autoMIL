@@ -16,7 +16,13 @@ The framework *runs*, and much of the plumbing is genuinely solid (see §"What i
 
 3. **The statistics cannot support the headline, and the headline's novelty is largely owned by prior work.** K=5 percentile-bootstrap CIs, no multiple-comparison control, a survival selection signal the code itself calls "near-random," and a headline ("encoder ≫ aggregator") contradicted by the team's own 210-config data and underpowered by design. Meanwhile AIRA2's *Hidden Consistent Evaluation* and AIDE already own the method claims, and a concurrent preprint (AMID) shares the framework framing.
 
-**Bottom line:** as currently scoped, this is a rejection risk at a top venue on rigor + novelty. **But** every blocking issue has a concrete, mostly-cheap fix, and there is a defensible surviving framing (a *recipe-bias auditing instrument* + an *honest non-replication*). Do not launch the agentic campaign or make the headline claim until the CRITICALs are closed — several silently corrupt results.
+**Bottom line:** as currently scoped, this is a rejection risk at a top venue
+on rigor + novelty. **But** every blocking issue has a concrete, mostly-cheap
+fix, and there is a defensible result-neutral framing: an auditable
+recipe-bias/ranking instrument that reports change, stability, or a null result
+without presupposing the Frontiers conclusion. Do not launch the agentic
+campaign or make the headline claim until the CRITICALs are closed — several
+silently corrupt results.
 
 ---
 
@@ -155,7 +161,15 @@ Four of five runners (nnMIL/ABMIL/DTFD/TITAN) resume a fold from `benchmark_dir/
 
 ## Novelty & positioning (strategic)
 
-**Surviving framing (most defensible):** position autoMIL as a **recipe-bias auditing instrument for computational-pathology MIL** — (1) the first *equal-effort, code-level, agent-driven* per-cell recipe optimization under a born-sealed protocol, releasing every frozen recipe + overlay + trace; and (2) a **de-biased replication test** of the Frontiers "encoder ≫ aggregator" claim that lands as an **honest non-replication** ("among modern PFMs, once recipe effort is equalized, aggregator/recipe variance is comparable to or larger than encoder variance"). Position the framework as **infrastructure that ports AIRA2-HCE-grade discipline into an open pathology benchmark**, citing AIRA2/AIDE as precedent — not invention. This is MICCAI / Medical Image Analysis / Nature-Communications-benchmark tier, **not** a Nature-BME methods-novelty paper as currently scoped.
+**Historical framing — superseded by the 2026-07-30 prior-art audit.** This
+audit originally proposed priority language around equal-effort code search and
+presupposed a de-biased non-replication of the Frontiers result. Neither is now
+allowed: AIDE/AIRA/AIRA2 establish direct code-search and controlled-evaluation
+precedents, and the completed experiment has not yet established ranking
+change, stability, or a directional variance result. Current authority is
+[`CONTRIBUTIONS.md`](CONTRIBUTIONS.md): C1 is the narrower auditable
+lineage-comparison substrate; C2 is a result-neutral pathology-MIL ranking
+audit.
 
 **Additions that would raise the bar:** (a) **restore encoder dynamic range** — add a legacy anchor (ResNet50/CTransPath) + the TITAN slide arm so the axis *can* vary (cheap, feature-extraction only; converts a preordained/wrong-signed result into a measurable one); (b) run the **equal-GPU-hour head-to-head** agentic-vs-Optuna(PathBench)-vs-random-vs-human per cell, with a default-config warm-start control (else it's a known reviewer trap); (c) add a **recipe-family transfer/planner** (cluster winning recipes → cell-metadata→recipe map, evaluate on held-out cells) — the one angle that reads as science, not engineering.
 
@@ -177,7 +191,8 @@ Four of five runners (nnMIL/ABMIL/DTFD/TITAN) resume a fold from `benchmark_dir/
 **Gate 2 — before any headline claim:**
 1. CR-4 + H-5 statistics: multi-seed CV, t/BCa intervals, Holm/BH, per-cell δ ≥ 1 SE; report on **sealed test** with selection correction; demote/strengthen CPTAC.
 2. Restore encoder dynamic range (novelty (a)).
-3. Reframe the headline as an honest non-replication; add the missing citations.
+3. Reframe the headline as a result-neutral ranking audit; add the missing
+   citations and report change, stability, or a null result honestly.
 
 **Gate 3 — to lift novelty:** the equal-GPU-hour AutoML head-to-head + the recipe-family planner.
 

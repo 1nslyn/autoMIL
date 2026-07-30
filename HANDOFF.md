@@ -17,6 +17,7 @@ and a mid-priority backlog, both enumerated below.
 
 | Doc | What it is |
 |---|---|
+| [`paper/preprint/CONTRIBUTIONS.md`](paper/preprint/CONTRIBUTIONS.md) | **authoritative contribution hierarchy and claim maturity — read first** |
 | [`paper/preprint/READINESS-2026-07-28.md`](paper/preprint/READINESS-2026-07-28.md) | the second-pass analysis — **start here**; it opens with the settled scope |
 | [`paper/preprint/CODE-AUDIT-FIXES.md`](paper/preprint/CODE-AUDIT-FIXES.md) | **living tracker** — every finding with status ☐/◐/☑/⚑/⊘, commit, notes |
 | [`paper/preprint/CODE-AUDIT-2026-07-23.md`](paper/preprint/CODE-AUDIT-2026-07-23.md) | the original 39-finding audit + the claim-level addendum |
@@ -28,10 +29,14 @@ and a mid-priority backlog, both enumerated below.
 
 This is the frame everything else hangs from, so it goes first.
 
-**The agentic recipe search IS the paper.** Without it there is no work. The
-headline is Fig 3 (an equal-effort search de-biases the leaderboard), with Fig 5
-and the pre-registered gate as the rigor backbone; Figs 1 and 4 are the benchmark
-substrate the search improves on.
+**Contribution hierarchy (reframed after the 2026-07-30 prior-art audit).** C1
+is the autoMIL auditable research-operations framework, including its
+matched-evaluation and sealed-certification contract. C2 is the result-neutral
+pathology-MIL ranking audit produced by the agentic campaign. Fig. 3 is the
+planned main empirical result, with Fig. 5 and the pre-registered gate as its
+rigor backbone; Figs. 1 and 4 are the benchmark substrate. C3 is deliberately
+unassigned; the historically reserved C4/C5 remain candidates. See
+[`CONTRIBUTIONS.md`](paper/preprint/CONTRIBUTIONS.md).
 
 **The "encoder ≫ aggregator" claim is dropped.** It came from the Frontiers
 precedent rather than from us, it is contradicted by our own 210-config baseline,
@@ -41,8 +46,8 @@ variance decomposition with no "≫" assertion, or not at all.
 
 This **voids** four findings rather than resolving them: A-0, O1, AXIS-RANGE,
 M-12. It **promotes** four others from optional to required — CR-4, H-5a, H-5b and
-multi-seed — because the headline now rests entirely on a per-cell lift selected
-on ~10 validation patients.
+multi-seed — because the empirical analysis includes per-cell lift selected on
+~10 validation patients alongside cross-lineage reranking.
 
 ---
 

@@ -11,14 +11,24 @@ direct verification of every load-bearing claim in the main thread._
 [`PRELAUNCH_REVIEW.md`](PRELAUNCH_REVIEW.md) (O1/O2/O3) ·
 [`EXPERIMENT_GRID.md`](EXPERIMENT_GRID.md) (the plan) · [`PLAN.md`](PLAN.md) (the claims).
 
+> **Point-in-time status warning.** The implementation findings below record the
+> 2026-07-28 audit state and are retained for their reasoning. They are not the
+> current completion ledger. Use [`CODE-AUDIT-FIXES.md`](CODE-AUDIT-FIXES.md)
+> for live fix status and [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md) for current
+> claim maturity.
+
 ---
 
 > ## Scope — settled 2026-07-28 by Leo
 >
-> **The agentic recipe search IS the paper.** Without it there is no work. The
-> headline is Fig 3 (equal-effort search de-biases the leaderboard) with Fig 5 +
-> the gate as the rigor backbone; Figs 1/4 are the benchmark substrate the search
-> improves on.
+> **Contribution hierarchy (reframed after the 2026-07-30 prior-art audit).**
+> The primary contribution is the autoMIL auditable research-operations
+> framework (C1), including its matched-evaluation and sealed-certification
+> contract. The agentic campaign is indispensable evidence for C1 and supplies
+> the result-neutral pathology-MIL ranking audit (C2). Fig. 3 is the planned main
+> empirical result, with Fig. 5 and the gate as its rigor backbone; Figs. 1/4 are
+> the benchmark substrate. See [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md). C3 is
+> deliberately unassigned; C4/C5 remain candidates.
 >
 > **The "encoder ≫ aggregator" claim is DROPPED.** It came from the Frontiers
 > precedent, not from us; it is contradicted by our own baseline; and neither axis
@@ -28,9 +38,10 @@ direct verification of every load-bearing claim in the main thread._
 > **This voids:** A-0 (Fig 2 deferring to Fig 3), O1 (self-contradiction), §1.8
 > AXIS-RANGE, decision 8 (legacy encoder anchor — **no new experiments**), M-12.
 >
-> **This promotes:** CR-4 / H-5a / H-5b / multi-seed. The headline now rests
-> entirely on a per-cell lift selected on ~10 validation patients at δ=0.0 —
-> the winner's-curse case. Interval estimation is no longer optional.
+> **This promotes:** CR-4 / H-5a / H-5b / multi-seed. The empirical claim
+> includes per-cell lift selected on ~10 validation patients at δ=0.0 — the
+> winner's-curse case — as well as cross-method reranking. Interval estimation
+> is no longer optional.
 >
 > Ordering below in §3 is superseded by §3′.
 
@@ -154,7 +165,10 @@ forwarding `optimizer`/`weighted_sample`/`stop_epoch` trips the fail-loud
 
 [`PLAN.md`](PLAN.md) §3 states the paper's differentiator: *"ours is an LLM agent
 modifying training-recipe **code** directly … not config/hyperparameter menu
-search — a different, stronger category."*
+search — a different execution regime."* The 2026-07-30 prior-art audit removed
+the unsupported word “stronger”: AIDE/AIRA already establish code-space search,
+so the remaining distinction must be demonstrated at the auditable
+lineage-comparison substrate.
 
 In the benchmark consumer that is only true of the **unguarded** channel.
 `apply_model_variant_to_exp_cfg`
@@ -227,7 +241,7 @@ before the preprint goes out.
 
 `benchmarks/experiments/` contains **ccrcc, clwd, ovarian_hrd, placeholder** —
 and nothing for TCGA-LUAD, TCGA-LGG, CPTAC-GBM, CPTAC-PDAC or TCGA-HNSC. The
-agentic layer, which is the paper's headline, is not configured for a single
+agentic layer, which supplies the main empirical result, is not configured for a single
 preprint cohort. The one live overlay (ccrcc) is off-roster, which is also why
 Fig 3's anchors are off-roster (finding A-1).
 
@@ -295,12 +309,12 @@ remedy is therefore not only "restore encoder range" (O1 option a) — it is to
 
 ## 2. Claim-by-claim readiness
 
-### 2.1 The two headline claims
+### 2.1 Historical claim readiness, reconciled to the current spine
 
 | Claim | Status | What blocks it |
 |---|---|---|
-| **Fig 2 — encoder ≫ aggregator** | **not supportable today** | (i) contradicted by our own baseline (O1) whose evidence is itself confounded (§1.7); (ii) neither axis has a designed range (§1.8); (iii) the stated defence is "read Fig 2 with Fig 3", and Fig 3 is blocked; (iv) the decomposition is single-seed and no mixed-effects code exists; (v) `TITAN`/`conch_v15` unextracted ⇒ encoder axis is 3 near-identical ViTs. |
-| **Fig 3 — equal-effort agentic search** | **not supportable today** | (i) coverage asymmetry 80% CLAM / 0% nnMIL (§1.2); (ii) budget is time-only, no eval-count primitive, and cells are not linked to the graph (§1.9 CELL-1); (iii) no roster cohort has an agentic overlay (§1.5); (iv) the substrate freeze is unenforced on the one live project (§1.4); (v) anchors are off-roster and pre-fix (A-1); (vi) selection is δ=0.0 on ~10 val patients (O2). |
+| **Retired Fig. 2 direction — encoder ≫ aggregator** | **dropped; not a contribution** | Contradicted by the baseline and unsupported by the roster's axis design. A descriptive decomposition may remain, but no direction is frozen. |
+| **C2 / Fig. 3 — equal-effort agentic search** | **not supportable today** | (i) coverage asymmetry 80% CLAM / 0% nnMIL (§1.2); (ii) budget is time-only, no eval-count primitive, and cells are not linked to the graph (§1.9 CELL-1); (iii) no roster cohort has an agentic overlay (§1.5); (iv) the substrate freeze is unenforced on the one live project (§1.4); (v) anchors are off-roster and pre-fix (A-1); (vi) selection is δ=0.0 on ~10 val patients (O2). |
 
 ### 2.2 Figures
 
@@ -368,7 +382,7 @@ Worth stating, because it is the part that does not need re-litigating:
    `cell_id` does not currently reach `graph.py` at all.
 5. **NO-OVERLAY** (§1.5) — five roster cohorts have no agentic overlay.
 6. **Statistics** — per-cell δ (CR-4), t₄/BCa (H-5a), Holm/BH (H-5b), multi-seed.
-   Promoted from optional: the headline is now a per-cell lift on ~10 val patients.
+   Promoted from optional: the empirical analysis includes per-cell lift on ~10 val patients.
 7. **FIG-0 + DATA-ID** (§0) — the results→claims layer.
 8. **Upstream defaults** (decision 2, settled) + the grid re-run.
 9. Remaining MED/LOW backlog.
@@ -401,8 +415,9 @@ Ordered by what unblocks the most, not by severity.
 
 **Settled 2026-07-28:**
 
-- **#7 Scope — the agentic search is the paper.** Full agentic headline (Fig 3 +
-  Fig 5). Not a static benchmark with a feasibility demo.
+- **#7 Scope — the agentic campaign is required to validate the framework.**
+  Full C1/C2 study (Fig. 3 + Fig. 5), not a static benchmark with a feasibility
+  demo. C1 remains the primary system contribution.
 - **#8 O1 — the "encoder ≫ aggregator" claim is dropped**, and **no new
   experiments** are added (no legacy encoder anchor). This voids O1, A-0, §1.8 and
   M-12 rather than resolving them.
@@ -411,7 +426,7 @@ Ordered by what unblocks the most, not by severity.
   1e-4 / 20 epochs. Requires purging and re-running the dispatched grid
   (≈40 GPU-h, training only). Restores the Fig 7 SOTA-parity claim as available.
 - **#5 Seeds — promoted from optional to required** by the scope decision: the
-  headline is a per-cell lift selected on ~10 validation patients at δ=0.0.
+  empirical analysis includes per-cell lift selected on ~10 validation patients at δ=0.0.
   Blocked on CR-5b.
 
 **Still open:**
@@ -438,16 +453,16 @@ _Original framing of the ten decisions, kept for the reasoning:_
 | 4 | Fig 3: re-run the CCRCC / ovarian-HRD anchors (off-roster **and** pre-fix) (A-1) | compute + coordination. |
 | 5 | Seeds: multi-seed, or stop reporting variance components (A-8 / H-5c) | **blocked by CR-5b** — today a second seed silently returns the first seed's numbers. |
 | 6 | A-3: equal eval-count ≠ equal search difficulty (DTFD 13-dim vs TITAN 4-dim) | needs a stated position. |
-| **7** | **new — Scope.** Does the preprint claim the agentic result (Fig 3 + the Fig 2 de-biasing defence), or ship as a static benchmark with an honest non-replication + a feasibility demo? | Determines whether items 3–5 of the critical path are on the preprint's path or Phase 2's. This is the decision every other one hangs from. |
-| **8** | **new — O1 position.** Restore encoder dynamic range (add a legacy anchor — YAML edit + extraction, **no code change**), or reframe as a non-replication? §1.8 says the aggregator axis needs the same treatment either way. | A legacy encoder is ~1 extraction pass per cohort; the reframe is free and is supported by data already held. |
+| **7** | **RESOLVED 2026-07-28 — Scope.** The campaign remains required to validate C1 and establish empirical C2; it does not replace C1 as the primary contribution. | Recorded in [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md). |
+| **8** | **RESOLVED 2026-07-28 — O1 position.** Drop the directional claim; do not add a legacy encoder merely to revive it. | Fig. 2 is descriptive only; no extra experiment is required for that retired claim. |
 | **9** | **new — the differentiator claim** (§1.3). Keep "code-level search, not menu search" and build the guarded code-level channel, or soften the claim to a declared search space? | Keeping it makes H-4 mandatory, not optional. |
 | **10** | **new — figure ownership.** Who writes the results→figures layer, and does the paper's schematic (Fig 8, intended as the paper's Fig 1) get drawn in-repo? | ~nothing exists today; it is on the critical path regardless of decision 7. |
 
 **Cost note for 1 & 2:** re-running costs only *training*. Features, `.pt`
 conversions, splits and any TITAN extraction survive — ≈40 GPU-h, ~½–1 day on
-4×H100. Much cheaper now than after the agentic layer, whose headline metric is
-lift-over-baseline. **But it is only safe after CR-5b is fixed or the results tree
-is purged.**
+4×H100. Much cheaper now than after the agentic layer, whose C2 analysis includes
+both cross-method rank/stability and within-method lift. **But it is only safe
+after CR-5b is fixed or the results tree is purged.**
 
 ---
 
@@ -466,10 +481,18 @@ is purged.**
 
 ## 6. Positions taken on the reporting findings (M-13, L-9)
 
+> **Superseded decision notice — 2026-07-30.** The M-13 position below is
+> retained as audit history but no longer governs the preprint. The current
+> authority is [`PLAN.md`](PLAN.md) §5 and `CODE-AUDIT-FIXES.md` METHOD-1:
+> C2 uses method-identity-preserving search with both scalar configuration and
+> executable train-only recipe programs. Defining inference/forward/core-loss
+> mechanisms are frozen per published method. Identity-breaking descendants are
+> archived separately and excluded from the cross-method leaderboard.
+
 Two findings were carried as "needs a decision" but did not actually need a new
 one — the decision existed and had not been written down where it binds.
 
-### M-13 — the aggregator axis is a LINEAGE, not a fixed architecture
+### M-13 — historical position: the aggregator axis is a LINEAGE, not a fixed architecture
 
 `PLAN.md` §5 (resolved 2026-07-15) already places *"Architecture / aggregator
 internals / training hyperparams / loss"* in the **searchable** column. That is
