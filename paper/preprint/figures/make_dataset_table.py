@@ -15,12 +15,17 @@ Regenerate: `python paper/preprint/figures/make_dataset_table.py`
 """
 from __future__ import annotations
 import os
+import sys
 import matplotlib.pyplot as plt
-import matplotlib as mpl
+import matplotlib as mpl  # noqa: F401
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import figstyle  # noqa: E402
 
 OUT = os.path.join(os.path.dirname(__file__), "mock")
 os.makedirs(OUT, exist_ok=True)
-mpl.rcParams.update({"font.family": "DejaVu Sans", "savefig.dpi": 200, "savefig.bbox": "tight"})
+# All figure text is Times New Roman -- see figstyle.py.
+figstyle.apply()
 
 HEADER_BG = "#3a4a63"
 STRIPE = "#f4f6f9"
@@ -46,7 +51,10 @@ def _style(tbl, n_body, widths, left_cols, mono_cells, has_total):
             cell.set_text_props(ha="left")
             cell._text.set_x(0.04)
         if (r, c) in mono_cells:
-            cell.set_text_props(fontfamily="DejaVu Sans Mono")
+            # Numeric columns stay in the project serif face -- the
+            # Times-New-Roman-only rule admits no monospace exception, so these
+            # cells get the same family and rely on column width for alignment.
+            cell.set_text_props(fontfamily=figstyle.TABLE_FAMILY)
 
 
 def _table_on_ax(ax, col_labels, body, widths, left_cols, mono_cells, has_total,

@@ -22,18 +22,22 @@ pipeline/config.generate_all_experiments):
 """
 from __future__ import annotations
 import os
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import font_manager as fm  # noqa: F401
-import matplotlib as mpl
+import matplotlib as mpl  # noqa: F401
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import figstyle  # noqa: E402
 
 rng = np.random.default_rng(20260714)
 OUT = os.path.join(os.path.dirname(__file__), "mock")
 os.makedirs(OUT, exist_ok=True)
 
 # ---- shared style -----------------------------------------------------------
-mpl.rcParams.update({
-    "font.family": "DejaVu Sans",
+# All figure text is Times New Roman -- see figstyle.py.
+figstyle.apply(**{
     "font.size": 9,
     "axes.titlesize": 10,
     "axes.titleweight": "bold",
@@ -41,8 +45,6 @@ mpl.rcParams.update({
     "axes.edgecolor": "#444444",
     "axes.linewidth": 0.8,
     "figure.dpi": 150,
-    "savefig.dpi": 200,
-    "savefig.bbox": "tight",
 })
 
 DATASETS = ["LUAD", "LGG", "GBM", "PDAC", "HNSC"]
@@ -54,8 +56,9 @@ ENCS = ["uni_v2", "virchow2", "hoptimus1"]
 
 # rough per-dataset classification "difficulty" centers (MOCK, anchored to prior AUC ranges)
 BASE_AUC = {"LUAD": 0.68, "LGG": 0.85, "GBM": 0.70, "PDAC": 0.65, "HNSC": 0.72}
-ENC_OFFSET = {"uni_v2": 0.015, "virchow2": 0.00, "hoptimus1": 0.025}   # encoder axis = big
-AGG_OFFSET = {"clam_mb": 0.012, "simple_mil": 0.0, "abmil": 0.004, "dtfd_mil": -0.006}  # aggregator axis = small
+# Layout-only offsets with matched ranges; no directional axis claim.
+ENC_OFFSET = {"uni_v2": 0.012, "virchow2": 0.00, "hoptimus1": 0.020}
+AGG_OFFSET = {"clam_mb": 0.012, "simple_mil": 0.0, "abmil": 0.006, "dtfd_mil": -0.008}
 TITAN_OFFSET = {"LUAD": 0.03, "LGG": 0.02, "GBM": 0.04, "PDAC": 0.03, "HNSC": 0.025}
 
 MOCK_TAG = "⚠ MOCK DATA — not real results"
@@ -106,21 +109,21 @@ def fig1_heatmap():
 
 
 # ---------------------------------------------------------------------------
-# FIG 2 — Encoder-vs-aggregator variance (THE HEADLINE)
+# FIG 2 — Descriptive encoder-vs-aggregator variance
 # ---------------------------------------------------------------------------
 def fig2_variance():
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(10, 4), gridspec_kw={"width_ratios": [1, 1.25]})
 
-    # Panel A: mixed-effects variance decomposition (encoder dominates aggregator)
+    # Panel A: illustrative mixed-effects variance-decomposition layout.
     comps = ["Dataset\n/ task", "Encoder", "Aggregator", "Recipe\n(pre-search)", "Residual"]
-    frac = np.array([0.34, 0.41, 0.10, 0.09, 0.06])
+    frac = np.array([0.34, 0.22, 0.22, 0.12, 0.10])
     colors = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#bbbbbb"]
     axA.bar(comps, frac * 100, color=colors, edgecolor="#333", linewidth=0.6)
     for i, f in enumerate(frac):
         axA.text(i, f * 100 + 1, f"{f*100:.0f}%", ha="center", fontsize=8, fontweight="bold")
     axA.set_ylabel("% of test-AUC variance explained")
     axA.set_ylim(0, 50)
-    axA.set_title("A · Variance decomposition\n(encoder ≫ aggregator)")
+    axA.set_title("A · Variance decomposition")
     axA.axvspan(0.5, 1.5, color="#dd8452", alpha=0.08)
     axA.axvspan(1.5, 2.5, color="#55a868", alpha=0.08)
 
@@ -142,7 +145,7 @@ def fig2_variance():
     axB.set_ylabel("test AUC")
     axB.set_title("B · Per-dataset spread\nswapping encoder vs swapping aggregator")
     axB.legend(fontsize=7.5, loc="lower right", frameon=False)
-    fig.suptitle("Fig 2 (MOCK) · Encoder choice moves AUC more than aggregator", fontsize=10, fontweight="bold")
+    fig.suptitle("Fig 2 (MOCK) · Encoder × aggregator variance decomposition", fontsize=10, fontweight="bold")
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     _mock_note(fig)
     p = os.path.join(OUT, "fig2_encoder_vs_aggregator_variance.png")
@@ -150,12 +153,12 @@ def fig2_variance():
 
 
 # ---------------------------------------------------------------------------
-# FIG 3 — autoMIL recipe-search effect: ranking flips + AUC lift (FRAMEWORK CONTRIBUTION)
+# FIG 3 — searched cross-lineage ranks + lift (MAIN C3 EMPIRICAL RESULT; validates C1/C2)
 # ---------------------------------------------------------------------------
 def fig3_recipe_search():
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(10.5, 4.2), gridspec_kw={"width_ratios": [1.1, 1]})
 
-    # Panel A: bump chart — aggregator ranking before vs after equal-effort search
+    # Panel A: illustrative bump-chart layout; no ranking direction is claimed.
     default_auc = {"clam_mb": 0.702, "simple_mil": 0.690, "abmil": 0.694, "dtfd_mil": 0.684}
     searched_auc = {"clam_mb": 0.716, "simple_mil": 0.731, "abmil": 0.727, "dtfd_mil": 0.709}
     order_def = sorted(AGGS, key=lambda a: -default_auc[a])
@@ -169,28 +172,29 @@ def fig3_recipe_search():
     axA.set_xlim(-0.55, 1.6); axA.set_ylim(3.5, -0.5)
     axA.set_xticks([0, 1]); axA.set_xticklabels(["default recipe", "autoMIL-searched\n(equal effort)"], fontsize=8)
     axA.set_yticks(range(4)); axA.set_yticklabels([f"rank {i+1}" for i in range(4)], fontsize=8)
-    axA.set_title("A · Aggregator ranking flips after\nequal-effort recipe search (RQ1)")
+    axA.set_title("A · Default vs equal-effort\ncross-lineage ranks (RQ1)")
     for s in ["top", "right"]:
         axA.spines[s].set_visible(False)
 
-    # Panel B: per-cell dumbbell — default -> searched composite lift (feasibility anchors)
-    cells = ["CCRCC hi-grade", "ovarian HRD", "LUAD-KRAS", "HNSC-grade", "LGG-IDH1"]
+    # Panel B: illustrative within-lineage effects using roster labels only.
+    cells = ["LUAD-KRAS", "LGG-IDH1", "GBM-TP53", "PDAC-immune", "HNSC-grade"]
     d0 = np.array([0.744, 0.814, 0.685, 0.742, 0.848])
-    d1 = np.array([0.807, 0.851, 0.712, 0.771, 0.861])
+    d1 = np.array([0.767, 0.808, 0.712, 0.743, 0.861])
     y = np.arange(len(cells))[::-1]
     for i in range(len(cells)):
         axB.plot([d0[i], d1[i]], [y[i], y[i]], color="#cccccc", lw=2, zorder=1)
         axB.scatter(d0[i], y[i], color="#999999", s=45, zorder=2, label="default" if i == 0 else None)
         axB.scatter(d1[i], y[i], color="#2a7", s=55, zorder=3, label="autoMIL" if i == 0 else None)
-        axB.text(d1[i] + 0.004, y[i], f"+{(d1[i]-d0[i]):.3f}", va="center", fontsize=7.5, color="#2a7")
+        delta = d1[i] - d0[i]
+        axB.text(d1[i] + 0.004, y[i], f"{delta:+.3f}", va="center", fontsize=7.5, color="#2a7")
     axB.set_yticks(y); axB.set_yticklabels(cells, fontsize=8)
-    axB.set_xlabel("validation composite")
+    axB.set_xlabel("task metric (illustrative)")
     axB.set_xlim(0.70, 0.90)
-    axB.set_title("B · Recipe-search lift per cell\n(CCRCC/HRD = real feasibility anchors)")
+    axB.set_title("B · Within-lineage searched − default effect (RQ2)")
     axB.legend(fontsize=8, loc="lower left", frameon=False)
     for s in ["top", "right"]:
         axB.spines[s].set_visible(False)
-    fig.suptitle("Fig 3 (MOCK) · autoMIL recipe search — rankings flip & composite lifts", fontsize=9.5, fontweight="bold")
+    fig.suptitle("Fig 3 (MOCK) · autoMIL recipe sensitivity — ranks + within-lineage effects", fontsize=9.5, fontweight="bold")
     fig.tight_layout(rect=[0, 0.03, 1, 0.94])
     _mock_note(fig)
     p = os.path.join(OUT, "fig3_recipe_search_effect.png")
@@ -204,7 +208,8 @@ def fig4_survival():
     arms = ["clam_mb·nll", "simple_mil·cox", "abmil·cox", "dtfd_mil·nll", "TITAN"]
     arm_c = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#5a2a82"]
     base_c = {"LUAD": 0.60, "LGG": 0.64, "GBM": 0.63, "PDAC": 0.66, "HNSC": 0.61}
-    arm_off = [0.00, 0.01, 0.008, -0.005, 0.03]  # TITAN best (Frontiers-style)
+    # Illustrative layout values only; do not encode a predeclared winner.
+    arm_off = [0.00, 0.01, 0.008, -0.005, 0.004]
     fig, ax = plt.subplots(figsize=(9.5, 3.8))
     x = np.arange(len(DATASETS)); w = 0.15
     for k, arm in enumerate(arms):

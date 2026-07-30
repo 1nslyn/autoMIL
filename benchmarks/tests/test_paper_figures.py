@@ -21,10 +21,16 @@ pytest.importorskip("matplotlib")
 # Moved out of paper/preprint/figures/ (2026-07-28): pyproject's testpaths is
 # ["tests"] and benchmarks/tests is the autobench gate, so a test sitting beside
 # the figure scripts was auto-discovered by neither and silently never ran.
-SCRIPT = os.path.join(
+FIGURES_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "paper", "preprint", "figures", "make_figures.py",
+    "paper", "preprint", "figures",
 )
+SCRIPT = os.path.join(FIGURES_DIR, "make_figures.py")
+
+# roster.py lives beside make_figures.py and defines the baseline roster the
+# script filters to by default; importing it here keeps the fixture's cohort
+# names from drifting out of sync with the filter they are meant to satisfy.
+sys.path.insert(0, FIGURES_DIR)
 
 
 def _results_rows():
@@ -96,10 +102,20 @@ def csv_paths(tmp_path):
     return str(results_csv), str(per_fold_csv)
 
 
-def _run(results_csv: str, per_fold_csv: str, out_dir: str):
+def _run(results_csv: str, per_fold_csv: str, out_dir: str, *extra: str):
+    """Invoke make_figures.py on the synthetic CSVs.
+
+    Passes ``--no-roster-filter`` by default: the fixture rows above are a
+    minimal plot-mechanics grid (uppercase ``TCGA-LUAD``-style names, a couple
+    of cells per cohort), NOT the 130-cell baseline roster, so the default
+    roster filter would correctly reject them. Roster-filtered behaviour is
+    covered by ``TestRosterFilterPath`` below and by
+    ``benchmarks/tests/test_roster_filter.py``.
+    """
     return subprocess.run(
         [sys.executable, SCRIPT,
-         "--results", results_csv, "--per-fold", per_fold_csv, "--out-dir", out_dir],
+         "--results", results_csv, "--per-fold", per_fold_csv, "--out-dir", out_dir,
+         "--no-roster-filter", *extra],
         capture_output=True, text=True,
     )
 
@@ -131,3 +147,104 @@ class TestMakeFiguresEndToEnd:
         assert "task_type" in proc.stderr
         # No plot from partial data: neither figure should have been written.
         assert not out_dir.exists() or list(out_dir.iterdir()) == []
+
+
+def _roster_csvs(tmp_path):
+    """The full 130-cell baseline roster, in the collector's output shape."""
+    from roster import ROSTER_TASKS  # noqa: PLC0415 -- path set up at import time
+
+    encoders = ("uni_v2", "virchow2", "hoptimus1")
+    results, folds = [], []
+
+    def add(dataset, task, task_type, model, encoder, loss=None):
+        metric = "c_index" if task_type == "survival" else "auc_roc"
+        results.append({
+            "dataset": dataset, "framework": "x", "strategy": "standard",
+            "task": task, "encoder": encoder, "model_type": model,
+            "survival_loss": loss or "", "task_type": task_type,
+            "test_auc_roc_mean": None if task_type == "survival" else 0.70,
+            "test_c_index_mean": 0.60 if task_type == "survival" else None,
+            "experiment_id": f"{dataset}__{task}__{encoder}__{model}__{loss}",
+        })
+        for fold in range(3):
+            folds.append({
+                "dataset": dataset, "framework": "x", "strategy": "standard",
+                "task": task, "encoder": encoder, "model_type": model,
+                "survival_loss": loss or "", "seed": 42,
+                "experiment_id": f"{dataset}__{task}__{encoder}__{model}__{loss}",
+                "split": "test", "fold": fold, "metric": metric,
+                "value": 0.60 + 0.01 * fold,
+            })
+
+    for cohort, task in ROSTER_TASKS.items():
+        for model in ("clam_mb", "simple_mil", "abmil", "dtfd_mil"):
+            for enc in encoders:
+                add(cohort, task, "classification", model, enc)
+                add(cohort, "os", "survival", model, enc, "nllsurv")
+        add(cohort, task, "classification", "titan", "titan")
+        add(cohort, "os", "survival", "titan", "titan", "nllsurv")
+
+    # off-roster noise the filter must strip: a cox arm and a second LUAD task
+    for enc in encoders:
+        add("tcga_luad", "os", "survival", "abmil", enc, "cox")
+        add("tcga_luad", "egfr", "classification", "clam_mb", enc)
+
+    results_csv = tmp_path / "roster_results.csv"
+    per_fold_csv = tmp_path / "roster_per_fold.csv"
+    pd.DataFrame(results).to_csv(results_csv, index=False)
+    pd.DataFrame(folds).to_csv(per_fold_csv, index=False)
+    return str(results_csv), str(per_fold_csv)
+
+
+class TestRosterFilterPath:
+    """The DEFAULT path: roster filtering on."""
+
+    def test_full_roster_plots_and_reports_what_it_dropped(self, tmp_path):
+        results_csv, per_fold_csv = _roster_csvs(tmp_path)
+        out_dir = tmp_path / "out_roster"
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, "--results", results_csv,
+             "--per-fold", per_fold_csv, "--out-dir", str(out_dir)],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "kept 130 of 136" in proc.stdout, proc.stdout
+        assert (out_dir / "fig1_leaderboard_heatmap.png").stat().st_size > 0
+        assert (out_dir / "fig4_survival_cindex.png").stat().st_size > 0
+
+    def test_incomplete_roster_fails_loudly_with_no_partial_plot(self, tmp_path):
+        results_csv, per_fold_csv = _roster_csvs(tmp_path)
+        trimmed = pd.read_csv(results_csv)
+        trimmed = trimmed[~(
+            (trimmed["dataset"] == "tcga_lgg") & (trimmed["model_type"] == "titan")
+        )]
+        trimmed.to_csv(results_csv, index=False)
+        out_dir = tmp_path / "out_incomplete"
+
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, "--results", results_csv,
+             "--per-fold", per_fold_csv, "--out-dir", str(out_dir)],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode != 0
+        assert "roster is incomplete" in proc.stderr
+        assert "tcga_lgg" in proc.stderr
+        assert not out_dir.exists() or list(out_dir.iterdir()) == []
+
+    def test_allow_incomplete_roster_plots_anyway(self, tmp_path):
+        results_csv, per_fold_csv = _roster_csvs(tmp_path)
+        trimmed = pd.read_csv(results_csv)
+        trimmed = trimmed[~(
+            (trimmed["dataset"] == "tcga_lgg") & (trimmed["model_type"] == "titan")
+        )]
+        trimmed.to_csv(results_csv, index=False)
+        out_dir = tmp_path / "out_allow"
+
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, "--results", results_csv,
+             "--per-fold", per_fold_csv, "--out-dir", str(out_dir),
+             "--allow-incomplete-roster"],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert (out_dir / "fig1_leaderboard_heatmap.png").stat().st_size > 0

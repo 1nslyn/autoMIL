@@ -48,10 +48,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import figstyle  # noqa: E402
+from roster import RosterError, filter_roster, format_report  # noqa: E402
+
 DEFAULT_OUT_DIR = os.path.join(os.path.dirname(__file__), "mock")
 
-mpl.rcParams.update({
-    "font.family": "DejaVu Sans",
+# Fig 1 type sizes. Named rather than inline because they are set relative to
+# the heatmap's cell geometry (see fig1_leaderboard_heatmap) -- changing one
+# without the other is what made the first pass illegible at page width.
+FIG1_CELL_PT = 13      # the +/-0.000 delta printed in each cell
+FIG1_TICK_PT = 12.5    # (aggregator, encoder) and dataset tick labels
+FIG1_LABEL_PT = 12     # colourbar label and its ticks
+FIG1_TITLE_PT = 14
+
+# All figure text is Times New Roman -- see figstyle.py.
+figstyle.apply(**{
     "font.size": 9,
     "axes.titlesize": 10,
     "axes.titleweight": "bold",
@@ -59,8 +72,6 @@ mpl.rcParams.update({
     "axes.edgecolor": "#444444",
     "axes.linewidth": 0.8,
     "figure.dpi": 150,
-    "savefig.dpi": 200,
-    "savefig.bbox": "tight",
 })
 
 
@@ -140,35 +151,51 @@ def fig1_leaderboard_heatmap(results_df: pd.DataFrame, out_dir: str) -> str:
     masked = np.ma.masked_invalid(delta_arr)
 
     n_rows, n_cols = pivot.shape
-    fig, ax = plt.subplots(figsize=(max(6.0, 1.05 * n_cols + 2), 0.85 * n_rows + 2.2))
+
+    # Figure geometry and type sizes are tied together deliberately. The figure
+    # is placed at page width in the manuscript, so what matters is the ratio of
+    # type size to figure width, not the absolute point size: at the previous
+    # 1.05 in/column the 13-column grid spanned ~15.6 in, and scaling that down
+    # to a ~7 in text block shrank 8 pt type to an unreadable ~3.6 pt effective.
+    # Narrower cells + larger type keeps the same information legible in print.
+    col_in, row_in = 0.75, 1.0
+    fig, ax = plt.subplots(
+        figsize=(max(6.0, col_in * n_cols + 3.0), row_in * n_rows + 2.9)
+    )
     im = ax.imshow(masked, cmap=cmap, vmin=-vmax, vmax=vmax, aspect="auto")
 
     ax.set_xticks(range(n_cols))
     ax.set_xticklabels(
-        [f"{agg}\n{enc}" for agg, enc in pivot.columns], rotation=45, ha="right", fontsize=7,
+        [f"{agg}\n{enc}" for agg, enc in pivot.columns],
+        rotation=45, ha="right", fontsize=FIG1_TICK_PT,
     )
     ax.set_yticks(range(n_rows))
     ax.set_yticklabels(
-        [f"{ds}\n(row mean {row_mean[ds]:.2f})" for ds in pivot.index], fontsize=7.5,
+        [f"{ds}\n(row mean {row_mean[ds]:.2f})" for ds in pivot.index],
+        fontsize=FIG1_TICK_PT,
     )
+    ax.tick_params(length=2, pad=2)
 
     raw_arr = pivot.to_numpy()
     for i in range(n_rows):
         for j in range(n_cols):
             if not np.isfinite(raw_arr[i, j]):
-                ax.text(j, i, "n/a", ha="center", va="center", fontsize=6.5, color="#777")
+                ax.text(j, i, "n/a", ha="center", va="center",
+                        fontsize=FIG1_CELL_PT, color="#777")
                 continue
             d = delta_arr[i, j]
             color = "white" if abs(d) > vmax * 0.6 else "#222"
-            ax.text(j, i, f"{d:+.3f}", ha="center", va="center", fontsize=6.5, color=color)
+            ax.text(j, i, f"{d:+.3f}", ha="center", va="center",
+                    fontsize=FIG1_CELL_PT, color=color)
 
     ax.set_title(
         "Classification leaderboard — test AUC, within-dataset centred ΔAUC\n"
         "(binary and macro-OvR AUC are different quantities; never averaged across datasets)",
-        fontsize=8.5, pad=10,
+        fontsize=FIG1_TITLE_PT, pad=12,
     )
     cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
-    cb.set_label("Δ test AUC vs. that dataset's own row mean", fontsize=7.5)
+    cb.set_label("Δ test AUC vs. that dataset's own row mean", fontsize=FIG1_LABEL_PT)
+    cb.ax.tick_params(labelsize=FIG1_LABEL_PT)
     fig.tight_layout()
 
     os.makedirs(out_dir, exist_ok=True)
@@ -255,7 +282,7 @@ def fig4_survival_cindex(results_df: pd.DataFrame, per_fold_df: pd.DataFrame, ou
     ax.set_xticklabels(datasets, fontsize=8)
     ax.set_ylabel("test c-index (pooled per-fold mean ± sd)")
     ax.set_title("Survival OS c-index by dataset × arm", fontsize=10, fontweight="bold")
-    ax.legend(fontsize=7, ncol=min(4, len(arms) + 1), loc="upper center",
+    ax.legend(fontsize=8, ncol=min(4, len(arms) + 1), loc="upper center",
               bbox_to_anchor=(0.5, -0.20), frameon=False)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
@@ -291,6 +318,15 @@ def parse_args() -> argparse.Namespace:
                    help="Directory to write PNGs into (default: figures/mock/, "
                         "matching make_mock_figures.py -- real figures overwrite "
                         "the mock of the same name once real data exists)")
+    p.add_argument("--no-roster-filter", dest="roster_filter", action="store_false",
+                   help="Plot every collected experiment instead of the 130 baseline "
+                        "roster cells. NOT recommended: unfiltered, TCGA-LUAD "
+                        "contributes 105 experiments against a roster of 26, and 35 "
+                        "partial cox runs join the survival arms (see roster.py)")
+    p.add_argument("--allow-incomplete-roster", dest="strict_roster",
+                   action="store_false",
+                   help="Plot even if a cohort does not have all 26 roster cells "
+                        "(default: fail loudly rather than draw a partial grid)")
     return p.parse_args()
 
 
@@ -298,6 +334,19 @@ def main() -> None:
     args = parse_args()
     results_df = _load_csv(args.results, "--results")
     per_fold_df = _load_csv(args.per_fold, "--per-fold")
+
+    if args.roster_filter:
+        try:
+            results_df, filtered_per_fold, report = filter_roster(
+                results_df, per_fold_df, strict=args.strict_roster,
+            )
+        except RosterError as exc:
+            raise SystemExit(f"[make_figures] {exc}") from exc
+        per_fold_df = filtered_per_fold if filtered_per_fold is not None else per_fold_df
+        print(format_report(report))
+    else:
+        print("[make_figures] WARNING: --no-roster-filter -- plotting ALL "
+              f"{len(results_df)} collected experiments, including off-roster work")
 
     jobs = [
         ("fig1_leaderboard_heatmap", lambda: fig1_leaderboard_heatmap(results_df, args.out_dir)),
