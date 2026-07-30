@@ -1,0 +1,20 @@
+# PaperSpine Config
+
+- **workflow**: build_from_materials
+- **scene**: conference
+- **tier**: pro
+- **output_language**: en
+- **target_name**: NeurIPS 2026 preprint: autoMIL
+- **materials_dir**: /Users/leoyin/Development/autoMIL
+- **draft_path**: 
+- **user_motivation**: Published ML rankings confound model quality with unequal human research and recipe effort. autoMIL provides an auditable research-operations substrate for matched autonomous source-level optimization, and autobench uses it to measure whether pathology-MIL rankings remain stable under equal declared research effort.
+- **official_urls**: 
+- **reference_mode**: local_first
+- **reference_paths**: /Users/leoyin/Development/autoMIL/paper/preprint, /Users/leoyin/Development/autoMIL/paper/shared, /Users/leoyin/Development/autoMIL/paper/references, /Users/leoyin/Development/autoMIL/.planning
+- **citation_target_count**: 30
+- **special_requirements**: Use the bundled NeurIPS 2026 LaTeX template in NeurIPS26_autoMIL and preserve its formatting contract., Compile main.tex locally to a viewable PDF and validate the rendered pages., Write in English, keep all incomplete campaign results explicitly result-neutral, and never fabricate metrics, significance, or final rankings.
+- **word_output**: none
+- **translation_package**: none
+- **humanize_tier**: medium
+- **detection_platform**: general
+- **ui_language**: zh

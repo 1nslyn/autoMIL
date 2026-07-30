@@ -1,0 +1,38 @@
+# Evidence Bank
+
+Evidence levels:
+
+- **A — locally verified:** current source and/or a test run in this checkout.
+- **B — audited external execution record:** documented cluster analysis whose
+  underlying artifacts are not present locally.
+- **C — protocol only:** planned evidence; no scientific outcome may be stated.
+
+| Evidence ID | Level | Factual proposition | Primary anchor | Verification / condition | Manuscript use |
+|---|---|---|---|---|---|
+| E01 | A | A node worktree is created at a pinned git commit with `git worktree add --detach`. | `src/automil/runner.py:40-66` | Direct source inspection; runner tests passed in the selected 51-test run. | C1 execution-layer description |
+| E02 | A | Submitted overlay files may be checked against recorded SHA-256 digests before copying. | `src/automil/runner.py:68-133` | Direct source inspection and runner tests. | C1 reconstructability and tamper detection |
+| E03 | A | Overlay application rejects symlinks, absolute/traversal targets, and escaping deletions. | `src/automil/runner.py:101-181` | Direct source inspection and runner tests. | C1 isolation boundary |
+| E04 | A | `registry.protected` matches are hard-refused at submission. | `src/automil/cli/submit.py:259-274`; `tests/test_submit_protected_files.py` | Targeted protected-file tests passed. | C1 declared intervention surface |
+| E05 | A | The comparison cap counts launched attempts, including crashed, partial, and budget-killed runs. | `src/automil/cells/state.py:116-131`; orchestrator `:1088-1124` | Direct source inspection; launch/accounting tests passed. | Exact definition of matched research opportunity |
+| E06 | A | Usable completed/partial-result counts are maintained separately and do not control the cap. | `src/automil/cells/state.py:128-131`; orchestrator `:1114-1124` | Direct source inspection; accounting tests passed. | Failure and resource reporting |
+| E07 | A | Training-result writing places the full held-out payload in a sealed directory and a stripped validation-visible payload in the worktree. | `src/automil/runtime_helpers.py:80-131` | Direct source inspection; born-sealed and runner tests passed. | C1 evidence-layer contract |
+| E08 | A | Overlay reconstruction explicitly excludes the `certify/` subtree from descendant worktrees. | `src/automil/runner.py:145-152` | Direct source inspection; firewall tests passed. | Non-interference path |
+| E09 | A | `automil certify` reveals held-out metrics through an explicit end-of-run command and warns against reselection. | `src/automil/cli/certify.py:93-167` | Direct source inspection; certify/firewall tests exist. | Certification protocol and threat boundary |
+| E10 | A | Fifty-one selected tests covering runner, born-sealed firewall, launch cap, evaluation accounting, protected files, framework purity, and a synthetic consumer passed. | Local command recorded 2026-07-30 | `51 passed in 4.80s`; full-suite collection was not clean and is not claimed. | Current implementation-validation table |
+| E11 | A | The generic framework and pathology consumer are separated in the monorepo. | `src/automil/`; `benchmarks/src/autobench/`; `tests/test_framework_purity.py` | Framework-purity tests passed in E10. | Mechanism-level plug-in claim |
+| E12 | A | A synthetic consumer completes the framework contract. | `tests/test_synthetic_consumer_roundtrip.py` | Selected end-to-end test passed in E10. | Narrow cross-project evidence |
+| E13 | B | The canonical study design contains 165 roster cells: 65 classification and 100 survival experiments over five cohorts. | `EXPERIMENT_GRID.md` newest cluster-state block and Section 2 | Audited status record; underlying cluster artifacts unavailable locally. | Benchmark design, not a final ranking |
+| E14 | B | The execution record reports 195 experiments on disk, comprising all 165 roster cells plus 30 off-roster LUAD experiments. | `EXPERIMENT_GRID.md:12-25` | Audited cluster record; exclude extras from paper denominator. | Campaign-status disclosure |
+| E15 | B | The cluster audit reports no fold-count anomalies or non-finite primary metrics across 8,440 per-fold records. | `EXPERIMENT_GRID.md:29-36` | Audited cluster record; not independently rerun locally. | Static-grid integrity status |
+| E16 | B | Of 195 stored configs, 102 misdescribe the recipe that actually ran; provenance code is the required recipe source. | `EXPERIMENT_GRID.md:42-49`; `CODE-AUDIT-FIXES.md` H-3 | Audited config/runner trace. | Baseline-provenance warning |
+| E17 | B | A validation-only baseline screen finds 151 of 174 gradeable roster experiments clearly above chance, 19 within 0.05, and 4 at/below chance. | `CODE-AUDIT-FIXES.md` SCREEN-1 | Interim screen; not a sealed result and not evidence of ranking. | Strawman-baseline diagnostic only |
+| E18 | B | All four subchance runs and 13 of 20 near-chance cases concentrate in GBM survival. | `CODE-AUDIT-FIXES.md` SCREEN-2 | Interim validation diagnostic; GBM decision remains open. | Task-difficulty limitation |
+| E19 | B | The corrected TCGA survival join recovered 129 censored patients and zero deaths across LUAD, LGG, and HNSC. | `PRELAUNCH_REVIEW.md:20-40` | Data-audit record after the fix. | Data integrity and attrition disclosure |
+| E20 | B | Planned cohort sizes are LUAD 465, LGG 491, GBM 99, PDAC 105, and HNSC 431 with 414 gradeable cases; death counts are 167, 115, 72, 81, and 205. | `PLAN.md:26-43` | Protocol source; final table must be regenerated from frozen manifests. | Dataset table with “planned/audited” qualifier |
+| E21 | C | The corrected per-arm native/no-search baseline count and rerun set are not yet reliably established in the local record. | Conflict between `CODE-AUDIT-FIXES.md` row BASE-1 and its progress log | Must regenerate canonical roster and join actual configs. | Do not print a rerun number in the manuscript |
+| E22 | C | The matched autonomous search campaign has not produced a final certified cross-arm ranking in the available materials. | `CONTRIBUTIONS.md` C2; `CODE-AUDIT-FIXES.md` open decisions | No local graph, trajectory, or sealed result artifacts. | Result-neutral abstract and Results section |
+| E23 | C | The scientific admissibility rule is settled, but method-identity enforcement and the runnable programmatic-recipe channel are unresolved. | `PLAN.md` Section 5; `CODE-AUDIT-FIXES.md` METHOD-1, ARCH-1/2, VAR-1, BOUND-1 | Multiple source/configuration routes can collapse one arm into another; the scalar override table is too narrow, while unrestricted source editing is too broad. | State the positive method-identity/programmatic-recipe protocol and its implementation blocker |
+| E24 | C | Multi-seed evidence is not available for the current campaign plan. | `CONTRIBUTIONS.md` C2; `CODE-AUDIT-FIXES.md` SEED-1 | Single-seed rankings cannot support strong robustness claims. | Limitation; no significance claim |
+| E25 | C | Cell-level observations share cohorts, patients, and splits and cannot be treated as 165 independent samples. | `CODE-AUDIT-FIXES.md` INDEP-1 | Infer by cohort or with a dependence-aware hierarchical design. | Statistical-analysis boundary |
+| E26 | C | Real Local/SLURM/Ray semantic equivalence has not been established. | `.planning/PROJECT.md`; contribution register | Interface/tests exist; real comparable backend executions are deferred. | Narrow backend wording |
+| E27 | C | The trajectory corpus and cross-cell transfer result do not yet meet their promotion gates. | `CONTRIBUTIONS.md` C4/C5 | No complete release or preregistered positive transfer evidence. | Future work, not numbered contributions |

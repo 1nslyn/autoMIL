@@ -1,0 +1,201 @@
+\begin{thebibliography}{25}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Probst et~al.(2019)Probst, Boulesteix, and
+  Bischl]{probst2019tunability}
+Philipp Probst, Anne-Laure Boulesteix, and Bernd Bischl.
+\newblock Tunability: Importance of hyperparameters of machine learning
+  algorithms.
+\newblock \emph{Journal of Machine Learning Research}, 20\penalty0
+  (53):\penalty0 1--32, 2019.
+\newblock URL \url{https://www.jmlr.org/papers/v20/18-444.html}.
+
+\bibitem[Schmidt et~al.(2020)Schmidt, Schneider, and
+  Hennig]{schmidt2020optimizer}
+Robin~M. Schmidt, Frank Schneider, and Philipp Hennig.
+\newblock Optimizer benchmarking needs to account for hyperparameter
+  optimization.
+\newblock \emph{Proceedings of the 37th International Conference on Machine
+  Learning}, 119:\penalty0 8528--8537, 2020.
+\newblock URL \url{https://proceedings.mlr.press/v119/schmidt20a.html}.
+
+\bibitem[Huang et~al.(2024)Huang, Vora, Liang, and
+  Leskovec]{huang2024mlagentbench}
+Qian Huang, Jian Vora, Percy Liang, and Jure Leskovec.
+\newblock {MLAgentBench}: Evaluating language agents on machine learning
+  experimentation.
+\newblock In \emph{Proceedings of the 41st International Conference on Machine
+  Learning}, volume 235, pages 20271--20309, 2024.
+\newblock URL \url{https://proceedings.mlr.press/v235/huang24y.html}.
+
+\bibitem[Jiang et~al.(2025)Jiang, Schmidt, Srikanth, Xu, Kaplan, Jacenko, and
+  Wu]{jiang2025aide}
+Zhengyao Jiang, Dominik Schmidt, Dhruv Srikanth, Dixing Xu, Ian Kaplan, Deniss
+  Jacenko, and Yuxiang Wu.
+\newblock {AIDE}: {AI}-driven exploration in the space of code.
+\newblock \emph{arXiv preprint arXiv:2502.13138}, 2025.
+\newblock URL \url{https://arxiv.org/abs/2502.13138}.
+
+\bibitem[Yamada et~al.(2025)Yamada, Lange, Lu, Hu, Lu, Foerster, Clune, and
+  Ha]{yamada2025aiscientistv2}
+Yutaro Yamada, Robert~Tjarko Lange, Cong Lu, Shengran Hu, Chris Lu, Jakob
+  Foerster, Jeff Clune, and David Ha.
+\newblock The {AI} scientist-v2: Workshop-level automated scientific discovery
+  via agentic tree search.
+\newblock \emph{arXiv preprint arXiv:2504.08066}, 2025.
+\newblock URL \url{https://arxiv.org/abs/2504.08066}.
+
+\bibitem[Toledo et~al.(2025)]{toledo2025aira}
+Edan Toledo et~al.
+\newblock {AI} research agents for machine learning: Search, exploration, and
+  generalization in {MLE}-bench.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~38, 2025.
+\newblock URL
+  \url{https://proceedings.neurips.cc/paper_files/paper/2025/hash/328b81881da145412f2bc56c998dfb6a-Abstract-Conference.html}.
+
+\bibitem[Hambardzumyan et~al.(2026)]{hambardzumyan2026aira2}
+Karen Hambardzumyan et~al.
+\newblock {AIRA}\_2: Overcoming bottlenecks in {AI} research agents.
+\newblock \emph{arXiv preprint arXiv:2603.26499}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2603.26499}.
+
+\bibitem[Wijk et~al.(2024)]{wijk2024rebench}
+Hjalmar Wijk et~al.
+\newblock {RE-Bench}: Evaluating frontier {AI} {R\&D} capabilities of language
+  model agents against human experts.
+\newblock \emph{arXiv preprint arXiv:2411.15114}, 2024.
+\newblock URL \url{https://arxiv.org/abs/2411.15114}.
+
+\bibitem[Zhang et~al.(2025)Zhang, Khalifa, Bhushan, Murphy, Logeswaran, Kim,
+  Lee, Lee, and Wang]{zhang2025mlrcbench}
+Yunxiang Zhang, Muhammad Khalifa, Shitanshu Bhushan, Grant Murphy, Lajanugen
+  Logeswaran, Jaekyeom Kim, Moontae Lee, Honglak Lee, and Lu~Wang.
+\newblock {MLRC-Bench}: Can language agents solve machine learning research
+  challenges?
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~38, 2025.
+\newblock URL
+  \url{https://proceedings.neurips.cc/paper_files/paper/2025/hash/82c96f3c90741ef2c9b248e65d9b5db0-Abstract-Datasets_and_Benchmarks_Track.html}.
+
+\bibitem[Liu et~al.(2026)Liu, Jiang, Zheng, Wang, Wang, Pan, Wu, Peng, Gu, Sun,
+  and Yuan]{liu2026amid}
+Shengyuan Liu, Jia-Xuan Jiang, Boyun Zheng, Cheng Wang, Zipei Wang, Wentao Pan,
+  Hongtao Wu, Houwen Peng, Yu~Gu, Lichao Sun, and Yixuan Yuan.
+\newblock Towards autonomous and auditable medical imaging model development.
+\newblock \emph{arXiv preprint arXiv:2607.10522}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2607.10522}.
+
+\bibitem[Brussee et~al.(2025)Brussee, Valkema, Weijer, Doeleman, Schrader, and
+  Kers]{brussee2025pathbenchmil}
+Siemen Brussee, Pieter~A. Valkema, Jurre A.~J. Weijer, Thom Doeleman, Anne
+  M.~R. Schrader, and Jesper Kers.
+\newblock Pathbench-mil: A comprehensive automl and benchmarking framework for
+  multiple instance learning in histopathology.
+\newblock \emph{arXiv preprint arXiv:2512.17517}, 2025.
+\newblock URL \url{https://arxiv.org/abs/2512.17517}.
+
+\bibitem[Luo et~al.(2025)Luo, Xiang, Ji, and Li]{luo2025nnmil}
+Xiangde Luo, Jinxi Xiang, Yuanfeng Ji, and Ruijiang Li.
+\newblock nnmil: A generalizable multiple instance learning framework for
+  computational pathology.
+\newblock \emph{arXiv preprint arXiv:2511.14907}, 2025.
+\newblock URL \url{https://arxiv.org/abs/2511.14907}.
+
+\bibitem[{The Cancer Genome Atlas Research Network}
+  et~al.(2013)]{tcga2013pancancer}
+{The Cancer Genome Atlas Research Network} et~al.
+\newblock The cancer genome atlas pan-cancer analysis project.
+\newblock \emph{Nature Genetics}, 45:\penalty0 1113--1120, 2013.
+\newblock \doi{10.1038/ng.2764}.
+
+\bibitem[Wang et~al.(2021)]{wang2021gbm}
+Lijun~B. Wang et~al.
+\newblock Proteogenomic and metabolomic characterization of human glioblastoma.
+\newblock \emph{Cancer Cell}, 39\penalty0 (4):\penalty0 509--528.e20, 2021.
+\newblock \doi{10.1016/j.ccell.2021.01.006}.
+
+\bibitem[Cao et~al.(2021)]{cao2021pdac}
+Lei Cao et~al.
+\newblock Proteogenomic characterization of pancreatic ductal adenocarcinoma.
+\newblock \emph{Cell}, 184\penalty0 (19):\penalty0 5031--5052.e26, 2021.
+\newblock \doi{10.1016/j.cell.2021.08.023}.
+
+\bibitem[Xu et~al.(2024)]{xu2024uni}
+Hanwen Xu et~al.
+\newblock A whole-slide foundation model for digital pathology from real-world
+  data.
+\newblock \emph{Nature}, 630:\penalty0 181--188, 2024.
+
+\bibitem[Vorontsov et~al.(2024)]{vorontsov2024virchow}
+Eugene Vorontsov et~al.
+\newblock A foundation model for clinical-grade computational pathology and
+  rare cancers detection.
+\newblock \emph{Nature Medicine}, 30:\penalty0 2924--2935, 2024.
+
+\bibitem[Saillard et~al.(2024)]{saillard2024hoptimus}
+Charlie Saillard et~al.
+\newblock {H}-optimus-0.
+\newblock \emph{arXiv preprint arXiv:2409.13031}, 2024.
+
+\bibitem[Lu et~al.(2021)Lu, Williamson, Chen, Chen, Barbieri, and
+  Mahmood]{lu2021clam}
+Ming~Y. Lu, Drew F.~K. Williamson, Tiffany~Y. Chen, Richard~J. Chen, Matteo
+  Barbieri, and Faisal Mahmood.
+\newblock Data-efficient and weakly supervised computational pathology on
+  whole-slide images.
+\newblock \emph{Nature Biomedical Engineering}, 5:\penalty0 555--570, 2021.
+\newblock \doi{10.1038/s41551-020-00682-w}.
+
+\bibitem[Ilse et~al.(2018)Ilse, Tomczak, and Welling]{ilse2018attention}
+Maximilian Ilse, Jakub~M. Tomczak, and Max Welling.
+\newblock Attention-based deep multiple instance learning.
+\newblock In \emph{Proceedings of the 35th International Conference on Machine
+  Learning}, volume~80, pages 2127--2136, 2018.
+\newblock URL \url{https://proceedings.mlr.press/v80/ilse18a.html}.
+
+\bibitem[Zhang et~al.(2022)Zhang, Meng, Zhao, Qiao, Yang, Coupland, and
+  Zheng]{zhang2022dtfd}
+Hongrun Zhang, Yanda Meng, Yitian Zhao, Yihong Qiao, Xiaoyun Yang, Sarah~E.
+  Coupland, and Yalin Zheng.
+\newblock {DTFD-MIL}: Double-tier feature distillation multiple instance
+  learning for histopathology whole slide image classification.
+\newblock In \emph{Proceedings of the IEEE/CVF Conference on Computer Vision
+  and Pattern Recognition}, pages 18802--18812, 2022.
+\newblock URL
+  \url{https://openaccess.thecvf.com/content/CVPR2022/html/Zhang_DTFD-MIL_Double-Tier_Feature_Distillation_Multiple_Instance_Learning_for_Histopathology_Whole_CVPR_2022_paper.html}.
+
+\bibitem[Ding et~al.(2024)]{ding2024titan}
+Tong Ding et~al.
+\newblock Multimodal whole slide foundation model for pathology.
+\newblock \emph{arXiv preprint arXiv:2411.19666}, 2024.
+
+\bibitem[Li et~al.(2021)Li, Li, and Eliceiri]{li2021dsmil}
+Bin Li, Yin Li, and Kevin~W. Eliceiri.
+\newblock Dual-stream multiple instance learning network for whole slide image
+  classification with self-supervised contrastive learning.
+\newblock In \emph{Proceedings of the IEEE/CVF Conference on Computer Vision
+  and Pattern Recognition}, pages 14318--14328, 2021.
+
+\bibitem[Shao et~al.(2021)Shao, Bian, Chen, Wang, Zhang, Ji, and
+  Zhang]{shao2021transmil}
+Zhuchen Shao, Hao Bian, Yang Chen, Yifeng Wang, Jian Zhang, Xiangyang Ji, and
+  Yongbing Zhang.
+\newblock Transmil: Transformer based correlated multiple instance learning for
+  whole slide image classification.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~34, pages 2136--2147, 2021.
+
+\bibitem[Mammadov et~al.(2025)]{mammadov2025variability}
+Ashar Mammadov et~al.
+\newblock Reducing variability of multiple instance learning methods for
+  digital pathology.
+\newblock In \emph{Medical Image Computing and Computer Assisted Intervention
+  -- MICCAI 2025}, 2025.
+\newblock URL \url{https://papers.miccai.org/miccai-2025/0759-Paper4644.html}.
+
+\end{thebibliography}
