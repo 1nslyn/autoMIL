@@ -32,7 +32,13 @@ def parse_args() -> argparse.Namespace:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--roots", nargs="+", required=True,
                    help="One or more benchmark_dir roots to walk "
-                        "(results/**/summary.json under each)")
+                        "(results/**/summary.json under each). Prefer the "
+                        "LABEL=PATH form (e.g. tcga_luad=/data/luad/benchmark_5fold): "
+                        "real summary.json files carry no 'dataset' field, so the "
+                        "label is what keeps cohorts distinct. A bare PATH falls "
+                        "back to that directory's basename, which for a layout like "
+                        "<cohort>/benchmark_5fold would label every cohort "
+                        "'benchmark_5fold' and silently pool them.")
     p.add_argument("--out", required=True,
                    help="Output CSV path for the wide per-experiment frame")
     p.add_argument("--per-fold-out", dest="per_fold_out", default=None,
@@ -40,10 +46,32 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _parse_roots(raw: list[str]) -> list[tuple[str, str]] | list[str]:
+    """Turn ``LABEL=PATH`` / bare ``PATH`` arguments into collect_summaries input.
+
+    Split on the FIRST ``=`` only, so a path containing ``=`` still resolves.
+    An argument with no ``=`` is passed through as a bare path (basename
+    fallback); mixing the two forms in one call is allowed.
+    """
+    parsed: list[tuple[str, str] | str] = []
+    for item in raw:
+        if "=" in item:
+            label, path = item.split("=", 1)
+            if not label or not path:
+                raise SystemExit(
+                    f"[collect_results] malformed --roots entry {item!r}: "
+                    "expected LABEL=PATH with both sides non-empty"
+                )
+            parsed.append((label, path))
+        else:
+            parsed.append(item)
+    return parsed
+
+
 def main() -> None:
     args = parse_args()
 
-    summaries = collect_summaries(args.roots)
+    summaries = collect_summaries(_parse_roots(args.roots))
     if not summaries:
         print(f"[collect_results] WARNING: no summary.json found under {args.roots}",
               file=sys.stderr)

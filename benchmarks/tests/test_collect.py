@@ -114,6 +114,31 @@ def _write_summary(
     return summary
 
 
+def _strip_dataset_field(summary: dict, benchmark_dir: str) -> str:
+    """Rewrite the summary just written by :func:`_write_summary` without ``dataset``.
+
+    :func:`_write_summary` injects ``"dataset"`` into the JSON, but the five
+    real framework runners never do -- 0 of 195 summaries from the completed
+    phase-2 campaign carry the key. Tests that care about cohort identity must
+    exercise the real shape, so they call this to drop it. Returns the path of
+    the rewritten file.
+    """
+    results_dir = os.path.join(benchmark_dir, "results")
+    matches = [
+        os.path.join(dirpath, "summary.json")
+        for dirpath, _, files in os.walk(results_dir)
+        if "summary.json" in files
+        and json.load(open(os.path.join(dirpath, "summary.json"))).get("experiment_id")
+        == summary["experiment_id"]
+    ]
+    assert len(matches) == 1, f"expected exactly one summary.json, found {matches}"
+    path = matches[0]
+    stripped = {k: v for k, v in summary.items() if k != "dataset"}
+    with open(path, "w") as f:
+        json.dump(stripped, f)
+    return path
+
+
 @pytest.fixture
 def results_tree(tmp_path) -> str:
     """A synthetic benchmark_dir covering the FIG-0 breakage grid.
@@ -215,6 +240,82 @@ class TestCollectSummaries:
         summaries = collect_summaries([results_tree, second_root])
         assert len(summaries) == 9
         assert "TCGA-LGG" in {s["dataset"] for s in summaries}
+
+    def test_root_label_stamps_dataset_when_summary_lacks_it(self, tmp_path):
+        """Real ``summary.json`` files carry NO ``dataset`` field.
+
+        Verified against the completed phase-2 campaign: 0 of 195 real
+        summaries have a ``dataset`` key (the five framework runners never
+        write one -- only this module's fixture does, which is why the rest of
+        this file cannot see the gap). Without a root label, every cohort
+        collapses into one blank ``dataset`` and any per-cohort figure silently
+        pools all five.
+        """
+        root = str(tmp_path / "tcga_luad" / "benchmark_5fold")
+        _strip_dataset_field(
+            _write_summary(root, dataset="unused", framework=Framework.CLAM,
+                           task_name="kras", encoder="uni_v2",
+                           model_type="clam_mb", seed=42),
+            root,
+        )
+        summaries = collect_summaries([("tcga_luad", root)])
+        assert len(summaries) == 1
+        assert summaries[0]["dataset"] == "tcga_luad"
+
+    def test_labelled_roots_keep_cohorts_distinct_without_dataset_field(self, tmp_path):
+        roots = []
+        for cohort, task in (("tcga_luad", "kras"), ("cptac_gbm", "tp53")):
+            root = str(tmp_path / cohort / "benchmark_5fold")
+            _strip_dataset_field(
+                _write_summary(root, dataset="unused", framework=Framework.CLAM,
+                               task_name=task, encoder="uni_v2",
+                               model_type="clam_mb", seed=42),
+                root,
+            )
+            roots.append((cohort, root))
+        summaries = collect_summaries(roots)
+        assert {s["dataset"] for s in summaries} == {"tcga_luad", "cptac_gbm"}
+
+    def test_existing_dataset_field_wins_over_root_label(self, results_tree):
+        """A label must never overwrite a dataset the runner did record."""
+        summaries = collect_summaries([("IGNORED_LABEL", results_tree)])
+        assert "IGNORED_LABEL" not in {s["dataset"] for s in summaries}
+        assert "TCGA-LUAD" in {s["dataset"] for s in summaries}
+
+    def test_unlabelled_root_falls_back_to_root_basename(self, tmp_path):
+        root = str(tmp_path / "cptac_pdac")
+        _strip_dataset_field(
+            _write_summary(root, dataset="unused", framework=Framework.ABMIL,
+                           task_name="immune_class", encoder="uni_v2",
+                           model_type="abmil", seed=42),
+            root,
+        )
+        summaries = collect_summaries([root])
+        assert summaries[0]["dataset"] == "cptac_pdac"
+
+    def test_stamping_does_not_mutate_the_file_on_disk(self, tmp_path):
+        root = str(tmp_path / "tcga_lgg" / "benchmark_5fold")
+        path = _strip_dataset_field(
+            _write_summary(root, dataset="unused", framework=Framework.CLAM,
+                           task_name="idh1", encoder="uni_v2",
+                           model_type="clam_mb", seed=42),
+            root,
+        )
+        collect_summaries([("tcga_lgg", root)])
+        with open(path) as f:
+            assert "dataset" not in json.load(f)
+
+    def test_per_fold_frame_carries_stamped_dataset(self, tmp_path):
+        root = str(tmp_path / "tcga_hnsc" / "benchmark_5fold")
+        _strip_dataset_field(
+            _write_summary(root, dataset="unused", framework=Framework.DTFD,
+                           task_name="grade", encoder="uni_v2",
+                           model_type="dtfd_mil", seed=42),
+            root,
+        )
+        summaries = collect_summaries([("tcga_hnsc", root)])
+        assert set(per_fold_frame(summaries)["dataset"]) == {"tcga_hnsc"}
+        assert set(summaries_to_frame(summaries)["dataset"]) == {"tcga_hnsc"}
 
     def test_root_with_no_results_dir_is_skipped(self, tmp_path):
         empty_root = tmp_path / "no_results_here"

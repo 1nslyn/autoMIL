@@ -6,10 +6,10 @@ captures **partition variance under a single fixed partition only** — it conta
 zero training-stochasticity component (initialisation, dropout, sampler order,
 cuDNN nondeterminism) and cannot be read as run-to-run reproducibility.
 
-That was tolerable while the paper's headline was a static leaderboard. It is not
-tolerable now: with the scope settled so that the agentic search IS the claim,
-the headline is a per-cell lift, and the first question asked of any lift is
-whether it exceeds the noise of simply rerunning the same recipe.
+That was tolerable while the empirical plan was a static leaderboard. It is not
+tolerable for C3: the equal-effort study includes both cross-lineage reranking
+and within-lineage lift, and the first question asked of any lift is whether it
+exceeds the noise of simply rerunning the same recipe.
 
 The harness is code; **how many seeds to run is Leo's call** — see H-5c in the
 tracker. An empty ``seeds`` list reproduces the single-seed grid exactly, so this

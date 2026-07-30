@@ -272,7 +272,7 @@ class BenchmarkConfig:
     # (splits are cached and not seed-keyed) trained from different
     # initialisations, which isolates training stochasticity from partition
     # variance. That is the component the reported cross-fold std cannot see,
-    # and it is the one the headline's per-cell lift has to clear.
+    # and it is the one C3's within-lineage lift analysis has to clear.
     #
     # Safe only because CR-5b put the seed in the results path: before that, a
     # second seed silently resumed the first seed's per-fold metrics.json and a
