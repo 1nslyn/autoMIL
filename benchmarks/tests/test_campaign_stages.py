@@ -27,6 +27,7 @@ from autobench.campaign_stages import (
     load_stage_state,
     materialize_promotion,
     register_baseline,
+    select_winner,
 )
 
 
@@ -332,11 +333,16 @@ def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell
 
 
 def _finish_promotion(
-    cell_root: Path, *, completed: int,
+    cell_root: Path, *, completed: int, promotion_base: float = 0.7,
+    promotion_bases: list[float] | None = None,
 ) -> None:
     adir = cell_root / "promotion" / "automil"
     state = load_stage_state(cell_root)
     for index, job in enumerate(state["promotion"]["jobs"]):
+        job_base = (
+            promotion_bases[index]
+            if promotion_bases is not None else promotion_base + index / 100
+        )
         node_id = job["promotion_node_id"]
         queue = adir / "orchestrator" / "queue" / f"{node_id}.json"
         archive = adir / "orchestrator" / "archive" / node_id
@@ -346,10 +352,10 @@ def _finish_promotion(
         result = (
             {
                 "status": "completed",
-                "composite": 0.7 + index / 100,
+                "composite": job_base,
                 "metrics": {"val_auc": 0.7, "val_bacc": 0.7},
                 "validation_folds": _folds(
-                    STAGE_FOLDS["promotion"], 0.7 + index / 100,
+                    STAGE_FOLDS["promotion"], job_base,
                 ),
             }
             if index < completed else
@@ -415,3 +421,105 @@ def test_promotion_freeze_rejects_cross_stage_identity_drift(staged_cell):
 
     with pytest.raises(CampaignStageError, match="source link drifted"):
         freeze_promotion(cell_root)
+
+
+def test_zero_complete_discovery_freezes_baseline_with_zero_lift(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+
+    state = select_winner(cell_root)
+    assert state["phase"] == "winner-frozen"
+    assert state["winner"]["kind"] == "baseline"
+    assert state["winner"]["candidate_id"] == "baseline"
+    assert state["winner"]["lift_over_baseline"] == pytest.approx(0.0)
+    assert select_winner(cell_root) == state
+
+
+def test_fivefold_validation_mean_can_select_searched_candidate(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
+    freeze_promotion(cell_root)
+
+    state = select_winner(cell_root)
+    winner = state["winner"]
+    assert winner["kind"] == "searched"
+    assert winner["candidate_id"] == "node_0012"
+    assert [fold["fold_index"] for fold in winner["validation_folds"]] == [
+        0, 1, 2, 3, 4,
+    ]
+    assert winner["validation_mean"] == pytest.approx(
+        sum(fold["composite"] for fold in winner["validation_folds"]) / 5
+    )
+    assert winner["lift_over_baseline"] > 0
+
+
+def test_exact_validation_tie_prefers_native_baseline(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    # Rank-1 source node_0012 has discovery composites .610/.615/.620.
+    # Promotion .600/.605 makes the exact five-fold mean .610, baseline's mean.
+    _finish_promotion(cell_root, completed=1, promotion_base=0.585)
+    freeze_promotion(cell_root)
+
+    state = select_winner(cell_root)
+    assert state["winner"]["validation_mean"] == pytest.approx(0.61)
+    assert state["winner"]["kind"] == "baseline"
+
+
+def test_searched_tie_uses_stable_discovery_node_id(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    # node_0012 has .03 more discovery-composite mass than node_0011;
+    # adding .015 to each of node_0011's two promotion folds makes them tie.
+    bases = [0.75, 0.765] + [0.5] * 8
+    _finish_promotion(
+        cell_root, completed=2, promotion_bases=bases,
+    )
+    freeze_promotion(cell_root)
+
+    state = select_winner(cell_root)
+    audit = state["winner"]["selection_audit"]
+    searched = [row for row in audit if row["kind"] == "searched"]
+    assert searched[0]["validation_mean"] == pytest.approx(
+        searched[1]["validation_mean"]
+    )
+    assert state["winner"]["candidate_id"] == "node_0011"
+
+
+def test_winner_selection_detects_baseline_artifact_drift(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    baseline = _baseline(cell_root)
+    register_baseline(cell_root, baseline)
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    (baseline / "certify" / "fold_4_result.json").write_text("tampered")
+
+    with pytest.raises(CampaignStageError, match="sealed artifact changed"):
+        select_winner(cell_root)
