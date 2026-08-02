@@ -13,12 +13,43 @@ import ast
 import importlib.util
 import inspect
 import logging
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from automil.registry.errors import ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _isolated_registry_state() -> Iterator[None]:
+    """Run reflection imports without reading or mutating live registrations.
+
+    ``@register`` necessarily writes to process-global dictionaries at import
+    time.  Interface validation is a property of one module, however, and may
+    run repeatedly inside a long-lived CLI/test process.  Snapshotting, clearing,
+    and restoring all registry stores makes validation idempotent while keeping
+    the decorator's kind/spec checks active for the module under inspection.
+    Cross-module name collisions remain the scanner/runtime registry's job.
+    """
+    from automil.registry._state import (
+        LOSS_VARIANTS,
+        MODEL_VARIANTS,
+        POLICY_VARIANTS,
+        SPEC_STORE,
+    )
+
+    stores = (MODEL_VARIANTS, LOSS_VARIANTS, POLICY_VARIANTS, SPEC_STORE)
+    snapshots = tuple(dict(store) for store in stores)
+    for store in stores:
+        store.clear()
+    try:
+        yield
+    finally:
+        for store, snapshot in zip(stores, snapshots):
+            store.clear()
+            store.update(snapshot)
 
 
 def _abcs() -> dict[str, type]:
@@ -223,7 +254,8 @@ class InterfaceValidator:
 
         # --- Phase 2: Dynamic import + reflection ---
         try:
-            module = _import_module_from_path(module_path)
+            with _isolated_registry_state():
+                module = _import_module_from_path(module_path)
         except SyntaxError as e:
             raise ValidationError(
                 validator_name="interface",
