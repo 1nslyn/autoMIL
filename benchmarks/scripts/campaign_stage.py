@@ -71,6 +71,12 @@ def public_status(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def baseline_command(cell_root: Path) -> str:
+    """Return the manifest-locked native five-fold incumbent command."""
+    cell = json.loads((cell_root / "automil" / "campaign_cell.json").read_text())
+    return str(cell["commands"]["baseline"])
+
+
 def advance(cell_root: Path, repo_root: Path) -> dict[str, Any]:
     """Advance exactly one safe transition, never the held-out reveal."""
     state = load_stage_state(cell_root)
@@ -97,7 +103,7 @@ def main(argv: list[str] | None = None) -> None:
         choices=(
             "status", "register-baseline", "freeze-discovery",
             "materialize-promotion", "freeze-promotion", "select-winner",
-            "certify", "advance",
+            "certify", "baseline-command", "advance",
         ),
     )
     parser.add_argument("--cell-root", required=True)
@@ -111,6 +117,9 @@ def main(argv: list[str] | None = None) -> None:
         cell_root = _cell_root(args.cell_root, repo_root)
         if args.action == "status":
             state = load_stage_state(cell_root)
+        elif args.action == "baseline-command":
+            print(baseline_command(cell_root))
+            return
         elif args.action == "register-baseline":
             if not args.baseline_archive:
                 parser.error("register-baseline requires --baseline-archive")

@@ -11,6 +11,7 @@ import yaml
 
 from automil.cells.state import make_cell_id, normalize_mil_model
 from autobench.campaign import (
+    BASELINE_FOLDS,
     CERTIFICATION_FOLDS,
     DATASETS,
     PROTOCOL,
@@ -66,7 +67,11 @@ def test_every_command_and_budget_identity_reconstructs_from_the_cell(manifest):
             cell["dataset"], cell["encoder"],
             normalize_mil_model(cell["model"]), cell["task"],
         )
-        for stage, folds in PROTOCOL["stage_folds"].items():
+        command_folds = {
+            "baseline": PROTOCOL["baseline"]["folds"],
+            **PROTOCOL["stage_folds"],
+        }
+        for stage, folds in command_folds.items():
             tokens = shlex.split(cell["commands"][stage])
             values = {tokens[i]: tokens[i + 1] for i in range(len(tokens) - 1)
                       if tokens[i].startswith("--") and tokens[i] != "--no_wandb"}
@@ -86,6 +91,11 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
         "discovery": [0, 1, 2],
         "promotion": [3, 4],
     }
+    assert protocol["baseline"] == {
+        "folds": list(BASELINE_FOLDS),
+        "incumbent": True,
+        "counts_toward_agentic_budget": False,
+    }
     assert set(protocol["stage_folds"]["discovery"]).isdisjoint(
         protocol["stage_folds"]["promotion"]
     )
@@ -104,7 +114,7 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
         "retrain": False,
     }
     assert protocol["fold_trainings_per_cell"] == 60 * 3 + 10 * 2 == 200
-    assert all(set(cell["commands"]) == {"discovery", "promotion"}
+    assert all(set(cell["commands"]) == {"baseline", "discovery", "promotion"}
                for cell in manifest["cells"])
 
 
