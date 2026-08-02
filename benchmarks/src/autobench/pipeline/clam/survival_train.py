@@ -13,14 +13,16 @@ import json
 import os
 import random
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import torch
 
 from autobench import LIB_ROOT
-from autobench.pipeline.clam._imports import CLAM_SB, CLAM_MB
+from autobench.pipeline.clam._imports import CLAM_SB, CLAM_MB, get_optim
 from autobench.pipeline.clam.dataset import load_survival_fold_splits
-from autobench.pipeline.config import ExperimentConfig
+from autobench.pipeline.config import ExperimentConfig, TrainConfig
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -51,6 +53,28 @@ def _build_model(model_type: str, n_out: int, embed_dim: int, dropout: float, si
         gate=True, size_arg=size_arg, dropout=dropout,
         n_classes=n_out, embed_dim=embed_dim,
     )
+
+
+def _build_optimizer(model: torch.nn.Module, train_cfg: TrainConfig):
+    """Build the live CLAM optimizer from the declared training recipe.
+
+    Classification reaches CLAM's upstream ``get_optim`` through
+    ``core_utils.train``. Survival is an adapter-owned loop, so it must call the
+    same factory explicitly; otherwise ``train.optimizer`` is only recorded in
+    the experiment config and silently ignored by the process that actually
+    trains the model.
+    """
+    args = SimpleNamespace(
+        opt=train_cfg.optimizer,
+        lr=train_cfg.lr,
+        reg=train_cfg.weight_decay,
+    )
+    return get_optim(model, args)
+
+
+def _should_stop(train_cfg: TrainConfig, stopping_state) -> bool:
+    """Return whether the declared early-stopping switch permits termination."""
+    return bool(train_cfg.early_stopping and stopping_state.early_stop)
 
 
 def _load_feats(pt_path: str, device: torch.device) -> torch.Tensor:
@@ -120,6 +144,7 @@ def train_survival_fold(
     fold: int,
     results_dir: str,
     device: torch.device,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train one CLAM survival fold; return ``{test_metrics, val_metrics, fold}``."""
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
@@ -156,9 +181,9 @@ def train_survival_fold(
         loss_fn = SurvivalLoss(loss_type=loss_type)
         edges = None
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=exp_cfg.train.lr, weight_decay=exp_cfg.train.weight_decay,
-    )
+    optimizer = _build_optimizer(model, exp_cfg.train)
+    policy_runtime = policy_runtime or PolicyRuntime()
+    optimizer = policy_runtime.wrap_optimizer(optimizer)
     # mode="min": select the checkpoint on val LOSS. With ~2 events per val fold
     # the val c-index is near-random, so maximizing it would overfit to noise.
     early_stopping = EarlyStoppingSurvival(
@@ -236,7 +261,12 @@ def train_survival_fold(
             f"val_loss={v_loss:.4f} val_c_index={v_cidx:.4f}"
         )
         early_stopping(v_loss, v_cidx, model)
-        if early_stopping.early_stop:
+        default_stop = _should_stop(exp_cfg.train, early_stopping)
+        if policy_runtime.should_stop(
+            default_stop,
+            epoch=epoch,
+            metrics={"val_loss": v_loss, "val_c_index": v_cidx},
+        ):
             break
 
     # Restore the val-loss-selected best checkpoint before final scoring.

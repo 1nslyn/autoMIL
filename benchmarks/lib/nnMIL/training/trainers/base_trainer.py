@@ -163,6 +163,9 @@ class BaseTrainer(ABC):
         
         # Initialize model (to be created by subclasses)
         self.model = None
+        # Consumer adapter injected by autobench after construction. Keeping
+        # this optional preserves byte-identical upstream behavior by default.
+        self.policy_runtime = None
         
         # Initialize data loaders (to be created by subclasses)
         self.train_loader = None
@@ -243,4 +246,3 @@ class BaseTrainer(ABC):
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.logger.info(f"Checkpoint loaded from {checkpoint_path}")
         return checkpoint
-

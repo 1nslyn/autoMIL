@@ -24,6 +24,7 @@ from autobench.pipeline.dtfd.train import train_dtfd_fold
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def _resolve_h5_dir(benchmark_dir: str, exp_cfg: ExperimentConfig) -> str:
@@ -77,6 +78,7 @@ def run_dtfd_experiment(
     # FIELD_ALIASES so a canonical `weight_decay` override still lands).
     cfg = apply_overrides(cfg, all_overrides(exp_cfg), arm="dtfd")
     torch_device = torch.device(device)
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
     # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
@@ -107,7 +109,7 @@ def run_dtfd_experiment(
     num_classes = exp_cfg.task.n_classes
 
     fold_results: list[dict] = []
-    for fold in range(exp_cfg.n_folds):
+    for fold in exp_cfg.selected_folds:
         fold_dir = os.path.join(results_dir, f"fold_{fold}")
         os.makedirs(fold_dir, exist_ok=True)
         metrics_path = os.path.join(fold_dir, "metrics.json")
@@ -130,6 +132,7 @@ def run_dtfd_experiment(
                 train_samples, val_samples, test_samples,
                 embed_dim=exp_cfg.embed_dim, nll_bins=exp_cfg.task.nll_bins,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+                policy_runtime=policy_runtime,
             )
             elapsed_seconds = int(raw.get("elapsed_seconds", 0) or 0)
         else:
@@ -141,6 +144,7 @@ def run_dtfd_experiment(
                 train_slides, val_slides, test_slides,
                 embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+                policy_runtime=policy_runtime,
             )
             elapsed_seconds = int(time.time() - start)
 
@@ -173,6 +177,7 @@ def run_dtfd_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),

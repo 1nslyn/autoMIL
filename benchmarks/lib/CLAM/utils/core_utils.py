@@ -165,6 +165,9 @@ def train(datasets, cur, args):
 
     print('\nInit optimizer ...', end=' ')
     optimizer = get_optim(model, args)
+    policy_runtime = getattr(args, 'policy_runtime', None)
+    if policy_runtime is not None:
+        optimizer = policy_runtime.wrap_optimizer(optimizer)
     print('Done!')
 
     print('\nInit Loaders...', end=' ')
@@ -192,6 +195,8 @@ def train(datasets, cur, args):
             stop = validate(cur, epoch, model, val_loader, args.n_classes, 
                 early_stopping, writer, loss_fn, args.results_dir)
         
+        if policy_runtime is not None:
+            stop = policy_runtime.should_stop(stop, epoch=epoch, metrics={})
         if stop:
             break
 

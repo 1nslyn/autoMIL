@@ -12,6 +12,7 @@ import time
 
 from autobench.pipeline.config import ExperimentConfig, get_nnmil_runtime_overrides
 from autobench.pipeline.nnmil.evaluate import normalize_nnmil_metrics
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def select_nnmil_trainer(task_type: str, survival_loss: str | None) -> str:
@@ -36,6 +37,7 @@ def train_nnmil_fold(
     fold: int,
     results_dir: str,
     device: str = "cuda:0",
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train one fold of an nnMIL experiment.
 
@@ -103,6 +105,8 @@ def train_nnmil_fold(
     else:
         from autobench.pipeline.nnmil._imports import ClassificationTrainer
         trainer = ClassificationTrainer(**common, **extra_kwargs)
+
+    trainer.policy_runtime = policy_runtime or PolicyRuntime()
 
     _timer_start = time.perf_counter()
 

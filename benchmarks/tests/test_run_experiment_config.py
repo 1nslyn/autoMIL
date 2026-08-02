@@ -155,3 +155,17 @@ class TestCFG01ExplicitFlagsHonored:
         assert args.n_folds == 3, (
             f"Explicit --n_folds 3 must be honored; got args.n_folds={args.n_folds!r}."
         )
+
+
+class TestStageFoldSubset:
+    def test_cli_preserves_fold_subset_literal(self, run_experiment_mod):
+        args = _parse(run_experiment_mod, _REQUIRED_ARGS + ["--folds", "0,1,2"])
+        assert args.folds == "0,1,2"
+
+    def test_parser_accepts_declared_subset(self, run_experiment_mod):
+        assert run_experiment_mod._parse_folds("0,1,2", 5) == (0, 1, 2)
+
+    @pytest.mark.parametrize("raw", ["", "0,0", "-1", "5", "a"])
+    def test_parser_rejects_invalid_subset(self, run_experiment_mod, raw):
+        with pytest.raises(SystemExit):
+            run_experiment_mod._parse_folds(raw, 5)

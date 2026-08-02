@@ -12,6 +12,7 @@ from autobench.pipeline.clam.dataset import create_dataset, load_fold_splits
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.clam.train import train_fold
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def _write_fold_result_json(fold_index: int, result: dict) -> None:
@@ -101,15 +102,17 @@ def run_experiment(
     # therefore carries `arm: null` and an empty superseded-fields list, which is
     # exactly what a reader needs to trust its `train` block.
     exp_cfg.save(os.path.join(results_dir, "config.json"))
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
     fold_results: list[dict] = []
     if exp_cfg.is_survival:
         # Survival uses an adapter-side trainer over the CLAM model.
         from autobench.pipeline.clam.survival_train import train_survival_fold
 
-        for fold in range(exp_cfg.n_folds):
+        for fold in exp_cfg.selected_folds:
             result = train_survival_fold(
                 exp_cfg, benchmark_dir, fold, results_dir, device,
+                policy_runtime=policy_runtime,
             )
             fold_results.append(result)
             _write_fold_result_json(fold, result)
@@ -119,7 +122,7 @@ def run_experiment(
         )
         # Splits directory: splits/{strategy}/{task}/
         splits_subdir = os.path.join(exp_cfg.strategy, exp_cfg.task.name)
-        for fold in range(exp_cfg.n_folds):
+        for fold in exp_cfg.selected_folds:
             train_split, val_split, test_split = load_fold_splits(
                 dataset, benchmark_dir, splits_subdir, fold,
                 task_csv_name=exp_cfg.task.name,
@@ -127,6 +130,7 @@ def run_experiment(
             result = train_fold(
                 exp_cfg, train_split, val_split, test_split,
                 fold, results_dir, device, wandb_project=wandb_project,
+                policy_runtime=policy_runtime,
             )
             fold_results.append(result)
             _write_fold_result_json(fold, result)
@@ -146,6 +150,7 @@ def run_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),

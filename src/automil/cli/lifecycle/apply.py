@@ -26,8 +26,8 @@ def _classify_variant_route(selection: dict, variants_root: Path) -> None:
     Classification rule (APL-03, D-05, RESEARCH.md §APL-03):
     - A loss variant is loop-opening iff it is registered in LOSS_VARIANTS
       as a custom LossVariant subclass (not a plain string bag_loss selector).
-    - A policy variant is loop-opening iff it is registered in POLICY_VARIANTS
-      as a custom PolicyVariant subclass.
+    - Policy variants are seam-expressible: the consumer's protected trainers
+      dispatch them through the shared optimizer/scheduler/stopping adapter.
     - Model variants are always seam-expressible — never raise.
     - String bag_loss selectors (e.g. "svm", "ce") are not in LOSS_VARIANTS — no raise.
 
@@ -40,7 +40,7 @@ def _classify_variant_route(selection: dict, variants_root: Path) -> None:
     """
     # Lazy imports to avoid circular dependency at module load time.
     from automil.registry.scanner import scan_variants
-    from automil.registry._state import LOSS_VARIANTS, POLICY_VARIANTS
+    from automil.registry._state import LOSS_VARIANTS
 
     loss_name = (selection.get("loss") or {}).get("variant")
     policy_name = (selection.get("policy") or {}).get("variant")
@@ -69,15 +69,9 @@ def _classify_variant_route(selection: dict, variants_root: Path) -> None:
                 f"Deferred to the RTA milestone."
             )
 
-    if policy_name is not None:
-        if policy_name in POLICY_VARIANTS:
-            raise click.ClickException(
-                f"Policy variant '{policy_name}' is a custom PolicyVariant callable that "
-                f"requires injecting into a closed MIL training loop "
-                f"(ISSUE-007 / RTA). It cannot be applied through the open "
-                f"_make_clam_args seam. This variant has NOT been applied. "
-                f"Deferred to the RTA milestone."
-            )
+    # PolicyVariant is intentionally accepted. Its runtime surface is the
+    # consumer-side train-only adapter; it receives no model, defining loss,
+    # held-out metrics, or result writer.
 
 
 def _derive_variant_selection(node: dict) -> dict[str, dict[str, Optional[str]]]:

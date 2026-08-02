@@ -18,6 +18,7 @@ from autobench import LIB_ROOT
 from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSurvivalSlide, _read_bag
 from autobench.pipeline.abmil.model import build_abmil_model
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -110,6 +111,7 @@ def train_abmil_survival_fold(
     device: torch.device,
     seed: int,
     fold_dir: str,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train one ABMIL survival fold; return shared-schema c-index metrics.
 
@@ -148,6 +150,8 @@ def train_abmil_survival_fold(
             edges = None
 
         optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        policy_runtime = policy_runtime or PolicyRuntime()
+        optimizer = policy_runtime.wrap_optimizer(optimizer)
         early_stopping = EarlyStoppingSurvival(
             patience=cfg.patience, verbose=True, metric="c_index",
             save_dir=fold_dir, model_type=model_type, mode="min",
@@ -221,7 +225,12 @@ def train_abmil_survival_fold(
                 # Always save the best (val-loss) checkpoint; cfg.early_stopping
                 # only gates stopping early (matches classification/DTFD).
                 early_stopping(v_loss, v_cidx, model)
-                if cfg.early_stopping and early_stopping.early_stop:
+                default_stop = cfg.early_stopping and early_stopping.early_stop
+                if policy_runtime.should_stop(
+                    default_stop,
+                    epoch=epoch,
+                    metrics={"val_loss": v_loss, "val_c_index": v_cidx},
+                ):
                     break
         elapsed_seconds = time.time() - start
 

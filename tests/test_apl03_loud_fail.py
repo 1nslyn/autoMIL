@@ -216,6 +216,19 @@ def test_string_selector_loss_does_not_raise(tmp_path):
     _classify_variant_route(selection, variants_root)
 
 
+def test_registered_policy_variant_is_now_seam_expressible(tmp_path):
+    """PolicyVariant no longer hits the historical closed-loop guard."""
+    policy_name = _register_dummy_policy_variant("train_only_dummy")
+    selection = {
+        "model": {"variant": None, "parent": None},
+        "loss": {"variant": None},
+        "policy": {"variant": policy_name},
+    }
+    variants_root = tmp_path / "variants"
+    variants_root.mkdir()
+    _classify_variant_route(selection, variants_root)
+
+
 # ---------------------------------------------------------------------------
 # Test 4: error raised BEFORE config.yaml is mutated (ordering integrity)
 # RED until Plan 10-02 adds _classify_variant_route AND inserts it in apply().
