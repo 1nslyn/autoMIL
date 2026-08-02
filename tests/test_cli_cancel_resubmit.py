@@ -469,6 +469,44 @@ def test_resubmit_happy_path(
     )
 
 
+def test_resubmit_is_not_an_architecture_preserving_bypass(
+    cli_runner: CliRunner, tmp_path: Path, monkeypatch,
+) -> None:
+    from automil.cli import main  # noqa: PLC0415
+
+    adir = _make_adir(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    (adir / "config.yaml").write_text(
+        "registry:\n"
+        "  mode: architecture-preserving\n"
+        "  protected: [models/**]\n"
+        "  allowed_override_options: [--hparams]\n"
+        "  allowed_variant_kinds: [policy]\n"
+        "files:\n"
+        "  editable: [recipes/**]\n"
+        "run:\n"
+        "  script: train.py\n"
+    )
+    node_id = "node_0005"
+    _write_graph(adir, {
+        node_id: {
+            "id": node_id,
+            "parent_id": None,
+            "type": "executed",
+            "status": "crashed",
+            "description": "old candidate",
+            "techniques": [],
+            "metadata": {"backend": "local"},
+        }
+    })
+    _write_archive(adir, node_id)
+
+    result = cli_runner.invoke(main, ["resubmit", node_id])
+    assert result.exit_code != 0
+    assert "architecture-preserving" in result.output
+    assert "automil submit" in result.output
+
+
 # ---------------------------------------------------------------------------
 # OPS-01 RED stubs (Wave 0 — Nyquist compliance)
 # These tests xfail until plan 13-02 implements the local direct-kill path.

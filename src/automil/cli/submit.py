@@ -1,6 +1,7 @@
 """submit command: snapshot changed files and queue an experiment."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -69,8 +70,6 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 f"provided; --max-time wins (timeout_min={translated})."
             )
         timeout = translated
-
-    import hashlib
 
     git_root = _find_git_root()
     adir = _find_automil_dir()
@@ -170,9 +169,13 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     except ValueError:
         automil_rel = "automil/"
 
-    # --- Phase 1 registry: load registry config + helper for variant-module detection ---
-    from automil.registry.config import load_registry_config
-    reg_cfg = load_registry_config(adir)
+    # One candidate policy owns path matching, mode semantics, command-override
+    # scope, classification, and the launch-time policy hash (LCH-1/LCH-3).
+    from automil.admissibility import (
+        CandidateClass,
+        load_candidate_policy,
+    )
+    candidate_policy = load_candidate_policy(adir)
 
     def _is_variant_module_path(rel_path: str) -> bool:
         """True if rel_path is a variant module under <consumer>/automil/variants/<*>/."""
@@ -240,8 +243,77 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             # No editable list configured, fall back to all changed
             file_list = all_changed
 
-    if not file_list:
-        raise click.ClickException("No changed files to snapshot")
+    _active_variant_path = adir / "active_variant.json"
+    _active_variant_selection: dict | None = None
+    if _active_variant_path.exists():
+        try:
+            _active_variant_selection = json.loads(_active_variant_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            raise click.ClickException(
+                f"Refusing to submit [invalid]: cannot read active_variant.json: {exc}"
+            ) from exc
+        if not isinstance(_active_variant_selection, dict):
+            raise click.ClickException(
+                "Refusing to submit [invalid]: active_variant.json must contain a JSON object"
+            )
+
+    verdict = candidate_policy.classify(
+        file_list,
+        override=override,
+        variant_selection=_active_variant_selection,
+    )
+    if not verdict.accepted:
+        fix = ""
+        if verdict.candidate_class is CandidateClass.PROTECTED_SURFACE_VIOLATION:
+            fix = (
+                " Fix the candidate to use the declared train-only surface, or "
+                "run `automil revert-baseline` if a protected file was edited."
+            )
+        raise click.ClickException(
+            f"Refusing to submit [{verdict.candidate_class.value}]: "
+            f"{verdict.reason}.{fix}"
+        )
+
+    # A policy module without a selector is inert: the protected trainers would
+    # run the baseline while the graph recorded a source candidate.  Conversely,
+    # two disagreeing selectors make the executed policy ambiguous.  Close both
+    # cases before archiving so every accepted train-only source candidate is
+    # actually activated by the exact command/selection covered by its verdict.
+    if candidate_policy.mode == "architecture-preserving":
+        policy_files = tuple(f for f in file_list if _is_variant_module_path(f))
+        explicit_policy: str | None = None
+        if override is not None:
+            override_tokens = shlex.split(override)
+            explicit_values = []
+            for index, token in enumerate(override_tokens):
+                if token == "--policy-variant" and index + 1 < len(override_tokens):
+                    explicit_values.append(override_tokens[index + 1])
+                elif token.startswith("--policy-variant="):
+                    explicit_values.append(token.split("=", 1)[1])
+            if len(explicit_values) > 1:
+                raise click.ClickException(
+                    "Refusing to submit [invalid]: --policy-variant appears more than once"
+                )
+            explicit_policy = explicit_values[0] if explicit_values else None
+
+        archived_policy: str | None = None
+        if isinstance(_active_variant_selection, dict):
+            section = _active_variant_selection.get("policy") or {}
+            if isinstance(section, dict):
+                value = section.get("variant")
+                archived_policy = value if isinstance(value, str) else None
+
+        if policy_files and not (explicit_policy or archived_policy):
+            raise click.ClickException(
+                "Refusing to submit [invalid]: a train-only policy source file "
+                "requires an explicit --policy-variant selector (or an active "
+                "policy selection); otherwise the candidate would execute as a no-op"
+            )
+        if explicit_policy and archived_policy and explicit_policy != archived_policy:
+            raise click.ClickException(
+                "Refusing to submit [invalid]: --policy-variant disagrees with "
+                f"active_variant.json ({explicit_policy!r} != {archived_policy!r})"
+            )
 
     # Get base commit
     base_commit = subprocess.run(
@@ -255,24 +327,8 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
 
     overlay_manifest = {}
     deletions = []
+    framework_overlay_files: list[str] = []
     for f in file_list:
-        # Phase 1 protected-files reject (REG-04 / D-33 / D-34): hard-fail with
-        # named pattern + fix suggestion.  Runs BEFORE path-validation so the
-        # protected message wins when a path matches both a protected glob AND a
-        # path-validation rule (T-01-28 mitigation; no --force escape in Phase 1).
-        if reg_cfg.protected and _matches_scope(f, list(reg_cfg.protected)):
-            matched: list[str] = []
-            for pattern in reg_cfg.protected:
-                if _matches_scope(f, [pattern]):
-                    matched.append(pattern)
-            raise click.ClickException(
-                f"Refusing to submit: file {f!r} matches registry.protected "
-                f"pattern(s) {matched}. Protected files only change via committed "
-                f"variant modules. Use `automil revert-baseline` to reset working "
-                f"tree, or edit automil/config.yaml: registry.protected if this "
-                f"path should NOT be protected."
-            )
-
         # Phase 1 variant-module validator chain (REG-03 / Plan 01-04 T-01-14:
         # purity FIRST, then interface).
         if _is_variant_module_path(f):
@@ -313,12 +369,34 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         content_hash = hashlib.sha256(src.read_bytes()).hexdigest()
         overlay_manifest[f] = f"sha256:{content_hash}"
 
-    if not overlay_manifest and not deletions:
+    # Framework-managed variant selection is not part of --files, but it still
+    # changes the live candidate. Include its exact bytes in the overlay digest
+    # after the policy has classified the selected variant kinds.
+    if _active_variant_path.exists():
+        _applied_rel = f"{automil_rel}applied_variant.json"
+        _applied_dst = archive / _applied_rel
+        _applied_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(_active_variant_path), str(_applied_dst))
+        _applied_hash = hashlib.sha256(_applied_dst.read_bytes()).hexdigest()
+        overlay_manifest[_applied_rel] = f"sha256:{_applied_hash}"
+        framework_overlay_files.append(_applied_rel)
+        click.echo(
+            f"  [variant] Copied active_variant.json → archive/{node}/{_applied_rel}"
+            f" (will be overlaid into worktree by orchestrator)."
+        )
+
+    if (
+        not overlay_manifest
+        and not deletions
+        and verdict.candidate_class is not CandidateClass.CONFIG_ONLY
+    ):
         raise click.ClickException("No files to snapshot or delete")
 
     # Compute config_hash from manifest + deletions
     parts = [f"{p}:{h}" for p, h in sorted(overlay_manifest.items())]
     parts.extend(f"DELETE:{d}" for d in sorted(deletions))
+    if override is not None:
+        parts.append(f"OVERRIDE:{override}")
     config_hash = hashlib.sha256(
         (base_commit + "\n" + "\n".join(parts)).encode()
     ).hexdigest()[:16]
@@ -328,6 +406,12 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # opaque_id is NOT written at submit time — the daemon writes it on launch.
     _automil_cfg = yaml.safe_load((adir / "config.yaml").read_text()) if (adir / "config.yaml").exists() else {}
     _backend_name: str = _automil_cfg.get("backend", {}).get("name", "local")
+    _base_run_command = (_automil_cfg.get("run") or {}).get("command")
+    if _base_run_command is not None and not isinstance(_base_run_command, str):
+        raise click.ClickException("run.command must be a string or null")
+    _base_run_command_sha256 = hashlib.sha256(
+        (_base_run_command or "").encode()
+    ).hexdigest()
 
     # D-134 + P2.3: Resolve cap config — CLI flag > cap.<key> duration >
     # legacy cap.<key>_seconds int > framework fallback. Honored only on the
@@ -420,6 +504,53 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         task=_task_name if _task_name != _dataset_name else None,
         eval_budget=_cap.eval_budget,
     )
+
+    # The manifest payload is consumer-owned; the binding contract is generic.
+    # Verify its bytes, then prove command, budget, and cell hashes all resolve
+    # from the same unique manifest row before stamping them into the queue spec.
+    _campaign_spec: dict[str, object] | None = None
+    _campaign_cfg = _automil_cfg.get("campaign")
+    if _campaign_cfg is not None:
+        if not isinstance(_campaign_cfg, dict):
+            raise click.ClickException("campaign must be a mapping in config.yaml")
+        _required_campaign = (
+            "campaign_id", "manifest", "manifest_sha256", "cell_id",
+            "cell_sha256", "budget_cell_id", "stage",
+        )
+        _missing_campaign = [
+            key for key in _required_campaign
+            if not isinstance(_campaign_cfg.get(key), str)
+            or not str(_campaign_cfg.get(key)).strip()
+        ]
+        if _missing_campaign:
+            raise click.ClickException(
+                f"campaign metadata is missing non-empty string field(s) {_missing_campaign}"
+            )
+        _manifest_rel = Path(str(_campaign_cfg["manifest"]))
+        if _manifest_rel.is_absolute() or ".." in _manifest_rel.parts:
+            raise click.ClickException("campaign.manifest must be a safe git-root-relative path")
+        _manifest_path = git_root / _manifest_rel
+        if not _manifest_path.is_file():
+            raise click.ClickException(f"campaign manifest not found: {_manifest_rel}")
+        _manifest_actual = hashlib.sha256(_manifest_path.read_bytes()).hexdigest()
+        if _manifest_actual != _campaign_cfg["manifest_sha256"]:
+            raise click.ClickException(
+                "campaign manifest hash differs from config.yaml; regenerate or "
+                "rematerialize the cell before submitting"
+            )
+        try:
+            from automil.admissibility import validate_campaign_binding
+
+            _campaign_spec = validate_campaign_binding(
+                _manifest_path,
+                {key: _campaign_cfg[key] for key in _required_campaign},
+                base_run_command=_base_run_command,
+                budget_cell_id=_cell.cell_id,
+            )
+        except ValueError as exc:
+            raise click.ClickException(
+                f"campaign config is not bound to its manifest: {exc}"
+            ) from exc
     if blocks_new_work(_cell):
         # H-2: name whichever axis is binding. The eval axis can bind while the
         # status still reads ACTIVE (status only advances on the next daemon tick).
@@ -435,23 +566,6 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
         )
 
-    # CR-01 fix: propagate active_variant.json into this node's archive directory
-    # as applied_variant.json so apply_overlay carries it into the worktree.
-    # apply_overlay copies every file from overlay_dir (= archive/<node>/),
-    # excluding only spec.json, run.log, and result.json (runner.py line 70).
-    # active_variant.json is written by `automil apply` BEFORE `automil submit`
-    # runs, so by the time we reach here the file is either present (user ran
-    # `apply` before this submit) or absent (no variant selected — no-op).
-    _active_variant_path = adir / "active_variant.json"
-    if _active_variant_path.exists():
-        import shutil as _shutil
-        _applied_dst = archive / "applied_variant.json"
-        _shutil.copy2(str(_active_variant_path), str(_applied_dst))
-        click.echo(
-            f"  [variant] Copied active_variant.json → archive/{node}/applied_variant.json"
-            f" (will be overlaid into worktree by orchestrator)."
-        )
-
     # Write spec to queue
     spec = {
         "id": node,
@@ -460,6 +574,9 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         "overlay_dir": f"archive/{node}",
         "overlay_manifest": overlay_manifest,
         "deletions": deletions,
+        "framework_overlay_files": framework_overlay_files,
+        "admissibility": verdict.to_dict(),
+        "base_run_command_sha256": _base_run_command_sha256,
         "priority": priority,
         "estimated_vram_gb": vram,
         "graph_metadata": {
@@ -494,6 +611,8 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # The daemon's _running_in_cell() filters in-cell experiments by this field.
     # Backward compat: legacy nodes without metadata.cell_id are treated as cell-less (no cap enforcement).
     spec.setdefault("metadata", {})["cell_id"] = _cell.cell_id
+    if _campaign_spec is not None:
+        spec.setdefault("metadata", {})["campaign"] = _campaign_spec
 
     queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
     queue_file.write_text(json.dumps(spec, indent=2))
@@ -536,6 +655,14 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 # only on the queue spec, so per-cell evaluation counts are
                 # answerable from graph.json alone.
                 graph.nodes[allocated]["cell_id"] = _cell.cell_id
+                from automil.graph import merged_metadata
+                graph.nodes[allocated]["metadata"] = merged_metadata(
+                    graph.nodes[allocated],
+                    {
+                        "candidate_class": verdict.candidate_class.value,
+                        "candidate_policy_hash": verdict.policy_hash,
+                    },
+                )
                 # Transition to running through the official state-machine
                 # path so the counter math stays consistent.
                 graph.mark_running(allocated)
@@ -553,6 +680,14 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                     # CELL-1: tag the pre-existing proposal too — `propose` runs
                     # before the cell is known, so this is the first chance.
                     existing["cell_id"] = _cell.cell_id
+                    from automil.graph import merged_metadata
+                    existing["metadata"] = merged_metadata(
+                        existing,
+                        {
+                            "candidate_class": verdict.candidate_class.value,
+                            "candidate_policy_hash": verdict.policy_hash,
+                        },
+                    )
                 if (
                     existing
                     and existing.get("type") == "proposed"

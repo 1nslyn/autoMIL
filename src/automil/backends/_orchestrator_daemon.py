@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -889,6 +890,15 @@ class ExperimentOrchestrator:
         env["AUTOMIL_GPU"] = "0"
         env["AUTOMIL_DESC"] = spec.get("description", "")
         env["AUTOMIL_NODE_ID"] = node_id
+        try:
+            _automil_rel = self.automil_dir.resolve().relative_to(
+                self.project_root.resolve()
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "automil_dir must live under project_root for an isolated launch"
+            ) from exc
+        env["AUTOMIL_DIR_REL"] = _automil_rel.as_posix()
         # Val-firewall (Scope B): born-seal every test-bearing training artifact.
         # AUTOMIL_RESULTS_DIR is the sealed subdir, so fold_*_result.json (the
         # per-fold writer), results/ (framework detail tree), and the SIGTERM
@@ -1231,6 +1241,81 @@ class ExperimentOrchestrator:
         src_file = spec.get("_file")
         if src_file and Path(src_file).exists():
             Path(src_file).unlink()
+
+        # LCH-1/LCH-3: submit-time admissibility is evidence, not authority.
+        # Recompute it from the live policy and exact archived overlay before a
+        # worktree is created. Architecture-preserving legacy specs, policy
+        # drift, unmanifested files, and changed variant selections fail closed.
+        try:
+            from automil.admissibility import (
+                load_candidate_policy,
+                revalidate_candidate_spec,
+                validate_campaign_binding,
+            )
+
+            _candidate_policy = load_candidate_policy(self.automil_dir)
+            _overlay_rel = spec.get("overlay_dir")
+            _overlay_path = (
+                self.orch_dir / str(_overlay_rel)
+                if _overlay_rel
+                else archive
+            )
+            revalidate_candidate_spec(_candidate_policy, spec, _overlay_path)
+
+            # The candidate overlay is only half the launched identity. Pin the
+            # config-owned base command as well, and for campaign cells recheck
+            # the immutable manifest bytes immediately before worktree creation.
+            _expected_command_hash = spec.get("base_run_command_sha256")
+            _live_command_hash = hashlib.sha256(
+                (self.run_command or "").encode()
+            ).hexdigest()
+            if _expected_command_hash is None:
+                if _candidate_policy.mode == "architecture-preserving":
+                    raise ValueError(
+                        "architecture-preserving spec is missing base_run_command_sha256"
+                    )
+            elif _expected_command_hash != _live_command_hash:
+                raise ValueError(
+                    "base run command changed between submit and launch"
+                )
+
+            _campaign = ((spec.get("metadata") or {}).get("campaign"))
+            if _campaign is not None:
+                if not isinstance(_campaign, dict):
+                    raise ValueError("spec metadata.campaign must be a mapping")
+                _manifest_rel = Path(str(_campaign.get("manifest", "")))
+                if (
+                    not _manifest_rel.parts
+                    or _manifest_rel.is_absolute()
+                    or ".." in _manifest_rel.parts
+                ):
+                    raise ValueError("campaign manifest path is unsafe")
+                _manifest_path = self.project_root / _manifest_rel
+                if not _manifest_path.is_file():
+                    raise ValueError(f"campaign manifest missing: {_manifest_rel}")
+                _actual_manifest_hash = hashlib.sha256(
+                    _manifest_path.read_bytes()
+                ).hexdigest()
+                if _actual_manifest_hash != _campaign.get("manifest_sha256"):
+                    raise ValueError("campaign manifest changed between submit and launch")
+                validate_campaign_binding(
+                    _manifest_path,
+                    _campaign,
+                    base_run_command=self.run_command,
+                    budget_cell_id=str((spec.get("metadata") or {}).get("cell_id", "")),
+                )
+        except Exception as exc:  # fail closed at the last pre-launch seam
+            logger.error(
+                "Spec for %s failed launch-time admissibility: %s",
+                node_id,
+                exc,
+            )
+            self._mark_crashed(
+                node_id,
+                spec,
+                f"launch-time admissibility failed: {exc}",
+            )
+            return
 
         # Reject specs without an explicit base_commit. submit always pins
         # the parent SHA at queue-time; any path that bypasses this would
