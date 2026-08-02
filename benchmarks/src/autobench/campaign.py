@@ -19,8 +19,8 @@ import yaml
 
 from automil.cells.state import make_cell_id, normalize_mil_model
 
-SCHEMA_VERSION = 2
-CAMPAIGN_ID = "automil-preprint-130-v2"
+SCHEMA_VERSION = 3
+CAMPAIGN_ID = "automil-preprint-130-v3"
 DATASETS = (
     "tcga_luad",
     "tcga_lgg",
@@ -40,6 +40,7 @@ STAGE_FOLDS = {
     "promotion": (3, 4),
 }
 CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
+BASELINE_FOLDS = CERTIFICATION_FOLDS
 DISCOVERY_ATTEMPTS = 60
 PROMOTION_CANDIDATES = 10
 FOLD_TRAININGS_PER_CELL = (
@@ -53,6 +54,11 @@ PROTOCOL = {
     "promotion_candidates": PROMOTION_CANDIDATES,
     "frozen_winners": 1,
     "stage_folds": {key: list(value) for key, value in STAGE_FOLDS.items()},
+    "baseline": {
+        "folds": list(BASELINE_FOLDS),
+        "incumbent": True,
+        "counts_toward_agentic_budget": False,
+    },
     "winner_selection": {
         "metric_source": "validation",
         "aggregation": "mean",
@@ -99,7 +105,8 @@ def _policy_template_path(repo_root: Path, dataset: str) -> Path:
 
 
 def _run_command(cell: Mapping[str, Any], stage: str) -> str:
-    if stage not in STAGE_FOLDS:
+    command_folds = {"baseline": BASELINE_FOLDS, **STAGE_FOLDS}
+    if stage not in command_folds:
         raise CampaignManifestError(f"unknown campaign stage {stage!r}")
     tokens = [
         "python", "benchmarks/scripts/run_experiment.py",
@@ -111,7 +118,7 @@ def _run_command(cell: Mapping[str, Any], stage: str) -> str:
         "--strategy", "standard",
         "--seed", str(PROTOCOL["seed"]),
         "--n_folds", str(PROTOCOL["split_folds"]),
-        "--folds", ",".join(str(i) for i in STAGE_FOLDS[stage]),
+        "--folds", ",".join(str(i) for i in command_folds[stage]),
     ]
     if cell["survival_loss"] is not None:
         tokens.extend(["--survival_loss", str(cell["survival_loss"])])
@@ -167,7 +174,8 @@ def _cell_record(
     # already owns folds 0-2 from discovery and folds 3-4 from promotion; final
     # reporting unseals only that candidate's existing five-fold held-out data.
     cell["commands"] = {
-        stage: _run_command(cell, stage) for stage in STAGE_FOLDS
+        stage: _run_command(cell, stage)
+        for stage in ("baseline", *STAGE_FOLDS)
     }
     cell["cell_sha256"] = content_sha256(cell)
     return cell
@@ -294,7 +302,8 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         per_dataset[cell["dataset"]] = per_dataset.get(cell["dataset"], 0) + 1
         per_task_type[cell["task_type"]] = per_task_type.get(cell["task_type"], 0) + 1
         expected_commands = {
-            stage: _run_command(cell, stage) for stage in STAGE_FOLDS
+            stage: _run_command(cell, stage)
+            for stage in ("baseline", *STAGE_FOLDS)
         }
         if cell.get("commands") != expected_commands:
             raise CampaignManifestError(f"command drift for {cell_id}")

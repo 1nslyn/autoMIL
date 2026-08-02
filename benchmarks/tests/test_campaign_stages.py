@@ -55,6 +55,7 @@ def staged_cell(tmp_path):
         "encoder": "encoder",
         "model": "model",
         "commands": {
+            "baseline": "python train.py --folds 0,1,2,3,4",
             "discovery": "python train.py --folds 0,1,2",
             "promotion": "python train.py --folds 3,4",
         },

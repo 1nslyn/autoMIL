@@ -66,3 +66,14 @@ def test_status_schema_tracks_the_frozen_protocol(tmp_path):
     assert rendered["campaign_id"] == CAMPAIGN_ID
     assert rendered["discovery"]["attempt_budget"] == PROTOCOL["discovery_attempts"]
     assert rendered["promotion"]["jobs"] == 0
+
+
+def test_baseline_command_is_an_explicit_non_agentic_fivefold_run(tmp_path):
+    module = _load_cli()
+    root, _ = _state(tmp_path)
+    adir = root / "automil"
+    adir.mkdir()
+    (adir / "campaign_cell.json").write_text(json.dumps({
+        "commands": {"baseline": "python train.py --folds 0,1,2,3,4"},
+    }))
+    assert module.baseline_command(root).endswith("--folds 0,1,2,3,4")
