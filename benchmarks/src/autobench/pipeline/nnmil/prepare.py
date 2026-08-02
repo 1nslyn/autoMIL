@@ -371,7 +371,7 @@ def _generate_training_config(
     hidden_dim = max(256, feat_dim // 4)
 
     # Prefer the value computed once by _analyze_features to keep the
-    # planner.py:129 formula in one place. Fall back to the live
+    # experiment_planner.py:129 formula in one place. Fall back to the live
     # computation for callers that hand-build a stats dict without going
     # through _analyze_features (e.g. unit tests). Both branches use the
     # same formula; this just keeps them from drifting silently.
@@ -380,10 +380,10 @@ def _generate_training_config(
     else:
         max_seq_length = int(feature_stats["num_patches_per_slide"]["median"] * 0.5)
 
-    # planner.py:596 fallback: train set ≈ 80% of total when split info absent
+    # experiment_planner.py:596 fallback: train set ≈ 80% of total when split info absent
     num_train_samples = int(n_samples * 0.8)
 
-    # planner.py:602-657 batch_size formula (replicated verbatim, including the
+    # experiment_planner.py:602-657 batch_size formula (replicated verbatim, including the
     # buggy minority-visibility upgrade where min(candidates)=16 always no-ops)
     batch_size_candidates: list[int] = []
     if min_class_count is not None and min_class_count > 0:
@@ -411,7 +411,7 @@ def _generate_training_config(
             batch_size = min(min_minority, 48)
     batch_size = max(16, min(48, batch_size))
 
-    # planner.py:660-674 — adaptive batch_sampler on metric
+    # experiment_planner.py:660-674 — adaptive batch_sampler on metric
     metric_lower = metric.lower()
     if "auc" in metric_lower:
         batch_sampler = "auc"
