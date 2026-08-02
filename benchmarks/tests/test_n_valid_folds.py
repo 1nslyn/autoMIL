@@ -41,6 +41,7 @@ def _cls_summary(fold_aucs):
         "per_fold_val": [{"auc_roc": a, "balanced_accuracy": 0.6} for a in fold_aucs],
         "per_fold_test": [],
         "n_folds": len(fold_aucs),
+        "fold_indices": list(range(len(fold_aucs))),
     }
 
 
@@ -80,3 +81,55 @@ def test_survival_degenerate_partial():
     assert r["status"] == "partial"
     assert r["n_valid_folds"] == 1
     assert "val_c_index" in r["metrics"]
+
+
+def test_validation_fold_evidence_is_public_and_fold_indexed():
+    m = _load_run_experiment()
+    summary = _cls_summary([0.70, 0.72, 0.68])
+    summary["fold_indices"] = [0, 1, 2]
+    result = m.summary_to_result_json(summary, 10.0)
+
+    assert result["validation_folds"] == [
+        {
+            "fold_index": 0,
+            "metrics": {"val_auc": 0.70, "val_bacc": 0.6},
+            "composite": pytest.approx(0.65),
+        },
+        {
+            "fold_index": 1,
+            "metrics": {"val_auc": 0.72, "val_bacc": 0.6},
+            "composite": pytest.approx(0.66),
+        },
+        {
+            "fold_index": 2,
+            "metrics": {"val_auc": 0.68, "val_bacc": 0.6},
+            "composite": pytest.approx(0.64),
+        },
+    ]
+    assert all("test" not in str(fold).lower()
+               for fold in result["validation_folds"])
+
+
+def test_invalid_fold_is_visible_but_never_given_a_numeric_composite():
+    m = _load_run_experiment()
+    result = m.summary_to_result_json(_cls_summary([0.70, NAN]), 10.0)
+    assert result["validation_folds"][1]["fold_index"] == 1
+    assert result["validation_folds"][1]["composite"] is None
+
+
+def test_survival_evidence_uses_per_fold_cindex_not_pooled_stage_value():
+    m = _load_run_experiment()
+    summary = {
+        "test": {"c_index": {"mean": 0.60}},
+        "val": {"c_index": {"mean": 0.60}},
+        "val_pooled": {"c_index": 0.91},
+        "per_fold_val": [{"c_index": 0.55}, {"c_index": 0.65}],
+        "per_fold_test": [],
+        "n_folds": 5,
+        "fold_indices": [3, 4],
+    }
+    result = m.summary_to_result_json(summary, 5.0)
+    assert result["composite"] == pytest.approx(0.91)
+    assert [fold["composite"] for fold in result["validation_folds"]] == [
+        pytest.approx(0.55), pytest.approx(0.65),
+    ]
