@@ -8,19 +8,22 @@ import pytest
 import yaml
 
 from automil.admissibility import load_candidate_policy
-from automil.cells.state import Cell, CellStatus, write_cell
+from automil.cells.state import Cell, CellStatus, read_cell, write_cell
 from autobench.campaign import (
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
     DISCOVERY_ATTEMPTS,
     PROTOCOL,
     STAGE_FOLDS,
+    content_sha256,
+    file_sha256,
 )
 from autobench.campaign_stages import (
     CampaignStageError,
     freeze_discovery,
     initialize_stage_state,
     load_stage_state,
+    materialize_promotion,
     register_baseline,
 )
 
@@ -41,26 +44,55 @@ def staged_cell(tmp_path):
     cell_root = tmp_path / "cell"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
-    cell = {
+    cell_without_hash = {
         "cell_id": "dataset__arm__task",
-        "cell_sha256": "a" * 64,
-        "budget_identity": {"cell_id": "b" * 16},
+        "dataset": "dataset",
+        "task": "task",
+        "encoder": "encoder",
+        "model": "model",
+        "commands": {
+            "discovery": "python train.py --folds 0,1,2",
+            "promotion": "python train.py --folds 3,4",
+        },
+        "budget_identity": {
+            "cell_id": "b" * 16,
+            "dataset": "dataset",
+            "encoder": "encoder",
+            "mil_model": "model",
+            "task": "task",
+        },
     }
+    cell = {**cell_without_hash, "cell_sha256": content_sha256(cell_without_hash)}
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "campaign_id": CAMPAIGN_ID,
+        "cells": [cell],
+    }))
+    manifest_hash = file_sha256(manifest_path)
     (adir / "campaign_cell.json").write_text(json.dumps(cell))
     (adir / "config.yaml").write_text(yaml.safe_dump({
         "registry": {
             "mode": "architecture-preserving",
             "protected": ["models/**"],
-            "allowed_override_options": ["--hparams"],
+            "allowed_override_options": ["--hparams", "--policy-variant"],
             "allowed_variant_kinds": ["policy"],
         },
         "files": {"editable": ["cell/automil/variants/_policies/*.py"]},
-        "run": {"command": "python train.py --folds 0,1,2"},
+        "run": {"command": cell["commands"]["discovery"], "mil_model": "model"},
+        "campaign": {
+            "campaign_id": CAMPAIGN_ID,
+            "manifest": "manifest.json",
+            "manifest_sha256": manifest_hash,
+            "cell_id": cell["cell_id"],
+            "cell_sha256": cell["cell_sha256"],
+            "budget_cell_id": cell["budget_identity"]["cell_id"],
+            "stage": "discovery",
+        },
     }))
     state = initialize_stage_state(
-        cell_root, cell=cell, manifest_sha256="c" * 64,
+        cell_root, cell=cell, manifest_sha256=manifest_hash,
     )
-    return cell_root, adir, cell, state
+    return cell_root, adir, cell, state, tmp_path
 
 
 def _baseline(cell_root: Path, *, leak=False, invalid_sealed=False) -> Path:
@@ -105,19 +137,32 @@ def _open_budget_cell(adir: Path, budget_id: str, consumed: int) -> None:
     )
 
 
-def _attempts(adir: Path, cell_id: str, *, completed=12) -> None:
+def _attempts(
+    adir: Path, cell_id: str, *, completed=12, source_at: int | None = None,
+) -> None:
     policy = load_candidate_policy(adir)
     archive_root = adir / "orchestrator" / "archive"
     for index in range(DISCOVERY_ATTEMPTS):
         node_id = f"node_{index + 1:04d}"
         archive = archive_root / node_id
         archive.mkdir(parents=True)
-        override = f'--hparams \'{{"lr":{0.0001 + index / 1_000_000:.7f}}}\''
-        verdict = policy.classify([], override=override)
+        candidate_paths = []
+        overlay_manifest = {}
+        if index == source_at:
+            rel = f"cell/automil/variants/_policies/candidate_{index}.py"
+            source = archive / rel
+            source.parent.mkdir(parents=True)
+            source.write_text("# exact train-only policy candidate\n")
+            overlay_manifest[rel] = f"sha256:{file_sha256(source)}"
+            candidate_paths = [rel]
+            override = f"--policy-variant candidate_{index}"
+        else:
+            override = f'--hparams \'{{"lr":{0.0001 + index / 1_000_000:.7f}}}\''
+        verdict = policy.classify(candidate_paths, override=override)
         spec = {
             "id": node_id,
             "base_commit": "d" * 40,
-            "overlay_manifest": {},
+            "overlay_manifest": overlay_manifest,
             "deletions": [],
             "framework_overlay_files": [],
             "run_command_override": override,
@@ -147,9 +192,9 @@ def _attempts(adir: Path, cell_id: str, *, completed=12) -> None:
 
 
 def test_initial_state_is_restart_idempotent_and_integrity_checked(staged_cell):
-    cell_root, _, cell, original = staged_cell
+    cell_root, _, cell, original, _ = staged_cell
     restarted = initialize_stage_state(
-        cell_root, cell=cell, manifest_sha256="c" * 64,
+        cell_root, cell=cell, manifest_sha256=original["manifest_sha256"],
     )
     assert restarted == original
     raw = json.loads((cell_root / "campaign_state.json").read_text())
@@ -160,7 +205,7 @@ def test_initial_state_is_restart_idempotent_and_integrity_checked(staged_cell):
 
 
 def test_baseline_registration_hashes_but_does_not_parse_sealed_test(staged_cell):
-    cell_root, _, _, _ = staged_cell
+    cell_root, _, _, _, _ = staged_cell
     state = register_baseline(
         cell_root, _baseline(cell_root, invalid_sealed=True),
     )
@@ -170,13 +215,13 @@ def test_baseline_registration_hashes_but_does_not_parse_sealed_test(staged_cell
 
 
 def test_baseline_registration_rejects_test_bearing_public_result(staged_cell):
-    cell_root, _, _, _ = staged_cell
+    cell_root, _, _, _, _ = staged_cell
     with pytest.raises(CampaignStageError, match="test-bearing"):
         register_baseline(cell_root, _baseline(cell_root, leak=True))
 
 
 def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
-    cell_root, adir, cell, _ = staged_cell
+    cell_root, adir, cell, _, _ = staged_cell
     _attempts(adir, cell["cell_id"])
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], 59)
     with pytest.raises(CampaignStageError, match="baseline"):
@@ -187,7 +232,7 @@ def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
 
 
 def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
-    cell_root, adir, cell, _ = staged_cell
+    cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
     _open_budget_cell(
@@ -214,7 +259,7 @@ def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
 
 
 def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
-    cell_root, adir, cell, _ = staged_cell
+    cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=0)
     _open_budget_cell(
@@ -224,3 +269,61 @@ def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
     assert state["phase"] == "selection-ready"
     assert state["discovery"]["complete_candidates"] == 0
     assert state["discovery"]["promoted_candidates"] == []
+
+
+def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12, source_at=11)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    frozen = freeze_discovery(cell_root)
+
+    state = materialize_promotion(cell_root, repo_root=repo_root)
+    promotion = cell_root / "promotion" / "automil"
+    jobs = state["promotion"]["jobs"]
+    assert state["phase"] == "promotion"
+    assert state["promotion"]["materialized"] is True
+    assert len(jobs) == 10
+    assert len(list((promotion / "orchestrator" / "queue").glob("*.json"))) == 10
+
+    budget = read_cell(
+        promotion / "cells" / f"{cell['budget_identity']['cell_id']}.json"
+    )
+    assert budget.eval_budget == 10
+    assert budget.consumed_evals == 0
+    config = yaml.safe_load((promotion / "config.yaml").read_text())
+    assert config["run"]["command"] == cell["commands"]["promotion"]
+    assert config["training"]["fold_count"] == 2
+    assert config["campaign"]["stage"] == "promotion"
+
+    first = jobs[0]
+    assert first["source_node_id"] == "node_0012"
+    spec = json.loads((
+        promotion / "orchestrator" / "queue"
+        / f"{first['promotion_node_id']}.json"
+    ).read_text())
+    assert spec["metadata"]["promotion"]["source_candidate_sha256"] == (
+        first["source_candidate_sha256"]
+    )
+    assert spec["metadata"]["campaign"]["stage"] == "promotion"
+    mapped = (
+        promotion / "orchestrator" / "archive"
+        / first["promotion_node_id"]
+        / "cell/promotion/automil/variants/_policies/candidate_11.py"
+    )
+    assert mapped.read_text() == "# exact train-only policy candidate\n"
+
+    # A restart returns the frozen jobs without duplicating graph/queue entries.
+    assert materialize_promotion(cell_root, repo_root=repo_root) == state
+
+    # Simulate power loss after atomic directory publication but before the
+    # state transition commit. The immutable plan is adopted, not duplicated.
+    (cell_root / "campaign_state.json").write_text(
+        json.dumps(frozen, indent=2, sort_keys=True) + "\n"
+    )
+    recovered = materialize_promotion(cell_root, repo_root=repo_root)
+    assert recovered["phase"] == "promotion"
+    assert recovered["promotion"]["jobs"] == jobs
+    assert len(list((promotion / "orchestrator" / "queue").glob("*.json"))) == 10
