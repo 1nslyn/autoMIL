@@ -21,6 +21,7 @@ from autobench.campaign import (
 )
 from autobench.campaign_stages import (
     CampaignStageError,
+    certify_winner,
     freeze_discovery,
     freeze_promotion,
     initialize_stage_state,
@@ -523,3 +524,124 @@ def test_winner_selection_detects_baseline_artifact_drift(staged_cell):
 
     with pytest.raises(CampaignStageError, match="sealed artifact changed"):
         select_winner(cell_root)
+
+
+def _write_searched_sealed_folds(
+    cell_root: Path, state: dict, *, selected_valid: bool = True,
+) -> None:
+    winner = state["winner"]
+    discovery = cell_root / "automil/orchestrator/archive"
+    promotion = cell_root / "promotion/automil/orchestrator/archive"
+    # Every loser is deliberately malformed. Certification must not open one.
+    for candidate in state["discovery"]["promoted_candidates"]:
+        sealed = discovery / candidate["candidate_id"] / "certify"
+        sealed.mkdir(parents=True, exist_ok=True)
+        for fold in STAGE_FOLDS["discovery"]:
+            (sealed / f"fold_{fold}_result.json").write_text("loser-not-json")
+    for job in state["promotion"]["jobs"]:
+        sealed = promotion / job["promotion_node_id"] / "certify"
+        sealed.mkdir(parents=True, exist_ok=True)
+        for fold in STAGE_FOLDS["promotion"]:
+            (sealed / f"fold_{fold}_result.json").write_text("loser-not-json")
+
+    selected_discovery = discovery / winner["candidate_id"] / "certify"
+    selected_promotion = promotion / winner["promotion_node_id"] / "certify"
+    for fold in CERTIFICATION_FOLDS:
+        path = (
+            selected_discovery if fold in STAGE_FOLDS["discovery"]
+            else selected_promotion
+        ) / f"fold_{fold}_result.json"
+        path.write_text(
+            json.dumps({
+                "fold_index": fold,
+                "held_out": {"test_auc": 0.70 + fold / 100},
+            })
+            if selected_valid else "selected-not-json"
+        )
+
+
+def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    winner_frozen = select_winner(cell_root)
+
+    state = certify_winner(cell_root)
+    bundle_path = cell_root / state["certification"]["bundle"]
+    bundle = json.loads(bundle_path.read_text())
+    assert state["phase"] == "certified"
+    assert bundle["winner"]["kind"] == "baseline"
+    assert bundle["held_out"]["test_auc"] == pytest.approx(0.52)
+    assert bundle["retrained"] is False
+    assert certify_winner(cell_root) == state
+
+    # Recover the narrow crash window after atomic bundle publication but
+    # before the stage-state commit, without reading/revealing another winner.
+    (cell_root / "campaign_state.json").write_text(
+        json.dumps(winner_frozen, indent=2, sort_keys=True) + "\n"
+    )
+    recovered = certify_winner(cell_root)
+    assert recovered["phase"] == "certified"
+    assert recovered["certification"]["bundle_sha256"] == bundle["bundle_sha256"]
+
+
+def test_searched_certification_reads_winner_and_never_losers(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
+    freeze_promotion(cell_root)
+    selected = select_winner(cell_root)
+    _write_searched_sealed_folds(cell_root, selected)
+
+    state = certify_winner(cell_root)
+    bundle = json.loads((cell_root / "certification/certify.json").read_text())
+    assert bundle["winner"]["candidate_id"] == selected["winner"]["candidate_id"]
+    assert bundle["held_out"]["test_auc"] == pytest.approx(0.72)
+    assert len(bundle["source_fold_sha256"]) == 5
+
+
+def test_selected_sealed_corruption_blocks_certification(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
+    freeze_promotion(cell_root)
+    selected = select_winner(cell_root)
+    _write_searched_sealed_folds(cell_root, selected, selected_valid=False)
+
+    with pytest.raises(CampaignStageError, match="selected winner sealed fold"):
+        certify_winner(cell_root)
+    assert load_stage_state(cell_root)["phase"] == "winner-frozen"
+    assert not (cell_root / "certification").exists()
+
+
+def test_existing_certification_bundle_is_immutable(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    certify_winner(cell_root)
+    bundle = cell_root / "certification/certify.json"
+    bundle.write_text(bundle.read_text().replace("0.52", "0.99"))
+
+    with pytest.raises(CampaignStageError, match="bundle hash mismatch"):
+        certify_winner(cell_root)
