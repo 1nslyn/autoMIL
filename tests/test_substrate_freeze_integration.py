@@ -13,9 +13,10 @@ because the failure mode is a paper claim rather than a crash:
   editing, which reaches ``splits.py`` and the composite writer, and which the
   agent skill actively instructs.
 
-Together the line is: **recipe and architecture edits stay free; substrate edits
-are refused.** These tests assert both halves of that sentence against the real
-``automil submit`` path, on the protected list the roster cohorts actually ship.
+The architecture-preserving campaign now draws the line more narrowly:
+**published model/trainer/measurement code is frozen; registered train-only
+PolicyVariant source and declared scalar overrides remain open.** These tests
+assert both halves against the real ``automil submit`` path.
 """
 from __future__ import annotations
 
@@ -37,12 +38,13 @@ _SUBSTRATE = [
     "benchmarks/datasets/tcga/tcga_luad.yaml",
 ]
 
-#: What the agent is *supposed* to be able to change: architecture and the
-#: training loop.
-_RECIPE = [
+#: Published identity surfaces that preserving mode must now refuse.
+_IDENTITY_SURFACE = [
     "benchmarks/src/autobench/pipeline/clam/train.py",
     "benchmarks/lib/CLAM/models/model_clam.py",
 ]
+
+_POLICY = "benchmarks/experiments/tcga_luad/automil/variants/_policies/identity.py"
 
 
 def _init_git_repo(path: Path) -> None:
@@ -64,6 +66,14 @@ def _roster_registry_block() -> dict:
     return cfg["registry"]
 
 
+def _roster_editable() -> list[str]:
+    repo = Path(__file__).resolve().parents[1]
+    cfg = yaml.safe_load(
+        (repo / "benchmarks/experiments/tcga_luad/automil/config.yaml").read_text()
+    )
+    return cfg["files"]["editable"]
+
+
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     """A project carrying the roster cohorts' real protected list."""
@@ -75,15 +85,29 @@ def project(tmp_path, monkeypatch):
     adir = tmp_path / "automil"
     cfg = yaml.safe_load((adir / "config.yaml").read_text()) or {}
     cfg["registry"] = _roster_registry_block()
+    cfg.setdefault("files", {})["editable"] = _roster_editable()
     cfg["project"] = {**(cfg.get("project") or {}), "name": "tcga_luad"}
     cfg["encoders"] = {**(cfg.get("encoders") or {}), "primary": "uni_v2"}
     cfg["task"] = {**(cfg.get("task") or {}), "name": "kras"}
     (adir / "config.yaml").write_text(yaml.safe_dump(cfg))
 
-    for rel in _SUBSTRATE + _RECIPE:
+    for rel in _SUBSTRATE + _IDENTITY_SURFACE:
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("# original\n")
+    policy = tmp_path / _POLICY
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text('''
+from automil.registry import PolicyVariant, VariantSpec, register
+@register(VariantSpec(
+    name="identity", kind="policy", parent=None, base_commit="abc",
+    composite=0.5, node_id="n_0001",
+    created_at="2026-08-02T00:00:00+00:00",
+))
+class Identity(PolicyVariant):
+    def wrap_optimizer(self, opt):
+        return opt
+''')
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(["git", "commit", "-m", "seed"], cwd=tmp_path, capture_output=True, check=True)
     return runner, tmp_path
@@ -130,21 +154,25 @@ class TestSubstrateEditsAreRefused:
         assert _submit(runner, "n_0001", rel).exit_code != 0
 
 
-class TestRecipeEditsStayFree:
-    """The other half. Over-freezing would be just as fatal to the claim."""
+class TestTrainOnlyPolicyStaysOpen:
+    """The non-HP source seam stays open without changing model identity."""
 
-    @pytest.mark.parametrize("rel", _RECIPE)
-    def test_architecture_and_training_loop_remain_submittable(self, project, rel):
+    @pytest.mark.parametrize("rel", _IDENTITY_SURFACE)
+    def test_architecture_and_training_loop_are_refused(self, project, rel):
         runner, root = project
         (root / rel).write_text("# a new idea\n")
         result = _submit(runner, "n_0001", rel)
-        assert result.exit_code == 0, result.output
+        assert result.exit_code != 0
+        assert "files.editable" in result.output
 
-    def test_a_recipe_edit_is_not_flagged_as_protected(self, project):
+    def test_registered_policy_module_is_submittable(self, project):
         runner, root = project
-        rel = "benchmarks/src/autobench/pipeline/clam/train.py"
-        (root / rel).write_text("# a new idea\n")
-        assert "protected" not in _submit(runner, "n_0001", rel).output.lower()
+        result = runner.invoke(
+            main,
+            ["submit", "--node", "n_0001", "--desc", "d", "--files", _POLICY,
+             "--override", "--policy-variant identity"],
+        )
+        assert result.exit_code == 0, result.output
 
 
 class TestTheListIsTheShippedOne:
@@ -157,8 +185,12 @@ class TestTheListIsTheShippedOne:
         patterns = list(_roster_registry_block()["protected"])
         for rel in _SUBSTRATE:
             assert _matches_scope(rel, patterns), f"{rel} is no longer protected"
-        for rel in _RECIPE:
-            assert not _matches_scope(rel, patterns), f"{rel} is now protected — over-freeze"
+        for rel in _IDENTITY_SURFACE:
+            assert not _matches_scope(rel, patterns), (
+                f"{rel} unexpectedly entered registry.protected; the hard editable "
+                "allowlist is the intended identity-surface boundary"
+            )
+        assert _matches_scope(_POLICY, _roster_editable())
 
     def test_every_roster_overlay_ships_the_same_list(self):
         repo = Path(__file__).resolve().parents[1] / "benchmarks" / "experiments"

@@ -70,11 +70,11 @@ def rank(n: int, max_per_branch: int, include_held_out: bool):
         click.echo()
 
 
-#: Proposal kinds for the architecture-vs-HP portfolio (P1.2). "architecture"
-#: and "ensemble" are structural; the portfolio gate targets ≥50% structural so
-#: the loop proposes real architectural change, not a pure hyperparameter sweep.
+#: Free mode exposes every kind. Architecture-preserving mode is narrower than
+#: this Click choice and admits only PRESERVING_KINDS at runtime.
 PROPOSAL_KINDS = ["architecture", "regularization", "hp", "data", "ensemble"]
 STRUCTURAL_KINDS = frozenset({"architecture", "ensemble"})
+PRESERVING_KINDS = frozenset({"regularization", "hp"})
 
 
 @main.command()
@@ -82,15 +82,26 @@ STRUCTURAL_KINDS = frozenset({"architecture", "ensemble"})
 @click.option("--desc", required=True, help="Proposal description")
 @click.option("--techniques", multiple=True, help="Technique tags")
 @click.option("--kind", type=click.Choice(PROPOSAL_KINDS), default=None,
-              help="Experiment kind for the architecture-vs-HP portfolio "
-                   "(architecture|regularization|hp|data|ensemble). Always set "
-                   "this — `automil portfolio` gates the loop on ≥50% structural.")
+              help="Experiment kind. Free mode uses architecture|ensemble for "
+                   "its structural quota; architecture-preserving mode permits "
+                   "only regularization|hp.")
 @click.option("--mil-model", default=None,
               help="MIL model identifier — stored in node metadata so `automil submit` "
                    "can inherit it as a fallback (D-12, REC-04).")
 def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_model: str | None):
     """Add a new experiment proposal to the graph."""
     adir = _find_automil_dir()
+    from automil.admissibility import load_candidate_policy
+    candidate_policy = load_candidate_policy(adir)
+    if candidate_policy.mode == "architecture-preserving" and (
+        kind is not None and kind not in PRESERVING_KINDS
+    ):
+        raise click.ClickException(
+            f"Refusing {kind!r} proposal in architecture-preserving mode: "
+            "the executable surface supports declared scalars plus train-only "
+            "optimizer/update, scheduler, and stopping policies; it has no "
+            "data/sampling hook. Use kind 'hp' or 'regularization'."
+        )
     # CR-2 (audit 2026-07-23): propose is the agent's most frequent write. Do the
     # whole read-modify-write under locked_update so a concurrent daemon
     # completion cannot clobber this proposal (or vice versa) via a stale snapshot.
@@ -144,11 +155,11 @@ def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_mod
 @click.option("--threshold", default=0.5, show_default=True,
               help="Minimum structural (architecture+ensemble) fraction of pending proposals.")
 def portfolio(threshold: float):
-    """Report the architecture-vs-HP mix of pending proposals (P1.2 gate).
+    """Validate the pending proposal mix under the configured search mode.
 
-    Exits non-zero when the structural fraction is below --threshold, so the
-    loop can gate EXECUTE on it: if it fails, propose more architectural
-    experiments before submitting. Structural = architecture + ensemble.
+    Free mode retains the structural-fraction gate. Architecture-preserving
+    mode has no architecture quota and instead fails if any architecture or
+    ensemble proposal is pending.
     """
     adir = _find_automil_dir()
     graph_path = adir / "graph.json"
@@ -157,7 +168,9 @@ def portfolio(threshold: float):
         return
 
     from automil.graph import ExperimentGraph
+    from automil.admissibility import load_candidate_policy
     graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
+    candidate_policy = load_candidate_policy(adir)
 
     pending = [n for n in graph.nodes.values()
                if n.get("type") == "proposed" and n.get("status") == "pending"]
@@ -181,6 +194,37 @@ def portfolio(threshold: float):
                 click.echo(f"  {k:<14} {counts[k]}{tag}")
         click.echo(f"  → structural: {structural}/{total} = {frac:.0%}")
         return frac
+
+    if candidate_policy.mode == "architecture-preserving":
+        def _render_recipe(label: str, nodes: list[dict]) -> None:
+            counts = _counts(nodes)
+            click.echo(f"{label} ({len(nodes)}) — recipe-only mode:")
+            for proposal_kind in PROPOSAL_KINDS + ["unspecified"]:
+                if counts.get(proposal_kind):
+                    tag = (
+                        " (forbidden)"
+                        if proposal_kind not in PRESERVING_KINDS
+                        else ""
+                    )
+                    click.echo(f"  {proposal_kind:<14} {counts[proposal_kind]}{tag}")
+
+        _render_recipe("Pending proposals", pending)
+        if executed:
+            click.echo("")
+            _render_recipe("Executed so far", executed)
+        forbidden = [
+            n for n in pending
+            if n.get("kind", "unspecified") not in PRESERVING_KINDS
+        ]
+        if forbidden:
+            click.echo("")
+            click.echo(
+                "PORTFOLIO FORBIDDEN: architecture-preserving mode fixes the "
+                "published model and has no data/sampling hook; retain only "
+                "hp/regularization proposals that fit the train-only policy seam."
+            )
+            raise SystemExit(1)
+        return
 
     pending_frac = _render("Pending proposals", pending)
     if executed:

@@ -45,8 +45,9 @@ _ALLOWLIST: dict[str, str] = {
     #    env.passthrough seam without auto-injecting any value.
     #    Line shifted to :60 by DBT-03 (14-02): removed 2-line deferral comment block.
     #    Line shifted to :61 by L-6 (audit 2026-07-23): added `import fcntl` for
-    #    cmd_submit's id-allocation lock.
-    "src/automil/backends/_orchestrator_daemon.py:61":
+    #    cmd_submit's id-allocation lock; to :62 by the campaign-boundary hash
+    #    imports.
+    "src/automil/backends/_orchestrator_daemon.py:62":
         "Consumer-specific vars (e.g. AUTOBENCH_*_ROOT)",
     # 2. Comment in verify_repro about the clean env not leaking AUTOBENCH_*.
     "src/automil/cli/lifecycle/verify_repro.py:84":
@@ -63,16 +64,17 @@ _ALLOWLIST: dict[str, str] = {
     #    Line shifted +1 by 12-02 (added scheduling_policy key above it),
     #    +4 by the run.mil_model addition to the run: block,
     #    +6 by the H-4 registry block, -2 by CFG-2 (dead cap: duplicates removed),
-    #    +9 by CR-4's se_multiplier documentation in the scoring: block.
-    "src/automil/templates/config.yaml.j2:120":
+    #    +9 by CR-4's se_multiplier documentation in the scoring: block,
+    #    +9 by the architecture-preserving command/identity channels.
+    "src/automil/templates/config.yaml.j2:129":
         "autobench-shaped consumers",
     # 5. Inline example comment in the scoring.formula block showing what an
     #    autobench consumer formula looks like. Documentation only. Retained by
     #    08-04 executor.
     #    Line shifted +1 by 12-02 (added scheduling_policy key to orchestrator block),
     #    +4 by the run.mil_model addition to the run: block,
-    #    +6 by H-4, -2 by CFG-2, +9 by CR-4 (see entry 4).
-    "src/automil/templates/config.yaml.j2:146":
+    #    +6 by H-4, -2 by CFG-2, +9 by CR-4, +9 by the preserving channels.
+    "src/automil/templates/config.yaml.j2:155":
         "autobench consumer",
 }
 

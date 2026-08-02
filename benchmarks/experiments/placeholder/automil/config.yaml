@@ -48,8 +48,8 @@ training:
 
 # H-4 (audit 2026-07-28): the frozen data substrate, ENFORCED.
 # `submit.py` hard-rejects any overlay matching these globs, with no --force
-# escape. Unlike files.readonly below (warning-only, and bypassed entirely by the
-# no---files auto-detect branch), this actually freezes the evaluation protocol,
+# escape. Unlike the former files.readonly warning (which explicit --files could
+# bypass), this actually freezes the evaluation protocol,
 # the selection signal and the encoder inputs — the precondition for the paper's
 # equal-effort claim. `mode: architecture-preserving` now REQUIRES a non-empty
 # list, so this can no longer be silently left empty.
@@ -57,10 +57,15 @@ training:
 # Note what makes this affordable: H-3b gave every arm an explicit hyperparameter
 # channel (--hparams / a variant's HPARAMS, checked against the declared
 # per-arm search space), so freezing `pipeline/config.py` and `run_experiment.py`
-# no longer costs the agent any legitimate tuning reach. Recipe and architecture
-# edits stay free; substrate edits are refused.
+# no longer costs the agent legitimate scalar tuning reach. Only declared
+# hyperparameters and executable train-only PolicyVariant modules remain open;
+# published model, trainer, and measurement implementations are frozen.
 registry:
   mode: "architecture-preserving"
+  allowed_override_options: ["--hparams", "--policy-variant"]
+  allowed_variant_kinds: ["policy"]
+  # These scalar switches erase CLAM's defining instance-loss mechanism.
+  identity_locked_hparams: ["no_inst_cluster", "bag_weight"]
   protected:
     # --- evaluation protocol: splits, prep, metrics ---
     - "benchmarks/src/autobench/pipeline/splits.py"
@@ -87,9 +92,7 @@ registry:
     - "benchmarks/src/autobench/data.py"                  # WSI-list CSV feeding TRIDENT
 
 files:
-  editable: ["train.py", "models/"]
-  readonly: []
-
+  editable: ["benchmarks/experiments/placeholder/automil/variants/_policies/*.py"]
 run:
   script: "train.py"
   command: null
