@@ -250,7 +250,7 @@ def _validation_folds(
 
 
 def _mean(folds: list[Mapping[str, Any]]) -> float:
-    return sum(float(fold["composite"]) for fold in folds) / len(folds)
+    return math.fsum(float(fold["composite"]) for fold in folds) / len(folds)
 
 
 def register_baseline(cell_root: Path, baseline_archive: Path) -> dict[str, Any]:
@@ -1017,5 +1017,112 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
         "attempts_charged": len(jobs),
         "eligible_candidates": len(eligible),
         "at": frozen_at,
+    })
+    return _commit_state(cell_root, state)
+
+
+def _verify_baseline_unchanged(cell_root: Path, baseline: Mapping[str, Any]) -> None:
+    archive = (cell_root / str(baseline["archive"])).resolve()
+    result = archive / "result.json"
+    if not result.is_file() or file_sha256(result) != baseline["result_sha256"]:
+        raise CampaignStageError("registered baseline validation artifact changed")
+    for filename, expected in baseline["sealed_fold_sha256"].items():
+        path = archive / "certify" / filename
+        if not path.is_file() or file_sha256(path) != expected:
+            raise CampaignStageError(
+                f"registered baseline sealed artifact changed: {filename}"
+            )
+
+
+def select_winner(cell_root: Path) -> dict[str, Any]:
+    """Freeze the deterministic five-fold validation winner, test-blindly."""
+    with _stage_lock(cell_root):
+        return _select_winner_unlocked(cell_root)
+
+
+def _select_winner_unlocked(cell_root: Path) -> dict[str, Any]:
+    state = load_stage_state(cell_root)
+    if state.get("winner") is not None:
+        return state
+    if state["phase"] != "selection-ready":
+        raise CampaignStageError(
+            f"winner can freeze only from selection-ready, got {state['phase']!r}"
+        )
+    baseline = state.get("baseline")
+    if not isinstance(baseline, dict):
+        raise CampaignStageError("native baseline is not registered")
+    _verify_baseline_unchanged(cell_root, baseline)
+
+    pool: list[dict[str, Any]] = [{
+        "kind": "baseline",
+        "candidate_id": "baseline",
+        "candidate_sha256": baseline["candidate_sha256"],
+        "validation_folds": baseline["validation_folds"],
+        "validation_mean": float(baseline["validation_mean"]),
+        "promotion_node_id": None,
+    }]
+    for candidate in state["promotion"].get("eligible_candidates", []):
+        if [fold["fold_index"] for fold in candidate["validation_folds"]] != list(
+            CERTIFICATION_FOLDS
+        ):
+            raise CampaignStageError(
+                f"selection candidate {candidate['candidate_id']} lacks exact five-fold evidence"
+            )
+        recomputed = _mean(candidate["validation_folds"])
+        if not math.isclose(
+            recomputed, float(candidate["validation_mean"]), rel_tol=0.0, abs_tol=1e-12,
+        ):
+            raise CampaignStageError(
+                f"selection candidate {candidate['candidate_id']} mean drifted"
+            )
+        pool.append({
+            "kind": "searched",
+            **candidate,
+            "validation_mean": recomputed,
+        })
+
+    # Exact ties prefer the native baseline. Remaining ties use the stable
+    # discovery node id, never filesystem iteration or completion order.
+    pool.sort(key=lambda candidate: (
+        -candidate["validation_mean"],
+        0 if candidate["kind"] == "baseline" else 1,
+        candidate["candidate_id"],
+    ))
+    selected = pool[0]
+    selected_at = _utc_now()
+    audit = [{
+        "rank": rank,
+        "kind": candidate["kind"],
+        "candidate_id": candidate["candidate_id"],
+        "candidate_sha256": candidate["candidate_sha256"],
+        "promotion_node_id": candidate.get("promotion_node_id"),
+        "validation_mean": candidate["validation_mean"],
+    } for rank, candidate in enumerate(pool, 1)]
+    winner = {
+        "kind": selected["kind"],
+        "candidate_id": selected["candidate_id"],
+        "candidate_sha256": selected["candidate_sha256"],
+        "promotion_node_id": selected.get("promotion_node_id"),
+        "validation_folds": selected["validation_folds"],
+        "validation_mean": selected["validation_mean"],
+        "baseline_validation_mean": baseline["validation_mean"],
+        "lift_over_baseline": (
+            selected["validation_mean"] - float(baseline["validation_mean"])
+        ),
+        "selection_audit": audit,
+        "selection_sha256": content_sha256(audit),
+        "selected_at": selected_at,
+    }
+    state["winner"] = winner
+    state["phase"] = "winner-frozen"
+    state["revision"] += 1
+    state["updated_at"] = selected_at
+    state["history"].append({
+        "event": "winner-frozen",
+        "kind": winner["kind"],
+        "candidate_id": winner["candidate_id"],
+        "validation_mean": winner["validation_mean"],
+        "selection_sha256": winner["selection_sha256"],
+        "at": selected_at,
     })
     return _commit_state(cell_root, state)
