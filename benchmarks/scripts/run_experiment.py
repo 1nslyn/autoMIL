@@ -196,6 +196,49 @@ def _per_fold_composites(per_fold_val: list, is_survival: bool) -> list[float]:
     return out
 
 
+def _validation_fold_evidence(summary: dict) -> list[dict]:
+    """Return the fold-indexed, validation-only evidence used by campaigns.
+
+    The raw per-fold artifacts are born-sealed because each file also contains
+    held-out metrics.  A stage controller must never open those files merely to
+    recover validation values.  This deliberately narrow projection is safe to
+    leave in the agent-facing ``result.json`` and is sufficient to prove exact
+    fold coverage and recompute an equal-weight cross-stage mean.
+    """
+    per_fold = summary.get("per_fold_val", []) or []
+    indices = summary.get("fold_indices")
+    if not isinstance(indices, list) or len(indices) != len(per_fold):
+        indices = list(range(len(per_fold)))
+    is_survival = "c_index" in (summary.get("test") or {})
+    evidence: list[dict] = []
+    for fold_index, raw_metrics in zip(indices, per_fold):
+        metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        if is_survival:
+            value = metrics.get("c_index")
+            public_metrics = {"val_c_index": value}
+            values = (value,)
+        else:
+            auc = metrics.get("auc_roc")
+            bacc = metrics.get("balanced_accuracy")
+            public_metrics = {"val_auc": auc, "val_bacc": bacc}
+            values = (auc, bacc)
+        finite = all(
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and math.isfinite(float(value))
+            for value in values
+        )
+        evidence.append({
+            "fold_index": fold_index,
+            "metrics": public_metrics,
+            "composite": (
+                sum(float(value) for value in values) / len(values)
+                if finite else None
+            ),
+        })
+    return evidence
+
+
 def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     """Convert autobench summary dict to autoMIL result.json format.
 
@@ -287,6 +330,7 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
         "peak_vram_mb": round(peak_vram_mb),
         "n_valid_folds": n_valid_folds,
         "n_folds": n_folds_total,
+        "validation_folds": _validation_fold_evidence(summary),
         "summary": summary,
     }
 
