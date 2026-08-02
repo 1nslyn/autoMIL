@@ -185,17 +185,46 @@ def _initialize_stage_state_unlocked(
     return _commit_state(cell_root, state)
 
 
-def _relative_source(cell_root: Path, source: Path) -> str:
+def _import_baseline_archive(cell_root: Path, source: Path) -> Path:
+    """Atomically import only the baseline artifacts the campaign consumes."""
     source = source.resolve()
-    try:
-        return source.relative_to(cell_root.resolve()).as_posix()
-    except ValueError:
-        relative = os.path.relpath(source, cell_root.resolve())
-        if relative.startswith("../"):
+    target_root = cell_root / "baseline"
+    target = target_root / "archive"
+    if source == target.resolve():
+        return target
+
+    required = [source / "result.json"] + [
+        source / "certify" / f"fold_{fold}_result.json"
+        for fold in CERTIFICATION_FOLDS
+    ]
+    if not all(path.is_file() for path in required):
+        raise CampaignStageError("external baseline archive is incomplete")
+    expected = {path.relative_to(source).as_posix(): file_sha256(path) for path in required}
+    if target_root.exists():
+        actual = {
+            relative: file_sha256(target / relative)
+            for relative in expected
+            if (target / relative).is_file()
+        }
+        if actual != expected:
             raise CampaignStageError(
-                "baseline archive must live inside the campaign cell root"
+                "cell-local baseline import exists with different artifact bytes"
             )
-        return Path(relative).as_posix()
+        return target
+
+    temporary = Path(tempfile.mkdtemp(prefix=".baseline-", dir=str(cell_root)))
+    temporary_archive = temporary / "archive"
+    try:
+        for source_file in required:
+            relative = source_file.relative_to(source)
+            destination = temporary_archive / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, destination)
+        os.replace(temporary, target_root)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return target
 
 
 def _validation_folds(
@@ -282,6 +311,10 @@ def _register_baseline_unlocked(
         if not sealed.is_file():
             raise CampaignStageError(f"baseline is missing sealed fold {fold_index}")
         sealed_hashes[f"fold_{fold_index}_result.json"] = file_sha256(sealed)
+    imported_archive = _import_baseline_archive(cell_root, baseline_archive)
+    imported_result = imported_archive / "result.json"
+    if file_sha256(imported_result) != file_sha256(result_path):
+        raise CampaignStageError("cell-local baseline import changed result bytes")
     identity_payload = {
         "result_sha256": file_sha256(result_path),
         "sealed_fold_sha256": sealed_hashes,
@@ -290,7 +323,7 @@ def _register_baseline_unlocked(
     baseline = {
         "candidate_id": "baseline",
         "candidate_sha256": content_sha256(identity_payload),
-        "archive": _relative_source(cell_root, baseline_archive),
+        "archive": "baseline/archive",
         "result_sha256": identity_payload["result_sha256"],
         "sealed_fold_sha256": sealed_hashes,
         "validation_folds": folds,

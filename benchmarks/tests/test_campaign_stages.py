@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -223,6 +224,27 @@ def test_baseline_registration_rejects_test_bearing_public_result(staged_cell):
     cell_root, _, _, _, _ = staged_cell
     with pytest.raises(CampaignStageError, match="test-bearing"):
         register_baseline(cell_root, _baseline(cell_root, leak=True))
+
+
+def test_external_baseline_is_atomically_imported_and_portable(staged_cell, tmp_path):
+    cell_root, adir, cell, _, _ = staged_cell
+    external_root = tmp_path / "external-cell"
+    external = _baseline(external_root)
+    state = register_baseline(cell_root, external)
+    imported = cell_root / state["baseline"]["archive"]
+    assert imported == cell_root / "baseline/archive"
+    assert (imported / "result.json").is_file()
+    assert len(list((imported / "certify").glob("fold_*_result.json"))) == 5
+
+    # The registered incumbent no longer depends on the external result tree.
+    shutil.rmtree(external_root)
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    selected = select_winner(cell_root)
+    assert selected["winner"]["kind"] == "baseline"
 
 
 def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
