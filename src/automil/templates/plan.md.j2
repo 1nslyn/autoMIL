@@ -2,9 +2,10 @@
 
 The agent rewrites this file at the **PLAN** phase of every batch (the
 Research → Diagnose → Plan → Execute loop). It is the visible record of *why*
-each queued experiment exists — diagnosis first, then a portfolio of proposals
-that is **≥50% structural** (architecture/ensemble), not a hyperparameter sweep.
-The restart protocol reads this file; keep it current.
+each queued experiment exists — diagnosis first, then a mode-valid portfolio.
+Free mode targets **≥50% structural** (architecture/ensemble); architecture-
+preserving mode forbids both and uses train-only recipe hypotheses. The restart
+protocol reads this file; keep it current.
 
 ## Current best
 - node: `<id>` · composite `<x>` · `<one-line description>`
@@ -18,10 +19,10 @@ The restart protocol reads this file; keep it current.
 
 `<diagnosis here>`
 
-## This batch (target ≥50% structural — run `automil portfolio`)
+## This batch (obey `registry.mode` — run `automil portfolio`)
 | node | kind | parent | hypothesis → expected mechanism |
 |------|------|--------|---------------------------------|
-| `<id>` | architecture | `<parent>` | `<what changes, and why it should move the metric>` |
+| `<id>` | `<mode-valid kind>` | `<parent>` | `<what changes, and why it should move the metric>` |
 | `<id>` | regularization | `<parent>` | `<...>` |
 
 ## Research notes — papers considered this batch

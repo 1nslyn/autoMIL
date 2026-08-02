@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from automil.admissibility import load_candidate_policy
 from automil.registry.config import load_registry_config
 from automil.runner import Runner
 
@@ -213,3 +214,23 @@ class TestTheLiveBenchmarkProjectIsProtected:
             f"protected — the auto-detect branch would capture them and submit "
             f"would then hard-reject, which is a confusing dead end."
         )
+
+    @pytest.mark.parametrize("project", PROJECTS)
+    def test_preserving_mode_exposes_only_the_recipe_module(self, project):
+        root = Path(__file__).resolve().parents[1]
+        policy = load_candidate_policy(
+            root / "benchmarks" / "experiments" / project / "automil"
+        )
+        assert policy.editable == (
+            f"benchmarks/experiments/{project}/automil/variants/_policies/*.py",
+        )
+        assert policy.allowed_override_options == ("--hparams", "--policy-variant")
+        assert policy.allowed_variant_kinds == ("policy",)
+
+        for forbidden in (
+            "benchmarks/lib/CLAM/models/model_clam.py",
+            "benchmarks/lib/CLAM/utils/core_utils.py",
+            "benchmarks/src/autobench/pipeline/clam/train.py",
+        ):
+            verdict = policy.classify([forbidden])
+            assert not verdict.accepted, (project, forbidden)
