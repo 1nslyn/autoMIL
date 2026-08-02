@@ -113,10 +113,18 @@ class TestTheAsymmetryIsClosed:
     def test_abmils_architecture_knobs_are_searchable(self):
         assert {"M", "L", "dropout"} <= declared_knobs("abmil")
 
-    def test_clams_instance_clustering_branch_is_searchable(self):
-        """Previously hardcoded in _make_clam_args, so outside the space while the
-        rest of CLAM's surface was inside it."""
-        assert {"bag_loss", "inst_loss", "no_inst_cluster"} <= declared_knobs("clam")
+    def test_clams_instance_loss_choices_are_searchable_but_branch_is_fixed(self):
+        """The loss implementation can vary without erasing the CLAM mechanism.
+
+        ``no_inst_cluster`` and ``bag_weight`` are different: they can remove a
+        defining loss branch, so the architecture-preserving campaign locks them
+        while leaving the loss family and instance-sampling recipe searchable.
+        """
+        assert {"bag_loss", "inst_loss", "B"} <= declared_knobs("clam")
+        assert "no_inst_cluster" not in declared_knobs("clam")
+        assert "bag_weight" not in declared_knobs("clam")
+        assert lock_reason("clam", "no_inst_cluster")
+        assert lock_reason("clam", "bag_weight")
 
     def test_no_arm_is_starved_relative_to_clam(self):
         """Not equality — arms genuinely differ in surface. But an order-of-

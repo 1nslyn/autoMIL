@@ -462,7 +462,7 @@ class TestTitanRunnerCarriesDataset:
 
 
 # ---------------------------------------------------------------------------
-# nnMIL -- self-configures ~100 epochs for real (planner.py), impractical for
+# nnMIL -- self-configures ~100 epochs for real (experiment_planner.py), impractical for
 # CI (test_instrumentation.py precedent). Mock the heavy vendored trainer;
 # the runner itself (and its `dataset` stamping) still runs for real.
 # ---------------------------------------------------------------------------
