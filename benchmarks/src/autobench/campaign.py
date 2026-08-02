@@ -448,5 +448,12 @@ def materialize_discovery_cells(
         policy_dir = adir / "variants" / "_policies"
         policy_dir.mkdir(parents=True, exist_ok=True)
         (policy_dir / ".gitkeep").touch()
+        from autobench.campaign_stages import initialize_stage_state
+
+        initialize_stage_state(
+            adir.parent,
+            cell=cell,
+            manifest_sha256=manifest_hash,
+        )
         written.append(adir)
     return written
