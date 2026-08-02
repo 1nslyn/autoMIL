@@ -10,13 +10,16 @@ from autobench.campaign import (
     file_sha256,
     load_manifest,
     materialize_discovery_cells,
+    run_materialization_canary,
     write_manifest,
 )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("generate", "check", "materialize"))
+    parser.add_argument(
+        "action", choices=("generate", "check", "materialize", "canary"),
+    )
     parser.add_argument(
         "--manifest", default="benchmarks/campaigns/preprint_130/manifest.json",
     )
@@ -35,11 +38,16 @@ def main() -> None:
         if manifest != rebuilt:
             raise SystemExit("manifest differs from the current canonical roster")
         print(f"verified 130 cells ({file_sha256(manifest_path)})")
-    else:
+    elif args.action == "materialize":
         roots = materialize_discovery_cells(
             manifest_path, (repo_root / args.output_root), repo_root,
         )
         print(f"materialized {len(roots)} isolated discovery roots")
+    else:
+        report = run_materialization_canary(manifest_path, repo_root=repo_root)
+        import json
+
+        print(json.dumps(report, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

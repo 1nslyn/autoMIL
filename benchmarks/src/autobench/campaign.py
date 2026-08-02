@@ -12,6 +12,7 @@ import copy
 import hashlib
 import json
 import shlex
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -466,3 +467,124 @@ def materialize_discovery_cells(
         )
         written.append(adir)
     return written
+
+
+def audit_materialized_campaign(
+    *,
+    roots: list[Path],
+    manifest_path: Path,
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Audit all 130 launch roots without executing a GPU training process."""
+    from automil.admissibility import (
+        load_candidate_policy,
+        validate_campaign_binding,
+    )
+    from autobench.campaign_stages import load_stage_state
+
+    manifest = load_manifest(manifest_path)
+    repo_root = repo_root.resolve()
+    if len(roots) != len(manifest["cells"]):
+        raise CampaignManifestError(
+            f"materialized root count mismatch: {len(roots)} != {len(manifest['cells'])}"
+        )
+    by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
+    seen: set[str] = set()
+    regimes: dict[tuple[str, str], str] = {}
+    manifest_hash = file_sha256(manifest_path)
+    for adir in roots:
+        if not adir.is_dir():
+            raise CampaignManifestError(f"missing materialized root: {adir}")
+        try:
+            cell = json.loads((adir / "campaign_cell.json").read_text())
+            config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+        except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
+            raise CampaignManifestError(f"cannot read materialized root {adir}: {exc}") from exc
+        cell_id = cell.get("cell_id")
+        if cell_id in seen or cell_id not in by_id or cell != by_id[cell_id]:
+            raise CampaignManifestError(f"materialized cell identity drift: {cell_id}")
+        seen.add(cell_id)
+        campaign = config.get("campaign") or {}
+        if campaign.get("manifest_sha256") != manifest_hash:
+            raise CampaignManifestError(f"manifest binding drift for {cell_id}")
+        validate_campaign_binding(
+            manifest_path,
+            campaign,
+            base_run_command=(config.get("run") or {}).get("command"),
+            budget_cell_id=cell["budget_identity"]["cell_id"],
+        )
+        if campaign.get("stage") != "discovery":
+            raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
+        if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
+            raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
+        if (config.get("training") or {}).get("fold_count") != len(
+            STAGE_FOLDS["discovery"]
+        ):
+            raise CampaignManifestError(f"{cell_id}: discovery fold count drift")
+        policy = load_candidate_policy(adir)
+        expected_editable = (
+            f"{adir.relative_to(repo_root).as_posix()}/variants/_policies/*.py",
+        )
+        if (
+            policy.mode != "architecture-preserving"
+            or policy.editable != expected_editable
+            or policy.allowed_variant_kinds != ("policy",)
+        ):
+            raise CampaignManifestError(f"{cell_id}: candidate boundary drift")
+        state = load_stage_state(adir.parent)
+        if (
+            state["phase"] != "discovery"
+            or state["cell_id"] != cell_id
+            or state["manifest_sha256"] != manifest_hash
+        ):
+            raise CampaignManifestError(f"{cell_id}: stage ledger drift")
+        for command_name, expected_folds in {
+            "baseline": BASELINE_FOLDS,
+            **STAGE_FOLDS,
+        }.items():
+            tokens = shlex.split(cell["commands"][command_name])
+            try:
+                actual_folds = tokens[tokens.index("--folds") + 1]
+            except (ValueError, IndexError) as exc:
+                raise CampaignManifestError(
+                    f"{cell_id}: {command_name} command lacks --folds"
+                ) from exc
+            if actual_folds != ",".join(map(str, expected_folds)):
+                raise CampaignManifestError(
+                    f"{cell_id}: {command_name} fold command drift"
+                )
+        regimes.setdefault((cell["framework"], cell["task_type"]), cell_id)
+
+    expected_regimes = {
+        (framework, task_type)
+        for framework in ("clam", "nnmil", "abmil", "dtfd", "titan")
+        for task_type in ("classification", "survival")
+    }
+    if set(regimes) != expected_regimes:
+        raise CampaignManifestError(
+            f"arm/task canary coverage mismatch: {sorted(set(regimes))}"
+        )
+    return {
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": manifest_hash,
+        "cells": len(seen),
+        "regimes": {
+            f"{framework}/{task_type}": regimes[(framework, task_type)]
+            for framework, task_type in sorted(regimes)
+        },
+        "gpu_processes_started": 0,
+    }
+
+
+def run_materialization_canary(
+    manifest_path: Path, *, repo_root: Path,
+) -> dict[str, Any]:
+    """Materialize, audit, and automatically remove one full dry-run campaign."""
+    parent = manifest_path.resolve().parent
+    with tempfile.TemporaryDirectory(prefix=".canary-", dir=str(parent)) as raw:
+        roots = materialize_discovery_cells(
+            manifest_path, Path(raw) / "runtime", repo_root,
+        )
+        return audit_materialized_campaign(
+            roots=roots, manifest_path=manifest_path, repo_root=repo_root,
+        )
