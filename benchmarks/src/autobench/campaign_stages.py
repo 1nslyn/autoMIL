@@ -1126,3 +1126,264 @@ def _select_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         "at": selected_at,
     })
     return _commit_state(cell_root, state)
+
+
+def _same_fold_evidence(left: list[Mapping[str, Any]], right: list[Mapping[str, Any]]) -> bool:
+    return content_sha256(left) == content_sha256(right)
+
+
+def _searched_winner_sources(
+    cell_root: Path, state: Mapping[str, Any], winner: Mapping[str, Any],
+) -> dict[int, Path]:
+    source = next((
+        candidate for candidate in state["discovery"]["promoted_candidates"]
+        if candidate["candidate_id"] == winner["candidate_id"]
+    ), None)
+    promoted = next((
+        candidate for candidate in state["promotion"].get("eligible_candidates", [])
+        if candidate["candidate_id"] == winner["candidate_id"]
+    ), None)
+    if source is None or promoted is None:
+        raise CampaignStageError("frozen searched winner is absent from its stage ledgers")
+    if (
+        source["candidate_sha256"] != winner["candidate_sha256"]
+        or promoted["promotion_node_id"] != winner["promotion_node_id"]
+        or not _same_fold_evidence(
+            promoted["validation_folds"], winner["validation_folds"],
+        )
+    ):
+        raise CampaignStageError("frozen searched winner identity/evidence drifted")
+
+    discovery_adir = cell_root / "automil"
+    discovery_archive = (
+        discovery_adir / "orchestrator" / "archive" / winner["candidate_id"]
+    )
+    discovery_spec_path = discovery_archive / "spec.json"
+    if file_sha256(discovery_spec_path) != source["source_spec_sha256"]:
+        raise CampaignStageError("winner discovery spec changed after selection")
+    discovery_spec = json.loads(discovery_spec_path.read_text())
+    discovery_verdict = revalidate_candidate_spec(
+        load_candidate_policy(discovery_adir), discovery_spec, discovery_archive,
+    ).to_dict()
+    discovery_sha, _ = _candidate_identity(discovery_spec, discovery_verdict)
+    if discovery_sha != winner["candidate_sha256"]:
+        raise CampaignStageError("winner discovery candidate changed after selection")
+    discovery_result = json.loads((discovery_archive / "result.json").read_text())
+    discovery_folds = _validation_folds(
+        discovery_result, STAGE_FOLDS["discovery"],
+    )
+    if not _same_fold_evidence(discovery_folds, source["validation_folds"]):
+        raise CampaignStageError("winner discovery validation evidence changed")
+
+    promotion_adir = cell_root / "promotion" / "automil"
+    promotion_archive = (
+        promotion_adir / "orchestrator" / "archive"
+        / winner["promotion_node_id"]
+    )
+    promotion_spec = json.loads((promotion_archive / "spec.json").read_text())
+    promotion_verdict = revalidate_candidate_spec(
+        load_candidate_policy(promotion_adir), promotion_spec, promotion_archive,
+    ).to_dict()
+    promotion_sha, _ = _candidate_identity(promotion_spec, promotion_verdict)
+    if promotion_sha != promoted["promotion_candidate_sha256"]:
+        raise CampaignStageError("winner promotion candidate changed after selection")
+    promotion_result = json.loads((promotion_archive / "result.json").read_text())
+    promotion_folds = _validation_folds(
+        promotion_result, STAGE_FOLDS["promotion"],
+    )
+    five_folds = sorted(
+        [*discovery_folds, *promotion_folds], key=lambda fold: fold["fold_index"],
+    )
+    if not _same_fold_evidence(five_folds, winner["validation_folds"]):
+        raise CampaignStageError("winner five-fold validation evidence changed")
+    return {
+        fold: (
+            discovery_archive if fold in STAGE_FOLDS["discovery"]
+            else promotion_archive
+        ) / "certify" / f"fold_{fold}_result.json"
+        for fold in CERTIFICATION_FOLDS
+    }
+
+
+def _winner_sealed_sources(
+    cell_root: Path, state: Mapping[str, Any], winner: Mapping[str, Any],
+) -> dict[int, Path]:
+    if winner["kind"] == "baseline":
+        baseline = state["baseline"]
+        _verify_baseline_unchanged(cell_root, baseline)
+        archive = (cell_root / baseline["archive"]).resolve()
+        return {
+            fold: archive / "certify" / f"fold_{fold}_result.json"
+            for fold in CERTIFICATION_FOLDS
+        }
+    return _searched_winner_sources(cell_root, state, winner)
+
+
+def _read_held_out_fold(path: Path, expected_fold: int) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            f"cannot read selected winner sealed fold {expected_fold}: {exc}"
+        ) from exc
+    if payload.get("fold_index") != expected_fold:
+        raise CampaignStageError(
+            f"selected sealed fold identity mismatch: expected {expected_fold}"
+        )
+    held_out = payload.get("held_out")
+    if not isinstance(held_out, dict) or not held_out:
+        raise CampaignStageError(f"sealed fold {expected_fold} has no held_out metrics")
+    normalized: dict[str, float] = {}
+    for key, value in held_out.items():
+        if "test" not in str(key).lower():
+            raise CampaignStageError(
+                f"sealed fold {expected_fold} contains a non-test metric {key!r}"
+            )
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            raise CampaignStageError(
+                f"sealed fold {expected_fold} metric {key!r} is not finite"
+            )
+        normalized[str(key)] = float(value)
+    return normalized
+
+
+def certify_winner(cell_root: Path) -> dict[str, Any]:
+    """Reveal exactly the already-frozen winner's existing five sealed folds."""
+    with _stage_lock(cell_root):
+        return _certify_winner_unlocked(cell_root)
+
+
+def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
+    state = load_stage_state(cell_root)
+    certification = state.get("certification")
+    if certification is not None:
+        bundle_path = cell_root / certification["bundle"]
+        try:
+            bundle = json.loads(bundle_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignStageError(f"cannot verify existing certification: {exc}") from exc
+        recorded = bundle.pop("bundle_sha256", None)
+        if (
+            recorded != content_sha256(bundle)
+            or recorded != certification["bundle_sha256"]
+        ):
+            raise CampaignStageError("existing certification bundle hash mismatch")
+        return state
+    if state["phase"] != "winner-frozen" or not isinstance(state.get("winner"), dict):
+        raise CampaignStageError("certification requires an immutable validation winner")
+    winner = state["winner"]
+    target = cell_root / "certification"
+    if target.exists():
+        try:
+            recovered = json.loads((target / "certify.json").read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignStageError(
+                "certification directory exists without a recoverable bundle"
+            ) from exc
+        recorded = recovered.pop("bundle_sha256", None)
+        if recorded != content_sha256(recovered):
+            raise CampaignStageError("recoverable certification bundle hash mismatch")
+        if (
+            recovered.get("campaign_id") != CAMPAIGN_ID
+            or recovered.get("cell_id") != state["cell_id"]
+            or recovered.get("selection_sha256") != winner["selection_sha256"]
+            or (recovered.get("winner") or {}).get("candidate_sha256")
+            != winner["candidate_sha256"]
+        ):
+            raise CampaignStageError("certification bundle is not bound to the winner")
+        recovery_sources = _winner_sealed_sources(cell_root, state, winner)
+        recovery_hashes = {
+            f"fold_{fold}_result.json": file_sha256(recovery_sources[fold])
+            for fold in CERTIFICATION_FOLDS
+        }
+        if recovered.get("source_fold_sha256") != recovery_hashes:
+            raise CampaignStageError(
+                "certification bundle source hashes differ from the frozen winner"
+            )
+        return _finalize_certification_state(
+            cell_root, state, bundle_sha256=recorded,
+            certified_at=recovered["certified_at"],
+        )
+    sources = _winner_sealed_sources(cell_root, state, winner)
+
+    held_out_folds: list[dict[str, Any]] = []
+    source_hashes: dict[str, str] = {}
+    metric_keys: set[str] | None = None
+    for fold in CERTIFICATION_FOLDS:
+        path = sources[fold]
+        metrics = _read_held_out_fold(path, fold)
+        keys = set(metrics)
+        if metric_keys is None:
+            metric_keys = keys
+        elif keys != metric_keys:
+            raise CampaignStageError("held-out metric keys differ across winner folds")
+        held_out_folds.append({"fold_index": fold, "held_out": metrics})
+        source_hashes[f"fold_{fold}_result.json"] = file_sha256(path)
+    aggregate = {
+        key: math.fsum(fold["held_out"][key] for fold in held_out_folds)
+        / len(held_out_folds)
+        for key in sorted(metric_keys or set())
+    }
+    certified_at = _utc_now()
+    bundle: dict[str, Any] = {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "cell_id": state["cell_id"],
+        "winner": {
+            "kind": winner["kind"],
+            "candidate_id": winner["candidate_id"],
+            "candidate_sha256": winner["candidate_sha256"],
+            "promotion_node_id": winner.get("promotion_node_id"),
+        },
+        "selection_sha256": winner["selection_sha256"],
+        "validation_mean": winner["validation_mean"],
+        "held_out_folds": held_out_folds,
+        "held_out": aggregate,
+        "source_fold_sha256": source_hashes,
+        "retrained": False,
+        "certified_at": certified_at,
+    }
+    bundle["bundle_sha256"] = content_sha256(bundle)
+    temporary = Path(tempfile.mkdtemp(prefix=".certification-", dir=str(cell_root)))
+    try:
+        (temporary / "certify.json").write_text(
+            json.dumps(bundle, indent=2, sort_keys=True) + "\n"
+        )
+        os.replace(temporary, target)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+
+    return _finalize_certification_state(
+        cell_root, state, bundle_sha256=bundle["bundle_sha256"],
+        certified_at=certified_at,
+    )
+
+
+def _finalize_certification_state(
+    cell_root: Path,
+    state: dict[str, Any],
+    *,
+    bundle_sha256: str,
+    certified_at: str,
+) -> dict[str, Any]:
+    winner = state["winner"]
+    state["certification"] = {
+        "bundle": "certification/certify.json",
+        "bundle_sha256": bundle_sha256,
+        "certified_at": certified_at,
+    }
+    state["phase"] = "certified"
+    state["revision"] += 1
+    state["updated_at"] = certified_at
+    state["history"].append({
+        "event": "winner-certified",
+        "candidate_id": winner["candidate_id"],
+        "bundle_sha256": bundle_sha256,
+        "at": certified_at,
+    })
+    return _commit_state(cell_root, state)
