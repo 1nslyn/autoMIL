@@ -20,6 +20,7 @@ from autobench.campaign import (
     file_sha256,
     load_manifest,
     materialize_discovery_cells,
+    run_materialization_canary,
     validate_manifest,
     write_manifest,
 )
@@ -186,3 +187,16 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]
+
+
+def test_full_campaign_canary_covers_every_arm_task_regime_without_gpu(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+
+    report = run_materialization_canary(manifest_path, repo_root=fake_repo)
+    assert report["cells"] == 130
+    assert len(report["regimes"]) == 10
+    assert report["gpu_processes_started"] == 0
+    assert not list(manifest_path.parent.glob(".canary-*"))
