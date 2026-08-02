@@ -86,6 +86,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--n_folds", type=int, default=None)
+    p.add_argument(
+        "--folds", default=None,
+        help="Comma-separated subset of the prepared fold indices to train "
+             "(for staged campaigns; n_folds still defines the split set).",
+    )
     p.add_argument("--patience", type=int, default=None)
     p.add_argument("--stop_epoch", type=int, default=None)
     # H-3b: these two had no flag at all, so they were reachable only through a
@@ -109,6 +114,10 @@ def parse_args() -> argparse.Namespace:
         "--hparams", type=str, default=None,
         help='JSON object of arm-specific hyperparameter overrides, '
              'e.g. \'{"numGroup": 8, "grad_clip": 1.0}\'',
+    )
+    p.add_argument(
+        "--policy-variant", default=None,
+        help="Registered train-only PolicyVariant under automil/variants/_policies/.",
     )
     p.add_argument("--no_wandb", action="store_true")
 
@@ -134,6 +143,25 @@ def _parse_hparams(raw: str | None) -> dict:
             f"--hparams values must be scalars; nested value(s) for {sorted(bad)}"
         )
     return parsed
+
+
+def _parse_folds(raw: str | None, n_folds: int) -> tuple[int, ...] | None:
+    """Parse one immutable subset of an already prepared split set."""
+    if raw is None:
+        return None
+    try:
+        values = tuple(int(part.strip()) for part in raw.split(","))
+    except ValueError as exc:
+        raise SystemExit("--folds must be comma-separated integer indices") from exc
+    if not values or any(not part.strip() for part in raw.split(",")):
+        raise SystemExit("--folds must contain at least one integer index")
+    if len(set(values)) != len(values):
+        raise SystemExit("--folds must not contain duplicate indices")
+    if any(value < 0 or value >= n_folds for value in values):
+        raise SystemExit(
+            f"--folds indices must lie in [0, {n_folds}), got {values}"
+        )
+    return values
 
 
 def _per_fold_composites(per_fold_val: list, is_survival: bool) -> list[float]:
@@ -341,8 +369,12 @@ def main() -> None:
 
     # CFG-01 / D-01: pass n_folds only when explicitly supplied; otherwise ExperimentConfig.n_folds applies.
     _exp_kwargs = {}
+    resolved_n_folds = args.n_folds if args.n_folds is not None else 5
     if args.n_folds is not None:
         _exp_kwargs["n_folds"] = args.n_folds
+    fold_indices = _parse_folds(args.folds, resolved_n_folds)
+    if fold_indices is not None:
+        _exp_kwargs["fold_indices"] = fold_indices
     exp_cfg = ExperimentConfig(
         task=task_cfg,
         encoder_key=args.encoder,
@@ -353,6 +385,7 @@ def main() -> None:
         strategy=args.strategy,
         survival_loss=survival_loss,
         hparam_overrides=_parse_hparams(args.hparams),
+        policy_variant=args.policy_variant,
         dataset=ds.name,  # DATA-ID: prefer the resolved DatasetConfig name over args.dataset
         **_exp_kwargs,
     )
@@ -361,9 +394,12 @@ def main() -> None:
     # Reads automil/applied_variant.json (written by `automil apply` and propagated
     # into the worktree by apply_overlay). No-op when no variant is selected or
     # when running outside autoMIL (applied_variant.json absent).
-    from pathlib import Path as _Path
     from autobench.pipeline.variant_dispatch import apply_model_variant_to_exp_cfg
-    _automil_dir = _Path("automil")
+    from autobench.pipeline.policy_dispatch import (
+        resolve_policy_name,
+        runtime_automil_dir,
+    )
+    _automil_dir = runtime_automil_dir()
     # WR-03: warn when automil/ is absent so the operator knows variant dispatch
     # is skipped.  This happens on manual invocations from any directory that is
     # not the worktree root; under the orchestrator the cwd is always the worktree
@@ -375,6 +411,10 @@ def main() -> None:
             flush=True,
         )
     apply_model_variant_to_exp_cfg(exp_cfg, _automil_dir)
+    # Resolve the train-only policy before any runner fingerprints or writes the
+    # ExperimentConfig. An archived selection must be provenance-equivalent to
+    # an explicit --policy-variant, never an invisible runtime side channel.
+    exp_cfg.policy_variant = resolve_policy_name(exp_cfg, _automil_dir)
 
     benchmark_dir = ds.benchmark_dir
 

@@ -163,10 +163,40 @@ class ExperimentConfig:
     # space (search_space.py) and raises on anything undeclared or locked.
     # Empty by default, so a plain grid run is byte-identical to before.
     hparam_overrides: dict = field(default_factory=dict)
+    # Optional registered train-only PolicyVariant. The protected trainers own
+    # model/forward/loss/measurement code; this selects only the optimizer,
+    # scheduler, and stopping adapter exposed by policy_dispatch.py.
+    policy_variant: str | None = None
+    # Stage controller fold subset. ``n_folds`` remains the immutable split
+    # definition (five for the preprint); this selects which of those prepared
+    # folds the current stage is allowed to train. None means all folds and is
+    # byte-compatible with every static-grid run.
+    fold_indices: tuple[int, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.fold_indices is None:
+            return
+        indices = tuple(self.fold_indices)
+        if not indices:
+            raise ValueError("fold_indices must not be empty")
+        if any(type(index) is not int for index in indices):
+            raise TypeError("fold_indices must contain only integers")
+        if len(set(indices)) != len(indices):
+            raise ValueError("fold_indices must not contain duplicates")
+        if any(index < 0 or index >= self.n_folds for index in indices):
+            raise ValueError(
+                f"fold_indices {indices} must lie in [0, {self.n_folds})"
+            )
+        self.fold_indices = indices
 
     @property
     def is_survival(self) -> bool:
         return self.task.task_type == "survival"
+
+    @property
+    def selected_folds(self) -> tuple[int, ...]:
+        """Prepared fold indices trained by this stage, in declared order."""
+        return self.fold_indices or tuple(range(self.n_folds))
 
     @property
     def experiment_id(self) -> str:
@@ -211,6 +241,12 @@ class ExperimentConfig:
         """
         d = asdict(self)
         d["framework"] = self.framework.value
+        # Preserve every existing baseline fingerprint/config.json byte shape.
+        # The field appears only when a source policy is actually selected.
+        if self.policy_variant is None:
+            d.pop("policy_variant", None)
+        if self.fold_indices is None:
+            d.pop("fold_indices", None)
         return d
 
     def save(self, path: str, arm_cfg=None) -> None:

@@ -26,6 +26,7 @@ from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -106,6 +107,7 @@ def train_titan_survival_fold(
     results_dir: str,
     device: str = "cuda:0",
     head_cfg: TitanHeadConfig | None = None,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train and evaluate one TITAN survival fold.
 
@@ -147,6 +149,8 @@ def train_titan_survival_fold(
     optimizer = torch.optim.Adam(
         model.parameters(), lr=head_cfg.lr, weight_decay=head_cfg.weight_decay,
     )
+    policy_runtime = policy_runtime or PolicyRuntime()
+    optimizer = policy_runtime.wrap_optimizer(optimizer)
 
     if is_nll:
         loss_fn = NLLSurvLoss()
@@ -227,7 +231,12 @@ def train_titan_survival_fold(
         # Always save the best (val-loss) checkpoint; early_stopping only gates
         # stopping early (matches classification/DTFD).
         early_stopping(v_loss, v_cidx, model)
-        if exp_cfg.train.early_stopping and early_stopping.early_stop:
+        default_stop = exp_cfg.train.early_stopping and early_stopping.early_stop
+        if policy_runtime.should_stop(
+            default_stop,
+            epoch=epoch,
+            metrics={"val_loss": v_loss, "val_c_index": v_cidx},
+        ):
             break
     elapsed = time.time() - start
 

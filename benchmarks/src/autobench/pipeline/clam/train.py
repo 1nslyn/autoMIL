@@ -47,7 +47,11 @@ def _set_clam_device(device: torch.device) -> None:
 
 
 def _make_clam_args(
-    exp_cfg: ExperimentConfig, fold_dir: str, *, log_data: bool = False,
+    exp_cfg: ExperimentConfig,
+    fold_dir: str,
+    *,
+    log_data: bool = False,
+    policy_runtime=None,
 ) -> SimpleNamespace:
     """Construct the full args namespace expected by clam_train()."""
     return SimpleNamespace(
@@ -78,6 +82,7 @@ def _make_clam_args(
         results_dir=fold_dir,
         log_data=log_data,
         testing=False,
+        policy_runtime=policy_runtime,
     )
 
 
@@ -95,6 +100,7 @@ def train_fold(
     results_dir: str,
     device: torch.device,
     wandb_project: str | None = None,
+    policy_runtime=None,
 ) -> dict:
     """Train one fold.
 
@@ -152,7 +158,12 @@ def train_fold(
     # --- Call CLAM's train() directly ---
     # Enable tensorboard (log_data) when wandb is active so CLAM writes
     # per-epoch metrics that wandb captures via sync_tensorboard.
-    args = _make_clam_args(exp_cfg, fold_dir, log_data=bool(wandb_project))
+    args = _make_clam_args(
+        exp_cfg,
+        fold_dir,
+        log_data=bool(wandb_project),
+        policy_runtime=policy_runtime,
+    )
     datasets = (train_split, val_split, test_split)
 
     _timer_start = time.perf_counter()

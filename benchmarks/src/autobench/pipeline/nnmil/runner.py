@@ -12,6 +12,7 @@ from autobench.pipeline.hparams import all_overrides, apply_overrides_to_plan
 from autobench.pipeline.nnmil.prepare import nnmil_plan_dir
 from autobench.pipeline.nnmil.train import train_nnmil_fold
 from autobench.pipeline.results_cache import resolve_results_dir
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def run_nnmil_experiment(
@@ -90,11 +91,13 @@ def run_nnmil_experiment(
     # TrainConfig that config.json also carries. Records the plan AFTER any
     # override was applied above, so it is the recipe that actually ran.
     exp_cfg.save(os.path.join(results_dir, "config.json"), arm_cfg=_plan_training_cfg)
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
     fold_results: list[dict] = []
-    for fold in range(exp_cfg.n_folds):
+    for fold in exp_cfg.selected_folds:
         result = train_nnmil_fold(
             exp_cfg, plan_path, fold, results_dir, device=device,
+            policy_runtime=policy_runtime,
         )
         fold_results.append(result)
         _write_fold_result_json(fold, result)
@@ -114,6 +117,7 @@ def run_nnmil_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),

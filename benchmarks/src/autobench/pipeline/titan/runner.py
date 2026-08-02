@@ -22,6 +22,7 @@ from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import build_split_dataset, build_survival_split_dataset
 from autobench.pipeline.titan.survival_train import train_titan_survival_fold
 from autobench.pipeline.titan.train import train_titan_fold
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 import pandas as pd
 
@@ -58,6 +59,7 @@ def run_titan_experiment(
     # embed_dim so train_titan_fold builds nn.Linear(true_dim, n_classes)
     # and config.json/summary record the real dimension.
     exp_cfg = replace(exp_cfg, embed_dim=int(manifest["embed_dim"]))
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
     # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
@@ -81,7 +83,7 @@ def run_titan_experiment(
     task_df = pd.read_csv(task_csv)
 
     fold_results: list[dict] = []
-    for fold in range(exp_cfg.n_folds):
+    for fold in exp_cfg.selected_folds:
         split_csv = os.path.join(
             benchmark_dir, "splits", exp_cfg.strategy, exp_cfg.task.name,
             f"splits_{fold}.csv",
@@ -92,6 +94,7 @@ def run_titan_experiment(
             test_ds = build_survival_split_dataset(split_csv, "test", task_df, features_dir)
             result = train_titan_survival_fold(
                 exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
+                policy_runtime=policy_runtime,
             )
         else:
             train_ds = build_split_dataset(
@@ -105,6 +108,7 @@ def run_titan_experiment(
             )
             result = train_titan_fold(
                 exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
+                policy_runtime=policy_runtime,
             )
         fold_results.append(result)
         _write_fold_result_json(fold, result)
@@ -124,6 +128,7 @@ def run_titan_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),

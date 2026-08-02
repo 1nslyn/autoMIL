@@ -180,6 +180,8 @@ class ClassificationTrainer(BaseTrainer):
             {"params": gain_or_bias_params, "weight_decay": 0.0},
             {"params": rest_params, "weight_decay": self.config.get('weight_decay', 0.01)}
         ], lr=self.config.get('learning_rate', 3e-4))
+        if self.policy_runtime is not None:
+            optimizer = self.policy_runtime.wrap_optimizer(optimizer)
         
         loss_fn = nn.CrossEntropyLoss()
         
@@ -293,7 +295,19 @@ class ClassificationTrainer(BaseTrainer):
             val_kappa = val_metrics.get('val_val/kappa', val_metrics.get('val/kappa', None))
             
             early_stopping(val_loss, val_bacc, val_f1, val_auc, self.model, val_kappa=val_kappa)
-            if early_stopping.early_stop:
+            default_stop = early_stopping.early_stop
+            if self.policy_runtime is not None:
+                default_stop = self.policy_runtime.should_stop(
+                    default_stop,
+                    epoch=epoch,
+                    metrics={
+                        'val_loss': val_loss,
+                        'val_bacc': val_bacc,
+                        'val_f1': val_f1,
+                        'val_auc': val_auc,
+                    },
+                )
+            if default_stop:
                 self.logger.info(f"Early stopping triggered at epoch {epoch+1}")
                 break
         

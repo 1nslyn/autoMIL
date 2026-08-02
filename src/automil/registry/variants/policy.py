@@ -14,7 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 class PolicyVariant(ABC):
-    """Parent-agnostic training-policy variant."""
+    """Parent-agnostic training-policy variant.
+
+    The protected consumer training loop owns forward passes, the defining MIL
+    loss, validation, and result writing.  A policy can only adapt the optimizer
+    and scheduler objects handed to it, or refine an already-computed stopping
+    decision.  This is the deliberately narrow, train-only source seam used by
+    architecture-preserving searches.
+    """
 
     @abstractmethod
     def wrap_optimizer(self, opt: Any) -> Any:
@@ -23,6 +30,29 @@ class PolicyVariant(ABC):
     def wrap_scheduler(self, sched: Any) -> Any:
         """Optional scheduler wrapping. Default returns the input unchanged."""
         return sched
+
+    def wrap_optimizer_for(self, opt: Any, *, role: str) -> Any:
+        """Role-aware optimizer seam; legacy policies keep working unchanged."""
+        return self.wrap_optimizer(opt)
+
+    def wrap_scheduler_for(self, sched: Any, *, role: str) -> Any:
+        """Role-aware scheduler seam; legacy policies keep working unchanged."""
+        return self.wrap_scheduler(sched)
+
+    def should_stop(
+        self,
+        *,
+        default: bool,
+        epoch: int,
+        metrics: dict[str, float],
+    ) -> bool:
+        """Refine the protected trainer's stopping decision.
+
+        The default is an identity operation, so opening this seam cannot alter
+        any baseline run.  Only validation/training metrics may be supplied by
+        consumers; held-out metrics remain outside the policy surface.
+        """
+        return default
 
     def step(self, loss: Any, opt: Any) -> None:
         """Default step: delegate to opt.step() after backward.

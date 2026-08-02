@@ -24,6 +24,7 @@ from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def _resolve_h5_dir(benchmark_dir: str, exp_cfg: ExperimentConfig) -> str:
@@ -71,6 +72,7 @@ def run_abmil_experiment(
     # unset flag can never pull this arm onto the shared schedule).
     cfg = apply_overrides(cfg, all_overrides(exp_cfg), arm="abmil")
     torch_device = torch.device(device)
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
     # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
@@ -91,7 +93,7 @@ def run_abmil_experiment(
     model_type = exp_cfg.model.model_type
 
     fold_results: list[dict] = []
-    for fold in range(exp_cfg.n_folds):
+    for fold in exp_cfg.selected_folds:
         fold_dir = os.path.join(results_dir, f"fold_{fold}")
         os.makedirs(fold_dir, exist_ok=True)
         metrics_path = os.path.join(fold_dir, "metrics.json")
@@ -115,6 +117,7 @@ def run_abmil_experiment(
                 embed_dim=exp_cfg.embed_dim, survival_loss=exp_cfg.survival_loss or "cox",
                 nll_bins=exp_cfg.task.nll_bins, cfg=cfg, device=torch_device,
                 seed=exp_cfg.train.seed + fold, fold_dir=fold_dir,
+                policy_runtime=policy_runtime,
             )
         else:
             train_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "train")
@@ -124,6 +127,7 @@ def run_abmil_experiment(
                 model_type, train_slides, val_slides, test_slides,
                 embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+                policy_runtime=policy_runtime,
             )
 
         result = {
@@ -155,6 +159,7 @@ def run_abmil_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),

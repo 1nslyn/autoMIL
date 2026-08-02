@@ -32,6 +32,7 @@ from autobench.pipeline.dtfd.dataset import DTFDSurvivalSlide, _read_bag, min_ba
 from autobench.pipeline.dtfd.eval import _split_pseudo_bags
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.dtfd.train import _restore, _snapshot
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -216,6 +217,7 @@ def _risk_records(
     cfg: DTFDConfig,
     device: torch.device,
     seed: int,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Per-slide risk scores (CR-3: pooled across folds by the runner)."""
     bundle.eval()
@@ -285,12 +287,17 @@ def train_dtfd_survival_fold(
 
         opt0 = torch.optim.Adam(bundle.tier1_parameters(), lr=cfg.lr, weight_decay=cfg.wd)
         opt1 = torch.optim.Adam(bundle.att_cls.parameters(), lr=cfg.lr, weight_decay=cfg.wd)
+        policy_runtime = policy_runtime or PolicyRuntime()
+        opt0 = policy_runtime.wrap_optimizer(opt0, role="tier1")
+        opt1 = policy_runtime.wrap_optimizer(opt1, role="tier2")
         sched0 = torch.optim.lr_scheduler.MultiStepLR(
             opt0, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
         )
         sched1 = torch.optim.lr_scheduler.MultiStepLR(
             opt1, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
         )
+        sched0 = policy_runtime.wrap_scheduler(sched0, role="tier1")
+        sched1 = policy_runtime.wrap_scheduler(sched1, role="tier2")
 
         # Select on val LOSS, not the noisy few-event val c-index (as CLAM/
         # ABMIL/TITAN do). DTFDBundle has no unified state_dict, so use DTFD's
@@ -320,7 +327,12 @@ def train_dtfd_survival_fold(
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
-                if cfg.early_stopping and epochs_no_improve >= cfg.patience:
+                default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
+                if policy_runtime.should_stop(
+                    default_stop,
+                    epoch=epoch,
+                    metrics={"val_loss": v_loss, "val_c_index": v_cidx},
+                ):
                     break
         elapsed_seconds = time.time() - start
 

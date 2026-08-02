@@ -237,6 +237,27 @@ class TestExperimentConfig:
         assert d["task"]["name"] == "brca"
         assert d["framework"] == "clam"
         assert d["strategy"] == "standard"
+        assert "fold_indices" not in d
+
+    def test_stage_subset_keeps_split_definition_fixed(self, exp):
+        exp.fold_indices = (0, 1, 2)
+        exp.__post_init__()
+        assert exp.n_folds == 5
+        assert exp.selected_folds == (0, 1, 2)
+        assert exp.to_dict()["fold_indices"] == (0, 1, 2)
+
+    @pytest.mark.parametrize("indices", [(), (0, 0), (-1,), (5,)])
+    def test_invalid_stage_subset_fails_loudly(self, exp, indices):
+        with pytest.raises((TypeError, ValueError)):
+            ExperimentConfig(
+                task=exp.task,
+                encoder_key=exp.encoder_key,
+                embed_dim=exp.embed_dim,
+                model=exp.model,
+                train=exp.train,
+                n_folds=5,
+                fold_indices=indices,
+            )
 
     def test_save_creates_file(self, exp, tmp_path):
         path = str(tmp_path / "config.json")

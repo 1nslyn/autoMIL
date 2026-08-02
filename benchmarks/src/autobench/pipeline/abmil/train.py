@@ -20,6 +20,7 @@ from autobench.pipeline.abmil.dataset import ABMILSlide
 from autobench.pipeline.abmil.model import build_abmil_model
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import compute_extended_metrics
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def _train_one_epoch(
@@ -94,6 +95,7 @@ def train_abmil_fold(
     cfg: ABMILConfig,
     device: torch.device,
     seed: int,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train one ABMIL fold and return shared-schema test/val metrics.
 
@@ -119,6 +121,8 @@ def train_abmil_fold(
         optimizer = torch.optim.Adam(
             model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
         )
+        policy_runtime = policy_runtime or PolicyRuntime()
+        optimizer = policy_runtime.wrap_optimizer(optimizer)
 
         best_auc = float("-inf")
         best_snap: dict | None = None
@@ -137,7 +141,10 @@ def train_abmil_fold(
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
-                if cfg.early_stopping and epochs_no_improve >= cfg.patience:
+                default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
+                if policy_runtime.should_stop(
+                    default_stop, epoch=_epoch, metrics={"val_auc": cur},
+                ):
                     break
         elapsed_seconds = time.time() - start
 

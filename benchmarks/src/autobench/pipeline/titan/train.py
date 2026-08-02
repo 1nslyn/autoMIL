@@ -22,6 +22,7 @@ from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import compute_extended_metrics
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSlideDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
@@ -62,6 +63,7 @@ def train_titan_fold(
     results_dir: str,
     device: str = "cuda:0",
     head_cfg: TitanHeadConfig | None = None,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train and evaluate one fold of a TITAN linear probe.
 
@@ -103,6 +105,8 @@ def train_titan_fold(
     optimizer = torch.optim.Adam(
         model.parameters(), lr=head_cfg.lr, weight_decay=head_cfg.weight_decay,
     )
+    policy_runtime = policy_runtime or PolicyRuntime()
+    optimizer = policy_runtime.wrap_optimizer(optimizer)
     criterion = nn.CrossEntropyLoss()
 
     batch_size = min(32, len(train_ds)) or 1
@@ -140,7 +144,13 @@ def train_titan_fold(
         else:
             epochs_without_improvement += 1
 
-        if exp_cfg.train.early_stopping and epochs_without_improvement >= head_cfg.patience:
+        default_stop = (
+            exp_cfg.train.early_stopping
+            and epochs_without_improvement >= head_cfg.patience
+        )
+        if policy_runtime.should_stop(
+            default_stop, epoch=_epoch, metrics={"val_auc": val_auc},
+        ):
             break
 
     elapsed = time.time() - start

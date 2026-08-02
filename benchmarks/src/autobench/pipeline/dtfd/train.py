@@ -30,6 +30,7 @@ from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import DTFDSlide, min_bag_size
 from autobench.pipeline.dtfd.eval import evaluate_dtfd, val_auc
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def _pseudo_bag_forward(
@@ -161,6 +162,7 @@ def train_dtfd_fold(
     device: torch.device,
     seed: int,
     return_history: bool = False,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train one DTFD fold and return shared-schema test/val metrics.
 
@@ -186,12 +188,17 @@ def train_dtfd_fold(
 
         opt0 = torch.optim.Adam(bundle.tier1_parameters(), lr=cfg.lr, weight_decay=cfg.wd)
         opt1 = torch.optim.Adam(bundle.att_cls.parameters(), lr=cfg.lr, weight_decay=cfg.wd)
+        policy_runtime = policy_runtime or PolicyRuntime()
+        opt0 = policy_runtime.wrap_optimizer(opt0, role="tier1")
+        opt1 = policy_runtime.wrap_optimizer(opt1, role="tier2")
         sched0 = torch.optim.lr_scheduler.MultiStepLR(
             opt0, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
         )
         sched1 = torch.optim.lr_scheduler.MultiStepLR(
             opt1, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
         )
+        sched0 = policy_runtime.wrap_scheduler(sched0, role="tier1")
+        sched1 = policy_runtime.wrap_scheduler(sched1, role="tier2")
 
         best_auc = float("-inf")
         best_snap: dict | None = None
@@ -214,7 +221,10 @@ def train_dtfd_fold(
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
-                if cfg.early_stopping and epochs_no_improve >= cfg.patience:
+                default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
+                if policy_runtime.should_stop(
+                    default_stop, epoch=epoch, metrics={"val_auc": cur},
+                ):
                     break
 
         if best_snap is not None:
