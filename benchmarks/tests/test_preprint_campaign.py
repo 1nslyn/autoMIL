@@ -189,6 +189,47 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         ]
 
 
+def test_materializer_restart_preserves_progress_files(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    roots = materialize_discovery_cells(manifest_path, output_root, fake_repo)
+    root = roots[0]
+    plan = root / "plan.md"
+    learnings = root / "learnings.md"
+    state = root.parent / "campaign_state.json"
+    plan.write_text("agent plan must survive\n")
+    learnings.write_text("earned knowledge must survive\n")
+    state_before = state.read_bytes()
+
+    restarted = materialize_discovery_cells(manifest_path, output_root, fake_repo)
+
+    assert restarted == roots
+    assert plan.read_text() == "agent plan must survive\n"
+    assert learnings.read_text() == "earned knowledge must survive\n"
+    assert state.read_bytes() == state_before
+
+
+def test_materializer_refuses_half_created_existing_root(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    first_cell = load_manifest(manifest_path)["cells"][0]
+    partial = output_root / first_cell["cell_id"] / "automil"
+    partial.mkdir(parents=True)
+    (partial / "plan.md").write_text("do not overwrite me\n")
+
+    with pytest.raises(CampaignManifestError, match="incomplete or corrupt"):
+        materialize_discovery_cells(manifest_path, output_root, fake_repo)
+
+    assert (partial / "plan.md").read_text() == "do not overwrite me\n"
+    assert not (partial / "config.yaml").exists()
+
+
 def test_full_campaign_canary_covers_every_arm_task_regime_without_gpu(tmp_path):
     fake_repo = tmp_path / "repo"
     _copy_campaign_sources(fake_repo)
