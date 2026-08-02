@@ -66,9 +66,9 @@ SEARCH_SPACE: dict[str, ArmSearchSpace] = {
         arm="clam",
         tunable=frozenset({
             # architecture / bag handling (ModelConfig)
-            "model_size", "dropout", "bag_weight", "B",
+            "model_size", "dropout", "B",
             # CLAM's instance-clustering branch (upstream core_utils.py:117,141,185)
-            "bag_loss", "inst_loss", "no_inst_cluster",
+            "bag_loss", "inst_loss",
             # optimisation / schedule (TrainConfig)
             "lr", "weight_decay", "optimizer", "max_epochs",
             "early_stopping", "patience", "stop_epoch", "weighted_sample",
@@ -76,6 +76,14 @@ SEARCH_SPACE: dict[str, ArmSearchSpace] = {
         locked={
             "model_type": "grid axis, not a search knob — it selects the arm",
             "seed": "evaluation protocol, not a recipe knob (frozen substrate)",
+            "no_inst_cluster": (
+                "identity lock: True removes CLAM's defining instance-clustering branch"
+            ),
+            "bag_weight": (
+                "identity lock: changing the fixed bag/instance-loss mixture can "
+                "zero a defining loss branch (bag_weight=1 makes CLAM degenerate to "
+                "bag-loss-only attention MIL)"
+            ),
         },
         source="shared TrainConfig + ModelConfig (pipeline/config.py)",
     ),
