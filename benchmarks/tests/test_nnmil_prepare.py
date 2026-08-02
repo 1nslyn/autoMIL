@@ -119,7 +119,7 @@ class TestAnalyzeFeatures:
         assert stats["recommended_max_seq_length"] == expected
 
     def test_max_seq_length_uncapped(self, tmp_path):
-        """Matches nnMIL planner.py:129 — int(median * 0.5) with no upper cap."""
+        """Matches nnMIL experiment_planner.py:129 — int(median * 0.5), no cap."""
         h5_dir = tmp_path / "features_big"
         h5_dir.mkdir()
         for i in range(5):
@@ -155,7 +155,7 @@ class TestGenerateTrainingConfig:
         assert config["batch_size"] == 16
 
     def test_large_dataset_batch_matches_planner(self):
-        """planner.py:639-657 — n_train>800 → batch_size=32 (clamped to [16,48])."""
+        """experiment_planner.py:639-657 — n_train>800 → batch_size=32."""
         stats = {
             "feature_dimension": 768,
             "num_patches_per_slide": {"median": 400},
@@ -164,7 +164,7 @@ class TestGenerateTrainingConfig:
         assert config["batch_size"] == 32
 
     def test_mid_dataset_batch_matches_planner(self):
-        """planner.py:643 — 200<=n_train<=800 → 24 if <400 else 32."""
+        """experiment_planner.py:643 — 200<=n_train<=800 → 24 if <400 else 32."""
         stats = {
             "feature_dimension": 768,
             "num_patches_per_slide": {"median": 400},
@@ -175,7 +175,7 @@ class TestGenerateTrainingConfig:
         assert cfg_600["batch_size"] == 32
 
     def test_max_seq_length_uncapped(self):
-        """planner.py:129 — int(median * 0.5) with no upper cap."""
+        """experiment_planner.py:129 — int(median * 0.5) with no upper cap."""
         stats = {
             "feature_dimension": 768,
             "num_patches_per_slide": {"median": 13236},

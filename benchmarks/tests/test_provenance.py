@@ -122,3 +122,24 @@ class TestUnchangedArmsAreUntouchedByThisMigration:
     def test_titan_still_has_no_upstream_recipe_to_match(self):
         titan = next(p for p in ARM_PROVENANCE if p.arm == "titan")
         assert titan.matches_upstream is False
+
+
+class TestTrainerProvenanceIsNotOverclaimed:
+    """Matching scalar defaults must not be reported as a faithful train loop."""
+
+    def test_every_arm_declares_its_training_loop_relation(self):
+        for arm in ARM_PROVENANCE:
+            assert arm.trainer_provenance.strip(), arm.arm
+
+    def test_benchmark_added_stopping_is_disclosed(self):
+        for name in ("clam", "abmil", "dtfd"):
+            arm = next(p for p in ARM_PROVENANCE if p.arm == name)
+            assert "early stopping" in arm.trainer_provenance.lower()
+
+    def test_table_separates_defaults_from_the_training_loop(self):
+        from autobench.pipeline.provenance import provenance_table
+
+        table = provenance_table()
+        assert "Native scalar defaults?" in table
+        assert "Trainer provenance" in table
+        assert "fully upstream-faithful" not in table

@@ -6,9 +6,11 @@ arm's own config dataclass remains the single runtime source of truth (see
 arms onto a lowest-common-denominator field set, and could not represent nnMIL's
 data-adaptive self-configuration).
 
-What this records is the answer to a question a reviewer will ask and the code
-previously could not answer: *where does each arm's schedule come from, and does
-it match that method's published defaults?*
+What this records is the answer to two questions a reviewer will ask and the
+code previously collapsed into one: *where do the arm's scalar defaults come
+from, and what is the relation between the live trainer and upstream?* Matching
+learning-rate/regularization/epoch literals does **not** make a benchmark-owned
+training loop upstream-faithful.
 
 Audit finding (2026-07-23), after checking every vendored package under
 ``benchmarks/lib/`` field by field:
@@ -57,8 +59,13 @@ class ArmProvenance:
 
     arm: str
     source: str
-    #: True when the defaults reproduce that method's published/upstream values.
+    #: True when the declared native scalar defaults reproduce the corresponding
+    #: published/upstream values. This is deliberately narrower than training-
+    #: loop fidelity; see ``trainer_provenance``.
     matches_upstream: bool
+    #: Relation between the live training loop and upstream, including benchmark
+    #: additions such as checkpoint selection or early stopping.
+    trainer_provenance: str
     note: str = ""
 
 
@@ -67,18 +74,31 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
         arm="clam",
         source="shared TrainConfig (autobench.pipeline.config)",
         matches_upstream=True,
+        trainer_provenance=(
+            "Classification calls the vendored CLAM trainer, but the benchmark "
+            "enables CLAM's optional early stopping by default whereas upstream's "
+            "CLI default is off. Survival uses a benchmark adapter loop with "
+            "validation-loss checkpointing and optional early stopping."
+        ),
         note=(
             "RESOLVED 2026-07-28 (was lr=2e-4 DEVIATING from upstream default "
             "1e-4, lib/CLAM/main.py:74, 2x with no recorded rationale): lr "
             "changed to 1e-4. Everything else already matched upstream: "
             "reg/weight_decay 1e-5, max_epochs 200, drop_out 0.25, bag_weight "
-            "0.7, B=8. CLAM is now fully upstream-faithful."
+            "0.7, B=8. The scalar defaults now match; trainer differences are "
+            "reported separately."
         ),
     ),
     ArmProvenance(
         arm="abmil",
         source="ABMILConfig (abmil/config.py)",
         matches_upstream=True,
+        trainer_provenance=(
+            "Benchmark reimplementation of the published model and recipe. It "
+            "adds validation checkpoint selection and an early stopping switch "
+            "that upstream ABMIL does not provide; patience=20 is inert under the "
+            "native 20-epoch default."
+        ),
         note=(
             "RESOLVED 2026-07-28 (was deviating on ALL THREE optimizer settings "
             "— lr=2e-4 vs upstream 5e-4, weight_decay=1e-5 vs upstream 1e-4, "
@@ -97,16 +117,27 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
         arm="dtfd",
         source="DTFDConfig (dtfd/config.py)",
         matches_upstream=True,
+        trainer_provenance=(
+            "Benchmark reimplementation of DTFD's two-tier trainer. It adds "
+            "validation checkpoint selection and early stopping, neither of "
+            "which appears in the vendored upstream entry point."
+        ),
         note=(
             "VERIFIED field-by-field against lib/DTFD-MIL/Main_DTFD_MIL.py: EPOCH=200, "
             "lr=1e-4, weight_decay=1e-4, numGroup=4, total_instance=4, mDim=512, "
-            "grad_clipping=5 — all reproduced exactly. Fully upstream-faithful."
+            "grad_clipping=5 — all scalar defaults reproduced exactly. Trainer "
+            "differences are reported separately."
         ),
     ),
     ArmProvenance(
         arm="titan",
         source="TitanHeadConfig (titan/config.py) + shared TrainConfig",
         matches_upstream=False,
+        trainer_provenance=(
+            "Benchmark-owned frozen-embedding linear-probe trainer with validation "
+            "checkpointing and early stopping; there is no upstream TITAN head "
+            "training loop to reproduce."
+        ),
         note=(
             "MIXED provenance: lr/weight_decay/patience come from TitanHeadConfig, "
             "while max_epochs and the early_stopping switch are read off the shared "
@@ -117,6 +148,11 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
         arm="nnmil",
         source="computed at prep time in nnmil/prepare.py, written to the plan JSON",
         matches_upstream=True,
+        trainer_provenance=(
+            "Uses nnMIL's vendored planner and task-specific trainers; the "
+            "benchmark adapter prepares inputs and normalizes outputs without "
+            "adding a separate early stopping mechanism."
+        ),
         note=(
             "CORRECTED after verifying lib/nnMIL: these literals REPRODUCE nnMIL's "
             "own upstream defaults — classification_trainer.py uses learning_rate "
@@ -133,10 +169,12 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
 def provenance_table() -> str:
     """Render as markdown for the paper's methods section."""
     lines = [
-        "| Arm | Defaults come from | Matches upstream? | Notes |",
-        "|---|---|:-:|---|",
+        "| Arm | Defaults come from | Native scalar defaults? | Trainer provenance | Notes |",
+        "|---|---|:-:|---|---|",
     ]
     for p in ARM_PROVENANCE:
         mark = "yes" if p.matches_upstream else "**no**"
-        lines.append(f"| {p.arm} | {p.source} | {mark} | {p.note} |")
+        lines.append(
+            f"| {p.arm} | {p.source} | {mark} | {p.trainer_provenance} | {p.note} |"
+        )
     return "\n".join(lines)
