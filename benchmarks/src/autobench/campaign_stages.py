@@ -890,3 +890,132 @@ def _finalize_promotion_state(
         "at": now,
     })
     return _commit_state(cell_root, state)
+
+
+def freeze_promotion(cell_root: Path) -> dict[str, Any]:
+    """Reconcile every promotion job and freeze the five-fold eligible pool."""
+    with _stage_lock(cell_root):
+        return _freeze_promotion_unlocked(cell_root)
+
+
+def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
+    state = load_stage_state(cell_root)
+    if state["promotion"]["frozen"]:
+        return state
+    if state["phase"] != "promotion":
+        raise CampaignStageError(
+            f"promotion can freeze only from promotion phase, got {state['phase']!r}"
+        )
+    jobs = state["promotion"]["jobs"]
+    if not jobs:
+        raise CampaignStageError("promotion ledger contains no jobs")
+    adir = cell_root / "promotion" / "automil"
+    pending = _pending_stage_work(adir)
+    if pending:
+        raise CampaignStageError(f"promotion still has queued/running work: {pending}")
+    cell = json.loads((adir / "campaign_cell.json").read_text())
+    budget_cell = _discovery_cell(adir, cell["budget_identity"]["cell_id"])
+    if budget_cell.eval_budget != len(jobs):
+        raise CampaignStageError("promotion budget differs from frozen job count")
+    if budget_cell.consumed_evals != len(jobs):
+        raise CampaignStageError(
+            f"promotion requires {len(jobs)} charged attempts; "
+            f"found {budget_cell.consumed_evals}"
+        )
+
+    policy = load_candidate_policy(adir)
+    discovery_by_id = {
+        candidate["candidate_id"]: candidate
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    frozen_jobs: list[dict[str, Any]] = []
+    eligible: list[dict[str, Any]] = []
+    for job in jobs:
+        job = dict(job)
+        source_node = job["source_node_id"]
+        source = discovery_by_id.get(source_node)
+        if source is None or source["candidate_sha256"] != job["source_candidate_sha256"]:
+            raise CampaignStageError(
+                f"promotion job {job['promotion_node_id']} lost its frozen source identity"
+            )
+        node_id = job["promotion_node_id"]
+        archive = adir / "orchestrator" / "archive" / node_id
+        spec_path = archive / "spec.json"
+        result_path = archive / "result.json"
+        if not spec_path.is_file() or not result_path.is_file():
+            raise CampaignStageError(
+                f"promotion job {node_id} is terminal but lacks spec/result artifact"
+            )
+        try:
+            spec = json.loads(spec_path.read_text())
+            result = json.loads(result_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignStageError(f"cannot read promotion job {node_id}: {exc}") from exc
+        link = (spec.get("metadata") or {}).get("promotion") or {}
+        if (
+            link.get("source_node_id") != source_node
+            or link.get("source_candidate_sha256") != source["candidate_sha256"]
+            or link.get("source_spec_sha256") != source["source_spec_sha256"]
+            or link.get("expected_folds") != list(STAGE_FOLDS["promotion"])
+        ):
+            raise CampaignStageError(f"promotion source link drifted for {node_id}")
+        verdict = revalidate_candidate_spec(policy, spec, archive).to_dict()
+        promotion_sha, _ = _candidate_identity(spec, verdict)
+        if promotion_sha != job["promotion_candidate_sha256"]:
+            raise CampaignStageError(f"promotion candidate identity drifted for {node_id}")
+
+        if result.get("status") != "completed":
+            job.update({
+                "status": "ineligible",
+                "reason": f"promotion status {result.get('status')!r}",
+            })
+            frozen_jobs.append(job)
+            continue
+        try:
+            promotion_folds = _validation_folds(
+                result, STAGE_FOLDS["promotion"],
+            )
+        except CampaignStageError as exc:
+            job.update({"status": "ineligible", "reason": str(exc)})
+            frozen_jobs.append(job)
+            continue
+        five_folds = sorted(
+            [*source["validation_folds"], *promotion_folds],
+            key=lambda fold: fold["fold_index"],
+        )
+        if [fold["fold_index"] for fold in five_folds] != list(CERTIFICATION_FOLDS):
+            raise CampaignStageError(f"five-fold coverage is not exact for {node_id}")
+        selection_candidate = {
+            "candidate_id": source_node,
+            "candidate_sha256": source["candidate_sha256"],
+            "promotion_node_id": node_id,
+            "promotion_candidate_sha256": promotion_sha,
+            "validation_folds": five_folds,
+            "validation_mean": _mean(five_folds),
+        }
+        eligible.append(selection_candidate)
+        job.update({
+            "status": "eligible",
+            "reason": "complete five-fold validation",
+            "validation_mean": selection_candidate["validation_mean"],
+        })
+        frozen_jobs.append(job)
+
+    frozen_at = _utc_now()
+    state["phase"] = "selection-ready"
+    state["promotion"].update({
+        "jobs": frozen_jobs,
+        "attempts_charged": len(jobs),
+        "eligible_candidates": eligible,
+        "frozen": True,
+        "frozen_at": frozen_at,
+    })
+    state["revision"] += 1
+    state["updated_at"] = frozen_at
+    state["history"].append({
+        "event": "promotion-frozen",
+        "attempts_charged": len(jobs),
+        "eligible_candidates": len(eligible),
+        "at": frozen_at,
+    })
+    return _commit_state(cell_root, state)

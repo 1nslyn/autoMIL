@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from autobench.campaign import (
 from autobench.campaign_stages import (
     CampaignStageError,
     freeze_discovery,
+    freeze_promotion,
     initialize_stage_state,
     load_stage_state,
     materialize_promotion,
@@ -327,3 +329,89 @@ def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell
     assert recovered["phase"] == "promotion"
     assert recovered["promotion"]["jobs"] == jobs
     assert len(list((promotion / "orchestrator" / "queue").glob("*.json"))) == 10
+
+
+def _finish_promotion(
+    cell_root: Path, *, completed: int,
+) -> None:
+    adir = cell_root / "promotion" / "automil"
+    state = load_stage_state(cell_root)
+    for index, job in enumerate(state["promotion"]["jobs"]):
+        node_id = job["promotion_node_id"]
+        queue = adir / "orchestrator" / "queue" / f"{node_id}.json"
+        archive = adir / "orchestrator" / "archive" / node_id
+        spec = json.loads(queue.read_text())
+        queue.unlink()
+        (archive / "spec.json").write_text(json.dumps(spec))
+        result = (
+            {
+                "status": "completed",
+                "composite": 0.7 + index / 100,
+                "metrics": {"val_auc": 0.7, "val_bacc": 0.7},
+                "validation_folds": _folds(
+                    STAGE_FOLDS["promotion"], 0.7 + index / 100,
+                ),
+            }
+            if index < completed else
+            {"status": "crash", "composite": 0.0, "metrics": {}}
+        )
+        (archive / "result.json").write_text(json.dumps(result))
+    cell_path = (
+        adir / "cells"
+        / f"{json.loads((adir / 'campaign_cell.json').read_text())['budget_identity']['cell_id']}.json"
+    )
+    budget = read_cell(cell_path)
+    write_cell(
+        replace(
+            budget,
+            consumed_evals=len(state["promotion"]["jobs"]),
+            completed_evals=completed,
+        ),
+        adir / "cells",
+    )
+
+
+def test_promotion_freeze_excludes_crashes_but_keeps_their_cost(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=8)
+
+    state = freeze_promotion(cell_root)
+    assert state["phase"] == "selection-ready"
+    assert state["promotion"]["attempts_charged"] == 10
+    assert len(state["promotion"]["eligible_candidates"]) == 8
+    assert [job["status"] for job in state["promotion"]["jobs"]] == (
+        ["eligible"] * 8 + ["ineligible"] * 2
+    )
+    for candidate in state["promotion"]["eligible_candidates"]:
+        assert [fold["fold_index"] for fold in candidate["validation_folds"]] == [
+            0, 1, 2, 3, 4,
+        ]
+    assert freeze_promotion(cell_root) == state
+
+
+def test_promotion_freeze_rejects_cross_stage_identity_drift(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10)
+    state = load_stage_state(cell_root)
+    node_id = state["promotion"]["jobs"][0]["promotion_node_id"]
+    spec_path = cell_root / "promotion/automil/orchestrator/archive" / node_id / "spec.json"
+    spec = json.loads(spec_path.read_text())
+    spec["metadata"]["promotion"]["source_candidate_sha256"] = "0" * 64
+    spec_path.write_text(json.dumps(spec))
+
+    with pytest.raises(CampaignStageError, match="source link drifted"):
+        freeze_promotion(cell_root)
