@@ -8,14 +8,21 @@ without parsing them, while discovery freeze reads only agent-facing
 from __future__ import annotations
 
 import fcntl
+import copy
+import hashlib
 import json
 import math
 import os
+import shutil
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Iterator, Mapping
+
+import yaml
 
 from automil.admissibility import (
     AdmissibilityError,
@@ -23,6 +30,7 @@ from automil.admissibility import (
     revalidate_candidate_spec,
 )
 from automil.cells.state import read_cell
+from automil.cells.state import Cell, CellStatus, write_cell
 
 from autobench.campaign import (
     CAMPAIGN_ID,
@@ -167,6 +175,8 @@ def _initialize_stage_state_unlocked(
             "candidate_budget": PROMOTION_CANDIDATES,
             "jobs": [],
             "frozen": False,
+            "materialized": False,
+            "materialized_at": None,
         },
         "winner": None,
         "certification": None,
@@ -458,5 +468,425 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         "unique_complete_candidates": len(unique_eligible),
         "promoted_candidates": len(promoted),
         "at": frozen_at,
+    })
+    return _commit_state(cell_root, state)
+
+
+def _map_overlay_path(path: str, source_adir_rel: str, target_adir_rel: str) -> str:
+    candidate = PurePosixPath(path)
+    source_root = PurePosixPath(source_adir_rel)
+    try:
+        suffix = candidate.relative_to(source_root)
+    except ValueError as exc:
+        raise CampaignStageError(
+            f"candidate overlay path {path!r} escapes its discovery automil root"
+        ) from exc
+    return (PurePosixPath(target_adir_rel) / suffix).as_posix()
+
+
+def _copy_exact_overlay(
+    *,
+    source_archive: Path,
+    target_archive: Path,
+    source_spec: Mapping[str, Any],
+    source_adir_rel: str,
+    target_adir_rel: str,
+) -> tuple[dict[str, str], list[str], list[str]]:
+    source_manifest = source_spec.get("overlay_manifest") or {}
+    if not isinstance(source_manifest, dict):
+        raise CampaignStageError("source overlay_manifest must be an object")
+    target_manifest: dict[str, str] = {}
+    path_map: dict[str, str] = {}
+    for source_path, recorded_hash in sorted(source_manifest.items()):
+        if not isinstance(source_path, str) or not isinstance(recorded_hash, str):
+            raise CampaignStageError("source overlay manifest is not string-to-string")
+        target_path = _map_overlay_path(
+            source_path, source_adir_rel, target_adir_rel,
+        )
+        source_file = source_archive / source_path
+        if not source_file.is_file():
+            raise CampaignStageError(f"source overlay file is missing: {source_path}")
+        actual = f"sha256:{file_sha256(source_file)}"
+        if actual != recorded_hash:
+            raise CampaignStageError(f"source overlay hash drift: {source_path}")
+        destination = target_archive / target_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, destination)
+        target_manifest[target_path] = actual
+        path_map[source_path] = target_path
+
+    source_deletions = source_spec.get("deletions") or []
+    if not isinstance(source_deletions, list) or not all(
+        isinstance(path, str) for path in source_deletions
+    ):
+        raise CampaignStageError("source deletions must be a list of paths")
+    target_deletions = [
+        _map_overlay_path(path, source_adir_rel, target_adir_rel)
+        for path in source_deletions
+    ]
+    source_framework = source_spec.get("framework_overlay_files") or []
+    if not isinstance(source_framework, list) or not all(
+        isinstance(path, str) for path in source_framework
+    ):
+        raise CampaignStageError("source framework_overlay_files must be paths")
+    target_framework = []
+    for path in source_framework:
+        mapped = path_map.get(path)
+        if mapped is None:
+            raise CampaignStageError(
+                f"framework overlay path {path!r} is absent from source manifest"
+            )
+        target_framework.append(mapped)
+    return target_manifest, target_deletions, target_framework
+
+
+def _selection_from_overlay(
+    archive: Path, framework_files: list[str],
+) -> Mapping[str, Any] | None:
+    candidates = [
+        archive / path for path in framework_files
+        if PurePosixPath(path).name == "applied_variant.json"
+    ]
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise CampaignStageError("promotion overlay has multiple variant selections")
+    try:
+        selection = json.loads(candidates[0].read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"invalid promotion variant selection: {exc}") from exc
+    if not isinstance(selection, dict):
+        raise CampaignStageError("promotion variant selection must be an object")
+    return selection
+
+
+def _promotion_cell(
+    adir: Path, *, cell: Mapping[str, Any], config: Mapping[str, Any], budget: int,
+) -> None:
+    from automil.cells.capconfig import resolve_cap_config
+    from automil.cells.state import normalize_mil_model
+
+    cap = resolve_cap_config(dict(config), eval_budget_override=budget)
+    budget_identity = cell["budget_identity"]
+    expected_id = budget_identity["cell_id"]
+    created = Cell(
+        cell_id=expected_id,
+        dataset=str(budget_identity["dataset"]),
+        encoder=str(budget_identity["encoder"]),
+        mil_model=normalize_mil_model(str(budget_identity["mil_model"])),
+        started_at=time.time(),
+        budget_seconds=cap.budget_seconds,
+        safety_buffer_seconds=cap.safety_buffer_seconds,
+        status=CellStatus.ACTIVE,
+        mode=cap.mode,
+        idle_grace_seconds=cap.idle_grace_seconds,
+        eval_budget=budget,
+    )
+    write_cell(created, adir / "cells")
+
+
+def materialize_promotion(
+    cell_root: Path, *, repo_root: Path,
+) -> dict[str, Any]:
+    """Atomically create exact promotion jobs for the frozen top candidates."""
+    with _stage_lock(cell_root):
+        return _materialize_promotion_unlocked(cell_root, repo_root=repo_root)
+
+
+def _materialize_promotion_unlocked(
+    cell_root: Path, *, repo_root: Path,
+) -> dict[str, Any]:
+    state = load_stage_state(cell_root)
+    if state["promotion"]["materialized"]:
+        return state
+    if state["phase"] != "promotion-ready":
+        raise CampaignStageError(
+            f"promotion can materialize only from promotion-ready, got {state['phase']!r}"
+        )
+    candidates = state["discovery"]["promoted_candidates"]
+    if not candidates or len(candidates) > PROMOTION_CANDIDATES:
+        raise CampaignStageError("frozen promotion candidate count is invalid")
+    repo_root = repo_root.resolve()
+    cell_root = cell_root.resolve()
+    try:
+        cell_root.relative_to(repo_root)
+    except ValueError as exc:
+        raise CampaignStageError("campaign cell root must live inside repo_root") from exc
+
+    source_adir = cell_root / "automil"
+    source_adir_rel = source_adir.relative_to(repo_root).as_posix()
+    cell = json.loads((source_adir / "campaign_cell.json").read_text())
+    target_dir = cell_root / "promotion"
+    target_adir = target_dir / "automil"
+    target_adir_rel = target_adir.relative_to(repo_root).as_posix()
+    if target_dir.exists():
+        jobs = _recover_promotion_plan(
+            state, target_adir=target_adir, source_adir=source_adir,
+        )
+        return _finalize_promotion_state(cell_root, state, jobs)
+
+    temporary = Path(tempfile.mkdtemp(prefix=".promotion-", dir=str(cell_root)))
+    temporary_adir = temporary / "automil"
+    try:
+        source_config = yaml.safe_load((source_adir / "config.yaml").read_text()) or {}
+        config = copy.deepcopy(source_config)
+        config["files"] = {
+            "editable": [f"{target_adir_rel}/variants/_policies/*.py"],
+        }
+        config.setdefault("run", {})["command"] = cell["commands"]["promotion"]
+        config["run"]["mil_model"] = cell["model"]
+        config.setdefault("cap", {})["eval_budget"] = len(candidates)
+        config["training"] = {"fold_count": len(STAGE_FOLDS["promotion"])}
+        config.setdefault("campaign", {})["stage"] = "promotion"
+        temporary_adir.mkdir(parents=True)
+        (temporary_adir / "config.yaml").write_text(
+            yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
+        )
+        (temporary_adir / "campaign_cell.json").write_text(
+            json.dumps(cell, indent=2, sort_keys=True) + "\n"
+        )
+        (temporary_adir / ".gitignore").write_text(
+            "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
+            ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
+        )
+        (temporary_adir / "plan.md").write_text(
+            f"# Frozen promotion — {state['cell_id']}\n\n"
+            f"{len(candidates)} exact candidates; no agent proposals permitted.\n"
+        )
+        (temporary_adir / "learnings.md").write_text(
+            f"# Promotion ledger — {state['cell_id']}\n"
+        )
+        (temporary_adir / "variants" / "_policies").mkdir(parents=True)
+        _promotion_cell(
+            temporary_adir, cell=cell, config=config, budget=len(candidates),
+        )
+
+        policy = load_candidate_policy(temporary_adir)
+        target_command = config["run"]["command"]
+        command_hash = hashlib.sha256(target_command.encode()).hexdigest()
+        campaign_binding = dict(config["campaign"])
+        from automil.admissibility import validate_campaign_binding
+
+        manifest_path = repo_root / campaign_binding["manifest"]
+        validate_campaign_binding(
+            manifest_path,
+            campaign_binding,
+            base_run_command=target_command,
+            budget_cell_id=cell["budget_identity"]["cell_id"],
+        )
+
+        jobs: list[dict[str, Any]] = []
+        queue_dir = temporary_adir / "orchestrator" / "queue"
+        archive_root = temporary_adir / "orchestrator" / "archive"
+        queue_dir.mkdir(parents=True)
+        from automil.graph import locked_update, merged_metadata
+
+        with locked_update(temporary_adir / "graph.json") as graph:
+            for rank, candidate in enumerate(candidates, 1):
+                source_node = candidate["candidate_id"]
+                source_archive = source_adir / "orchestrator" / "archive" / source_node
+                source_spec_path = source_archive / "spec.json"
+                if file_sha256(source_spec_path) != candidate["source_spec_sha256"]:
+                    raise CampaignStageError(
+                        f"source spec changed after discovery freeze: {source_node}"
+                    )
+                source_spec = json.loads(source_spec_path.read_text())
+                source_verdict = revalidate_candidate_spec(
+                    load_candidate_policy(source_adir), source_spec, source_archive,
+                ).to_dict()
+                source_sha, _ = _candidate_identity(source_spec, source_verdict)
+                if source_sha != candidate["candidate_sha256"]:
+                    raise CampaignStageError(
+                        f"source candidate identity changed after freeze: {source_node}"
+                    )
+
+                target_node = graph.add_proposed(
+                    parent_id="campaign_root",
+                    description=f"promotion rank {rank}: exact {source_node}",
+                    techniques=[],
+                    kind="hp" if source_verdict["candidate_class"] == "config-only"
+                    else "regularization",
+                )
+                graph.mark_running(target_node)
+                graph_node = graph.get_node(target_node)
+                graph_node["cell_id"] = cell["budget_identity"]["cell_id"]
+                graph_node["metadata"] = merged_metadata(graph_node, {
+                    "source_node_id": source_node,
+                    "source_candidate_sha256": source_sha,
+                })
+
+                target_archive = archive_root / target_node
+                target_archive.mkdir(parents=True)
+                manifest, deletions, framework_files = _copy_exact_overlay(
+                    source_archive=source_archive,
+                    target_archive=target_archive,
+                    source_spec=source_spec,
+                    source_adir_rel=source_adir_rel,
+                    target_adir_rel=target_adir_rel,
+                )
+                selection = _selection_from_overlay(target_archive, framework_files)
+                candidate_paths = sorted(
+                    (set(manifest) - set(framework_files)) | set(deletions)
+                )
+                override = source_spec.get("run_command_override")
+                verdict = policy.classify(
+                    candidate_paths,
+                    override=str(override) if override is not None else None,
+                    variant_selection=selection,
+                )
+                if not verdict.accepted:
+                    raise CampaignStageError(
+                        f"promotion mapping made {source_node} inadmissible: {verdict.reason}"
+                    )
+                config_parts = [
+                    f"{path}:{digest}" for path, digest in sorted(manifest.items())
+                ] + [f"DELETE:{path}" for path in sorted(deletions)]
+                if override is not None:
+                    config_parts.append(f"OVERRIDE:{override}")
+                config_hash = hashlib.sha256(
+                    (str(source_spec["base_commit"]) + "\n" + "\n".join(config_parts)).encode()
+                ).hexdigest()[:16]
+                target_spec: dict[str, Any] = {
+                    "id": target_node,
+                    "description": f"promotion rank {rank}: exact {source_node}",
+                    "base_commit": source_spec["base_commit"],
+                    "overlay_dir": f"archive/{target_node}",
+                    "overlay_manifest": manifest,
+                    "deletions": deletions,
+                    "framework_overlay_files": framework_files,
+                    "admissibility": verdict.to_dict(),
+                    "base_run_command_sha256": command_hash,
+                    "priority": 0,
+                    "estimated_vram_gb": source_spec.get("estimated_vram_gb", 0),
+                    "graph_metadata": {
+                        "parent_id": "campaign_root",
+                        "techniques": [],
+                        "config_hash": config_hash,
+                    },
+                    "submitted_at": _utc_now(),
+                    "metadata": {
+                        "backend": (config.get("backend") or {}).get("name", "local"),
+                        "runtime": "campaign-controller",
+                        "cell_id": cell["budget_identity"]["cell_id"],
+                        "campaign": campaign_binding,
+                        "promotion": {
+                            "source_node_id": source_node,
+                            "source_candidate_sha256": source_sha,
+                            "source_spec_sha256": candidate["source_spec_sha256"],
+                            "expected_folds": list(STAGE_FOLDS["promotion"]),
+                        },
+                    },
+                }
+                if override is not None:
+                    target_spec["run_command_override"] = override
+                revalidate_candidate_spec(policy, target_spec, target_archive)
+                (queue_dir / f"{target_node}.json").write_text(
+                    json.dumps(target_spec, indent=2, sort_keys=True) + "\n"
+                )
+                target_sha, target_identity = _candidate_identity(
+                    target_spec, verdict.to_dict(),
+                )
+                jobs.append({
+                    "rank": rank,
+                    "source_node_id": source_node,
+                    "source_candidate_sha256": source_sha,
+                    "promotion_node_id": target_node,
+                    "promotion_candidate_sha256": target_sha,
+                    "promotion_identity": target_identity,
+                    "status": "queued",
+                })
+
+        plan = {
+            "campaign_id": CAMPAIGN_ID,
+            "cell_id": state["cell_id"],
+            "source_state_sha256": state["state_sha256"],
+            "jobs": jobs,
+        }
+        plan["plan_sha256"] = content_sha256(plan)
+        (temporary_adir / "promotion_plan.json").write_text(
+            json.dumps(plan, indent=2, sort_keys=True) + "\n"
+        )
+        os.replace(temporary, target_dir)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+
+    return _finalize_promotion_state(cell_root, state, jobs)
+
+
+def _recover_promotion_plan(
+    state: Mapping[str, Any], *, target_adir: Path, source_adir: Path,
+) -> list[dict[str, Any]]:
+    """Adopt an atomically published plan if state commit was interrupted."""
+    plan_path = target_adir / "promotion_plan.json"
+    try:
+        plan = json.loads(plan_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            "promotion directory exists without a recoverable immutable plan"
+        ) from exc
+    recorded_hash = plan.pop("plan_sha256", None)
+    if recorded_hash != content_sha256(plan):
+        raise CampaignStageError("promotion plan integrity hash mismatch")
+    if (
+        plan.get("campaign_id") != CAMPAIGN_ID
+        or plan.get("cell_id") != state["cell_id"]
+        or plan.get("source_state_sha256") != state["state_sha256"]
+    ):
+        raise CampaignStageError("promotion plan is not bound to the frozen state")
+    jobs = plan.get("jobs")
+    if not isinstance(jobs, list):
+        raise CampaignStageError("promotion plan jobs must be a list")
+    expected = [
+        (candidate["candidate_id"], candidate["candidate_sha256"])
+        for candidate in state["discovery"]["promoted_candidates"]
+    ]
+    actual = [
+        (job.get("source_node_id"), job.get("source_candidate_sha256"))
+        for job in jobs if isinstance(job, dict)
+    ]
+    if actual != expected:
+        raise CampaignStageError("promotion plan candidate order/identity drifted")
+    if not (target_adir / "graph.json").is_file():
+        raise CampaignStageError("promotion plan is missing graph.json")
+    for job in jobs:
+        node_id = job["promotion_node_id"]
+        queue_spec = target_adir / "orchestrator" / "queue" / f"{node_id}.json"
+        archived_spec = target_adir / "orchestrator" / "archive" / node_id / "spec.json"
+        running_specs = list(
+            (target_adir / "orchestrator" / "running").glob(f"*/{node_id}.json")
+        )
+        if not queue_spec.is_file() and not archived_spec.is_file() and not running_specs:
+            raise CampaignStageError(f"promotion job {node_id} has no durable spec")
+    # Re-read the source specs named by the plan. This does not inspect results
+    # or any held-out file; it proves the frozen source identity still exists.
+    for job in jobs:
+        source_spec = (
+            source_adir / "orchestrator" / "archive"
+            / job["source_node_id"] / "spec.json"
+        )
+        if not source_spec.is_file():
+            raise CampaignStageError(
+                f"promotion source disappeared: {job['source_node_id']}"
+            )
+    return jobs
+
+
+def _finalize_promotion_state(
+    cell_root: Path, state: dict[str, Any], jobs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    now = _utc_now()
+    state["phase"] = "promotion"
+    state["promotion"].update({
+        "jobs": jobs,
+        "materialized": True,
+        "materialized_at": now,
+    })
+    state["revision"] += 1
+    state["updated_at"] = now
+    state["history"].append({
+        "event": "promotion-materialized",
+        "jobs": len(jobs),
+        "at": now,
     })
     return _commit_state(cell_root, state)
