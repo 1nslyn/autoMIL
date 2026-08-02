@@ -100,6 +100,15 @@ registry:
   # additionally runs identity-strict validation per identity_constraints.)
   mode: "free"
 
+  # Command and registered-variant channels admitted in architecture-preserving
+  # mode. Keep empty unless the consumer has executable adapters for them.
+  allowed_override_options: []
+  allowed_variant_kinds: []
+
+  # Scalar keys that would erase a defining method mechanism when changed.
+  # The submit/launch policy rejects these inside --hparams.
+  identity_locked_hparams: []
+
   # Reproduction tolerance for `automil verify-repro <node_id>` (default ±0.005).
   repro_tolerance: 0.005
 

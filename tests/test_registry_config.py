@@ -23,6 +23,20 @@ def test_empty_config_returns_defaults(tmp_path):
     assert cfg.mode == "free"
     assert cfg.repro_tolerance == pytest.approx(0.005)
     assert cfg.identity_constraints == ()
+    assert cfg.identity_locked_hparams == ()
+
+
+def test_identity_locked_hparams_returns_tuple(tmp_path):
+    from automil.registry.config import load_registry_config
+    adir = _write_config(
+        tmp_path,
+        "registry:\n"
+        "  identity_locked_hparams:\n"
+        "    - no_inst_cluster\n"
+        "    - bag_weight\n",
+    )
+    cfg = load_registry_config(adir)
+    assert cfg.identity_locked_hparams == ("no_inst_cluster", "bag_weight")
 
 
 def test_empty_registry_section_returns_defaults(tmp_path):

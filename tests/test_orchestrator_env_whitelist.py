@@ -130,6 +130,19 @@ def test_orchestrator_injected_vars_always_set(orch):
     assert env["AUTOMIL_NODE_ID"] == "node_0001"
     assert "AUTOMIL_RESULTS_DIR" in env
     assert "AUTOMIL_DESC" in env
+    assert env["AUTOMIL_DIR_REL"] == "automil"
+
+
+def test_nested_automil_dir_is_injected_project_relative(tmp_path):
+    automil_dir = tmp_path / "benchmarks" / "experiments" / "ccrcc" / "automil"
+    automil_dir.mkdir(parents=True)
+    (automil_dir / "config.yaml").write_text("orchestrator: {}\n")
+    (tmp_path / ".git").mkdir()
+    nested = ExperimentOrchestrator(project_root=tmp_path, automil_dir=automil_dir)
+    env = _call_build(nested)
+    assert env["AUTOMIL_DIR_REL"] == (
+        "benchmarks/experiments/ccrcc/automil"
+    )
 
 
 def test_autobench_root_not_auto_injected_phase8(orch):

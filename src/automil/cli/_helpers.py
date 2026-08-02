@@ -6,7 +6,6 @@ now.
 """
 from __future__ import annotations
 
-import fnmatch
 import logging
 from pathlib import Path
 
@@ -113,15 +112,6 @@ def _matches_scope(path: str, patterns: list[str] | set[str]) -> bool:
     Supports exact file paths, directory prefixes ending in ``/``, and glob
     patterns such as ``data/*.py``.
     """
-    rel_path = Path(path).as_posix()
-    for raw_pattern in patterns:
-        pattern = str(raw_pattern).strip().replace("\\", "/")
-        if not pattern:
-            continue
-        if pattern.endswith("/"):
-            if rel_path.startswith(pattern):
-                return True
-            continue
-        if fnmatch.fnmatch(rel_path, pattern):
-            return True
-    return False
+    from automil.admissibility import matches_scope
+
+    return matches_scope(path, patterns)

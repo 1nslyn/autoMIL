@@ -30,12 +30,18 @@ class RegistryConfig:
     Defaults (all configurable in consumer automil/config.yaml):
         protected: ()           — no framework defaults (D-33 + D-49)
         mode: "free"            — D-31: default search scope
+        allowed_override_options: () — command options allowed in preserving mode
+        allowed_variant_kinds: () — variant kinds allowed in preserving mode
+        identity_locked_hparams: () — scalar keys that may erase model identity
         repro_tolerance: 0.005  — D-39: CCRCC ±0.005 carried as framework default
         identity_constraints: () — D-31: per-project structural rules
     """
 
     protected: tuple[str, ...] = ()              # glob patterns (relative to project root)
     mode: Mode = "free"                          # D-31: default free
+    allowed_override_options: tuple[str, ...] = ()
+    allowed_variant_kinds: tuple[str, ...] = ()
+    identity_locked_hparams: tuple[str, ...] = ()
     repro_tolerance: float = 0.005               # D-39: default ±0.005
     identity_constraints: tuple[str, ...] = ()   # D-31: per-project identity rules
 
@@ -90,6 +96,18 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
         )
 
     protected = _coerce_str_tuple(registry_section.get("protected"), "registry.protected")
+    allowed_override_options = _coerce_str_tuple(
+        registry_section.get("allowed_override_options"),
+        "registry.allowed_override_options",
+    )
+    allowed_variant_kinds = _coerce_str_tuple(
+        registry_section.get("allowed_variant_kinds"),
+        "registry.allowed_variant_kinds",
+    )
+    identity_locked_hparams = _coerce_str_tuple(
+        registry_section.get("identity_locked_hparams"),
+        "registry.identity_locked_hparams",
+    )
     identity_constraints = _coerce_str_tuple(
         registry_section.get("identity_constraints"), "registry.identity_constraints"
     )
@@ -130,6 +148,9 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
     return RegistryConfig(
         protected=protected,
         mode=mode_raw,  # type: ignore[arg-type]  # validated above
+        allowed_override_options=allowed_override_options,
+        allowed_variant_kinds=allowed_variant_kinds,
+        identity_locked_hparams=identity_locked_hparams,
         repro_tolerance=repro_tolerance,
         identity_constraints=identity_constraints,
     )
