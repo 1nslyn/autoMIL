@@ -541,11 +541,17 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         try:
             from automil.admissibility import validate_campaign_binding
 
+            _campaign_binding = {
+                key: _campaign_cfg[key] for key in _required_campaign
+            }
+            if "base_commit" in _campaign_cfg:
+                _campaign_binding["base_commit"] = _campaign_cfg["base_commit"]
             _campaign_spec = validate_campaign_binding(
                 _manifest_path,
-                {key: _campaign_cfg[key] for key in _required_campaign},
+                _campaign_binding,
                 base_run_command=_base_run_command,
                 budget_cell_id=_cell.cell_id,
+                base_commit=base_commit,
             )
         except ValueError as exc:
             raise click.ClickException(

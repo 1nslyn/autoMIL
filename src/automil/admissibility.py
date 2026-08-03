@@ -501,6 +501,7 @@ def validate_campaign_binding(
     *,
     base_run_command: str | None,
     budget_cell_id: str,
+    base_commit: str | None = None,
 ) -> dict[str, object]:
     """Prove command, budget, and cell metadata share one manifest record.
 
@@ -520,6 +521,14 @@ def validate_campaign_binding(
         raise AdmissibilityError(
             f"campaign binding is missing non-empty string field(s) {missing}"
         )
+    locked_base = campaign.get("base_commit")
+    if locked_base is not None:
+        if not isinstance(locked_base, str) or not locked_base:
+            raise AdmissibilityError("campaign base_commit must be a non-empty string")
+        if base_commit != locked_base:
+            raise AdmissibilityError(
+                "candidate base commit differs from the materialized campaign base"
+            )
     try:
         manifest = json.loads(manifest_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:

@@ -97,6 +97,7 @@ def staged_cell(tmp_path):
     }))
     state = initialize_stage_state(
         cell_root, cell=cell, manifest_sha256=manifest_hash,
+        base_commit="d" * 40,
     )
     return cell_root, adir, cell, state, tmp_path
 
@@ -201,8 +202,15 @@ def test_initial_state_is_restart_idempotent_and_integrity_checked(staged_cell):
     cell_root, _, cell, original, _ = staged_cell
     restarted = initialize_stage_state(
         cell_root, cell=cell, manifest_sha256=original["manifest_sha256"],
+        base_commit="d" * 40,
     )
     assert restarted == original
+    with pytest.raises(CampaignStageError, match="different campaign inputs"):
+        initialize_stage_state(
+            cell_root, cell=cell,
+            manifest_sha256=original["manifest_sha256"],
+            base_commit="e" * 40,
+        )
     raw = json.loads((cell_root / "campaign_state.json").read_text())
     raw["phase"] = "winner-frozen"
     (cell_root / "campaign_state.json").write_text(json.dumps(raw))

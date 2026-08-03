@@ -43,7 +43,7 @@ from autobench.campaign import (
     file_sha256,
 )
 
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 STATE_FILE = "campaign_state.json"
 
 
@@ -120,11 +120,13 @@ def initialize_stage_state(
     *,
     cell: Mapping[str, Any],
     manifest_sha256: str,
+    base_commit: str,
 ) -> dict[str, Any]:
     """Create the immutable discovery ledger, or verify an identical restart."""
     with _stage_lock(cell_root):
         return _initialize_stage_state_unlocked(
             cell_root, cell=cell, manifest_sha256=manifest_sha256,
+            base_commit=base_commit,
         )
 
 
@@ -133,14 +135,17 @@ def _initialize_stage_state_unlocked(
     *,
     cell: Mapping[str, Any],
     manifest_sha256: str,
+    base_commit: str,
 ) -> dict[str, Any]:
     path = cell_root / STATE_FILE
     if path.exists():
         state = load_stage_state(cell_root)
-        expected = (cell["cell_id"], cell["cell_sha256"], manifest_sha256)
+        expected = (
+            cell["cell_id"], cell["cell_sha256"], manifest_sha256, base_commit,
+        )
         actual = (
             state.get("cell_id"), state.get("cell_sha256"),
-            state.get("manifest_sha256"),
+            state.get("manifest_sha256"), state.get("base_commit"),
         )
         if actual != expected:
             raise CampaignStageError(
@@ -153,6 +158,7 @@ def _initialize_stage_state_unlocked(
         "schema_version": STATE_SCHEMA_VERSION,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": manifest_sha256,
+        "base_commit": base_commit,
         "cell_id": cell["cell_id"],
         "cell_sha256": cell["cell_sha256"],
         "protocol_sha256": content_sha256(PROTOCOL),
@@ -542,6 +548,10 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
             continue
         if (spec.get("metadata") or {}).get("cap_refused"):
             continue
+        if spec.get("base_commit") != state["base_commit"]:
+            raise CampaignStageError(
+                f"discovery spec {archive.name} differs from the frozen base commit"
+            )
         launched += 1
         audit: dict[str, Any] = {
             "node_id": archive.name,
@@ -817,6 +827,7 @@ def _materialize_promotion_unlocked(
             campaign_binding,
             base_run_command=target_command,
             budget_cell_id=cell["budget_identity"]["cell_id"],
+            base_commit=state["base_commit"],
         )
 
         jobs: list[dict[str, Any]] = []
@@ -835,6 +846,10 @@ def _materialize_promotion_unlocked(
                         f"source spec changed after discovery freeze: {source_node}"
                     )
                 source_spec = json.loads(source_spec_path.read_text())
+                if source_spec.get("base_commit") != state["base_commit"]:
+                    raise CampaignStageError(
+                        f"source candidate base commit drifted: {source_node}"
+                    )
                 source_verdict = revalidate_candidate_spec(
                     load_candidate_policy(source_adir), source_spec, source_archive,
                 ).to_dict()
@@ -1095,6 +1110,8 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             result = json.loads(result_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
             raise CampaignStageError(f"cannot read promotion job {node_id}: {exc}") from exc
+        if spec.get("base_commit") != state["base_commit"]:
+            raise CampaignStageError(f"promotion base commit drifted for {node_id}")
         link = (spec.get("metadata") or {}).get("promotion") or {}
         if (
             link.get("source_node_id") != source_node
@@ -1306,6 +1323,8 @@ def _searched_winner_sources(
     if file_sha256(discovery_spec_path) != source["source_spec_sha256"]:
         raise CampaignStageError("winner discovery spec changed after selection")
     discovery_spec = json.loads(discovery_spec_path.read_text())
+    if discovery_spec.get("base_commit") != state["base_commit"]:
+        raise CampaignStageError("winner discovery base commit changed")
     discovery_verdict = revalidate_candidate_spec(
         load_candidate_policy(discovery_adir), discovery_spec, discovery_archive,
     ).to_dict()
@@ -1325,6 +1344,8 @@ def _searched_winner_sources(
         / winner["promotion_node_id"]
     )
     promotion_spec = json.loads((promotion_archive / "spec.json").read_text())
+    if promotion_spec.get("base_commit") != state["base_commit"]:
+        raise CampaignStageError("winner promotion base commit changed")
     promotion_verdict = revalidate_candidate_spec(
         load_candidate_policy(promotion_adir), promotion_spec, promotion_archive,
     ).to_dict()
