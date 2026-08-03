@@ -282,6 +282,113 @@ def _mean(folds: list[Mapping[str, Any]]) -> float:
     return math.fsum(float(fold["composite"]) for fold in folds) / len(folds)
 
 
+def _ensure_discovery_baseline_root(
+    cell_root: Path,
+    state: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+) -> str:
+    """Create or verify the discovery graph's validation-only incumbent.
+
+    Discovery compares candidates on folds 0/1/2, so its graph root must use
+    the same evidence.  The campaign's final baseline incumbent remains the
+    separately frozen five-fold mean in ``campaign_state.json``.
+    """
+    from automil.graph import locked_update, merged_metadata
+    from automil.scoring import cross_fold_se
+
+    discovery_folds = [
+        fold for fold in baseline["validation_folds"]
+        if fold["fold_index"] in STAGE_FOLDS["discovery"]
+    ]
+    if [fold["fold_index"] for fold in discovery_folds] != list(
+        STAGE_FOLDS["discovery"]
+    ):
+        raise CampaignStageError("baseline lacks exact discovery-fold evidence")
+    discovery_mean = _mean(discovery_folds)
+    discovery_se = cross_fold_se(
+        [float(fold["composite"]) for fold in discovery_folds]
+    )
+    try:
+        cell = json.loads(
+            (cell_root / "automil" / "campaign_cell.json").read_text()
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read campaign cell identity: {exc}") from exc
+    if cell.get("cell_id") != state["cell_id"]:
+        raise CampaignStageError("campaign cell identity differs from stage state")
+    budget_cell_id = cell["budget_identity"]["cell_id"]
+    graph_path = cell_root / "automil" / "graph.json"
+    with locked_update(graph_path) as graph:
+        matches = [
+            node for node in graph.nodes.values()
+            if (isinstance(node.get("metadata"), dict)
+                and node["metadata"].get("campaign_baseline_sha256")
+                == baseline["candidate_sha256"])
+        ]
+        if len(matches) > 1:
+            raise CampaignStageError("discovery graph contains duplicate baseline roots")
+        if matches:
+            node = matches[0]
+            metadata = node.get("metadata") or {}
+            recorded_composite = node.get("composite")
+            recorded_baseline = graph.meta.get("baseline_composite")
+            valid = (
+                node.get("parent_id") is None
+                and node.get("type") == "executed"
+                and node.get("status") == "keep"
+                and not isinstance(recorded_composite, bool)
+                and isinstance(recorded_composite, (int, float))
+                and math.isclose(
+                    float(recorded_composite), discovery_mean,
+                    rel_tol=0.0, abs_tol=1e-12,
+                )
+                and metadata.get("cell_id") == budget_cell_id
+                and isinstance(metadata.get("validation_folds"), list)
+                and content_sha256(metadata.get("validation_folds"))
+                == content_sha256(discovery_folds)
+                and not isinstance(recorded_baseline, bool)
+                and isinstance(recorded_baseline, (int, float))
+                and math.isclose(
+                    float(recorded_baseline),
+                    discovery_mean, rel_tol=0.0, abs_tol=1e-12,
+                )
+            )
+            if not valid:
+                raise CampaignStageError("discovery baseline graph root drifted")
+            recorded_root = baseline.get("discovery_root_node_id")
+            if recorded_root is not None and recorded_root != node["id"]:
+                raise CampaignStageError("baseline ledger points to a different graph root")
+            return str(node["id"])
+        if graph.nodes:
+            raise CampaignStageError(
+                "discovery graph already has nodes but no registered baseline root"
+            )
+
+        node_id = graph.add_executed(
+            parent_id=None,
+            description="native upstream baseline (discovery folds 0/1/2)",
+            techniques=[],
+            metrics={
+                "composite": discovery_mean,
+                "composite_se": discovery_se,
+            },
+            status="keep",
+            config_hash=baseline["candidate_sha256"],
+            bootstrapped=True,
+        )
+        node = graph.get_node(node_id)
+        node["cell_id"] = budget_cell_id
+        node["metadata"] = merged_metadata(node, {
+            "cell_id": budget_cell_id,
+            "mil_model": cell["budget_identity"]["mil_model"],
+            "campaign_baseline_sha256": baseline["candidate_sha256"],
+            "validation_folds": discovery_folds,
+        })
+        graph.meta["baseline_composite"] = discovery_mean
+        graph.recalculate_scores()
+        return node_id
+
+
 def register_baseline(cell_root: Path, baseline_archive: Path) -> dict[str, Any]:
     """Register the five-fold native baseline as the immutable incumbent.
 
@@ -334,7 +441,11 @@ def _register_baseline_unlocked(
     if current is not None:
         if current.get("candidate_sha256") != baseline["candidate_sha256"]:
             raise CampaignStageError("a different baseline is already registered")
+        _ensure_discovery_baseline_root(cell_root, state, current)
         return state
+    baseline["discovery_root_node_id"] = _ensure_discovery_baseline_root(
+        cell_root, state, baseline,
+    )
     state["baseline"] = baseline
     state["revision"] += 1
     state["updated_at"] = _utc_now()
