@@ -127,7 +127,7 @@ def test_degenerate_identical_folds_report_zero_se_not_none():
 
 
 def test_survival_composite_se_is_the_cross_fold_c_index_sem():
-    """Survival composite is the POOLED c-index (CR-3); the SE is fold spread."""
+    """Survival selection and its SE use the same per-fold evidence."""
     m = _load_run_experiment()
     summary = {
         "test": {"c_index": {"mean": 0.62}},
@@ -138,7 +138,11 @@ def test_survival_composite_se_is_the_cross_fold_c_index_sem():
         "n_folds": 5,
     }
     r = m.summary_to_result_json(summary, 5.0)
-    assert r["composite"] == pytest.approx(0.61)      # pooled, unchanged
+    assert r["composite"] == pytest.approx(0.60)      # equal-weight fold mean
+    assert r["metrics"]["val_c_index"] == pytest.approx(r["composite"])
+    assert r["composite"] == pytest.approx(
+        sum(fold["composite"] for fold in r["validation_folds"]) / 5
+    )
     # ddof=1 SD over the five per-fold c-indices = 0.01581138830, /sqrt(5)
     assert r["composite_se"] == pytest.approx(0.007071, abs=1e-6)
 

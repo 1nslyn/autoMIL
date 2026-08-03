@@ -7,10 +7,10 @@ from a clean 5-fold mean. H-8 fixed this one level up on the autoMIL path
 (``run_experiment.py`` records ``n_valid_folds``/``n_folds``); these tests pin
 the same guarantee in the shared helper, per metric.
 
-The interaction to keep in mind: CR-3's pooled cross-fold concordance
-(``pooled_val_block``) exists because the per-fold val c-index sits on ~2
-events. ``n_valid_folds`` is what tells a reader whether the fold-mean fallback
-behind the pooled number was computed on 5 folds or on 2.
+The interaction to keep in mind: pooled cross-fold concordance
+(``pooled_val_block``) remains a diagnostic because the per-fold val c-index
+sits on ~2 events. The campaign selection signal is nevertheless the locked
+equal-weight fold mean, and ``n_valid_folds`` records its actual support.
 """
 from __future__ import annotations
 

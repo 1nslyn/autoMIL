@@ -117,7 +117,7 @@ def test_invalid_fold_is_visible_but_never_given_a_numeric_composite():
     assert result["validation_folds"][1]["composite"] is None
 
 
-def test_survival_evidence_uses_per_fold_cindex_not_pooled_stage_value():
+def test_survival_selection_uses_fold_mean_not_pooled_stage_value():
     m = _load_run_experiment()
     summary = {
         "test": {"c_index": {"mean": 0.60}},
@@ -129,7 +129,7 @@ def test_survival_evidence_uses_per_fold_cindex_not_pooled_stage_value():
         "fold_indices": [3, 4],
     }
     result = m.summary_to_result_json(summary, 5.0)
-    assert result["composite"] == pytest.approx(0.91)
+    assert result["composite"] == pytest.approx(0.60)
     assert [fold["composite"] for fold in result["validation_folds"]] == [
         pytest.approx(0.55), pytest.approx(0.65),
     ]
