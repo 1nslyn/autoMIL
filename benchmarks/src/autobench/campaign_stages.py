@@ -49,6 +49,7 @@ from autobench.campaign import (
 
 STATE_SCHEMA_VERSION = 2
 STATE_FILE = "campaign_state.json"
+BASELINE_ATTESTATION_FILE = "baseline_attestation.json"
 
 
 class CampaignStageError(ValueError):
@@ -203,7 +204,7 @@ def _import_baseline_archive(cell_root: Path, source: Path) -> Path:
     if source == target.resolve():
         return target
 
-    required = [source / "result.json"] + [
+    required = [source / "result.json", source / BASELINE_ATTESTATION_FILE] + [
         source / "certify" / f"fold_{fold}_result.json"
         for fold in CERTIFICATION_FOLDS
     ]
@@ -235,6 +236,60 @@ def _import_baseline_archive(cell_root: Path, source: Path) -> Path:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
     return target
+
+
+def _expected_baseline_attestation(
+    cell_root: Path,
+    state: Mapping[str, Any],
+    identity_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind a portable baseline archive to one frozen cell and recipe."""
+    try:
+        cell = json.loads(
+            (cell_root / "automil" / "campaign_cell.json").read_text()
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read baseline campaign cell: {exc}") from exc
+    if cell.get("cell_id") != state["cell_id"]:
+        raise CampaignStageError("baseline campaign cell differs from stage state")
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": state["manifest_sha256"],
+        "cell_id": state["cell_id"],
+        "cell_sha256": state["cell_sha256"],
+        "base_commit": state["base_commit"],
+        "baseline_command": cell["commands"]["baseline"],
+        "result_sha256": identity_payload["result_sha256"],
+        "sealed_fold_sha256": identity_payload["sealed_fold_sha256"],
+    }
+    payload["attestation_sha256"] = content_sha256(payload)
+    return payload
+
+
+def _write_baseline_attestation(
+    cell_root: Path, state: Mapping[str, Any], baseline_archive: Path,
+) -> Path:
+    """Write the deterministic provenance binding for a local baseline run."""
+    result = baseline_archive / "result.json"
+    if not result.is_file():
+        raise CampaignStageError("cannot attest a baseline without result.json")
+    sealed_hashes = _sealed_fold_hashes(baseline_archive, CERTIFICATION_FOLDS)
+    expected = _expected_baseline_attestation(cell_root, state, {
+        "result_sha256": file_sha256(result),
+        "sealed_fold_sha256": sealed_hashes,
+    })
+    path = baseline_archive / BASELINE_ATTESTATION_FILE
+    if path.exists():
+        try:
+            current = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignStageError(f"cannot read baseline attestation: {exc}") from exc
+        if current != expected:
+            raise CampaignStageError("existing baseline attestation differs from frozen inputs")
+        return path
+    _atomic_write_json(path, expected)
+    return path
 
 
 def _validation_folds(
@@ -451,12 +506,25 @@ def _register_baseline_unlocked(
         "sealed_fold_sha256": sealed_hashes,
         "validation_folds": folds,
     }
+    expected_attestation = _expected_baseline_attestation(
+        cell_root, state, identity_payload,
+    )
+    attestation_path = baseline_archive / BASELINE_ATTESTATION_FILE
+    try:
+        attestation = json.loads(attestation_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read baseline attestation: {exc}") from exc
+    if attestation != expected_attestation:
+        raise CampaignStageError(
+            "baseline attestation is not bound to this cell/base/command/artifact set"
+        )
     baseline = {
         "candidate_id": "baseline",
         "candidate_sha256": content_sha256(identity_payload),
         "archive": "baseline/archive",
         "result_sha256": identity_payload["result_sha256"],
         "sealed_fold_sha256": sealed_hashes,
+        "attestation_sha256": expected_attestation["attestation_sha256"],
         "validation_folds": folds,
         "validation_mean": _mean(folds),
         "registered_at": _utc_now(),
@@ -533,6 +601,7 @@ def run_native_baseline(
                 for fold in CERTIFICATION_FOLDS
             ]
             if all(path.is_file() for path in required):
+                _write_baseline_attestation(cell_root, state, execution_archive)
                 return register_baseline(cell_root, execution_archive)
             sealed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -611,6 +680,7 @@ def run_native_baseline(
                     f"native baseline exited with code {returncode}; see "
                     f"{execution_archive / 'run.log'}"
                 )
+            _write_baseline_attestation(cell_root, state, execution_archive)
             return register_baseline(cell_root, execution_archive)
         finally:
             fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
