@@ -201,6 +201,13 @@ def _attempts(
                     STAGE_FOLDS["discovery"], 0.5 + index / 100,
                 ),
             }
+            sealed = archive / "certify"
+            sealed.mkdir()
+            for fold in STAGE_FOLDS["discovery"]:
+                (sealed / f"fold_{fold}_result.json").write_text(json.dumps({
+                    "fold_index": fold,
+                    "held_out": {"test_auc": 0.70 + fold / 100},
+                }))
         else:
             result = {"status": "crash", "composite": 0.0, "metrics": {}}
         (archive / "result.json").write_text(json.dumps(result))
@@ -363,6 +370,7 @@ def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
     assert all(set(candidate["validation_folds"][0]) == {
         "fold_index", "metrics", "composite",
     } for candidate in promoted)
+    assert all(len(candidate["sealed_fold_sha256"]) == 3 for candidate in promoted)
 
     # Restarting cannot spend, reorder, or refreeze anything.
     assert freeze_discovery(cell_root) == state
@@ -469,6 +477,14 @@ def _finish_promotion(
             {"status": "crash", "composite": 0.0, "metrics": {}}
         )
         (archive / "result.json").write_text(json.dumps(result))
+        if index < completed:
+            sealed = archive / "certify"
+            sealed.mkdir(exist_ok=True)
+            for fold in STAGE_FOLDS["promotion"]:
+                (sealed / f"fold_{fold}_result.json").write_text(json.dumps({
+                    "fold_index": fold,
+                    "held_out": {"test_auc": 0.70 + fold / 100},
+                }))
     cell_path = (
         adir / "cells"
         / f"{json.loads((adir / 'campaign_cell.json').read_text())['budget_identity']['cell_id']}.json"
@@ -506,6 +522,7 @@ def test_promotion_freeze_excludes_crashes_but_keeps_their_cost(staged_cell):
         assert [fold["fold_index"] for fold in candidate["validation_folds"]] == [
             0, 1, 2, 3, 4,
         ]
+        assert len(candidate["sealed_fold_sha256"]) == 5
     assert freeze_promotion(cell_root) == state
 
 
@@ -638,7 +655,8 @@ def _write_searched_sealed_folds(
     winner = state["winner"]
     discovery = cell_root / "automil/orchestrator/archive"
     promotion = cell_root / "promotion/automil/orchestrator/archive"
-    # Every loser is deliberately malformed. Certification must not open one.
+    # Every loser is deliberately malformed after selection. Certification
+    # must not open or verify an unselected candidate.
     for candidate in state["discovery"]["promoted_candidates"]:
         sealed = discovery / candidate["candidate_id"] / "certify"
         sealed.mkdir(parents=True, exist_ok=True)
@@ -652,18 +670,18 @@ def _write_searched_sealed_folds(
 
     selected_discovery = discovery / winner["candidate_id"] / "certify"
     selected_promotion = promotion / winner["promotion_node_id"] / "certify"
-    for fold in CERTIFICATION_FOLDS:
-        path = (
-            selected_discovery if fold in STAGE_FOLDS["discovery"]
-            else selected_promotion
-        ) / f"fold_{fold}_result.json"
-        path.write_text(
-            json.dumps({
+    if selected_valid:
+        for fold in CERTIFICATION_FOLDS:
+            path = (
+                selected_discovery if fold in STAGE_FOLDS["discovery"]
+                else selected_promotion
+            ) / f"fold_{fold}_result.json"
+            path.write_text(json.dumps({
                 "fold_index": fold,
                 "held_out": {"test_auc": 0.70 + fold / 100},
-            })
-            if selected_valid else "selected-not-json"
-        )
+            }))
+    else:
+        (selected_discovery / "fold_0_result.json").write_text("selected-not-json")
 
 
 def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
@@ -730,7 +748,7 @@ def test_selected_sealed_corruption_blocks_certification(staged_cell):
     selected = select_winner(cell_root)
     _write_searched_sealed_folds(cell_root, selected, selected_valid=False)
 
-    with pytest.raises(CampaignStageError, match="selected winner sealed fold"):
+    with pytest.raises(CampaignStageError, match="sealed artifact changed"):
         certify_winner(cell_root)
     assert load_stage_state(cell_root)["phase"] == "winner-frozen"
     assert not (cell_root / "certification").exists()
