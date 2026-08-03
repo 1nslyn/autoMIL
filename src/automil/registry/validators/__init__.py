@@ -1,7 +1,7 @@
 """Submit-time + instantiate-time validators for variant modules (REG-03 / D-30).
 
 Phase 1 ships:
-  - InterfaceValidator (Plan 01-04) — submit-time, AST + reflection.
+  - InterfaceValidator (Plan 01-04) — submit-time, fully static AST checks.
   - PurityValidator   (Plan 01-04) — submit-time, pure AST.
   - IdentityValidator (Plan 01-05) — instantiate-time, runtime.
 

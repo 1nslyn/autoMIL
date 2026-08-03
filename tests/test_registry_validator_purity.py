@@ -134,6 +134,39 @@ def test_function_body_io_ok(tmp_path):
     PurityValidator().check(path)
 
 
+def test_undecorated_helper_class_is_allowed(tmp_path):
+    from automil.registry.validators.purity import PurityValidator
+
+    body = CLEAN_MODULE.replace(
+        "@register(VariantSpec(",
+        "class OptimizerWrapper:\n"
+        "    def step(self):\n"
+        "        return None\n\n\n"
+        "@register(VariantSpec(",
+    )
+    PurityValidator().check(_write_module(tmp_path, body))
+
+
+@pytest.mark.parametrize("body", [
+    CLEAN_MODULE.replace('name="clean"', 'name=open("/tmp/purity", "w")'),
+    CLEAN_MODULE.replace(
+        "def forward(self, features, coords=None):",
+        'def forward(self, features, coords=open("/tmp/purity", "w")):',
+    ),
+    CLEAN_MODULE.replace(
+        "class Clean(ModelVariant):",
+        'class Clean(ModelVariant):\n    MARK = open("/tmp/purity", "w")',
+    ),
+])
+def test_definition_time_calls_are_rejected(tmp_path, body):
+    from automil.registry.errors import ValidationError
+    from automil.registry.validators.purity import PurityValidator
+
+    path = _write_module(tmp_path, body)
+    with pytest.raises(ValidationError, match="definition-time"):
+        PurityValidator().check(path)
+
+
 # ---------------------------------------------------------------------------
 # Top-level I/O rejections
 # ---------------------------------------------------------------------------

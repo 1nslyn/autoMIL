@@ -194,8 +194,20 @@ def test_happy_path_policy_variant(tmp_path):
     InterfaceValidator().check(path)
 
 
+def test_interface_validation_never_imports_candidate_dependencies(tmp_path):
+    from automil.registry.validators.interface import InterfaceValidator
+
+    body = HAPPY_POLICY.replace(
+        'from automil.registry import register, VariantSpec, PolicyVariant',
+        'from automil.registry import register, VariantSpec, PolicyVariant\n'
+        'import package_that_must_never_be_imported_by_validation',
+    )
+    path = _write_module(tmp_path, body)
+    InterfaceValidator().check(path)
+
+
 def test_validation_is_idempotent_and_preserves_live_registry(tmp_path):
-    """Reflection must neither collide with nor replace live registrations."""
+    """Static validation must neither read nor mutate live registrations."""
     from automil.registry import PolicyVariant, VariantSpec, register
     from automil.registry._state import (
         LOSS_VARIANTS,
