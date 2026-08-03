@@ -15,6 +15,7 @@ from autobench.campaign_stages import (
     load_stage_state,
     materialize_promotion,
     register_baseline,
+    run_native_baseline,
     select_winner,
 )
 
@@ -107,10 +108,14 @@ def main(argv: list[str] | None = None) -> None:
         choices=(
             "status", "register-baseline", "freeze-discovery",
             "materialize-promotion", "freeze-promotion", "select-winner",
-            "certify", "baseline-command", "advance",
+            "certify", "baseline-command", "run-baseline", "advance",
         ),
     )
     parser.add_argument("--cell-root", required=True)
+    parser.add_argument(
+        "--gpu", type=int, default=0,
+        help="Physical GPU id used by run-baseline (default: 0).",
+    )
     parser.add_argument(
         "--baseline-archive",
         help="Agent-facing native-baseline archive; required by register-baseline.",
@@ -133,6 +138,10 @@ def main(argv: list[str] | None = None) -> None:
                 if baseline.is_absolute() else (repo_root / baseline).resolve()
             )
             state = register_baseline(cell_root, baseline)
+        elif args.action == "run-baseline":
+            state = run_native_baseline(
+                cell_root, repo_root=repo_root, gpu_id=args.gpu,
+            )
         elif args.action == "freeze-discovery":
             state = freeze_discovery(cell_root)
         elif args.action == "materialize-promotion":

@@ -13,7 +13,10 @@ import hashlib
 import json
 import math
 import os
+import shlex
 import shutil
+import subprocess
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
@@ -23,6 +26,7 @@ from pathlib import PurePosixPath
 from typing import Any, Iterator, Mapping
 
 import yaml
+from dotenv import dotenv_values
 
 from automil.admissibility import (
     AdmissibilityError,
@@ -461,6 +465,141 @@ def _register_baseline_unlocked(
         "at": state["updated_at"],
     })
     return _commit_state(cell_root, state)
+
+
+def run_native_baseline(
+    cell_root: Path,
+    *,
+    repo_root: Path,
+    gpu_id: int = 0,
+) -> dict[str, Any]:
+    """Run and register the frozen five-fold baseline outside agentic budget.
+
+    Training executes in a detached worktree at the materialized base commit.
+    Its public result is validation-only; full and per-fold held-out artifacts
+    are born under ``baseline-execution/archive/certify`` and are parsed only
+    after validation selection freezes a winner.
+    """
+    if gpu_id < 0:
+        raise CampaignStageError("baseline gpu_id must be non-negative")
+    cell_root = cell_root.resolve()
+    repo_root = repo_root.resolve()
+    try:
+        cell_root.relative_to(repo_root)
+    except ValueError as exc:
+        raise CampaignStageError("campaign cell root must live inside repo_root") from exc
+
+    run_lock_path = cell_root / ".baseline_execution.lock"
+    run_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with run_lock_path.open("a+") as run_lock:
+        try:
+            fcntl.flock(run_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise CampaignStageError("native baseline is already running") from exc
+        try:
+            state = load_stage_state(cell_root)
+            if state.get("baseline") is not None:
+                _ensure_discovery_baseline_root(cell_root, state, state["baseline"])
+                return state
+            if state["phase"] != "discovery":
+                raise CampaignStageError("native baseline must run before discovery freeze")
+            try:
+                cell = json.loads(
+                    (cell_root / "automil" / "campaign_cell.json").read_text()
+                )
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CampaignStageError(f"cannot read campaign cell: {exc}") from exc
+            if cell.get("cell_id") != state["cell_id"]:
+                raise CampaignStageError("baseline cell identity differs from stage state")
+
+            execution_archive = cell_root / "baseline-execution" / "archive"
+            sealed_dir = execution_archive / "certify"
+            required = [execution_archive / "result.json"] + [
+                sealed_dir / f"fold_{fold}_result.json"
+                for fold in CERTIFICATION_FOLDS
+            ]
+            if all(path.is_file() for path in required):
+                return register_baseline(cell_root, execution_archive)
+            sealed_dir.mkdir(parents=True, exist_ok=True)
+
+            tokens = shlex.split(str(cell["commands"]["baseline"]))
+            if len(tokens) < 2 or tokens[1] != "benchmarks/scripts/run_experiment.py":
+                raise CampaignStageError("manifest baseline command has an invalid entrypoint")
+            worktree_parent = Path(tempfile.mkdtemp(
+                prefix=".baseline-worktree-", dir=str(cell_root),
+            ))
+            worktree = worktree_parent / "repo"
+            worktree_added = False
+            returncode: int | None = None
+            try:
+                subprocess.run(
+                    [
+                        "git", "worktree", "add", "--detach", str(worktree),
+                        state["base_commit"],
+                    ],
+                    cwd=repo_root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                worktree_added = True
+                command = [
+                    sys.executable,
+                    str(worktree / "benchmarks/scripts/run_experiment.py"),
+                    *tokens[2:],
+                ]
+                env = os.environ.copy()
+                for key, value in dotenv_values(repo_root / "benchmarks/.env").items():
+                    if value is not None:
+                        env.setdefault(str(key), str(value))
+                python_paths = [
+                    str(worktree / "src"),
+                    str(worktree / "benchmarks/src"),
+                ]
+                if env.get("PYTHONPATH"):
+                    python_paths.append(env["PYTHONPATH"])
+                env.update({
+                    "PYTHONPATH": os.pathsep.join(python_paths),
+                    "CUDA_VISIBLE_DEVICES": str(gpu_id),
+                    "AUTOMIL_GPU": "0",
+                    "AUTOMIL_NODE_ID": "native-baseline",
+                    "AUTOMIL_RESULTS_DIR": str(sealed_dir.resolve()),
+                    "AUTOMIL_FOLD_COUNT": str(len(CERTIFICATION_FOLDS)),
+                })
+                log_path = execution_archive / "run.log"
+                with log_path.open("a") as log:
+                    completed = subprocess.run(
+                        command,
+                        cwd=worktree,
+                        env=env,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        check=False,
+                    )
+                returncode = completed.returncode
+                public_result = worktree / "result.json"
+                if returncode == 0 and public_result.is_file():
+                    shutil.copy2(public_result, execution_archive / "result.json")
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise CampaignStageError(f"cannot execute native baseline: {exc}") from exc
+            finally:
+                if worktree_added:
+                    subprocess.run(
+                        ["git", "worktree", "remove", "--force", str(worktree)],
+                        cwd=repo_root,
+                        check=False,
+                        capture_output=True,
+                    )
+                shutil.rmtree(worktree_parent, ignore_errors=True)
+
+            if returncode != 0:
+                raise CampaignStageError(
+                    f"native baseline exited with code {returncode}; see "
+                    f"{execution_archive / 'run.log'}"
+                )
+            return register_baseline(cell_root, execution_archive)
+        finally:
+            fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
 
 
 def _candidate_identity(

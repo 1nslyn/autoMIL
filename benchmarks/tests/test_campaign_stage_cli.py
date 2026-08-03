@@ -78,3 +78,25 @@ def test_baseline_command_is_an_explicit_non_agentic_fivefold_run(tmp_path):
         "commands": {"baseline": "python train.py --folds 0,1,2,3,4"},
     }))
     assert module.baseline_command(root).endswith("--folds 0,1,2,3,4")
+
+
+def test_run_baseline_cli_forwards_physical_gpu(tmp_path, monkeypatch, capsys):
+    module = _load_cli()
+    root, state = _state(tmp_path)
+    observed = {}
+    monkeypatch.setattr(module, "_cell_root", lambda *_: root)
+
+    def fake_run(cell_root, *, repo_root, gpu_id):
+        observed.update({
+            "cell_root": cell_root,
+            "repo_root": repo_root,
+            "gpu_id": gpu_id,
+        })
+        return state
+
+    monkeypatch.setattr(module, "run_native_baseline", fake_run)
+    module.main(["run-baseline", "--cell-root", "ignored", "--gpu", "3"])
+
+    assert observed["cell_root"] == root
+    assert observed["gpu_id"] == 3
+    assert json.loads(capsys.readouterr().out)["phase"] == "discovery"
