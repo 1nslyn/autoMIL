@@ -58,6 +58,22 @@ class TestCandidateClassification:
         assert verdict.accepted is True
         assert verdict.candidate_class is CandidateClass.CONFIG_ONLY
 
+    def test_hparam_hash_canonicalizes_json_whitespace_and_key_order(
+        self, recipe_policy,
+    ):
+        first = recipe_policy.classify(
+            [], override='--hparams \'{"lr":0.001,"wd":0.01}\'',
+        )
+        second = recipe_policy.classify(
+            [], override='--hparams \'{ "wd": 0.01, "lr": 0.001 }\'',
+        )
+        changed = recipe_policy.classify(
+            [], override='--hparams \'{"lr":0.002,"wd":0.01}\'',
+        )
+
+        assert first.override_hash == second.override_hash
+        assert first.override_hash != changed.override_hash
+
     @pytest.mark.parametrize("key", ["no_inst_cluster", "bag_weight"])
     def test_identity_erasing_hparam_is_rejected(self, recipe_policy, key):
         verdict = recipe_policy.classify(
