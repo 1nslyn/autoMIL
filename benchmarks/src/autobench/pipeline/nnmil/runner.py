@@ -95,9 +95,10 @@ def run_nnmil_experiment(
 
     fold_results: list[dict] = []
     for fold in exp_cfg.selected_folds:
+        fold_policy_runtime = policy_runtime.for_fold()
         result = train_nnmil_fold(
             exp_cfg, plan_path, fold, results_dir, device=device,
-            policy_runtime=policy_runtime,
+            policy_runtime=fold_policy_runtime,
         )
         fold_results.append(result)
         _write_fold_result_json(fold, result)

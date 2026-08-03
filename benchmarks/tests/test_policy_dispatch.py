@@ -21,6 +21,25 @@ def test_native_runtime_is_exact_identity():
     assert runtime.wrap_scheduler(scheduler) is scheduler
     assert runtime.should_stop(False, epoch=3, metrics={"val_loss": 1.0}) is False
     assert runtime.should_stop(True, epoch=3, metrics={"val_loss": 1.0}) is True
+    assert runtime.for_fold() is runtime
+
+
+def test_each_fold_gets_an_independent_policy_instance():
+    class StatefulPolicy:
+        def __init__(self):
+            self.epochs = []
+
+        def wrap_optimizer(self, opt):
+            return opt
+
+    template = PolicyRuntime(name="stateful", policy=StatefulPolicy())
+    fold_zero = template.for_fold()
+    fold_one = template.for_fold()
+    fold_zero.policy.epochs.append(3)
+
+    assert fold_zero.policy is not fold_one.policy
+    assert fold_one.policy.epochs == []
+    assert template.policy.epochs == []
 
 
 def test_nested_runtime_automil_dir_comes_from_orchestrator_env(monkeypatch):

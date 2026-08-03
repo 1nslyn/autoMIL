@@ -102,6 +102,12 @@ class PolicyRuntime:
             ) from exc
         return cls(name=name, policy=policy_cls())
 
+    def for_fold(self) -> "PolicyRuntime":
+        """Return an independent policy instance for one CV fold."""
+        if self.policy is None:
+            return self
+        return type(self)(name=self.name, policy=type(self.policy)())
+
     def wrap_optimizer(self, optimizer: Any, *, role: str = "main") -> Any:
         if self.policy is None:
             return optimizer
