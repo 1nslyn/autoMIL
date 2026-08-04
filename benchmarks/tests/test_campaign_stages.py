@@ -5,6 +5,7 @@ import json
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -29,6 +30,7 @@ from autobench.campaign_stages import (
     load_stage_state,
     materialize_promotion,
     register_baseline,
+    run_native_baseline,
     select_winner,
 )
 
@@ -56,9 +58,15 @@ def staged_cell(tmp_path):
         "encoder": "encoder",
         "model": "model",
         "commands": {
-            "baseline": "python train.py --folds 0,1,2,3,4",
-            "discovery": "python train.py --folds 0,1,2",
-            "promotion": "python train.py --folds 3,4",
+            "baseline": (
+                "python benchmarks/scripts/run_experiment.py --folds 0,1,2,3,4"
+            ),
+            "discovery": (
+                "python benchmarks/scripts/run_experiment.py --folds 0,1,2"
+            ),
+            "promotion": (
+                "python benchmarks/scripts/run_experiment.py --folds 3,4"
+            ),
         },
         "budget_identity": {
             "cell_id": "b" * 16,
@@ -249,6 +257,56 @@ def test_baseline_registration_rejects_test_bearing_public_result(staged_cell):
     cell_root, _, _, _, _ = staged_cell
     with pytest.raises(CampaignStageError, match="test-bearing"):
         register_baseline(cell_root, _baseline(cell_root, leak=True))
+
+
+def test_native_baseline_runs_at_frozen_commit_and_registers(
+    staged_cell, monkeypatch,
+):
+    cell_root, adir, _, _, repo_root = staged_cell
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "worktree", "add"]:
+            worktree = Path(command[4])
+            worktree.mkdir(parents=True)
+            observed["base_commit"] = command[5]
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if command[:3] == ["git", "worktree", "remove"]:
+            shutil.rmtree(Path(command[4]), ignore_errors=True)
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+        worktree = Path(kwargs["cwd"])
+        env = kwargs["env"]
+        observed["command"] = command
+        observed["gpu"] = (
+            env["CUDA_VISIBLE_DEVICES"], env["AUTOMIL_GPU"],
+        )
+        public = {
+            "status": "completed",
+            "composite": 0.61,
+            "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
+            "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60),
+        }
+        (worktree / "result.json").write_text(json.dumps(public))
+        sealed = Path(env["AUTOMIL_RESULTS_DIR"])
+        sealed.mkdir(parents=True, exist_ok=True)
+        for fold in CERTIFICATION_FOLDS:
+            (sealed / f"fold_{fold}_result.json").write_text(json.dumps({
+                "fold_index": fold,
+                "held_out": {"test_auc": 0.5 + fold / 100},
+            }))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("autobench.campaign_stages.subprocess.run", fake_run)
+    state = run_native_baseline(cell_root, repo_root=repo_root, gpu_id=3)
+
+    assert observed["base_commit"] == "d" * 40
+    assert observed["gpu"] == ("3", "0")
+    assert "--folds" in observed["command"]
+    assert "0,1,2,3,4" in observed["command"]
+    assert state["baseline"]["candidate_id"] == "baseline"
+    assert (cell_root / "baseline/archive/result.json").is_file()
+    assert (adir / "graph.json").is_file()
 
 
 def test_external_baseline_is_atomically_imported_and_portable(staged_cell, tmp_path):
