@@ -566,6 +566,7 @@ def test_cancel_local_direct_kill(
         })
 
         result = cli_runner.invoke(main, ["cancel", node_id], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
 
         # Give the signal a moment to propagate.
         time.sleep(0.3)
@@ -678,6 +679,7 @@ def test_cancel_no_starttime_ticks(
         })
 
         result = cli_runner.invoke(main, ["cancel", node_id], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
 
         # Give the signal a moment to propagate.
         time.sleep(0.3)
