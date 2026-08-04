@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -75,6 +76,7 @@ _SPEC_ENV_BLOCKED: frozenset[str] = frozenset({
     "AUTOMIL_ACCELERATOR",
     "AUTOMIL_GPU",
     "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL",
     "HIP_VISIBLE_DEVICES",
     "ROCR_VISIBLE_DEVICES",
 })
@@ -92,6 +94,8 @@ logger = logging.getLogger(__name__)
 # call, so the cost is paid once and tests can re-resolve via importlib.reload.
 _resolved_nvidia_smi = shutil.which("nvidia-smi")
 NVIDIA_SMI_PATH = _resolved_nvidia_smi or "nvidia-smi"
+_resolved_rocm_smi = shutil.which("rocm-smi")
+ROCM_SMI_PATH = _resolved_rocm_smi or "rocm-smi"
 if _resolved_nvidia_smi:
     logger.info("nvidia-smi resolved to %s", NVIDIA_SMI_PATH)
 else:
@@ -283,6 +287,76 @@ def query_gpus() -> list[GPUInfo]:
         return gpus
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
         logger.warning(f"nvidia-smi failed: {e}")
+        return []
+
+
+def query_rocm_gpus() -> list[GPUInfo]:
+    """Query live ROCm device count and VRAM via pinned ``rocm-smi``.
+
+    ``--showmeminfo vram --json`` reports total and currently used bytes for
+    every device. Any missing, malformed, duplicate, or internally inconsistent
+    record rejects the whole snapshot: partial telemetry must never become
+    permission to launch on an unverified device.
+    """
+    try:
+        result = subprocess.run(
+            [ROCM_SMI_PATH, "--showmeminfo", "vram", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            logger.warning(
+                "rocm-smi failed with return code %s: %s",
+                result.returncode,
+                result.stderr.strip(),
+            )
+            return []
+        payload = json.loads(result.stdout)
+        if not isinstance(payload, dict):
+            raise ValueError("top-level payload is not a mapping")
+
+        devices: list[GPUInfo] = []
+        seen_indices: set[int] = set()
+        for raw_name, raw_metrics in payload.items():
+            if not isinstance(raw_metrics, dict):
+                continue
+            total_raw = raw_metrics.get("VRAM Total Memory (B)")
+            used_raw = raw_metrics.get("VRAM Total Used Memory (B)")
+            if total_raw is None and used_raw is None:
+                continue
+            if total_raw is None or used_raw is None:
+                raise ValueError(f"{raw_name!r} has partial VRAM telemetry")
+
+            match = re.search(r"(\d+)$", str(raw_name))
+            if match is None:
+                raise ValueError(f"cannot derive device index from {raw_name!r}")
+            index = int(match.group(1))
+            if index in seen_indices:
+                raise ValueError(f"duplicate device index {index}")
+
+            total_bytes = int(str(total_raw).strip())
+            used_bytes = int(str(used_raw).strip())
+            if total_bytes <= 0 or used_bytes < 0 or used_bytes > total_bytes:
+                raise ValueError(
+                    f"invalid VRAM values for device {index}: "
+                    f"total={total_bytes}, used={used_bytes}"
+                )
+            devices.append(GPUInfo(
+                index=index,
+                total_mb=total_bytes // (1024 * 1024),
+                free_mb=(total_bytes - used_bytes) // (1024 * 1024),
+                utilization=0,
+            ))
+            seen_indices.add(index)
+
+        if not devices:
+            raise ValueError("no complete device records")
+        devices.sort(key=lambda device: device.index)
+        return devices
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError,
+            json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.warning("rocm-smi failed: %s", exc)
         return []
 
 
@@ -562,12 +636,34 @@ class ExperimentOrchestrator:
             )
         elif configured_accelerator == "rocm":
             if configured_gpu_count > 0 and configured_min_vram_gb > 0:
-                for device_index in range(configured_gpu_count):
-                    self.gpu_allocations[device_index] = []
-                logger.info(
-                    "ROCm execution configured; using %d declared device slot(s)",
-                    configured_gpu_count,
+                live_rocm = query_rocm_gpus()
+                live_indices = [device.index for device in live_rocm]
+                expected_indices = list(range(configured_gpu_count))
+                live_min_vram_gb = min(
+                    (device.total_mb / 1024 for device in live_rocm),
+                    default=0.0,
                 )
+                if (
+                    live_indices == expected_indices
+                    and live_min_vram_gb >= configured_min_vram_gb
+                ):
+                    for device_index in live_indices:
+                        self.gpu_allocations[device_index] = []
+                    logger.info(
+                        "ROCm execution configured; verified %d live device slot(s)",
+                        configured_gpu_count,
+                    )
+                else:
+                    logger.warning(
+                        "Live ROCm hardware does not match config "
+                        "(expected indices=%s, min_vram_gb>=%.1f; "
+                        "detected indices=%s, min_vram_gb=%.1f); "
+                        "queued jobs will remain pending",
+                        expected_indices,
+                        configured_min_vram_gb,
+                        live_indices,
+                        live_min_vram_gb,
+                    )
             else:
                 logger.warning(
                     "ROCm configuration requires positive hardware.gpu_count and "
@@ -710,6 +806,7 @@ class ExperimentOrchestrator:
     def _save_state(self):
         """Persist typed execution-slot state and legacy CUDA telemetry."""
         gpus = query_gpus() if self._accelerator == "cuda" else []
+        rocm_gpus = query_rocm_gpus() if self._accelerator == "rocm" else []
         gpu_data = {}
         execution_slots = {}
         for g in gpus:
@@ -742,24 +839,27 @@ class ExperimentOrchestrator:
                 "capacity": self.max_per_gpu,
             }
         elif self._accelerator == "rocm":
+            live_by_index = {device.index: device for device in rocm_gpus}
             for device_index, running_on in sorted(self.gpu_allocations.items()):
                 alloc_vram = sum(
                     self.running[eid].estimated_vram_gb
                     for eid in running_on
                     if eid in self.running
                 )
-                execution_slots[f"rocm:{device_index}"] = {
+                slot_state = {
                     "accelerator": "rocm",
                     "device_index": device_index,
                     "running": running_on,
                     "capacity": self.max_per_gpu,
-                    "schedulable_free_gb": round(
-                        self._configured_min_vram_gb
-                        - self.safety_margin_gb
-                        - alloc_vram,
-                        1,
-                    ),
+                    "telemetry_available": device_index in live_by_index,
                 }
+                live_device = live_by_index.get(device_index)
+                if live_device is not None:
+                    slot_state["schedulable_free_gb"] = round(
+                        live_device.free_gb - self.safety_margin_gb - alloc_vram,
+                        1,
+                    )
+                execution_slots[f"rocm:{device_index}"] = slot_state
 
         state = {
             "counter": self.counter,
@@ -916,7 +1016,10 @@ class ExperimentOrchestrator:
 
         candidates: list[tuple[int, float]] = []
         if accelerator == "rocm":
-            for device_index, running_on in self.gpu_allocations.items():
+            for device in query_rocm_gpus():
+                running_on = self.gpu_allocations.get(device.index)
+                if running_on is None:
+                    continue
                 if len(running_on) >= self.max_per_gpu:
                     continue
                 alloc_vram = sum(
@@ -924,13 +1027,9 @@ class ExperimentOrchestrator:
                     for eid in running_on
                     if eid in self.running
                 )
-                schedulable = (
-                    self._configured_min_vram_gb
-                    - self.safety_margin_gb
-                    - alloc_vram
-                )
+                schedulable = device.free_gb - self.safety_margin_gb - alloc_vram
                 if schedulable >= needed_gb:
-                    candidates.append((device_index, schedulable))
+                    candidates.append((device.index, schedulable))
         else:
             for g in query_gpus():
                 running_on = self.gpu_allocations.get(g.index, [])
@@ -979,15 +1078,10 @@ class ExperimentOrchestrator:
             running_on = self.gpu_allocations.get(gpu_id)
             if running_on is None or len(running_on) >= self.max_per_gpu:
                 return False
-            alloc_vram = sum(
-                self.running[eid].estimated_vram_gb
-                for eid in running_on
-                if eid in self.running
-            )
-            return (
-                self._configured_min_vram_gb - alloc_vram
-                >= needed_gb + self.safety_margin_gb
-            )
+            for device in query_rocm_gpus():
+                if device.index == gpu_id:
+                    return device.free_gb >= needed_gb + self.safety_margin_gb
+            return False
 
         gpus = query_gpus()
         for g in gpus:
@@ -1033,14 +1127,27 @@ class ExperimentOrchestrator:
 
         # 3. Orchestrator-injected (always overrides 1 + 2).
         accelerator = getattr(self, "_accelerator", "cuda") or "cuda"
-        physical_device = "" if accelerator == "cpu" else str(gpu_id)
-        # HIP accepts CUDA_VISIBLE_DEVICES for compatibility, while native ROCm
-        # stacks may read HIP_VISIBLE_DEVICES or ROCR_VISIBLE_DEVICES. Own and
-        # set all three masks so a candidate spec cannot route around isolation.
-        env["CUDA_VISIBLE_DEVICES"] = physical_device
-        env["HIP_VISIBLE_DEVICES"] = physical_device if accelerator == "rocm" else ""
-        env["ROCR_VISIBLE_DEVICES"] = physical_device if accelerator == "rocm" else ""
-        env["AUTOMIL_GPU"] = "" if accelerator == "cpu" else "0"
+        # On Linux ROCm, ROCR_VISIBLE_DEVICES selects the host device first;
+        # HIP/CUDA/GPU_DEVICE_ORDINAL then refer to logical device 0 inside that
+        # restricted view (the same layering used by AMD AgentKernelArena).
+        if accelerator == "rocm":
+            env["ROCR_VISIBLE_DEVICES"] = str(gpu_id)
+            env["HIP_VISIBLE_DEVICES"] = "0"
+            env["CUDA_VISIBLE_DEVICES"] = "0"
+            env["GPU_DEVICE_ORDINAL"] = "0"
+        elif accelerator == "cuda":
+            env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            env["HIP_VISIBLE_DEVICES"] = ""
+            env["ROCR_VISIBLE_DEVICES"] = ""
+            env["GPU_DEVICE_ORDINAL"] = ""
+        else:
+            env["CUDA_VISIBLE_DEVICES"] = ""
+            env["HIP_VISIBLE_DEVICES"] = ""
+            env["ROCR_VISIBLE_DEVICES"] = ""
+            env["GPU_DEVICE_ORDINAL"] = ""
+        # Backward-compatible logical slot. Consumers must use
+        # AUTOMIL_ACCELERATOR to distinguish CPU from accelerator execution.
+        env["AUTOMIL_GPU"] = "0"
         env["AUTOMIL_ACCELERATOR"] = accelerator
         env["AUTOMIL_DESC"] = spec.get("description", "")
         env["AUTOMIL_NODE_ID"] = node_id

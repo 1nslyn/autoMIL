@@ -152,7 +152,8 @@ def test_cpu_subprocess_hides_cuda_devices(tmp_path, monkeypatch):
     assert env["CUDA_VISIBLE_DEVICES"] == ""
     assert env["HIP_VISIBLE_DEVICES"] == ""
     assert env["ROCR_VISIBLE_DEVICES"] == ""
-    assert env["AUTOMIL_GPU"] == ""
+    assert env["GPU_DEVICE_ORDINAL"] == ""
+    assert env["AUTOMIL_GPU"] == "0"
     assert env["AUTOMIL_ACCELERATOR"] == "cpu"
 
 
