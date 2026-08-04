@@ -66,12 +66,19 @@ def resolve_policy_name(exp_cfg: Any, automil_dir: Path | None = None) -> str | 
     return explicit or archived
 
 
-@dataclass(frozen=True)
+@dataclass
 class PolicyRuntime:
-    """Fail-loud runtime wrapper around one optional ``PolicyVariant``."""
+    """Fail-loud, fold-local wrapper around one optional ``PolicyVariant``.
+
+    Selected policy classes are resolved once but instantiated lazily.  Every
+    trainer seeds its fold before the first guarded policy operation, so even a
+    randomized policy constructor is isolated from the preceding fold's RNG
+    state.
+    """
 
     name: str | None = None
     policy: Any | None = None
+    policy_factory: type[Any] | None = None
 
     @classmethod
     def from_experiment(
@@ -100,18 +107,28 @@ class PolicyRuntime:
                 f"selected policy variant {name!r} was not registered from "
                 f"{variants_root}.{detail}"
             ) from exc
-        return cls(name=name, policy=policy_cls())
+        return cls(name=name, policy_factory=policy_cls)
 
     def for_fold(self) -> "PolicyRuntime":
-        """Return an independent policy instance for one CV fold."""
-        if self.policy is None:
+        """Return a lazy runtime that cannot share instance state across folds."""
+        factory = self.policy_factory
+        if factory is None and self.policy is not None:
+            factory = type(self.policy)
+        if factory is None:
             return self
-        return type(self)(name=self.name, policy=type(self.policy)())
+        return type(self)(name=self.name, policy_factory=factory)
+
+    def _resolved_policy(self) -> Any | None:
+        """Instantiate once, at first use inside an already-seeded trainer."""
+        if self.policy is None and self.policy_factory is not None:
+            self.policy = self.policy_factory()
+        return self.policy
 
     def wrap_optimizer(self, optimizer: Any, *, role: str = "main") -> Any:
-        if self.policy is None:
+        policy = self._resolved_policy()
+        if policy is None:
             return optimizer
-        wrapped = self.policy.wrap_optimizer_for(optimizer, role=role)
+        wrapped = policy.wrap_optimizer_for(optimizer, role=role)
         if wrapped is None:
             raise TypeError(f"policy {self.name!r} returned None for optimizer role {role!r}")
         for method in ("zero_grad", "step"):
@@ -123,9 +140,10 @@ class PolicyRuntime:
         return wrapped
 
     def wrap_scheduler(self, scheduler: Any, *, role: str = "main") -> Any:
-        if self.policy is None:
+        policy = self._resolved_policy()
+        if policy is None:
             return scheduler
-        wrapped = self.policy.wrap_scheduler_for(scheduler, role=role)
+        wrapped = policy.wrap_scheduler_for(scheduler, role=role)
         if wrapped is None or not callable(getattr(wrapped, "step", None)):
             raise TypeError(
                 f"policy {self.name!r} returned an invalid scheduler for role {role!r}"
@@ -139,14 +157,15 @@ class PolicyRuntime:
         epoch: int,
         metrics: Mapping[str, float] | None = None,
     ) -> bool:
-        if self.policy is None:
+        policy = self._resolved_policy()
+        if policy is None:
             return bool(default)
         safe_metrics: dict[str, float] = {}
         for key, value in (metrics or {}).items():
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise TypeError(f"policy metric {key!r} must be a real scalar")
             safe_metrics[str(key)] = float(value)
-        decision = self.policy.should_stop(
+        decision = policy.should_stop(
             default=bool(default), epoch=int(epoch), metrics=safe_metrics,
         )
         if type(decision) is not bool:

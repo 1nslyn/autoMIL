@@ -147,6 +147,32 @@ def test_undecorated_helper_class_is_allowed(tmp_path):
     PurityValidator().check(_write_module(tmp_path, body))
 
 
+@pytest.mark.parametrize("class_state", ["STATE = []", "STATE = {}", "STATE = set()"])
+def test_mutable_class_state_is_rejected(tmp_path, class_state):
+    from automil.registry.errors import ValidationError
+    from automil.registry.validators.purity import PurityValidator
+
+    body = CLEAN_MODULE.replace(
+        "class Clean(ModelVariant):",
+        f"class Clean(ModelVariant):\n    {class_state}",
+    )
+    with pytest.raises(ValidationError, match="class attributes must be immutable"):
+        PurityValidator().check(_write_module(tmp_path, body))
+
+
+@pytest.mark.parametrize("scope_statement", ["global COUNT", "nonlocal COUNT"])
+def test_method_scope_mutation_is_rejected(tmp_path, scope_statement):
+    from automil.registry.errors import ValidationError
+    from automil.registry.validators.purity import PurityValidator
+
+    body = CLEAN_MODULE.replace(
+        "        # Function-body I/O is allowed.",
+        f"        {scope_statement}\n        # Function-body I/O is allowed.",
+    )
+    with pytest.raises(ValidationError, match="global or enclosing-scope state"):
+        PurityValidator().check(_write_module(tmp_path, body))
+
+
 @pytest.mark.parametrize("body", [
     CLEAN_MODULE.replace('name="clean"', 'name=open("/tmp/purity", "w")'),
     CLEAN_MODULE.replace(

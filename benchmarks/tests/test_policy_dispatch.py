@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -29,17 +30,43 @@ def test_each_fold_gets_an_independent_policy_instance():
         def __init__(self):
             self.epochs = []
 
-        def wrap_optimizer(self, opt):
+        def wrap_optimizer_for(self, opt, *, role):
             return opt
 
     template = PolicyRuntime(name="stateful", policy=StatefulPolicy())
     fold_zero = template.for_fold()
     fold_one = template.for_fold()
+    optimizer = Mock(zero_grad=Mock(), step=Mock())
+    fold_zero.wrap_optimizer(optimizer)
+    fold_one.wrap_optimizer(optimizer)
     fold_zero.policy.epochs.append(3)
 
     assert fold_zero.policy is not fold_one.policy
     assert fold_one.policy.epochs == []
     assert template.policy.epochs == []
+
+
+def test_fold_policy_construction_is_lazy_and_seed_deterministic():
+    class RandomizedPolicy:
+        def __init__(self):
+            self.draw = random.random()
+
+        def wrap_optimizer_for(self, opt, *, role):
+            return opt
+
+    template = PolicyRuntime(name="randomized", policy=RandomizedPolicy())
+    fold_zero = template.for_fold()
+    fold_one = template.for_fold()
+    assert fold_zero.policy is None
+    assert fold_one.policy is None
+
+    optimizer = Mock(zero_grad=Mock(), step=Mock())
+    random.seed(17)
+    fold_zero.wrap_optimizer(optimizer)
+    random.seed(17)
+    fold_one.wrap_optimizer(optimizer)
+    assert fold_zero.policy is not fold_one.policy
+    assert fold_zero.policy.draw == fold_one.policy.draw
 
 
 def test_nested_runtime_automil_dir_comes_from_orchestrator_env(monkeypatch):

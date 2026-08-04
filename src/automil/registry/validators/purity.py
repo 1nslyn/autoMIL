@@ -297,6 +297,13 @@ class PurityValidator:
                 self._definition_error(
                     module_path, annotation, "annotation contains a call",
                 )
+        for statement in ast.walk(node):
+            if isinstance(statement, (ast.Global, ast.Nonlocal)):
+                self._definition_error(
+                    module_path,
+                    statement,
+                    "methods cannot mutate global or enclosing-scope state",
+                )
 
     def _check_register_decorator(
         self, module_path: Path, decorator: ast.AST,
@@ -367,15 +374,11 @@ class PurityValidator:
                 value = getattr(statement, "value", None)
                 if value is None:
                     continue
-                if any(isinstance(part, ast.Call) for part in ast.walk(value)):
+                if not _is_immutable_literal(value):
                     self._definition_error(
-                        module_path, value, "class attribute contains a call",
-                    )
-                if any(isinstance(part, (ast.ListComp, ast.DictComp, ast.SetComp,
-                                         ast.GeneratorExp, ast.Lambda))
-                       for part in ast.walk(value)):
-                    self._definition_error(
-                        module_path, value, "class attribute contains executable syntax",
+                        module_path,
+                        value,
+                        "class attributes must be immutable literals",
                     )
                 continue
             self._definition_error(
