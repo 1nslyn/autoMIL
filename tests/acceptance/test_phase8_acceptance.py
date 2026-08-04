@@ -81,9 +81,15 @@ def test_d208_clause_02_result_schema_validation():
 # ---------------------------------------------------------------------------
 
 def test_d208_clause_03_graph_dict_spread():
-    """D-208 #3: graph.py stores node['metrics'] = dict(metrics); composite-only Pareto."""
+    """D-208 #3: graph.py stores opaque consumer metrics; composite-only Pareto."""
     graph_src = (_SRC_AUTOMIL / "graph.py").read_text()
-    assert '"metrics": dict(metrics)' in graph_src or "node[\"metrics\"] = dict(metrics)" in graph_src
+    # ``composite_se`` became a framework-owned top-level scalar after D-200,
+    # so the write path now filters that key instead of blindly copying the
+    # entire mapping.  Keep this acceptance gate on the contract, not one stale
+    # local-variable spelling.
+    assert '"metrics": {k: v for k, v in metrics.items()' in graph_src
+    assert 'node["metrics"] = {k: v for k, v in metrics.items()' in graph_src
+    assert '"metrics": dict(comp_metrics)' in graph_src
     assert "composite-only dominance" in graph_src
 
     # Dict-spread tests pass.
@@ -267,33 +273,33 @@ def test_d208_clause_11_state_roadmap_complete():
     assert changelog_path.exists(), "CHANGELOG.md missing"
     changelog_text = changelog_path.read_text()
 
-    # The head section (above the first older entry) must lead with ## 8.0.0.
-    # Find the first `## ` heading; assert it is the 8.0.0 heading.
-    first_heading_match = re.search(r"^## (\S.+)$", changelog_text, re.MULTILINE)
-    assert first_heading_match is not None, "CHANGELOG.md has no ## headings"
-    first_heading = first_heading_match.group(1)
-    assert first_heading.startswith("8.0.0"), (
-        f"CHANGELOG head section must lead with '## 8.0.0', got '## {first_heading}'. "
-        f"Phase 8 release entry must be most-recent; place it ABOVE existing "
-        f"7.0.0 entry (Iter-2 / F-09 anchor)."
+    # Post-v1.0 semver releases and an Unreleased section now correctly precede
+    # the historical 8.0.0 milestone.  Validate the milestone's own section
+    # instead of requiring it to remain the newest changelog entry forever.
+    milestone_match = re.search(
+        r"^## 8\.0\.0\b.*?(?=^## |\Z)",
+        changelog_text,
+        re.MULTILINE | re.DOTALL,
     )
+    assert milestone_match is not None, "CHANGELOG.md has no 8.0.0 milestone section"
+    milestone_text = milestone_match.group(0)
 
     # F-06 migration note: explicit AUTOBENCH-shaped operator-recovery snippet.
     # The CHANGELOG (NOT the framework template) is where the 4-cell matrix
     # (env.required vs env.passthrough x example values vs sentinel) is
     # resolved with concrete autobench-shaped examples for migration.
-    assert "AUTOBENCH_OVARIAN_ROOT" in changelog_text, (
+    assert "AUTOBENCH_OVARIAN_ROOT" in milestone_text, (
         "CHANGELOG.md 8.0.0 BREAKING section must include the F-06 migration "
         "recovery snippet with explicit AUTOBENCH_OVARIAN_ROOT example. "
         "(Framework template config.yaml.j2 stays framework-pure per F-06; "
         "CHANGELOG is the migration surface.)"
     )
-    assert "AUTOBENCH_CCRCC_ROOT" in changelog_text, (
+    assert "AUTOBENCH_CCRCC_ROOT" in milestone_text, (
         "CHANGELOG.md 8.0.0 BREAKING section must include AUTOBENCH_CCRCC_ROOT "
         "example for autobench-shaped consumers per F-06 4-cell resolution."
     )
-    assert "env.required" in changelog_text or "env:\n  required:" in changelog_text
-    assert "passthrough" in changelog_text
+    assert "env.required" in milestone_text or "env:\n  required:" in milestone_text
+    assert "passthrough" in milestone_text
 
     # 2. REQUIREMENTS.md DEC-XX rows transitioned Pending -> Complete.
     # After milestone close, REQUIREMENTS.md is archived to milestones/v1.0-REQUIREMENTS.md
