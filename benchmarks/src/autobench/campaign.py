@@ -14,6 +14,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -78,6 +79,26 @@ PROTOCOL = {
 
 class CampaignManifestError(ValueError):
     """A campaign artifact is malformed or has drifted from its lock."""
+
+
+def resolve_campaign_base_commit(repo_root: Path) -> str:
+    """Return the full git commit that every run in one materialization uses."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise CampaignManifestError(
+            f"cannot resolve campaign base commit under {repo_root}"
+        ) from exc
+    commit = completed.stdout.strip().lower()
+    if len(commit) not in {40, 64} or any(char not in "0123456789abcdef" for char in commit):
+        raise CampaignManifestError(f"git returned an invalid base commit {commit!r}")
+    return commit
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -369,6 +390,8 @@ def materialize_discovery_cells(
     manifest_path: Path,
     output_root: Path,
     repo_root: Path,
+    *,
+    base_commit: str | None = None,
 ) -> list[Path]:
     """Create 130 isolated discovery roots from the immutable manifest.
 
@@ -380,6 +403,13 @@ def materialize_discovery_cells(
     manifest_hash = file_sha256(manifest_path)
     repo_root = repo_root.resolve()
     output_root = output_root.resolve()
+    base_commit = base_commit or resolve_campaign_base_commit(repo_root)
+    if (
+        len(base_commit) not in {40, 64}
+        or any(char not in "0123456789abcdef" for char in base_commit.lower())
+    ):
+        raise CampaignManifestError("campaign base_commit must be a full git hash")
+    base_commit = base_commit.lower()
     try:
         output_root.relative_to(repo_root)
     except ValueError as exc:
@@ -441,6 +471,7 @@ def materialize_discovery_cells(
             "cell_sha256": cell["cell_sha256"],
             "budget_cell_id": cell["budget_identity"]["cell_id"],
             "stage": "discovery",
+            "base_commit": base_commit,
         }
 
         # Materialization is a restart-safe initializer, never a reset command.
@@ -458,11 +489,11 @@ def materialize_discovery_cells(
                     f"existing discovery root is incomplete or corrupt: {cell_root}"
                 ) from exc
             expected_state = (
-                cell["cell_id"], cell["cell_sha256"], manifest_hash,
+                cell["cell_id"], cell["cell_sha256"], manifest_hash, base_commit,
             )
             actual_state = (
                 state.get("cell_id"), state.get("cell_sha256"),
-                state.get("manifest_sha256"),
+                state.get("manifest_sha256"), state.get("base_commit"),
             )
             if existing_cell != cell or existing_config != config or actual_state != expected_state:
                 raise CampaignManifestError(
@@ -503,6 +534,7 @@ def materialize_discovery_cells(
                 staging_root,
                 cell=cell,
                 manifest_sha256=manifest_hash,
+                base_commit=base_commit,
             )
             os.replace(staging_root, cell_root)
         finally:
@@ -533,6 +565,7 @@ def audit_materialized_campaign(
         )
     by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
     seen: set[str] = set()
+    base_commits: set[str] = set()
     regimes: dict[tuple[str, str], str] = {}
     manifest_hash = file_sha256(manifest_path)
     for adir in roots:
@@ -555,9 +588,11 @@ def audit_materialized_campaign(
             campaign,
             base_run_command=(config.get("run") or {}).get("command"),
             budget_cell_id=cell["budget_identity"]["cell_id"],
+            base_commit=str(campaign.get("base_commit", "")),
         )
         if campaign.get("stage") != "discovery":
             raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
+        base_commits.add(str(campaign.get("base_commit", "")))
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
         if (config.get("training") or {}).get("fold_count") != len(
@@ -579,6 +614,7 @@ def audit_materialized_campaign(
             state["phase"] != "discovery"
             or state["cell_id"] != cell_id
             or state["manifest_sha256"] != manifest_hash
+            or state["base_commit"] != campaign.get("base_commit")
         ):
             raise CampaignManifestError(f"{cell_id}: stage ledger drift")
         for command_name, expected_folds in {
@@ -607,10 +643,15 @@ def audit_materialized_campaign(
         raise CampaignManifestError(
             f"arm/task canary coverage mismatch: {sorted(set(regimes))}"
         )
+    if len(base_commits) != 1 or "" in base_commits:
+        raise CampaignManifestError(
+            f"materialized cells do not share one base commit: {sorted(base_commits)}"
+        )
     return {
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": manifest_hash,
         "cells": len(seen),
+        "base_commit": next(iter(base_commits)),
         "regimes": {
             f"{framework}/{task_type}": regimes[(framework, task_type)]
             for framework, task_type in sorted(regimes)
@@ -620,13 +661,14 @@ def audit_materialized_campaign(
 
 
 def run_materialization_canary(
-    manifest_path: Path, *, repo_root: Path,
+    manifest_path: Path, *, repo_root: Path, base_commit: str | None = None,
 ) -> dict[str, Any]:
     """Materialize, audit, and automatically remove one full dry-run campaign."""
     parent = manifest_path.resolve().parent
     with tempfile.TemporaryDirectory(prefix=".canary-", dir=str(parent)) as raw:
         roots = materialize_discovery_cells(
             manifest_path, Path(raw) / "runtime", repo_root,
+            base_commit=base_commit,
         )
         return audit_materialized_campaign(
             roots=roots, manifest_path=manifest_path, repo_root=repo_root,

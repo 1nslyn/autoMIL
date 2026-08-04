@@ -25,6 +25,7 @@ def _state(tmp_path: Path):
     cell = {"cell_id": "cell", "cell_sha256": "a" * 64}
     return root, initialize_stage_state(
         root, cell=cell, manifest_sha256="b" * 64,
+        base_commit="d" * 40,
     )
 
 

@@ -36,6 +36,7 @@ def public_status(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "campaign_id": state["campaign_id"],
         "cell_id": state["cell_id"],
+        "base_commit": state["base_commit"],
         "phase": state["phase"],
         "revision": state["revision"],
         "baseline_registered": state.get("baseline") is not None,

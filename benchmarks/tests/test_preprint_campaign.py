@@ -27,6 +27,7 @@ from autobench.campaign import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
+BASE_COMMIT = "d" * 40
 
 
 @pytest.fixture(scope="module")
@@ -142,6 +143,7 @@ def test_materializer_rejects_policy_boundary_drift(tmp_path):
             manifest_path,
             fake_repo / "benchmarks/campaigns/preprint_130/runtime",
             fake_repo,
+            base_commit=BASE_COMMIT,
         )
 
 
@@ -164,7 +166,9 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
     manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
     write_manifest(build_preprint_manifest(fake_repo), manifest_path)
     output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
-    roots = materialize_discovery_cells(manifest_path, output_root, fake_repo)
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, base_commit=BASE_COMMIT,
+    )
 
     assert len(roots) == 130
     assert len(set(roots)) == 130
@@ -195,7 +199,9 @@ def test_materializer_restart_preserves_progress_files(tmp_path):
     manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
     write_manifest(build_preprint_manifest(fake_repo), manifest_path)
     output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
-    roots = materialize_discovery_cells(manifest_path, output_root, fake_repo)
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, base_commit=BASE_COMMIT,
+    )
     root = roots[0]
     plan = root / "plan.md"
     learnings = root / "learnings.md"
@@ -204,12 +210,19 @@ def test_materializer_restart_preserves_progress_files(tmp_path):
     learnings.write_text("earned knowledge must survive\n")
     state_before = state.read_bytes()
 
-    restarted = materialize_discovery_cells(manifest_path, output_root, fake_repo)
+    restarted = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, base_commit=BASE_COMMIT,
+    )
 
     assert restarted == roots
     assert plan.read_text() == "agent plan must survive\n"
     assert learnings.read_text() == "earned knowledge must survive\n"
     assert state.read_bytes() == state_before
+
+    with pytest.raises(CampaignManifestError, match="different inputs"):
+        materialize_discovery_cells(
+            manifest_path, output_root, fake_repo, base_commit="e" * 40,
+        )
 
 
 def test_materializer_refuses_half_created_existing_root(tmp_path):
@@ -224,7 +237,9 @@ def test_materializer_refuses_half_created_existing_root(tmp_path):
     (partial / "plan.md").write_text("do not overwrite me\n")
 
     with pytest.raises(CampaignManifestError, match="incomplete or corrupt"):
-        materialize_discovery_cells(manifest_path, output_root, fake_repo)
+        materialize_discovery_cells(
+            manifest_path, output_root, fake_repo, base_commit=BASE_COMMIT,
+        )
 
     assert (partial / "plan.md").read_text() == "do not overwrite me\n"
     assert not (partial / "config.yaml").exists()
@@ -236,7 +251,9 @@ def test_full_campaign_canary_covers_every_arm_task_regime_without_gpu(tmp_path)
     manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
     write_manifest(build_preprint_manifest(fake_repo), manifest_path)
 
-    report = run_materialization_canary(manifest_path, repo_root=fake_repo)
+    report = run_materialization_canary(
+        manifest_path, repo_root=fake_repo, base_commit=BASE_COMMIT,
+    )
     assert report["cells"] == 130
     assert len(report["regimes"]) == 10
     assert report["gpu_processes_started"] == 0

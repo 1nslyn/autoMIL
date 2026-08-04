@@ -84,6 +84,23 @@ def test_campaign_binding_requires_one_manifest_source_of_truth(tmp_path):
     assert bound == campaign
 
 
+def test_campaign_binding_rejects_base_commit_drift(tmp_path):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    campaign["base_commit"] = "a" * 40
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="base commit"):
+        validate_campaign_binding(
+            path,
+            campaign,
+            base_run_command="python train.py --folds 0,1,2",
+            budget_cell_id="budget-123",
+            base_commit="b" * 40,
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
