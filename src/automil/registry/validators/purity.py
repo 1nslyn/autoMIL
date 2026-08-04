@@ -244,6 +244,12 @@ class PurityValidator:
             # e.g., os.environ["X"] = "y"   (Assign with Subscript target)
             targets = getattr(node, "targets", None) or [getattr(node, "target", None)]
             for tgt in (t for t in targets if t is not None):
+                if strict_policy and isinstance(tgt, ast.Attribute):
+                    self._definition_error(
+                        module_path,
+                        tgt,
+                        "strict policy modules cannot assign object attributes",
+                    )
                 if isinstance(tgt, ast.Subscript):
                     raise ValidationError(
                         validator_name="purity",
@@ -434,6 +440,30 @@ class PurityValidator:
         node: ast.FunctionDef | ast.AsyncFunctionDef,
         shared_names: set[str],
     ) -> None:
+        shared_aliases = set(shared_names)
+        shared_aliases.add("cls")
+        changed = True
+        while changed:
+            changed = False
+            for statement in ast.walk(node):
+                value: ast.AST | None = None
+                target: ast.AST | None = None
+                if (
+                    isinstance(statement, ast.Assign)
+                    and len(statement.targets) == 1
+                ):
+                    target, value = statement.targets[0], statement.value
+                elif isinstance(statement, ast.AnnAssign):
+                    target, value = statement.target, statement.value
+                if (
+                    isinstance(target, ast.Name)
+                    and value is not None
+                    and target.id not in shared_aliases
+                    and self._shared_owner(value, shared_aliases)
+                ):
+                    shared_aliases.add(target.id)
+                    changed = True
+
         for statement in ast.walk(node):
             targets: list[ast.AST] = []
             if isinstance(statement, ast.Assign):
@@ -445,7 +475,7 @@ class PurityValidator:
             for target in targets:
                 if (
                     isinstance(target, ast.Attribute)
-                    and self._shared_owner(target.value, shared_names)
+                    and self._shared_owner(target.value, shared_aliases)
                 ):
                     self._definition_error(
                         module_path,
@@ -457,7 +487,7 @@ class PurityValidator:
                 and isinstance(statement.func, ast.Name)
                 and statement.func.id in {"setattr", "delattr"}
                 and statement.args
-                and self._shared_owner(statement.args[0], shared_names)
+                and self._shared_owner(statement.args[0], shared_aliases)
             ):
                 self._definition_error(
                     module_path,

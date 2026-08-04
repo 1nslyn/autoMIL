@@ -425,6 +425,7 @@ def test_postponed_annotation_calls_are_not_executed(tmp_path):
         "type(self).COUNT += 1",
         "Clean.COUNT = 2",
         "helper.calls += 1",
+        "alias = helper\n        alias.calls += 1",
     ],
 )
 def test_policy_shared_class_or_helper_writes_are_rejected(tmp_path, write):
@@ -439,6 +440,27 @@ def test_policy_shared_class_or_helper_writes_are_rejected(tmp_path, write):
         f"        {write}\n        # Function-body I/O is allowed.",
     )
     with pytest.raises(ValidationError, match="shared class/helper state"):
+        PurityValidator(strict_policy=True).check(_write_module(tmp_path, body))
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "PolicyVariant.LEAK = 1",
+        "PolicyVariant.LEAK: int = 1",
+        "PolicyVariant.LEAK += 1",
+    ],
+)
+def test_strict_policy_rejects_module_scope_attribute_assignment(
+    tmp_path, assignment,
+):
+    from automil.registry.errors import ValidationError
+    from automil.registry.validators.purity import PurityValidator
+
+    body = POLICY_MODULE.replace(
+        "CONST = \"ok\"", f"CONST = \"ok\"\n{assignment}",
+    )
+    with pytest.raises(ValidationError, match="attributes|constants cannot be mutated"):
         PurityValidator(strict_policy=True).check(_write_module(tmp_path, body))
 
 
