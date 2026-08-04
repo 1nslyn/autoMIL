@@ -160,8 +160,8 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(public_status(state), indent=2, sort_keys=True))
         if args.action == "advance" and state["phase"] == "winner-frozen":
             print(
-                "Winner is frozen. Held-out data remains sealed; run explicit "
-                "action 'certify' only when the search is over."
+                "Winner is frozen. Held-out data remains sealed until all 130 "
+                "cells are frozen by campaign_manifest.py freeze-selections."
             )
     except CampaignStageError as exc:
         parser.exit(2, f"campaign-stage error: {exc}\n")

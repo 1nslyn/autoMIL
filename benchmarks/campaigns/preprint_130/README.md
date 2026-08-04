@@ -8,7 +8,10 @@ protocol independently for every cell:
 - exactly 60 charged discovery attempts on validation folds `0,1,2`;
 - promotion of at most 10 unique complete candidates on folds `3,4`;
 - winner selection by the equal-weight mean of validation folds `0` through `4`;
-- explicit, winner-only reveal of the already sealed five-fold held-out results.
+- one campaign-wide freeze of all 130 validation winners before any held-out
+  read;
+- paired baseline-and-winner reveal of the already sealed five-fold held-out
+  results.
 
 There is no final retraining. Crashes and partial runs consume discovery
 attempts. An incomplete promotion candidate is ineligible. The native baseline
@@ -133,19 +136,24 @@ The winner record is immutable. `advance` may perform the next safe transition
 through selection, but it intentionally stops at `winner-frozen` and never
 reveals held-out data.
 
-## 6. Certify explicitly
+Repeat Sections 3–5 for every manifest cell. No cell may be certified early.
 
-Only after all search and selection activity for the cell is over, reveal the
-frozen winner's existing sealed folds:
+## 6. Freeze all selections, then certify
+
+After all 130 cells report `winner-frozen`, atomically bind their validation
+selections into one campaign artifact:
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_stage.py certify \
-  --cell-root "$CAMPAIGN_CELL_ROOT"
+.venv/bin/python benchmarks/scripts/campaign_manifest.py freeze-selections
+.venv/bin/python benchmarks/scripts/campaign_manifest.py certify-all
 ```
 
-Certification verifies the hashes recorded before selection and writes one
-winner bundle. The ordinary `status` output reports only bundle identity and
-timestamps, never held-out metric values.
+Before `selection_freeze.json` exists and contains the exact 130-cell roster,
+every per-cell certification entry point fails closed. `certify-all` is
+restart-safe: it verifies and reveals each frozen winner together with its
+native baseline, emits paired fold deltas, and writes a hashed
+`campaign_certification.json` index. The ordinary `status` output reports only
+bundle identity and timestamps, never held-out metric values.
 
 ## Recovery and audit trail
 

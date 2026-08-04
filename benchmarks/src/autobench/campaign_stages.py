@@ -39,17 +39,22 @@ from automil.cells.state import Cell, CellStatus, write_cell
 from autobench.campaign import (
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
+    DATASETS,
     DISCOVERY_ATTEMPTS,
     PROMOTION_CANDIDATES,
     PROTOCOL,
     STAGE_FOLDS,
     content_sha256,
     file_sha256,
+    load_manifest,
 )
 
 STATE_SCHEMA_VERSION = 2
 STATE_FILE = "campaign_state.json"
 BASELINE_ATTESTATION_FILE = "baseline_attestation.json"
+SELECTION_FREEZE_FILE = "selection_freeze.json"
+CAMPAIGN_CERTIFICATION_FILE = "campaign_certification.json"
+CAMPAIGN_CELL_COUNT = len(DATASETS) * 26
 
 
 class CampaignStageError(ValueError):
@@ -92,6 +97,19 @@ def _stage_lock(cell_root: Path) -> Iterator[None]:
     """Serialize controller transitions while keeping state writes atomic."""
     cell_root.mkdir(parents=True, exist_ok=True)
     lock_path = cell_root / ".campaign_state.lock"
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _campaign_lock(runtime_root: Path) -> Iterator[None]:
+    """Serialize the one campaign-wide transition into held-out certification."""
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    lock_path = runtime_root / ".selection_freeze.lock"
     with lock_path.open("a+") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
@@ -1655,7 +1673,9 @@ def _winner_sealed_sources(
     cell_root: Path, state: Mapping[str, Any], winner: Mapping[str, Any],
 ) -> dict[int, Path]:
     if winner["kind"] == "baseline":
-        baseline = state["baseline"]
+        baseline = state.get("baseline")
+        if not isinstance(baseline, dict):
+            raise CampaignStageError("native baseline is not registered")
         _verify_baseline_unchanged(cell_root, baseline)
         archive = (cell_root / baseline["archive"]).resolve()
         return {
@@ -1736,6 +1756,225 @@ def _read_certification_evidence(
     return held_out_folds, aggregate, source_hashes
 
 
+def _validated_selection_freeze(runtime_root: Path) -> dict[str, Any]:
+    path = runtime_root / SELECTION_FREEZE_FILE
+    try:
+        artifact = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            "held-out certification requires the global 130-cell selection freeze"
+        ) from exc
+    if not isinstance(artifact, dict):
+        raise CampaignStageError("campaign selection freeze must be a JSON object")
+    recorded = artifact.get("freeze_sha256")
+    payload = {
+        key: value for key, value in artifact.items() if key != "freeze_sha256"
+    }
+    cells = artifact.get("cells")
+    if (
+        artifact.get("schema_version") != 1
+        or artifact.get("campaign_id") != CAMPAIGN_ID
+        or artifact.get("protocol_sha256") != content_sha256(PROTOCOL)
+        or artifact.get("cell_count") != CAMPAIGN_CELL_COUNT
+        or not isinstance(cells, list)
+        or len(cells) != CAMPAIGN_CELL_COUNT
+        or len({row.get("cell_id") for row in cells if isinstance(row, dict)})
+        != CAMPAIGN_CELL_COUNT
+        or not isinstance(recorded, str)
+        or recorded != content_sha256(payload)
+    ):
+        raise CampaignStageError("campaign selection freeze integrity mismatch")
+    return artifact
+
+
+def _verify_selection_freeze_for_cell(
+    cell_root: Path, state: Mapping[str, Any],
+) -> str:
+    artifact = _validated_selection_freeze(cell_root.parent)
+    if (
+        artifact.get("manifest_sha256") != state.get("manifest_sha256")
+        or artifact.get("base_commit") != state.get("base_commit")
+    ):
+        raise CampaignStageError("campaign selection freeze binding mismatch")
+    entries = {
+        row["cell_id"]: row
+        for row in artifact["cells"]
+        if isinstance(row, dict) and isinstance(row.get("cell_id"), str)
+    }
+    entry = entries.get(str(state.get("cell_id")))
+    winner = state.get("winner")
+    if not isinstance(entry, dict) or not isinstance(winner, dict):
+        raise CampaignStageError("cell is absent from the global selection freeze")
+    if (
+        entry.get("cell_sha256") != state.get("cell_sha256")
+        or entry.get("selection_sha256") != winner.get("selection_sha256")
+        or entry.get("winner_candidate_sha256") != winner.get("candidate_sha256")
+        or entry.get("winner_candidate_id") != winner.get("candidate_id")
+        or entry.get("winner_kind") != winner.get("kind")
+    ):
+        raise CampaignStageError("cell winner differs from the global selection freeze")
+    return str(artifact["freeze_sha256"])
+
+
+def freeze_campaign_selections(
+    runtime_root: Path, manifest_path: Path,
+) -> dict[str, Any]:
+    """Freeze all 130 validation winners before any held-out value is opened."""
+    runtime_root = runtime_root.resolve()
+    manifest_path = manifest_path.resolve()
+    manifest = load_manifest(manifest_path)
+    manifest_sha256 = file_sha256(manifest_path)
+    expected = {cell["cell_id"]: cell for cell in manifest["cells"]}
+    if len(expected) != CAMPAIGN_CELL_COUNT:
+        raise CampaignStageError(
+            f"selection freeze requires exactly {CAMPAIGN_CELL_COUNT} manifest cells"
+        )
+    with _campaign_lock(runtime_root):
+        path = runtime_root / SELECTION_FREEZE_FILE
+        if path.exists():
+            artifact = _validated_selection_freeze(runtime_root)
+            entries = {row["cell_id"]: row for row in artifact["cells"]}
+            if (
+                set(entries) != set(expected)
+                or artifact.get("manifest_sha256") != manifest_sha256
+            ):
+                raise CampaignStageError("selection freeze cell roster mismatch")
+            for cell_id, cell in expected.items():
+                state = load_stage_state(runtime_root / cell_id)
+                winner = state.get("winner") or {}
+                entry = entries[cell_id]
+                if (
+                    state.get("cell_sha256") != cell["cell_sha256"]
+                    or entry.get("selection_sha256")
+                    != winner.get("selection_sha256")
+                    or entry.get("winner_candidate_sha256")
+                    != winner.get("candidate_sha256")
+                ):
+                    raise CampaignStageError(
+                        f"{cell_id}: winner drift after campaign selection freeze"
+                    )
+            return artifact
+
+        actual = {path.name for path in runtime_root.iterdir() if path.is_dir()}
+        if actual != set(expected):
+            missing = sorted(set(expected) - actual)
+            unexpected = sorted(actual - set(expected))
+            raise CampaignStageError(
+                "runtime roster differs from manifest "
+                f"(missing={missing[:3]}, unexpected={unexpected[:3]})"
+            )
+        entries: list[dict[str, Any]] = []
+        base_commits: set[str] = set()
+        for cell_id in sorted(expected):
+            cell = expected[cell_id]
+            state = load_stage_state(runtime_root / cell_id)
+            winner = state.get("winner")
+            if (
+                state.get("phase") != "winner-frozen"
+                or state.get("certification") is not None
+                or not isinstance(winner, dict)
+            ):
+                raise CampaignStageError(
+                    f"{cell_id}: all winners must be frozen before certification"
+                )
+            if (
+                state.get("manifest_sha256") != manifest_sha256
+                or state.get("cell_sha256") != cell["cell_sha256"]
+            ):
+                raise CampaignStageError(f"{cell_id}: campaign binding drift")
+            base_commits.add(str(state.get("base_commit", "")))
+            entries.append({
+                "cell_id": cell_id,
+                "cell_sha256": state["cell_sha256"],
+                "state_sha256": state["state_sha256"],
+                "selection_sha256": winner["selection_sha256"],
+                "winner_kind": winner["kind"],
+                "winner_candidate_id": winner["candidate_id"],
+                "winner_candidate_sha256": winner["candidate_sha256"],
+            })
+        if len(base_commits) != 1 or "" in base_commits:
+            raise CampaignStageError("campaign cells do not share one base commit")
+        artifact: dict[str, Any] = {
+            "schema_version": 1,
+            "campaign_id": CAMPAIGN_ID,
+            "manifest_sha256": manifest_sha256,
+            "protocol_sha256": content_sha256(PROTOCOL),
+            "base_commit": next(iter(base_commits)),
+            "cell_count": len(entries),
+            "cells": entries,
+            "frozen_at": _utc_now(),
+        }
+        artifact["freeze_sha256"] = content_sha256(artifact)
+        _atomic_write_json(path, artifact)
+        return artifact
+
+
+def certify_campaign(
+    runtime_root: Path, manifest_path: Path,
+) -> dict[str, Any]:
+    """Certify every frozen cell and publish one complete, hashed bundle index."""
+    runtime_root = runtime_root.resolve()
+    manifest_path = manifest_path.resolve()
+    manifest = load_manifest(manifest_path)
+    expected_ids = sorted(cell["cell_id"] for cell in manifest["cells"])
+    if len(expected_ids) != CAMPAIGN_CELL_COUNT:
+        raise CampaignStageError(
+            f"campaign certification requires {CAMPAIGN_CELL_COUNT} cells"
+        )
+    freeze = _validated_selection_freeze(runtime_root)
+    if (
+        freeze.get("manifest_sha256") != file_sha256(manifest_path)
+        or sorted(row["cell_id"] for row in freeze["cells"]) != expected_ids
+    ):
+        raise CampaignStageError("campaign certification freeze roster mismatch")
+
+    with _campaign_lock(runtime_root):
+        entries: list[dict[str, Any]] = []
+        for cell_id in expected_ids:
+            cell_root = runtime_root / cell_id
+            state = certify_winner(cell_root)
+            certification = state.get("certification")
+            if state.get("phase") != "certified" or not isinstance(
+                certification, dict
+            ):
+                raise CampaignStageError(f"{cell_id}: certification did not complete")
+            bundle_path = cell_root / str(certification["bundle"])
+            try:
+                bundle = json.loads(bundle_path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CampaignStageError(
+                    f"{cell_id}: cannot index certification bundle: {exc}"
+                ) from exc
+            recorded = bundle.pop("bundle_sha256", None)
+            if (
+                recorded != content_sha256(bundle)
+                or recorded != certification.get("bundle_sha256")
+                or bundle.get("selection_freeze_sha256")
+                != freeze["freeze_sha256"]
+            ):
+                raise CampaignStageError(
+                    f"{cell_id}: certification bundle integrity mismatch"
+                )
+            entries.append({
+                "cell_id": cell_id,
+                "bundle": bundle_path.relative_to(runtime_root).as_posix(),
+                "bundle_sha256": recorded,
+                "file_sha256": file_sha256(bundle_path),
+            })
+        index: dict[str, Any] = {
+            "schema_version": 1,
+            "campaign_id": CAMPAIGN_ID,
+            "manifest_sha256": file_sha256(manifest_path),
+            "selection_freeze_sha256": freeze["freeze_sha256"],
+            "cell_count": len(entries),
+            "cells": entries,
+            "certified_at": _utc_now(),
+        }
+        index["certification_sha256"] = content_sha256(index)
+        _atomic_write_json(runtime_root / CAMPAIGN_CERTIFICATION_FILE, index)
+        return index
+
+
 def certify_winner(cell_root: Path) -> dict[str, Any]:
     """Reveal exactly the already-frozen winner's existing five sealed folds."""
     with _stage_lock(cell_root):
@@ -1744,6 +1983,7 @@ def certify_winner(cell_root: Path) -> dict[str, Any]:
 
 def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     state = load_stage_state(cell_root)
+    selection_freeze_sha256 = _verify_selection_freeze_for_cell(cell_root, state)
     certification = state.get("certification")
     if certification is not None:
         bundle_path = cell_root / certification["bundle"]
@@ -1755,6 +1995,8 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         if (
             recorded != content_sha256(bundle)
             or recorded != certification["bundle_sha256"]
+            or bundle.get("selection_freeze_sha256")
+            != selection_freeze_sha256
         ):
             raise CampaignStageError("existing certification bundle hash mismatch")
         return state
@@ -1778,6 +2020,8 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
             or recovered.get("selection_sha256") != winner["selection_sha256"]
             or (recovered.get("winner") or {}).get("candidate_sha256")
             != winner["candidate_sha256"]
+            or recovered.get("selection_freeze_sha256")
+            != selection_freeze_sha256
         ):
             raise CampaignStageError("certification bundle is not bound to the winner")
         winner_sources = _winner_sealed_sources(cell_root, state, winner)
@@ -1851,6 +2095,7 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
             "promotion_node_id": winner.get("promotion_node_id"),
         },
         "selection_sha256": winner["selection_sha256"],
+        "selection_freeze_sha256": selection_freeze_sha256,
         "validation_mean": winner["validation_mean"],
         "baseline": {
             "candidate_id": "baseline",
