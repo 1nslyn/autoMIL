@@ -44,6 +44,7 @@ computation rather than replacing it.
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass, replace
+from typing import Any, Mapping, TypeVar
 
 from autobench.pipeline.search_space import SEARCH_SPACE, declared_knobs, lock_reason
 
@@ -60,9 +61,10 @@ __all__ = [
 #: protocol and the grid axis, not recipe knobs. ``seed`` in particular is frozen
 #: substrate — an agent that could set it could select a favourable partition.
 _NEVER_OVERRIDABLE = frozenset({"seed", "model_type"})
+_ConfigT = TypeVar("_ConfigT")
 
 
-def _pristine(cfg):
+def _pristine(cfg: Any) -> Any | None:
     """A default-constructed twin of ``cfg``, for the was-this-set? diff."""
     from autobench.pipeline.config import ModelConfig, TrainConfig
 
@@ -75,7 +77,7 @@ def _pristine(cfg):
     return None
 
 
-def overrides_from_exp_cfg(exp_cfg) -> dict:
+def overrides_from_exp_cfg(exp_cfg: Any) -> dict[str, Any]:
     """Detect which transport knobs were *explicitly* set on this experiment.
 
     Recovered by diffing the live ``exp_cfg.model`` / ``exp_cfg.train`` against
@@ -91,7 +93,7 @@ def overrides_from_exp_cfg(exp_cfg) -> dict:
     shared default*. Where it does not — DTFD's ``lr``, TITAN's ``patience`` — use
     the opaque channel, which has no such blind spot.
     """
-    out: dict = {}
+    out: dict[str, Any] = {}
     for attr in ("model", "train"):
         live = getattr(exp_cfg, attr, None)
         if live is None:
@@ -108,7 +110,7 @@ def overrides_from_exp_cfg(exp_cfg) -> dict:
     return out
 
 
-def all_overrides(exp_cfg) -> dict:
+def all_overrides(exp_cfg: Any) -> dict[str, Any]:
     """Canonical transport diff, then the opaque per-arm channel on top.
 
     The opaque channel wins: it is the explicit, arm-aware request, whereas the
@@ -142,7 +144,7 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
-def explicit_overrides(**kwargs) -> dict:
+def explicit_overrides(**kwargs: Any) -> dict[str, Any]:
     """Drop ``None`` values — the CLI parses unset flags as None.
 
     This is what keeps every arm on its own schedule unless the operator (or the
@@ -152,7 +154,7 @@ def explicit_overrides(**kwargs) -> dict:
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
-def _resolve_field(cfg_or_plan, name: str) -> str | None:
+def _resolve_field(cfg_or_plan: Any, name: str) -> str | None:
     """Return the actual attribute/key on this arm matching the canonical name.
 
     Raises:
@@ -205,7 +207,12 @@ def _check_declared(arm: str, requested: str, resolved: str) -> None:
     )
 
 
-def apply_overrides(cfg, overrides: dict | None, *, arm: str = ""):
+def apply_overrides(
+    cfg: _ConfigT,
+    overrides: Mapping[str, Any] | None,
+    *,
+    arm: str = "",
+) -> _ConfigT:
     """Return a copy of an arm's config dataclass with explicit overrides applied.
 
     Args:
@@ -224,7 +231,7 @@ def apply_overrides(cfg, overrides: dict | None, *, arm: str = ""):
     """
     if not overrides:
         return cfg
-    concrete: dict = {}
+    concrete: dict[str, Any] = {}
     unknown: list[str] = []
     for name, value in overrides.items():
         if value is None:
@@ -245,8 +252,12 @@ def apply_overrides(cfg, overrides: dict | None, *, arm: str = ""):
     return replace(cfg, **concrete) if concrete else cfg
 
 
-def apply_overrides_to_plan(plan_cfg: dict, overrides: dict | None,
-                            *, arm: str = "nnmil") -> dict:
+def apply_overrides_to_plan(
+    plan_cfg: Mapping[str, Any],
+    overrides: Mapping[str, Any] | None,
+    *,
+    arm: str = "nnmil",
+) -> dict[str, Any]:
     """Same contract for nnMIL, whose training config is a computed dict.
 
     Applied AFTER the adaptive computation so nnMIL keeps its self-configuring

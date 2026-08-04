@@ -1,9 +1,8 @@
 """Retained-fraction / per-class-floor guard for split loading (M-9).
 
-Every per-arm dataset loader drops slides whose feature file (or, on a stale
-task CSV, whose label) is missing, and until this guard existed each did so
-silently: a print, and training/evaluation proceeded on whatever fraction of
-the split happened to survive.
+Every per-arm dataset loader can drop slides whose feature file (or, on a stale
+task CSV, whose label) is missing. This guard prevents training or evaluation
+from proceeding on an unaccounted subset of the intended split.
 
 On TRAIN that shrink is merely lossy -- fewer bags to fit on. On VAL it
 corrupts the model-selection signal (keep/discard reads a metric computed on

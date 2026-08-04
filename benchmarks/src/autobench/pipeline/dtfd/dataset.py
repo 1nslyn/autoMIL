@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 from dataclasses import dataclass
+from typing import Sequence
 
 import h5py
 import numpy as np
@@ -122,7 +123,9 @@ def load_dtfd_split(
     return slides
 
 
-def min_bag_size(slides) -> int:
+def min_bag_size(
+    slides: Sequence[DTFDSlide | DTFDSurvivalSlide],
+) -> int:
     """Smallest patch count across a split (used to guard ``numGroup``).
 
     Handles both eager slides (``.features`` already loaded, classification) and
@@ -132,7 +135,7 @@ def min_bag_size(slides) -> int:
     if not slides:
         return 0
 
-    def _n(s) -> int:
+    def _n(s: DTFDSlide | DTFDSurvivalSlide) -> int:
         feats = getattr(s, "features", None)
         if feats is not None:
             return int(feats.shape[0])

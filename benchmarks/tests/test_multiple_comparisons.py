@@ -22,7 +22,11 @@ from __future__ import annotations
 
 import pytest
 
-from autobench.stats import adjust, benjamini_hochberg, holm_bonferroni
+from autobench.stats.multiple_comparisons import (
+    adjust,
+    benjamini_hochberg,
+    holm_bonferroni,
+)
 
 
 def _adj(result):

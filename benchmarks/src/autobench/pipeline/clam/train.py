@@ -11,6 +11,7 @@ import json
 import os
 import time
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -51,7 +52,7 @@ def _make_clam_args(
     fold_dir: str,
     *,
     log_data: bool = False,
-    policy_runtime=None,
+    policy_runtime: Any | None = None,
 ) -> SimpleNamespace:
     """Construct the full args namespace expected by clam_train()."""
     return SimpleNamespace(
@@ -93,15 +94,15 @@ def _make_clam_args(
 
 def train_fold(
     exp_cfg: ExperimentConfig,
-    train_split,
-    val_split,
-    test_split,
+    train_split: Any,
+    val_split: Any,
+    test_split: Any,
     fold: int,
     results_dir: str,
     device: torch.device,
     wandb_project: str | None = None,
-    policy_runtime=None,
-) -> dict:
+    policy_runtime: Any | None = None,
+) -> dict[str, Any]:
     """Train one fold.
 
     Delegates entirely to CLAM's train() for model creation, training,

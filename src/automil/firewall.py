@@ -15,6 +15,8 @@ as a re-vendored upstream that reintroduces a test-metric print.
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from typing import Any, Mapping
 
 REDACTION = "[REDACTED: held-out metric — val-firewall]"
 
@@ -50,7 +52,7 @@ def redact_held_out(text: str, extra_keys: tuple[str, ...] = ()) -> str:
     return "\n".join(out)
 
 
-def held_out_keys(result: dict) -> tuple[str, ...]:
+def held_out_keys(result: Mapping[str, Any]) -> tuple[str, ...]:
     """Metric names declared in the result's sealed ``held_out`` block."""
     block = (result or {}).get("held_out")
     if not isinstance(block, dict):
@@ -58,7 +60,7 @@ def held_out_keys(result: dict) -> tuple[str, ...]:
     return tuple(str(k) for k in block)
 
 
-def redact_log_file(path, extra_keys: tuple[str, ...] = ()) -> int:
+def redact_log_file(path: Path, extra_keys: tuple[str, ...] = ()) -> int:
     """Rewrite ``path`` in place with held-out lines redacted.
 
     Returns the number of redacted lines. Best-effort: a missing/unreadable file

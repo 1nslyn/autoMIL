@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -147,17 +148,17 @@ def _validate(model, loader, loss_fn, device, cfg, inst_refinement=False) -> flo
 
 
 def train_smmile_fold(
-    train_dataset,
-    val_dataset,
-    test_dataset,
+    train_dataset: Any,
+    val_dataset: Any,
+    test_dataset: Any,
     fold: int,
     results_dir: str,
     fea_dim: int,
     device: torch.device,
     seed: int = 42,
     cfg: SMMILeConfig | None = None,
-    **kwargs,
-) -> dict:
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Train one fold (two-stage) and return metrics dict.
 
     Saves patch-level detection scores for tumor ROI extraction after

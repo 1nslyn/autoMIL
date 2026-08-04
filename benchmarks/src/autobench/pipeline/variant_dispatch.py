@@ -31,6 +31,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -42,7 +43,7 @@ __all__ = ["apply_model_variant_to_exp_cfg"]
 logger = logging.getLogger(__name__)
 
 
-def apply_model_variant_to_exp_cfg(exp_cfg, automil_dir: Path) -> None:
+def apply_model_variant_to_exp_cfg(exp_cfg: Any, automil_dir: Path) -> None:
     """Mutate *exp_cfg*.model (and optionally *exp_cfg*.train) in-place.
 
     Reads the active ``model.variant`` selection from ``applied_variant.json``

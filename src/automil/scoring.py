@@ -1,8 +1,8 @@
 """Composite recomputation from the agent-facing validation metrics (CR-1b).
 
 The val-firewall's central claim is that **test never drives selection**. But the
-orchestrator historically trusted the ``composite`` scalar in ``result.json``
-verbatim, and that file is written by agent-editable training code. A script that
+orchestrator cannot trust the ``composite`` scalar in ``result.json`` verbatim,
+because that file is written by agent-editable training code. A script that
 computed its composite from the sealed test block (by bug or by design) produced a
 perfectly schema-valid result, the graph selected on it, and no code path could
 detect the leak.
@@ -23,6 +23,7 @@ Set ``formula: trust_reported`` to opt out (documented as weakening the firewall
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Mapping
 
 DEFAULT_FORMULA = "mean"
 
@@ -31,7 +32,7 @@ DEFAULT_FORMULA = "mean"
 #: faithful writer can differ by ~1e-4 purely from rounding.
 COMPOSITE_TOLERANCE = 1e-3
 
-#: Formula values that disable recomputation (the pre-CR-1b trust-verbatim path).
+#: Formula values that explicitly disable validation-metric recomputation.
 _OPT_OUT = frozenset({"trust_reported", "none", "reported"})
 
 _REDUCERS = {
@@ -41,7 +42,10 @@ _REDUCERS = {
 }
 
 
-def recompute_composite(metrics: dict, formula: str = DEFAULT_FORMULA) -> float | None:
+def recompute_composite(
+    metrics: Mapping[str, object] | None,
+    formula: str = DEFAULT_FORMULA,
+) -> float | None:
     """Derive the composite from validation ``metrics``.
 
     Returns ``None`` when recomputation does not apply — the project opted out,
@@ -60,7 +64,7 @@ def recompute_composite(metrics: dict, formula: str = DEFAULT_FORMULA) -> float 
             f"unknown scoring.formula {formula!r}; expected one of "
             f"{sorted(_REDUCERS)} or 'trust_reported'"
         )
-    if not isinstance(metrics, dict):
+    if not isinstance(metrics, Mapping):
         return None
     values = [
         float(v)
@@ -82,12 +86,13 @@ def composite_disagrees(reported: float, recomputed: float,
         return True
 
 
-def cross_fold_se(fold_values) -> float | None:
+def cross_fold_se(fold_values: Iterable[object] | None) -> float | None:
     """Standard error of a cross-fold mean: sample SD (ddof=1) / sqrt(n) (CR-4).
 
     This is the number the Ladder keep-margin is supposed to exceed and that
-    nothing in the codebase previously measured. It matters most exactly where
-    the selection is weakest: the validation split is 12.5% of train_val, so on
+    quantifies whether the Ladder keep-margin exceeds observed fold variation.
+    It matters most where the selection is weakest: the validation split is
+    12.5% of train_val, so on
     CPTAC-GBM (n=99) and CPTAC-PDAC (n=105) the composite is a mean over folds
     scored on ~10 patients, and a discovery sweep screening ~60 candidates keeps
     the maximum of 60 draws from that distribution.

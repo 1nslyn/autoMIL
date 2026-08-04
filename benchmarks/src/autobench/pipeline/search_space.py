@@ -1,10 +1,10 @@
 """The declared per-arm search space (A-2, H-3b).
 
-**Why this exists.** Before this module the search space was never declared
-anywhere; the de-facto space was *whatever the transport happened to carry*. The
+**Why this exists.** The search space must be declared independently of
+*whatever the transport happens to carry*. The
 transport is ``ModelConfig`` + ``TrainConfig``, which were designed around CLAM
 (``bag_weight``, ``B``, ``model_size`` are CLAM concepts), so CLAM's whole surface
-was natively in the channel and nobody else's was. Measured before the fix:
+is natively in the channel and nobody else's is. The measured transport coverage is:
 
     CLAM   12/15   ABMIL 5/8   TITAN 3/4   DTFD 5/15   nnMIL 0/11
 

@@ -1,10 +1,7 @@
 """Single seeding routine shared by every trainer (L-2).
 
-Before this module existed, each of the seven per-arm trainers (clam,
-smmile, dtfd classification + survival, abmil, titan classification +
-survival) defined its own ``seed_everything``/``_seed_everything``, and the
-copies had silently drifted: only CLAM's and SMMILe's set the cuDNN
-determinism flags --
+All seven per-arm trainers use this routine so they share the same Python,
+NumPy, Torch, CUDA, and cuDNN determinism contract:
 
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
@@ -18,8 +15,8 @@ exactly the cross-arm comparison the shared training schedule (H-3/H-3b)
 exists to make meaningful: "same seed" is supposed to mean the same thing
 everywhere.
 
-One function, imported everywhere it was previously reimplemented, so the
-seven copies cannot drift again.
+Keeping the contract in one function prevents cross-arm seed semantics from
+drifting.
 """
 from __future__ import annotations
 

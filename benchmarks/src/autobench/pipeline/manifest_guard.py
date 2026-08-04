@@ -1,6 +1,6 @@
 """Manifest-content fingerprint for the task-CSV / splits cache (M-10).
 
-**The defect.** ``prepare_all`` (``prepare.py``) validates a cached task
+``prepare_all`` (``prepare.py``) validates a cached task
 CSV's SCHEMA (columns match the task's type -- classification vs survival)
 and validates cached splits against that task CSV's actual slide_id set.
 Neither check can tell that the CSV's SOURCE -- the manifest (``mapping_csv``,
@@ -8,13 +8,13 @@ the file ``load_all_slides`` reads) -- was rebuilt with different values
 since the CSV was generated: same columns, same slide_id set even, but a
 label/status/time value silently corrected upstream (e.g. an OS date fix)
 never reaches the cached derived artefacts. The cache looks perfectly valid
-by every check that existed before this module, and is quietly wrong.
+by schema and identity checks alone, and is quietly wrong.
 
 **Stamp a sidecar, don't self-heal.** ``prepare_all`` runs once per
 EXPERIMENT against the SHARED ``benchmark_dir`` (see
 ``scripts/run_experiment.py``), so under the agentic loop many processes
-execute it concurrently. A self-purging version was tried and produced 5
-``FileNotFoundError``s from 6 concurrent ``rmtree`` calls, and could delete
+execute it concurrently. Self-purging can race across concurrent ``rmtree``
+calls and can delete
 splits another process was already training from -- the same race
 ``prepare_all``'s own task-CSV/splits guards (PRELAUNCH_REVIEW B2) and
 ``results_cache.py`` (CR-5b) both document and refuse to self-heal. This

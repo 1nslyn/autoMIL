@@ -1,6 +1,6 @@
 """Identity of the per-fold results cache (CR-5b).
 
-**The defect.** Every trainer resumes a fold by checking whether
+Every trainer resumes a fold by checking whether
 ``<results_dir>/fold_N/metrics.json`` exists. CR-5 gave the *orchestrated* path an
 isolated ``AUTOMIL_RESULTS_DIR``, but the static grid never sets it, so all five
 runners fell back to
@@ -12,7 +12,7 @@ seed and no hyperparameter**. Two silent failures followed:
   multi-seed variance study would report zero variance.
 * Re-running after correcting a learning rate returned the old numbers.
 
-**Two remedies, because the two cases want different behaviour.**
+Seed identity and recipe identity require different cache behavior.
 
 *Seed* belongs in the **path**: seeds are meant to coexist, and evicting seed 42 to
 run seed 43 would make multi-seed impossible rather than merely wrong.
@@ -31,6 +31,7 @@ import json
 import os
 import tempfile
 from dataclasses import asdict, is_dataclass
+from typing import Any, Mapping
 
 __all__ = [
     "FINGERPRINT_FILENAME",
@@ -59,7 +60,7 @@ class StaleResultsCacheError(RuntimeError):
     """
 
 
-def _as_plain(obj):
+def _as_plain(obj: Any) -> dict[str, Any] | None:
     """Dataclass / mapping -> plain JSON-able dict."""
     if obj is None:
         return None
@@ -72,7 +73,9 @@ def _as_plain(obj):
     )
 
 
-def fingerprint_payload(exp_cfg, arm_cfg=None) -> dict:
+def fingerprint_payload(
+    exp_cfg: Any, arm_cfg: Any | None = None,
+) -> dict[str, Any]:
     """The configuration this results directory belongs to.
 
     Args:
@@ -92,7 +95,7 @@ def fingerprint_payload(exp_cfg, arm_cfg=None) -> dict:
     return payload
 
 
-def config_fingerprint(exp_cfg, arm_cfg=None) -> str:
+def config_fingerprint(exp_cfg: Any, arm_cfg: Any | None = None) -> str:
     """Stable digest of everything that can change this experiment's numbers."""
     blob = json.dumps(
         fingerprint_payload(exp_cfg, arm_cfg), sort_keys=True, default=str,
@@ -100,8 +103,8 @@ def config_fingerprint(exp_cfg, arm_cfg=None) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-def _flatten(obj, prefix: str = "") -> dict:
-    out: dict = {}
+def _flatten(obj: Any, prefix: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {}
     if isinstance(obj, dict):
         for k, v in obj.items():
             out.update(_flatten(v, f"{prefix}.{k}" if prefix else str(k)))
@@ -110,14 +113,16 @@ def _flatten(obj, prefix: str = "") -> dict:
     return out
 
 
-def _changed_fields(old: dict, new: dict) -> list[str]:
+def _changed_fields(
+    old: Mapping[str, Any], new: Mapping[str, Any],
+) -> list[str]:
     """Dotted field names that differ, for an error message that says *what* moved."""
     flat_old, flat_new = _flatten(old), _flatten(new)
     keys = sorted(set(flat_old) | set(flat_new))
     return [k for k in keys if flat_old.get(k) != flat_new.get(k)]
 
 
-def _write_atomic(path: str, payload: dict) -> None:
+def _write_atomic(path: str, payload: Mapping[str, Any]) -> None:
     """Concurrent experiments share ``benchmark_dir``; never leave a torn file."""
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".fingerprint-", suffix=".tmp")
@@ -131,7 +136,9 @@ def _write_atomic(path: str, payload: dict) -> None:
         raise
 
 
-def _enforce_fingerprint(results_dir: str, exp_cfg, arm_cfg) -> None:
+def _enforce_fingerprint(
+    results_dir: str, exp_cfg: Any, arm_cfg: Any | None,
+) -> None:
     path = os.path.join(results_dir, FINGERPRINT_FILENAME)
     payload = fingerprint_payload(exp_cfg, arm_cfg)
     digest = config_fingerprint(exp_cfg, arm_cfg)
@@ -161,11 +168,11 @@ def _enforce_fingerprint(results_dir: str, exp_cfg, arm_cfg) -> None:
 
 
 def resolve_results_dir(
-    exp_cfg,
+    exp_cfg: Any,
     benchmark_dir: str,
     results_dir: str | None = None,
     *,
-    arm_cfg=None,
+    arm_cfg: Any | None = None,
 ) -> str:
     """Resolve an experiment's results directory and refuse a stale cache.
 
