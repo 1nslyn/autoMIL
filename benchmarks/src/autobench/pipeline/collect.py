@@ -1,9 +1,7 @@
-"""Cross-cohort results collector: ``summary.json`` -> DataFrames for the preprint.
+"""Cross-cohort results collector: ``summary.json`` -> reporting DataFrames.
 
-FIG-0 (paper/preprint/READINESS-2026-07-28.md Sec.0, Sec.2.3): no figure in the paper
-plan had producing code that read real results. The only code that ever turned
-real fold metrics into figures was ``tasks/baseline_summary/scripts/`` -- gitignored,
-and structurally broken against the current five-framework / TCGA+CPTAC roster:
+This tracked collector replaces legacy task-local scripts that were
+structurally incompatible with the current five-framework TCGA+CPTAC roster:
 
   - it globs ``TCGA-*`` only, so both CPTAC cohorts are invisible;
   - it hardcodes ``for fw in ("clam", "nnmil")``, so abmil/dtfd/titan are never walked;
@@ -13,9 +11,8 @@ and structurally broken against the current five-framework / TCGA+CPTAC roster:
   - its walk assumes a fixed ``task/encoder/model`` depth with no ``survival_loss``
     level, so cox and nllsurv variants collide.
 
-This module replaces it with a framework/strategy-agnostic walker
-(:func:`collect_summaries`) plus two DataFrame builders that both autobench and
-``paper/preprint/figures`` can consume: one row per experiment
+It provides a framework/strategy-agnostic walker (:func:`collect_summaries`)
+plus two reusable DataFrame builders: one row per experiment
 (:func:`summaries_to_frame`) and one row per per-fold metric
 (:func:`per_fold_frame`).
 
