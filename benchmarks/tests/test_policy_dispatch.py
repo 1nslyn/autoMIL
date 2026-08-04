@@ -69,6 +69,27 @@ def test_fold_policy_construction_is_lazy_and_seed_deterministic():
     assert fold_zero.policy.draw == fold_one.policy.draw
 
 
+def test_each_fold_gets_an_isolated_policy_class_namespace():
+    class ClassStatePolicy:
+        COUNT = 0
+
+        def wrap_optimizer_for(self, opt, *, role):
+            type(self).COUNT += 1
+            return opt
+
+    template = PolicyRuntime(name="class-state", policy=ClassStatePolicy())
+    fold_zero = template.for_fold()
+    fold_one = template.for_fold()
+    optimizer = Mock(zero_grad=Mock(), step=Mock())
+    fold_zero.wrap_optimizer(optimizer)
+    fold_one.wrap_optimizer(optimizer)
+
+    assert type(fold_zero.policy) is not type(fold_one.policy)
+    assert type(fold_zero.policy).COUNT == 1
+    assert type(fold_one.policy).COUNT == 1
+    assert ClassStatePolicy.COUNT == 0
+
+
 def test_nested_runtime_automil_dir_comes_from_orchestrator_env(monkeypatch):
     monkeypatch.setenv(
         "AUTOMIL_DIR_REL", "benchmarks/experiments/ccrcc/automil",

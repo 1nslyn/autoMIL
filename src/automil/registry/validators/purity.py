@@ -122,11 +122,17 @@ class PurityValidator:
             for node in tree.body
             if isinstance(node, ast.ClassDef)
         )
+        shared_names = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        }
         for node in tree.body:
             self._check_top_level_node(
                 module_path,
                 node,
                 strict_policy=strict_policy,
+                shared_names=shared_names,
             )
 
     @staticmethod
@@ -155,6 +161,7 @@ class PurityValidator:
         node: ast.AST,
         *,
         strict_policy: bool,
+        shared_names: set[str],
     ) -> None:
         """Inspect one top-level statement for purity violations."""
 
@@ -184,6 +191,7 @@ class PurityValidator:
                 module_path,
                 node,
                 strict_policy=strict_policy,
+                shared_names=shared_names,
             )
             return
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -191,6 +199,7 @@ class PurityValidator:
                 module_path,
                 node,
                 reject_shared_state=strict_policy,
+                shared_names=shared_names,
             )
             return
 
@@ -301,6 +310,7 @@ class PurityValidator:
                     module_path,
                     statement,
                     strict_policy=strict_policy,
+                    shared_names=shared_names,
                 )
             return
 
@@ -339,6 +349,7 @@ class PurityValidator:
         node: ast.FunctionDef | ast.AsyncFunctionDef,
         *,
         reject_shared_state: bool = False,
+        shared_names: set[str] | None = None,
     ) -> None:
         safe_decorators = {"staticmethod", "classmethod", "property", "abstractmethod"}
         for decorator in node.decorator_list:
@@ -378,6 +389,67 @@ class PurityValidator:
                     statement,
                     "methods cannot mutate global or enclosing-scope state",
                 )
+        if reject_shared_state:
+            self._check_shared_state_writes(
+                module_path, node, shared_names or set(),
+            )
+
+    @staticmethod
+    def _shared_owner(node: ast.AST, shared_names: set[str]) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id == "cls" or node.id in shared_names
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+            and node.attr == "__class__"
+        ):
+            return True
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "type"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "self"
+        )
+
+    def _check_shared_state_writes(
+        self,
+        module_path: Path,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        shared_names: set[str],
+    ) -> None:
+        for statement in ast.walk(node):
+            targets: list[ast.AST] = []
+            if isinstance(statement, ast.Assign):
+                targets.extend(statement.targets)
+            elif isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+                targets.append(statement.target)
+            elif isinstance(statement, ast.Delete):
+                targets.extend(statement.targets)
+            for target in targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and self._shared_owner(target.value, shared_names)
+                ):
+                    self._definition_error(
+                        module_path,
+                        target,
+                        "policy methods cannot write shared class/helper state",
+                    )
+            if (
+                isinstance(statement, ast.Call)
+                and isinstance(statement.func, ast.Name)
+                and statement.func.id in {"setattr", "delattr"}
+                and statement.args
+                and self._shared_owner(statement.args[0], shared_names)
+            ):
+                self._definition_error(
+                    module_path,
+                    statement,
+                    "policy methods cannot write shared class/helper state",
+                )
 
     def _check_register_decorator(
         self, module_path: Path, decorator: ast.AST,
@@ -411,6 +483,7 @@ class PurityValidator:
         node: ast.ClassDef,
         *,
         strict_policy: bool,
+        shared_names: set[str],
     ) -> None:
         register_decorators = [
             decorator for decorator in node.decorator_list
@@ -444,6 +517,7 @@ class PurityValidator:
                     module_path,
                     statement,
                     reject_shared_state=strict_policy,
+                    shared_names=shared_names,
                 )
                 continue
             if isinstance(statement, ast.Pass):
