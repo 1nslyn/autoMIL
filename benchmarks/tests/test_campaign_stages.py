@@ -415,6 +415,42 @@ def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
     assert freeze_discovery(cell_root) == state
 
 
+def test_discovery_deduplicates_semantically_identical_hparams(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    policy = load_candidate_policy(adir)
+    archive_root = adir / "orchestrator/archive"
+    overrides = (
+        '--hparams \'{"lr":0.001,"wd":0.01}\'',
+        '--hparams \'{ "wd": 0.01, "lr": 0.001 }\'',
+    )
+    for node_id, override in zip(("node_0011", "node_0012"), overrides):
+        path = archive_root / node_id / "spec.json"
+        spec = json.loads(path.read_text())
+        spec["run_command_override"] = override
+        spec["admissibility"] = policy.classify(
+            [], override=override,
+        ).to_dict()
+        path.write_text(json.dumps(spec))
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    assert state["discovery"]["complete_candidates"] == 12
+    assert state["discovery"]["unique_complete_candidates"] == 11
+    assert "node_0012" in {
+        candidate["candidate_id"]
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert "node_0011" not in {
+        candidate["candidate_id"]
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+
+
 def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))

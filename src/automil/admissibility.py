@@ -341,6 +341,35 @@ class CandidatePolicy:
                 )
         return None
 
+    def _override_hash(self, override: str) -> str:
+        """Hash override semantics, canonicalizing the structured HP channel."""
+        if self.mode == "free":
+            return hashlib.sha256(override.encode()).hexdigest()
+        tokens = shlex.split(override)
+        canonical: list[str] = []
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--hparams":
+                value = json.loads(tokens[index + 1])
+                canonical.extend((
+                    token,
+                    json.dumps(value, sort_keys=True, separators=(",", ":")),
+                ))
+                index += 2
+                continue
+            if token.startswith("--hparams="):
+                value = json.loads(token.split("=", 1)[1])
+                canonical.append(
+                    "--hparams="
+                    + json.dumps(value, sort_keys=True, separators=(",", ":"))
+                )
+            else:
+                canonical.append(token)
+            index += 1
+        encoded = json.dumps(canonical, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
     def classify(
         self,
         paths: Iterable[str],
@@ -351,11 +380,7 @@ class CandidatePolicy:
         """Return a complete verdict without mutating filesystem or graph state."""
         raw_files = tuple(str(path) for path in paths)
         normalized = tuple(sorted({Path(path).as_posix() if path else "" for path in raw_files}))
-        override_hash = (
-            hashlib.sha256(override.encode()).hexdigest()
-            if override is not None
-            else ""
-        )
+        override_hash = ""
         if len(normalized) != len(raw_files):
             return self._verdict(
                 CandidateClass.INVALID,
@@ -393,6 +418,8 @@ class CandidatePolicy:
         override_rejection = self._classify_override(override, normalized)
         if override_rejection is not None:
             return override_rejection
+        if override is not None:
+            override_hash = self._override_hash(override)
         variant_rejection, variant_kinds, variant_selection_hash = (
             self._classify_variant_selection(variant_selection, normalized)
         )

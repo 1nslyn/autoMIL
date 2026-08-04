@@ -691,7 +691,6 @@ def _candidate_identity(
 ) -> tuple[str, dict[str, Any]]:
     payload = {
         "base_commit": spec.get("base_commit"),
-        "run_command_override": spec.get("run_command_override"),
         "overlay_manifest": spec.get("overlay_manifest") or {},
         "deletions": spec.get("deletions") or [],
         "candidate_class": verdict.get("candidate_class"),
