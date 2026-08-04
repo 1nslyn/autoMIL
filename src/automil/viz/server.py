@@ -393,33 +393,38 @@ def cmd_start(
     orch_dir = automil_dir / "orchestrator"
     if orch_dir.exists():
         observer.schedule(watcher, str(orch_dir), recursive=False)
-    observer.start()
 
     async def run_server():
         app = create_app()
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, host, port, shutdown_timeout=2.0)
-        await site.start()
-        if host in ("0.0.0.0", "::"):
-            logging.warning(
-                "Viz server bound to %s:%d — reachable from any host on the "
-                "network. The SSE stream exposes graph.json and gpu_state.json "
-                "(PIDs, GPU utilization, node descriptions). Set viz.host to "
-                "'127.0.0.1' in automil/config.yaml unless remote access is "
-                "intended.", host, port,
-            )
-        logging.info(f"Viz server running on http://{host}:{port}")
+        try:
+            site = web.TCPSite(runner, host, port, shutdown_timeout=2.0)
+            await site.start()
+            # Do not start the native filesystem observer until the HTTP site
+            # has bound successfully. A bind/setup failure otherwise starts and
+            # immediately stops macOS FSEvents, which can race in native code.
+            observer.start()
+            if host in ("0.0.0.0", "::"):
+                logging.warning(
+                    "Viz server bound to %s:%d — reachable from any host on the "
+                    "network. The SSE stream exposes graph.json and gpu_state.json "
+                    "(PIDs, GPU utilization, node descriptions). Set viz.host to "
+                    "'127.0.0.1' in automil/config.yaml unless remote access is "
+                    "intended.", host, port,
+                )
+            logging.info(f"Viz server running on http://{host}:{port}")
 
-        # Wait for shutdown signal
-        stop_event = asyncio.Event()
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, stop_event.set)
+            # Wait for shutdown signal
+            stop_event = asyncio.Event()
+            loop = asyncio.get_event_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, stop_event.set)
 
-        await stop_event.wait()
-        logging.info("Shutting down...")
-        await runner.cleanup()
+            await stop_event.wait()
+            logging.info("Shutting down...")
+        finally:
+            await runner.cleanup()
 
     loop = asyncio.new_event_loop()
     watcher.set_loop(loop)
@@ -429,8 +434,9 @@ def cmd_start(
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        observer.stop()
-        observer.join(timeout=2)
+        if observer.is_alive():
+            observer.stop()
+            observer.join(timeout=2)
         if PID_FILE.exists():
             PID_FILE.unlink()
         logging.info("Viz server stopped.")
