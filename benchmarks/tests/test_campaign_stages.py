@@ -907,7 +907,7 @@ def test_agent_session_is_single_protocol_bound_and_registered_after_selection(
     staged_cell,
 ):
     cell_root, adir, cell, _, _ = staged_cell
-    with pytest.raises(CampaignStageError, match="after winner freeze"):
+    with pytest.raises(CampaignStageError, match="requires a frozen winner"):
         register_agent_session(cell_root, _agent_attestation(cell["cell_id"]))
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=0)

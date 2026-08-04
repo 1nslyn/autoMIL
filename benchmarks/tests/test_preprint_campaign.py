@@ -13,6 +13,7 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 from autobench.campaign import (
     ANALYSIS_PLAN_PATH,
     BASELINE_FOLDS,
+    CANARY_AGENT_PROTOCOL,
     CERTIFICATION_FOLDS,
     DATASETS,
     PROTOCOL,
@@ -26,6 +27,7 @@ from autobench.campaign import (
     validate_manifest,
     write_manifest,
 )
+from autobench.campaign_stages import CampaignStageError, freeze_campaign_selections
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
@@ -236,6 +238,25 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]
+
+
+def test_canary_agent_protocol_cannot_enter_publication_freeze(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    materialize_discovery_cells(
+        manifest_path,
+        output_root,
+        fake_repo,
+        agent_protocol=CANARY_AGENT_PROTOCOL,
+        base_commit=BASE_COMMIT,
+        allow_canary_protocol=True,
+    )
+
+    with pytest.raises(CampaignStageError, match="purpose is not allowed"):
+        freeze_campaign_selections(output_root, manifest_path)
 
 
 def test_materializer_restart_preserves_progress_files(tmp_path):

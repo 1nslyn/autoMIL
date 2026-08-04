@@ -1763,7 +1763,7 @@ def _locked_agent_protocol(runtime_root: Path) -> tuple[dict[str, Any], str]:
     path = runtime_root / AGENT_PROTOCOL_FILE
     try:
         raw = json.loads(path.read_text())
-        protocol = validate_agent_protocol(raw, allow_canary=True)
+        protocol = validate_agent_protocol(raw)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise CampaignStageError(f"cannot verify locked agent protocol: {exc}") from exc
     return protocol, content_sha256(protocol)
@@ -1852,7 +1852,7 @@ def register_agent_session(
     with _stage_lock(cell_root):
         state = load_stage_state(cell_root)
         if state.get("phase") != "winner-frozen":
-            raise CampaignStageError("agent session is registered after winner freeze")
+            raise CampaignStageError("agent session requires a frozen winner")
         _, protocol_sha256 = _locked_agent_protocol(cell_root.parent)
         config = yaml.safe_load((cell_root / "automil/config.yaml").read_text()) or {}
         if (config.get("campaign") or {}).get(
