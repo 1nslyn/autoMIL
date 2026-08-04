@@ -11,7 +11,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import shlex
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -382,10 +384,11 @@ def materialize_discovery_cells(
         output_root.relative_to(repo_root)
     except ValueError as exc:
         raise CampaignManifestError("campaign output_root must live inside the git repo") from exc
+    output_root.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for cell in manifest["cells"]:
-        adir = output_root / cell["cell_id"] / "automil"
-        adir.mkdir(parents=True, exist_ok=True)
+        cell_root = output_root / cell["cell_id"]
+        adir = cell_root / "automil"
         template_path = repo_root / cell["policy_template"]
         if not template_path.exists():
             raise CampaignManifestError(f"missing cohort template {template_path}")
@@ -439,32 +442,72 @@ def materialize_discovery_cells(
             "budget_cell_id": cell["budget_identity"]["cell_id"],
             "stage": "discovery",
         }
-        (adir / "config.yaml").write_text(
-            yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
-        )
-        (adir / "campaign_cell.json").write_text(
-            json.dumps(cell, indent=2, sort_keys=True) + "\n"
-        )
-        (adir / ".gitignore").write_text(
-            "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
-            ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
-        )
-        (adir / "plan.md").write_text(
-            f"# Discovery plan — {cell['cell_id']}\n\nNo proposals queued yet.\n"
-        )
-        (adir / "learnings.md").write_text(
-            f"# Cell-local learnings — {cell['cell_id']}\n"
-        )
-        policy_dir = adir / "variants" / "_policies"
-        policy_dir.mkdir(parents=True, exist_ok=True)
-        (policy_dir / ".gitkeep").touch()
-        from autobench.campaign_stages import initialize_stage_state
 
-        initialize_stage_state(
-            adir.parent,
-            cell=cell,
-            manifest_sha256=manifest_hash,
-        )
+        # Materialization is a restart-safe initializer, never a reset command.
+        # A repeated invocation verifies the immutable inputs but preserves the
+        # agent-owned plan/learnings/policies and the progressed stage ledger.
+        if cell_root.exists():
+            from autobench.campaign_stages import load_stage_state
+
+            try:
+                state = load_stage_state(cell_root)
+                existing_cell = json.loads((adir / "campaign_cell.json").read_text())
+                existing_config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+            except (OSError, json.JSONDecodeError, yaml.YAMLError, ValueError) as exc:
+                raise CampaignManifestError(
+                    f"existing discovery root is incomplete or corrupt: {cell_root}"
+                ) from exc
+            expected_state = (
+                cell["cell_id"], cell["cell_sha256"], manifest_hash,
+            )
+            actual_state = (
+                state.get("cell_id"), state.get("cell_sha256"),
+                state.get("manifest_sha256"),
+            )
+            if existing_cell != cell or existing_config != config or actual_state != expected_state:
+                raise CampaignManifestError(
+                    f"existing discovery root is bound to different inputs: {cell_root}"
+                )
+            written.append(adir)
+            continue
+
+        # Publish a fully initialized cell directory in one rename.  A crash
+        # before os.replace leaves only a hidden temporary directory and never
+        # exposes a half-created campaign root as resumable state.
+        staging_root = Path(tempfile.mkdtemp(prefix=".materialize-", dir=str(output_root)))
+        try:
+            staging_adir = staging_root / "automil"
+            staging_adir.mkdir(parents=True)
+            (staging_adir / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
+            )
+            (staging_adir / "campaign_cell.json").write_text(
+                json.dumps(cell, indent=2, sort_keys=True) + "\n"
+            )
+            (staging_adir / ".gitignore").write_text(
+                "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
+                ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
+            )
+            (staging_adir / "plan.md").write_text(
+                f"# Discovery plan — {cell['cell_id']}\n\nNo proposals queued yet.\n"
+            )
+            (staging_adir / "learnings.md").write_text(
+                f"# Cell-local learnings — {cell['cell_id']}\n"
+            )
+            policy_dir = staging_adir / "variants" / "_policies"
+            policy_dir.mkdir(parents=True)
+            (policy_dir / ".gitkeep").touch()
+            from autobench.campaign_stages import initialize_stage_state
+
+            initialize_stage_state(
+                staging_root,
+                cell=cell,
+                manifest_sha256=manifest_hash,
+            )
+            os.replace(staging_root, cell_root)
+        finally:
+            if staging_root.exists():
+                shutil.rmtree(staging_root)
         written.append(adir)
     return written
 
