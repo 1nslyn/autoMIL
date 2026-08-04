@@ -69,7 +69,10 @@ the sealed archive, and registers the discovery root:
 Use `baseline-command` to inspect the exact command without running it. If an
 equivalent baseline was executed portably elsewhere, import its validation-only
 `result.json` plus `certify/fold_<0..4>_result.json` files with
-`register-baseline --baseline-archive <path>` instead.
+`register-baseline --baseline-archive <path>` instead. The archive must also
+carry the deterministic `baseline_attestation.json` emitted by `run-baseline`;
+it binds the artifacts to this campaign, cell, base commit, and exact native
+command. A shape-compatible result from another cell is rejected.
 
 ## 4. Run discovery
 

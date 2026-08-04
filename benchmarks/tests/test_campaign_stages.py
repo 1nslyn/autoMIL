@@ -22,6 +22,7 @@ from autobench.campaign import (
     file_sha256,
 )
 from autobench.campaign_stages import (
+    BASELINE_ATTESTATION_FILE,
     CampaignStageError,
     certify_winner,
     freeze_discovery,
@@ -110,7 +111,10 @@ def staged_cell(tmp_path):
     return cell_root, adir, cell, state, tmp_path
 
 
-def _baseline(cell_root: Path, *, leak=False, invalid_sealed=False) -> Path:
+def _baseline(
+    cell_root: Path, *, leak=False, invalid_sealed=False,
+    attest_for: Path | None = None,
+) -> Path:
     archive = cell_root / "baseline" / "archive"
     sealed = archive / "certify"
     sealed.mkdir(parents=True)
@@ -129,6 +133,27 @@ def _baseline(cell_root: Path, *, leak=False, invalid_sealed=False) -> Path:
             "held_out": {"test_auc": 0.5 + fold / 100},
         })
         (sealed / f"fold_{fold}_result.json").write_text(payload)
+    target = attest_for or cell_root
+    state = load_stage_state(target)
+    cell = json.loads((target / "automil/campaign_cell.json").read_text())
+    attestation = {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": state["manifest_sha256"],
+        "cell_id": state["cell_id"],
+        "cell_sha256": state["cell_sha256"],
+        "base_commit": state["base_commit"],
+        "baseline_command": cell["commands"]["baseline"],
+        "result_sha256": file_sha256(archive / "result.json"),
+        "sealed_fold_sha256": {
+            f"fold_{fold}_result.json": file_sha256(
+                sealed / f"fold_{fold}_result.json"
+            )
+            for fold in CERTIFICATION_FOLDS
+        },
+    }
+    attestation["attestation_sha256"] = content_sha256(attestation)
+    (archive / BASELINE_ATTESTATION_FILE).write_text(json.dumps(attestation))
     return archive
 
 
@@ -319,7 +344,7 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
 def test_external_baseline_is_atomically_imported_and_portable(staged_cell, tmp_path):
     cell_root, adir, cell, _, _ = staged_cell
     external_root = tmp_path / "external-cell"
-    external = _baseline(external_root)
+    external = _baseline(external_root, attest_for=cell_root)
     state = register_baseline(cell_root, external)
     imported = cell_root / state["baseline"]["archive"]
     assert imported == cell_root / "baseline/archive"
@@ -335,6 +360,20 @@ def test_external_baseline_is_atomically_imported_and_portable(staged_cell, tmp_
     freeze_discovery(cell_root)
     selected = select_winner(cell_root)
     assert selected["winner"]["kind"] == "baseline"
+
+
+def test_external_baseline_rejects_a_foreign_attestation(staged_cell, tmp_path):
+    cell_root, _, _, _, _ = staged_cell
+    external = _baseline(tmp_path / "external", attest_for=cell_root)
+    path = external / BASELINE_ATTESTATION_FILE
+    attestation = json.loads(path.read_text())
+    attestation["base_commit"] = "e" * 40
+    attestation.pop("attestation_sha256")
+    attestation["attestation_sha256"] = content_sha256(attestation)
+    path.write_text(json.dumps(attestation))
+
+    with pytest.raises(CampaignStageError, match="not bound to this cell/base/command"):
+        register_baseline(cell_root, external)
 
 
 def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
