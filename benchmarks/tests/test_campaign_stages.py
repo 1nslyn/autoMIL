@@ -211,13 +211,30 @@ def test_initial_state_is_restart_idempotent_and_integrity_checked(staged_cell):
 
 
 def test_baseline_registration_hashes_but_does_not_parse_sealed_test(staged_cell):
-    cell_root, _, _, _, _ = staged_cell
+    cell_root, adir, cell, _, _ = staged_cell
     state = register_baseline(
         cell_root, _baseline(cell_root, invalid_sealed=True),
     )
     assert state["baseline"]["candidate_id"] == "baseline"
     assert len(state["baseline"]["sealed_fold_sha256"]) == 5
     assert state["baseline"]["validation_mean"] == pytest.approx(0.61)
+    root_id = state["baseline"]["discovery_root_node_id"]
+    graph = json.loads((adir / "graph.json").read_text())
+    assert list(graph["nodes"]) == [root_id]
+    root = graph["nodes"][root_id]
+    assert root["parent_id"] is None
+    assert root["status"] == "keep"
+    assert root["composite"] == pytest.approx(0.605)
+    assert root["metadata"]["cell_id"] == cell["budget_identity"]["cell_id"]
+    assert [
+        fold["fold_index"] for fold in root["metadata"]["validation_folds"]
+    ] == list(STAGE_FOLDS["discovery"])
+
+    restarted = register_baseline(
+        cell_root, cell_root / state["baseline"]["archive"],
+    )
+    assert restarted == state
+    assert list(json.loads((adir / "graph.json").read_text())["nodes"]) == [root_id]
 
 
 def test_baseline_registration_rejects_test_bearing_public_result(staged_cell):

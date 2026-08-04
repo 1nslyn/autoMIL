@@ -39,6 +39,9 @@ def public_status(state: dict[str, Any]) -> dict[str, Any]:
         "phase": state["phase"],
         "revision": state["revision"],
         "baseline_registered": state.get("baseline") is not None,
+        "discovery_root_node_id": (
+            (state.get("baseline") or {}).get("discovery_root_node_id")
+        ),
         "discovery": {
             "attempts_charged": state["discovery"]["attempts_charged"],
             "attempt_budget": state["discovery"]["attempt_budget"],
