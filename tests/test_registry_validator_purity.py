@@ -401,10 +401,22 @@ def test_annotation_calls_are_rejected(tmp_path, annotation_site):
     from automil.registry.validators.purity import PurityValidator
 
     body = POLICY_MODULE.replace(
+        "from __future__ import annotations\n", "",
+    ).replace(
         "from automil.registry import", annotation_site + "from automil.registry import",
     )
     with pytest.raises(ValidationError, match="annotation contains a call"):
         PurityValidator().check(_write_module(tmp_path, body))
+
+
+def test_postponed_annotation_calls_are_not_executed(tmp_path):
+    from automil.registry.validators.purity import PurityValidator
+
+    body = POLICY_MODULE.replace(
+        "from automil.registry import",
+        "LEAK: open('/tmp/not-executed', 'w') = 1\nfrom automil.registry import",
+    )
+    PurityValidator(strict_policy=True).check(_write_module(tmp_path, body))
 
 
 @pytest.mark.parametrize(
