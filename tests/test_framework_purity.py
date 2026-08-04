@@ -46,8 +46,8 @@ _ALLOWLIST: dict[str, str] = {
     #    Line shifted to :60 by DBT-03 (14-02): removed 2-line deferral comment block.
     #    Line shifted to :61 by L-6 (audit 2026-07-23): added `import fcntl` for
     #    cmd_submit's id-allocation lock; to :62 by the campaign-boundary hash
-    #    imports.
-    "src/automil/backends/_orchestrator_daemon.py:62":
+    #    imports; to :63 by the live ROCm parser's `re` import.
+    "src/automil/backends/_orchestrator_daemon.py:63":
         "Consumer-specific vars (e.g. AUTOBENCH_*_ROOT)",
     # 2. Comment in verify_repro about the clean env not leaking AUTOBENCH_*.
     "src/automil/cli/lifecycle/verify_repro.py:84":
