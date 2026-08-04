@@ -166,6 +166,8 @@ def test_cap_kill_writes_all_four(tmp_path: Path) -> None:
     assert (completed_dir / f"{node_id}.json").exists(), "completed/<node>.json missing"
     assert (archive_dir / "result.json").exists(), "archive/result.json missing"
     assert len(tsv_calls) == 1, "TSV writer must be called once"
+    completion = json.loads((completed_dir / f"{node_id}.json").read_text())
+    assert completion["budget_killed"] is True
 
     graph2 = ExperimentGraph(path=str(tmp_path / "graph.json"))
     node = graph2.get_node(node_id)
@@ -175,6 +177,35 @@ def test_cap_kill_writes_all_four(tmp_path: Path) -> None:
         f"Cap-kill node should have status='partial', got {node['status']!r}"
     )
     assert abs(node["composite"] - 0.78) < 1e-6
+
+
+@pytest.mark.parametrize("metadata", ["legacy", ["legacy"]])
+def test_terminal_writer_tolerates_non_mapping_metadata(
+    tmp_path: Path, metadata,
+) -> None:
+    from automil.terminal_writer import write_terminal_state
+
+    graph, node_id = _make_graph(tmp_path)
+    completed_dir, archive_dir = _make_dirs(tmp_path, node_id)
+    write_terminal_state(
+        node_id=node_id,
+        result={
+            "status": "completed",
+            "composite": 0.7,
+            "metrics": {"val_auc": 0.7},
+            "metadata": metadata,
+        },
+        graph=graph,
+        completed_dir=completed_dir,
+        archive_dir=archive_dir,
+        results_tsv_writer=lambda *_args, **_kwargs: None,
+        spec={"description": "legacy metadata", "graph_metadata": {}},
+        elapsed_s=1.0,
+        gpu_id=0,
+    )
+
+    completion = json.loads((completed_dir / f"{node_id}.json").read_text())
+    assert completion["budget_killed"] is False
 
 
 def test_graph_updated_before_tsv(tmp_path: Path) -> None:

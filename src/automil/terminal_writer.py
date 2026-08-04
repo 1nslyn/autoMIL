@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -291,7 +292,7 @@ def write_terminal_state(
                 # update/assign would mutate node["metadata"] in place, and that
                 # dict object can be aliased with another node's (gate/evaluate.py
                 # creates gate-eval children via a shallow dict(node) copy).
-                if result.get("metadata"):
+                if isinstance(result.get("metadata"), Mapping):
                     gnode["metadata"] = merged_metadata(gnode, result["metadata"])
                 # CR-1b: durable audit trail when the reported scalar could not be
                 # explained by the node's own validation metrics.
@@ -325,10 +326,15 @@ def write_terminal_state(
     if composite_recomputed is not None:
         result = {**result, "composite": composite_recomputed}
         if composite_disagreement is not None:
+            existing_metadata = (
+                result.get("metadata")
+                if isinstance(result.get("metadata"), Mapping)
+                else {}
+            )
             result = {
                 **result,
                 "metadata": {
-                    **(result.get("metadata") or {}),
+                    **existing_metadata,
                     "composite_disagreement": composite_disagreement,
                 },
             }
@@ -347,6 +353,10 @@ def write_terminal_state(
         "peak_vram_mb": result.get("peak_vram_mb", 0),
         "gpu": gpu_id,
         "completed_at": datetime.now().isoformat(),
+        "budget_killed": bool(
+            result.get("metadata", {}).get("budget_killed", False)
+            if isinstance(result.get("metadata"), Mapping) else False
+        ),
         "graph_metadata": result.get("graph_metadata") or spec.get("graph_metadata") or {},
     }
     if result.get("termination_reason"):
