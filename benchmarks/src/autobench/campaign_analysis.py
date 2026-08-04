@@ -17,9 +17,7 @@ from autobench.campaign import (
     CERTIFICATION_FOLDS,
     PROTOCOL,
     TILE_ARMS,
-    classify_attempt_outcome,
     content_sha256,
-    expected_promotion_sources,
     file_sha256,
     load_manifest,
     validate_agent_protocol,
@@ -283,79 +281,6 @@ def _validated_agent_usage(raw: object, cell_id: str) -> dict[str, Any]:
         return validate_agent_usage_artifact(raw)
     except CampaignStageError as exc:
         raise CampaignAnalysisError(f"{cell_id}: {exc}") from exc
-
-
-def _process_resource_stats(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
-    output: dict[str, Any] = {}
-    for key in ("elapsed_seconds", "peak_vram_mb"):
-        values = [
-            _finite(row[key], f"process.{key}")
-            for row in rows if row.get(key) is not None
-        ]
-        if any(value < 0 for value in values):
-            raise CampaignAnalysisError(f"process.{key} must be nonnegative")
-        summary: dict[str, Any] = {
-            "reported": len(values),
-            "missing": len(rows) - len(values),
-            "maximum": max(values) if values else None,
-        }
-        if key == "elapsed_seconds":
-            total = math.fsum(values) if values else None
-            summary.update({
-                "total": total,
-                "gpu_attached_job_hours": (
-                    total / 3600 if total is not None else None
-                ),
-            })
-        output[key] = summary
-    return output
-
-
-def _validate_resource_summary(raw: object, count: int, label: str) -> None:
-    if not isinstance(raw, dict) or set(raw) != {"elapsed_seconds", "peak_vram_mb"}:
-        raise CampaignAnalysisError(f"{label}: resource summary is malformed")
-    elapsed = raw["elapsed_seconds"]
-    vram = raw["peak_vram_mb"]
-    if (
-        not isinstance(elapsed, dict)
-        or set(elapsed) != {
-            "reported", "missing", "maximum", "total",
-            "gpu_attached_job_hours",
-        }
-        or not isinstance(vram, dict)
-        or set(vram) != {"reported", "missing", "maximum"}
-    ):
-        raise CampaignAnalysisError(f"{label}: resource fields are malformed")
-    for name, record in (("elapsed_seconds", elapsed), ("peak_vram_mb", vram)):
-        reported = record.get("reported")
-        missing = record.get("missing")
-        if (
-            isinstance(reported, bool) or not isinstance(reported, int)
-            or isinstance(missing, bool) or not isinstance(missing, int)
-            or reported < 0 or missing < 0 or reported + missing != count
-        ):
-            raise CampaignAnalysisError(f"{label}: {name} missingness is inconsistent")
-    if elapsed["reported"] == 0:
-        if any(elapsed[key] is not None for key in (
-            "maximum", "total", "gpu_attached_job_hours",
-        )):
-            raise CampaignAnalysisError(f"{label}: missing elapsed time was imputed")
-    else:
-        total = _finite(elapsed["total"], f"{label}.elapsed.total")
-        maximum = _finite(elapsed["maximum"], f"{label}.elapsed.maximum")
-        gpu_hours = _finite(
-            elapsed["gpu_attached_job_hours"],
-            f"{label}.elapsed.gpu_attached_job_hours",
-        )
-        if total < 0 or maximum < 0 or gpu_hours < 0 or total < maximum or not math.isclose(
-            gpu_hours, total / 3600, rel_tol=0.0, abs_tol=1e-12,
-        ):
-            raise CampaignAnalysisError(f"{label}: elapsed summary is inconsistent")
-    if vram["reported"] == 0:
-        if vram["maximum"] is not None:
-            raise CampaignAnalysisError(f"{label}: missing VRAM was imputed")
-    elif _finite(vram["maximum"], f"{label}.vram.maximum") < 0:
-        raise CampaignAnalysisError(f"{label}: VRAM maximum is invalid")
 
 
 def _validated_process_evidence(
