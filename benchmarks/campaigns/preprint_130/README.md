@@ -43,9 +43,11 @@ to the detached training worktree.
 ## 2. Materialize the campaign once
 
 Copy `agent_protocol.template.json`, fill the immutable provider/runtime/model
-versions, and hash the exact proposal instructions and tool schema. Placeholder
-or `unknown` values are rejected. This file fixes the coding-agent policy before
-any search starts; it is not an optimization result.
+versions, embed the exact proposal instructions and tool schema, and record the
+SHA-256 of each embedded string. Materialization recomputes both hashes;
+placeholder, `unknown`, or content/hash mismatches are rejected. The locked
+file therefore archives the resolvable coding-agent policy before any search
+starts; it is not an optimization result.
 
 ```bash
 .venv/bin/python benchmarks/scripts/campaign_manifest.py materialize \
@@ -88,6 +90,19 @@ command. A shape-compatible result from another cell is rejected.
 
 ## 4. Run discovery
 
+Fill `agent_session.template.json` with the runtime session identifier and a
+timezone-aware start time, then bind it before the first proposal. The command
+fails if any discovery spec already exists or the attempt budget has been
+consumed. After those pristine-state checks, the controller records its own
+`bound_at`; every charged proposal must carry a timezone-aware `submitted_at`
+at or after that controller timestamp.
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_stage.py open-agent-session \
+  --cell-root "$CAMPAIGN_CELL_ROOT" \
+  --agent-session /path/to/agent_session_start.json
+```
+
 Start the scheduler for the selected cell:
 
 ```bash
@@ -95,7 +110,8 @@ Start the scheduler for the selected cell:
 .venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" orchestrator start
 ```
 
-Run one coding-agent session against this project and have it follow the autoMIL
+Run one fresh coding-agent session with no cross-cell memory against this
+project and have it follow the autoMIL
 experiment loop. The enforced policy permits source-level train-only policy
 implementations under that cell's `automil/variants/_policies/` directory; it
 does not reduce the campaign to a fixed hyperparameter menu. Submit and launch
@@ -145,17 +161,22 @@ The winner record is immutable. `advance` may perform the next safe transition
 through selection, but it intentionally stops at `winner-frozen` and never
 reveals held-out data.
 
-Fill `agent_session.template.json` from the runtime usage record and register it
-for the frozen cell. Exact, estimated, and unavailable usage are all represented
-explicitly; unavailable token/cost fields must be null and carry a reason.
+After the winner freezes, fill `agent_session_end.template.json` from the runtime
+usage record and finalize the same pre-bound session. Exact, estimated, and
+unavailable usage are represented explicitly; unavailable token/cost fields
+must be null and carry a reason. Finalization verifies that all 60 proposal
+timestamps fall inside this session interval.
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_stage.py register-agent-session \
+.venv/bin/python benchmarks/scripts/campaign_stage.py finalize-agent-session \
   --cell-root "$CAMPAIGN_CELL_ROOT" \
-  --agent-session /path/to/agent_session.json
+  --agent-session /path/to/agent_session_end.json
 ```
 
-Repeat Sections 3–5 for every manifest cell. No cell may be certified early.
+Repeat Sections 3–5 for every manifest cell, using a distinct fresh runtime
+session identifier each time. Session opening rejects an identifier already
+reserved by a sibling cell, and the global freeze rechecks uniqueness across
+all 130 attestations. No cell may be certified early.
 
 ## 6. Freeze all selections, then certify
 
@@ -168,12 +189,21 @@ selections into one campaign artifact:
 ```
 
 Before `selection_freeze.json` exists and contains the exact 130-cell roster,
-one locked protocol, and 130 immutable session attestations, every per-cell
+one locked protocol, 130 immutable session attestations, and the complete
+failure-inclusive search-process evidence, every per-cell
 certification entry point fails closed. `certify-all` is
 restart-safe: it verifies and reveals each frozen winner together with its
 native baseline, emits paired fold deltas, and writes a hashed
 `campaign_certification.json` index. The ordinary `status` output reports only
 bundle identity and timestamps, never held-out metric values.
+
+Each freeze entry binds the winner kind, candidate, promotion node (when
+searched), baseline candidate, and the canonical cell-local path plus SHA-256
+of all five sealed winner and baseline fold files. Certification and reporting
+re-read those files and recompute their fold metrics and aggregates; a newly
+hashed downstream bundle or index therefore cannot relabel a run or replace
+its evidence without conflicting with the independently maintained cell state,
+sealed-fold hashes, process census, or finalized session attestation.
 
 Generate the complete publication artifact only after certification:
 

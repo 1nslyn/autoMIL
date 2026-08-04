@@ -35,9 +35,11 @@ from automil.admissibility import (
 )
 from automil.cells.state import read_cell
 from automil.cells.state import Cell, CellStatus, write_cell
+from automil.launch_binding import LaunchBindingError, validate_launch_binding
 
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
+    ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
     DATASETS,
@@ -45,7 +47,9 @@ from autobench.campaign import (
     PROMOTION_CANDIDATES,
     PROTOCOL,
     STAGE_FOLDS,
+    classify_attempt_outcome,
     content_sha256,
+    expected_promotion_sources,
     file_sha256,
     load_manifest,
     validate_agent_protocol,
@@ -58,6 +62,7 @@ SELECTION_FREEZE_FILE = "selection_freeze.json"
 CAMPAIGN_CERTIFICATION_FILE = "campaign_certification.json"
 AGENT_SESSION_FILE = "agent_session.json"
 CAMPAIGN_CELL_COUNT = len(DATASETS) * 26
+SELECTION_FREEZE_SCHEMA_VERSION = 3
 
 
 class CampaignStageError(ValueError):
@@ -360,14 +365,42 @@ def _validation_folds(
             isinstance(composite, bool)
             or not isinstance(composite, (int, float))
             or not math.isfinite(float(composite))
+            or not 0 <= float(composite) <= 1
         ):
             raise CampaignStageError(
-                f"fold {fold_index} has no finite validation composite"
+                f"fold {fold_index} validation composite is outside [0, 1]"
             )
         metrics = raw.get("metrics")
-        if not isinstance(metrics, dict) or any("test" in str(key).lower() for key in metrics):
+        if (
+            not isinstance(metrics, dict)
+            or not metrics
+            or any("test" in str(key).lower() for key in metrics)
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0 <= float(value) <= 1
+                for value in metrics.values()
+            )
+        ):
             raise CampaignStageError(
-                f"fold {fold_index} metrics are not validation-only"
+                f"fold {fold_index} metrics are not validation-only unit-interval values"
+            )
+        if set(metrics) == {"val_auc", "val_bacc"}:
+            expected_composite = (
+                float(metrics["val_auc"]) + float(metrics["val_bacc"])
+            ) / 2
+        elif set(metrics) == {"val_c_index"}:
+            expected_composite = float(metrics["val_c_index"])
+        else:
+            raise CampaignStageError(
+                f"fold {fold_index} validation metric schema is not campaign-locked"
+            )
+        if not math.isclose(
+            float(composite), expected_composite, rel_tol=0.0, abs_tol=1e-12,
+        ):
+            raise CampaignStageError(
+                f"fold {fold_index} composite disagrees with validation metrics"
             )
         seen.add(fold_index)
         normalized.append({
@@ -530,6 +563,7 @@ def _register_baseline_unlocked(
         result = json.loads(result_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise CampaignStageError(f"cannot read baseline result.json: {exc}") from exc
+    baseline_resources = _process_resource_summary([result])
     folds = _validation_folds(result, CERTIFICATION_FOLDS)
     sealed_hashes: dict[str, str] = {}
     for fold_index in CERTIFICATION_FOLDS:
@@ -572,6 +606,8 @@ def _register_baseline_unlocked(
         "attestation_sha256": expected_attestation["attestation_sha256"],
         "validation_folds": folds,
         "validation_mean": _mean(folds),
+        "result_status": result.get("status"),
+        "resources": baseline_resources,
         "registered_at": _utc_now(),
     }
     current = state.get("baseline")
@@ -757,6 +793,86 @@ def _pending_stage_work(adir: Path) -> list[str]:
     return sorted(pending)
 
 
+def _terminal_evidence(
+    adir: Path, node_id: str, result: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Join the archived result with the trusted daemon completion record."""
+    completion_path = adir / "orchestrator" / "completed" / f"{node_id}.json"
+    completion: dict[str, Any] = {}
+    if completion_path.is_file():
+        try:
+            loaded = json.loads(completion_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignStageError(
+                f"terminal record for {node_id} is unreadable"
+            ) from exc
+        if not isinstance(loaded, dict) or loaded.get("id") != node_id:
+            raise CampaignStageError(f"terminal record for {node_id} is misbound")
+        completion = loaded
+    result = result if isinstance(result, Mapping) else {}
+    result_status = result.get("status")
+    completion_status = completion.get("status")
+    if (
+        isinstance(result_status, str)
+        and isinstance(completion_status, str)
+        and result_status != completion_status
+    ):
+        raise CampaignStageError(f"terminal status disagrees for {node_id}")
+    status = (
+        result_status if isinstance(result_status, str) and result_status
+        else completion_status if isinstance(completion_status, str) and completion_status
+        else "missing"
+    )
+    raw_reason = result.get("termination_reason")
+    if not isinstance(raw_reason, str) or not raw_reason.strip():
+        raw_reason = completion.get("termination_reason")
+    termination_reason = (
+        raw_reason if isinstance(raw_reason, str) and raw_reason.strip()
+        else "unspecified"
+    )
+    metadata = result.get("metadata")
+    budget_killed = (
+        status == "budget_killed"
+        or isinstance(metadata, Mapping) and metadata.get("budget_killed") is True
+        or completion.get("budget_killed") is True
+    )
+    outcome_class = classify_attempt_outcome(
+        status, termination_reason, budget_killed,
+    )
+
+    evidence: dict[str, Any] = {
+        "result_status": status,
+        "termination_reason": termination_reason,
+        "budget_killed": budget_killed,
+        "outcome_class": outcome_class,
+        "elapsed_seconds": None,
+        "peak_vram_mb": None,
+    }
+    for key in ("elapsed_seconds", "peak_vram_mb"):
+        candidates = [result.get(key)]
+        if key == "elapsed_seconds":
+            candidates.append(completion.get(key))
+        else:
+            completion_vram = completion.get(key)
+            candidates.append(
+                completion_vram
+                if isinstance(completion_vram, (int, float))
+                and not isinstance(completion_vram, bool)
+                and float(completion_vram) > 0
+                else None
+            )
+        for value in candidates:
+            if (
+                not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(float(value))
+                and float(value) >= 0
+            ):
+                evidence[key] = float(value)
+                break
+    return evidence
+
+
 def _discovery_cell(adir: Path, budget_cell_id: str):
     path = adir / "cells" / f"{budget_cell_id}.json"
     if not path.is_file():
@@ -786,6 +902,10 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         raise CampaignStageError(f"cannot read campaign_cell.json: {exc}") from exc
     if config.get("cell_id") != state["cell_id"]:
         raise CampaignStageError("discovery root belongs to a different cell")
+    protocol_sha256 = _cell_agent_protocol_sha256(cell_root, state)
+    agent_session = _agent_session_for_discovery(
+        cell_root, state, protocol_sha256,
+    )
     pending = _pending_stage_work(adir)
     if pending:
         raise CampaignStageError(f"discovery still has queued/running work: {pending}")
@@ -820,17 +940,69 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                 f"discovery spec {archive.name} differs from the frozen base commit"
             )
         launched += 1
+        submitted_at = spec.get("submitted_at")
+        try:
+            submitted = datetime.fromisoformat(str(submitted_at))
+        except ValueError as exc:
+            raise CampaignStageError(
+                f"discovery spec {archive.name} has an invalid submitted_at"
+            ) from exc
+        if submitted.tzinfo is None:
+            raise CampaignStageError(
+                f"discovery spec {archive.name} submitted_at lacks a timezone"
+            )
+        session_bound = datetime.fromisoformat(
+            agent_session["session"]["bound_at"]
+        )
+        if submitted < session_bound:
+            raise CampaignStageError(
+                f"discovery spec {archive.name} predates controller session binding"
+            )
+        spec_session = (spec.get("metadata") or {}).get("agent_session")
+        expected_session = {
+            "session_id": agent_session["session"]["session_id"],
+            "agent_protocol_sha256": protocol_sha256,
+            "binding_sha256": agent_session["binding_sha256"],
+        }
+        if spec_session != expected_session:
+            raise CampaignStageError(
+                f"discovery spec {archive.name} is outside the pre-bound agent session"
+            )
         audit: dict[str, Any] = {
             "node_id": archive.name,
+            "source_spec_sha256": file_sha256(archive / "spec.json"),
+            "submitted_at": submitted_at,
+            "agent_session_id": expected_session["session_id"],
+            "agent_session_binding_sha256": expected_session["binding_sha256"],
+            "candidate_class": "inadmissible",
+            "policy_hash": None,
+            "result_status": "missing",
+            "termination_reason": "unspecified",
+            "budget_killed": False,
+            "outcome_class": "missing-result",
+            "elapsed_seconds": None,
+            "peak_vram_mb": None,
             "eligible": False,
             "reason": "missing result.json",
+            "candidate_sha256": None,
+            "validation_mean": None,
         }
+        audit.update(_terminal_evidence(adir, archive.name, None))
+        verdict: dict[str, Any] | None = None
+        try:
+            verdict = revalidate_candidate_spec(policy, spec, archive).to_dict()
+            audit["candidate_class"] = verdict["candidate_class"]
+            audit["policy_hash"] = verdict["policy_hash"]
+        except (AdmissibilityError, OSError, KeyError, TypeError, ValueError) as exc:
+            audit["reason"] = str(exc)
         result_path = archive / "result.json"
         if result_path.is_file():
             try:
                 result = json.loads(result_path.read_text())
+                audit.update(_terminal_evidence(adir, archive.name, result))
+                if verdict is None:
+                    raise CampaignStageError(audit["reason"])
                 folds = _validation_folds(result, STAGE_FOLDS["discovery"])
-                verdict = revalidate_candidate_spec(policy, spec, archive).to_dict()
                 candidate_sha, identity = _candidate_identity(spec, verdict)
                 candidate = {
                     "candidate_id": archive.name,
@@ -1367,31 +1539,34 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             raise CampaignStageError(
                 f"promotion job {job['promotion_node_id']} lost its frozen source identity"
             )
+        job.update({
+            "candidate_class": source["identity"]["candidate_class"],
+            "policy_hash": source["identity"]["policy_hash"],
+            "result_status": "missing",
+            "source_spec_sha256": source["source_spec_sha256"],
+            "promotion_spec_sha256": None,
+            "submitted_at": None,
+            "elapsed_seconds": None,
+            "peak_vram_mb": None,
+            "validation_mean": None,
+        })
         node_id = job["promotion_node_id"]
         archive = adir / "orchestrator" / "archive" / node_id
+        job.update(_terminal_evidence(adir, node_id, None))
         spec_path = archive / "spec.json"
         result_path = archive / "result.json"
-        missing = [
-            name for name, path in (("spec.json", spec_path), ("result.json", result_path))
-            if not path.is_file()
-        ]
-        if missing:
-            job.update({
-                "status": "ineligible",
-                "reason": f"terminal promotion is missing {', '.join(missing)}",
-            })
-            frozen_jobs.append(job)
-            continue
+        if not spec_path.is_file():
+            raise CampaignStageError(
+                f"promotion job {node_id} lost its durable spec"
+            )
         try:
             spec = json.loads(spec_path.read_text())
-            result = json.loads(result_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            job.update({
-                "status": "ineligible",
-                "reason": f"terminal promotion artifact is unreadable: {exc}",
-            })
-            frozen_jobs.append(job)
-            continue
+            raise CampaignStageError(
+                f"promotion spec is unreadable for {node_id}: {exc}"
+            ) from exc
+        job["promotion_spec_sha256"] = file_sha256(spec_path)
+        job["submitted_at"] = spec.get("submitted_at")
         if spec.get("base_commit") != state["base_commit"]:
             raise CampaignStageError(f"promotion base commit drifted for {node_id}")
         link = (spec.get("metadata") or {}).get("promotion") or {}
@@ -1402,6 +1577,27 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             or link.get("expected_folds") != list(STAGE_FOLDS["promotion"])
         ):
             raise CampaignStageError(f"promotion source link drifted for {node_id}")
+        verdict = revalidate_candidate_spec(policy, spec, archive).to_dict()
+        promotion_sha, _ = _candidate_identity(spec, verdict)
+        if promotion_sha != job["promotion_candidate_sha256"]:
+            raise CampaignStageError(f"promotion candidate identity drifted for {node_id}")
+        if not result_path.is_file():
+            job.update({
+                "status": "ineligible",
+                "reason": "terminal promotion is missing result.json",
+            })
+            frozen_jobs.append(job)
+            continue
+        try:
+            result = json.loads(result_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            job.update({
+                "status": "ineligible",
+                "reason": f"terminal promotion result is unreadable: {exc}",
+            })
+            frozen_jobs.append(job)
+            continue
+        job.update(_terminal_evidence(adir, node_id, result))
         if result.get("status") != "completed":
             job.update({
                 "status": "ineligible",
@@ -1409,10 +1605,6 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             })
             frozen_jobs.append(job)
             continue
-        verdict = revalidate_candidate_spec(policy, spec, archive).to_dict()
-        promotion_sha, _ = _candidate_identity(spec, verdict)
-        if promotion_sha != job["promotion_candidate_sha256"]:
-            raise CampaignStageError(f"promotion candidate identity drifted for {node_id}")
         try:
             promotion_folds = _validation_folds(
                 result, STAGE_FOLDS["promotion"],
@@ -1702,6 +1894,65 @@ def _baseline_sealed_sources(
     }
 
 
+def _source_fold_anchors(
+    runtime_root: Path, sources: Mapping[int, Path],
+) -> dict[str, dict[str, str]]:
+    root = runtime_root.resolve()
+    if set(sources) != set(CERTIFICATION_FOLDS):
+        raise CampaignStageError("source fold roster differs from 0..4")
+    anchors: dict[str, dict[str, str]] = {}
+    for fold in CERTIFICATION_FOLDS:
+        path = sources[fold].resolve()
+        if not path.is_file() or not path.is_relative_to(root):
+            raise CampaignStageError("source fold path escapes the campaign runtime")
+        filename = f"fold_{fold}_result.json"
+        anchors[filename] = {
+            "path": path.relative_to(root).as_posix(),
+            "sha256": file_sha256(path),
+        }
+    return anchors
+
+
+def _validate_source_fold_anchors_artifact(
+    raw: object, *, label: str, expected_cell_id: str | None = None,
+) -> dict[str, dict[str, str]]:
+    expected = {f"fold_{fold}_result.json" for fold in CERTIFICATION_FOLDS}
+    if not isinstance(raw, dict) or set(raw) != expected:
+        raise CampaignStageError(f"{label} source-fold roster is invalid")
+    normalized: dict[str, dict[str, str]] = {}
+    paths: set[str] = set()
+    for filename in sorted(expected):
+        record = raw[filename]
+        if not isinstance(record, Mapping) or set(record) != {"path", "sha256"}:
+            raise CampaignStageError(f"{label} source-fold record is invalid")
+        path = record.get("path")
+        relative = PurePosixPath(str(path))
+        if (
+            not isinstance(path, str)
+            or not path
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or relative.as_posix() != path
+            or relative.name != filename
+            or (
+                expected_cell_id is not None
+                and (
+                    not relative.parts
+                    or relative.parts[0] != expected_cell_id
+                )
+            )
+            or path in paths
+            or not _is_sha256(record.get("sha256"))
+        ):
+            raise CampaignStageError(f"{label} source-fold anchor is invalid")
+        paths.add(path)
+        normalized[filename] = {
+            "path": path,
+            "sha256": str(record["sha256"]),
+        }
+    return normalized
+
+
 def _read_held_out_fold(path: Path, expected_fold: int) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text())
@@ -1769,49 +2020,8 @@ def _locked_agent_protocol(runtime_root: Path) -> tuple[dict[str, Any], str]:
     return protocol, content_sha256(protocol)
 
 
-def _validate_agent_session(
-    payload: Mapping[str, Any], *, state: Mapping[str, Any],
-    agent_protocol_sha256: str,
-) -> dict[str, Any]:
-    required = {
-        "schema_version", "campaign_id", "cell_id", "agent_protocol_sha256",
-        "sessions", "attestation_sha256",
-    }
-    if not isinstance(payload, Mapping) or set(payload) != required:
-        raise CampaignStageError("agent session attestation field set is not exact")
-    recorded = payload.get("attestation_sha256")
-    canonical = {
-        key: value for key, value in payload.items()
-        if key != "attestation_sha256"
-    }
-    if (
-        payload.get("schema_version") != 1
-        or payload.get("campaign_id") != CAMPAIGN_ID
-        or payload.get("cell_id") != state.get("cell_id")
-        or payload.get("agent_protocol_sha256") != agent_protocol_sha256
-        or recorded != content_sha256(canonical)
-    ):
-        raise CampaignStageError("agent session attestation binding mismatch")
-    sessions = payload.get("sessions")
-    if not isinstance(sessions, list) or len(sessions) != 1:
-        raise CampaignStageError("preprint requires exactly one agent session per cell")
-    session = sessions[0]
-    session_fields = {
-        "session_id", "started_at", "ended_at", "termination_reason", "usage",
-    }
-    if not isinstance(session, dict) or set(session) != session_fields:
-        raise CampaignStageError("agent session record field set is not exact")
-    for key in ("session_id", "termination_reason"):
-        if not isinstance(session.get(key), str) or not session[key].strip():
-            raise CampaignStageError(f"agent session {key} is invalid")
-    try:
-        started = datetime.fromisoformat(str(session["started_at"]))
-        ended = datetime.fromisoformat(str(session["ended_at"]))
-    except ValueError as exc:
-        raise CampaignStageError("agent session timestamps are invalid") from exc
-    if started.tzinfo is None or ended.tzinfo is None or ended < started:
-        raise CampaignStageError("agent session time interval is invalid")
-    usage = session.get("usage")
+def validate_agent_usage_artifact(usage: object) -> dict[str, Any]:
+    """Validate the exact agent-usage schema shared by freeze and analysis."""
     usage_fields = {
         "status", "input_tokens", "output_tokens", "cached_input_tokens",
         "cost_usd", "basis",
@@ -1842,40 +2052,303 @@ def _validate_agent_session(
             raise CampaignStageError("unavailable usage must use null numeric fields")
     elif usage["input_tokens"] is None or usage["output_tokens"] is None:
         raise CampaignStageError("reported usage requires input and output tokens")
+    return json.loads(json.dumps(usage))
+
+
+def _session_binding_payload(
+    *, state: Mapping[str, Any], protocol_sha256: str,
+    session_id: str, started_at: str, bound_at: str,
+) -> dict[str, Any]:
+    return {
+        "campaign_id": CAMPAIGN_ID,
+        "cell_id": state.get("cell_id"),
+        "agent_protocol_sha256": protocol_sha256,
+        "session_id": session_id,
+        "started_at": started_at,
+        "bound_at": bound_at,
+    }
+
+
+def _validate_agent_session(
+    payload: object, *, state: Mapping[str, Any],
+    agent_protocol_sha256: str, require_finalized: bool = False,
+) -> dict[str, Any]:
+    try:
+        launch = validate_launch_binding(
+            payload,
+            campaign_id=CAMPAIGN_ID,
+            cell_id=str(state.get("cell_id")),
+            agent_protocol_sha256=agent_protocol_sha256,
+            require_open=(
+                isinstance(payload, Mapping) and payload.get("status") == "open"
+            ),
+        )
+    except LaunchBindingError as exc:
+        raise CampaignStageError(str(exc)) from exc
+    if not isinstance(payload, Mapping):
+        raise CampaignStageError("agent session record is invalid")
+    session = payload.get("session")
+    bound = datetime.fromisoformat(launch["bound_at"])
+    if not isinstance(session, Mapping):
+        raise CampaignStageError("agent session record is invalid")
+    status = payload.get("status")
+    if status == "open":
+        if require_finalized:
+            raise CampaignStageError("agent session has not been finalized")
+        if (
+            session.get("ended_at") is not None
+            or session.get("termination_reason") is not None
+            or session.get("usage") is not None
+            or payload.get("attestation_sha256") is not None
+        ):
+            raise CampaignStageError("open agent session contains post-session fields")
+    elif status == "finalized":
+        reason = session.get("termination_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise CampaignStageError("agent session termination_reason is invalid")
+        try:
+            ended = datetime.fromisoformat(str(session.get("ended_at")))
+        except ValueError as exc:
+            raise CampaignStageError("agent session ended_at is invalid") from exc
+        if ended.tzinfo is None or ended < bound:
+            raise CampaignStageError("agent session time interval is invalid")
+        validate_agent_usage_artifact(session.get("usage"))
+        canonical = {
+            key: value for key, value in payload.items()
+            if key != "attestation_sha256"
+        }
+        if payload.get("attestation_sha256") != content_sha256(canonical):
+            raise CampaignStageError("agent session attestation hash mismatch")
+    else:
+        raise CampaignStageError("agent session status is invalid")
     return json.loads(json.dumps(payload))
 
 
-def register_agent_session(
-    cell_root: Path, attestation: Mapping[str, Any],
+def _cell_agent_protocol_sha256(
+    cell_root: Path, state: Mapping[str, Any],
+) -> str:
+    _, protocol_sha256 = _locked_agent_protocol(cell_root.parent)
+    try:
+        config = yaml.safe_load((cell_root / "automil/config.yaml").read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise CampaignStageError("cell config is unreadable") from exc
+    if (config.get("campaign") or {}).get(
+        "agent_protocol_sha256"
+    ) != protocol_sha256:
+        raise CampaignStageError("cell config agent protocol binding mismatch")
+    if state.get("campaign_id") != CAMPAIGN_ID:
+        raise CampaignStageError("cell campaign identity mismatch")
+    return protocol_sha256
+
+
+def open_agent_session(
+    cell_root: Path, session_start: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Import the one runtime/resource attestation allowed for this cell."""
+    """Bind the only coding-agent session before its first proposal."""
+    with _campaign_lock(cell_root.parent), _stage_lock(cell_root):
+        state = load_stage_state(cell_root)
+        if state.get("phase") != "discovery":
+            raise CampaignStageError("agent session must open during discovery")
+        target = cell_root / AGENT_SESSION_FILE
+        if target.exists():
+            raise CampaignStageError("agent session has already been opened")
+        adir = cell_root / "automil"
+        durable_specs = [
+            *adir.glob("orchestrator/queue/*.json"),
+            *adir.glob("orchestrator/running/**/*.json"),
+            *adir.glob("orchestrator/archive/*/spec.json"),
+        ]
+        if durable_specs:
+            raise CampaignStageError("agent session must precede the first proposal")
+        graph_path = adir / "graph.json"
+        if graph_path.is_file():
+            try:
+                graph = json.loads(graph_path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CampaignStageError("discovery graph is unreadable") from exc
+            nodes = graph.get("nodes")
+            allowed = {
+                (state.get("baseline") or {}).get("discovery_root_node_id")
+            } - {None}
+            if not isinstance(nodes, dict) or set(nodes) != allowed:
+                raise CampaignStageError(
+                    "agent session must precede every non-baseline proposal"
+                )
+        policy_dir = adir / "variants" / "_policies"
+        if policy_dir.exists() and any(
+            path.name != ".gitkeep" for path in policy_dir.iterdir()
+        ):
+            raise CampaignStageError(
+                "agent session must precede every candidate policy file"
+            )
+        expected_plan = f"# Discovery plan — {state['cell_id']}\n\nNo proposals queued yet.\n"
+        expected_learnings = f"# Cell-local learnings — {state['cell_id']}\n"
+        for path, expected in (
+            (adir / "plan.md", expected_plan),
+            (adir / "learnings.md", expected_learnings),
+        ):
+            if path.is_file() and path.read_text() != expected:
+                raise CampaignStageError(
+                    "agent session must precede proposal planning and learnings"
+                )
+        cell = json.loads((adir / "campaign_cell.json").read_text())
+        budget_path = adir / "cells" / f"{cell['budget_identity']['cell_id']}.json"
+        if budget_path.is_file() and read_cell(budget_path).consumed_evals != 0:
+            raise CampaignStageError("agent session must precede budget consumption")
+        if not isinstance(session_start, Mapping) or set(session_start) != {
+            "session_id", "started_at",
+        }:
+            raise CampaignStageError("agent session start field set is not exact")
+        session_id = session_start.get("session_id")
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise CampaignStageError("agent session session_id is invalid")
+        for sibling in cell_root.parent.iterdir():
+            sibling_session = sibling / AGENT_SESSION_FILE
+            if sibling == cell_root or not sibling_session.is_file():
+                continue
+            try:
+                existing = json.loads(sibling_session.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CampaignStageError(
+                    f"cannot verify session reservation under {sibling.name}"
+                ) from exc
+            if not isinstance(existing, Mapping):
+                raise CampaignStageError(
+                    f"cannot verify session reservation under {sibling.name}"
+                )
+            existing_session = existing.get("session")
+            if not isinstance(existing_session, Mapping):
+                raise CampaignStageError(
+                    f"cannot verify session reservation under {sibling.name}"
+                )
+            if existing_session.get("session_id") == session_id:
+                raise CampaignStageError(
+                    "agent session_id is already reserved by another cell"
+                )
+        protocol_sha256 = _cell_agent_protocol_sha256(cell_root, state)
+        started_at = session_start.get("started_at")
+        bound_at = _utc_now()
+        payload: dict[str, Any] = {
+            "schema_version": 2,
+            "campaign_id": CAMPAIGN_ID,
+            "cell_id": state["cell_id"],
+            "agent_protocol_sha256": protocol_sha256,
+            "status": "open",
+            "session": {
+                "session_id": session_id,
+                "started_at": started_at,
+                "bound_at": bound_at,
+                "ended_at": None,
+                "termination_reason": None,
+                "usage": None,
+            },
+            "binding_sha256": content_sha256(_session_binding_payload(
+                state=state, protocol_sha256=protocol_sha256,
+                session_id=str(session_id), started_at=str(started_at),
+                bound_at=bound_at,
+            )),
+            "attestation_sha256": None,
+        }
+        validated = _validate_agent_session(
+            payload, state=state, agent_protocol_sha256=protocol_sha256,
+        )
+        _atomic_write_json(target, validated)
+        return validated
+
+
+def finalize_agent_session(
+    cell_root: Path, session_end: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Close the pre-bound session and attach its resource attestation."""
     with _stage_lock(cell_root):
         state = load_stage_state(cell_root)
         if state.get("phase") != "winner-frozen":
-            raise CampaignStageError("agent session requires a frozen winner")
-        _, protocol_sha256 = _locked_agent_protocol(cell_root.parent)
-        config = yaml.safe_load((cell_root / "automil/config.yaml").read_text()) or {}
-        if (config.get("campaign") or {}).get(
-            "agent_protocol_sha256"
-        ) != protocol_sha256:
-            raise CampaignStageError("cell config agent protocol binding mismatch")
-        prepared = json.loads(json.dumps(attestation))
-        if "attestation_sha256" not in prepared:
-            prepared["attestation_sha256"] = content_sha256(prepared)
+            raise CampaignStageError("agent session finalization requires a frozen winner")
+        protocol_sha256 = _cell_agent_protocol_sha256(cell_root, state)
+        target = cell_root / AGENT_SESSION_FILE
+        try:
+            current = json.loads(target.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignStageError("pre-bound agent session is missing") from exc
+        current = _validate_agent_session(
+            current, state=state, agent_protocol_sha256=protocol_sha256,
+        )
+        required = {"session_id", "ended_at", "termination_reason", "usage"}
+        if not isinstance(session_end, Mapping) or set(session_end) != required:
+            raise CampaignStageError("agent session end field set is not exact")
+        if session_end.get("session_id") != current["session"]["session_id"]:
+            raise CampaignStageError("agent session end uses a different session_id")
+        if current["status"] == "finalized":
+            expected = {
+                "session_id": current["session"]["session_id"],
+                "ended_at": current["session"]["ended_at"],
+                "termination_reason": current["session"]["termination_reason"],
+                "usage": current["session"]["usage"],
+            }
+            if json.loads(json.dumps(session_end)) != expected:
+                raise CampaignStageError("agent session finalization is immutable")
+            return current
+        audits = state.get("discovery", {}).get("attempt_audit")
+        if not isinstance(audits, list) or len(audits) != DISCOVERY_ATTEMPTS:
+            raise CampaignStageError("agent session lacks the exact 60-proposal audit")
+        if any(
+            not isinstance(row, dict)
+            or row.get("agent_session_binding_sha256") != current["binding_sha256"]
+            or row.get("agent_session_id") != current["session"]["session_id"]
+            for row in audits
+        ):
+            raise CampaignStageError("a discovery proposal is outside the bound session")
+        try:
+            ended = datetime.fromisoformat(str(session_end.get("ended_at")))
+        except ValueError as exc:
+            raise CampaignStageError("agent session ended_at is invalid") from exc
+        if ended.tzinfo is None:
+            raise CampaignStageError("agent session ended_at must include a timezone")
+        for row in audits:
+            try:
+                submitted = datetime.fromisoformat(str(row["submitted_at"]))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise CampaignStageError(
+                    "agent session audit contains an invalid submission timestamp"
+                ) from exc
+            if submitted.tzinfo is None or submitted > ended:
+                raise CampaignStageError(
+                    "a discovery proposal falls outside the agent session interval"
+                )
+        prepared = json.loads(json.dumps(current))
+        prepared["status"] = "finalized"
+        prepared["session"].update({
+            "ended_at": session_end["ended_at"],
+            "termination_reason": session_end["termination_reason"],
+            "usage": session_end["usage"],
+        })
+        prepared["attestation_sha256"] = content_sha256({
+            key: value for key, value in prepared.items()
+            if key != "attestation_sha256"
+        })
         validated = _validate_agent_session(
             prepared, state=state, agent_protocol_sha256=protocol_sha256,
+            require_finalized=True,
         )
-        target = cell_root / AGENT_SESSION_FILE
-        if target.exists():
-            try:
-                existing = json.loads(target.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
-                raise CampaignStageError("existing agent session is corrupt") from exc
-            if existing != validated:
-                raise CampaignStageError("agent session attestation is immutable")
-            return validated
         _atomic_write_json(target, validated)
         return validated
+
+
+def _agent_session_for_discovery(
+    cell_root: Path, state: Mapping[str, Any], protocol_sha256: str,
+) -> dict[str, Any]:
+    try:
+        payload = json.loads((cell_root / AGENT_SESSION_FILE).read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            "open the agent session before freezing discovery"
+        ) from exc
+    validated = _validate_agent_session(
+        payload, state=state, agent_protocol_sha256=protocol_sha256,
+    )
+    if validated["status"] != "open":
+        raise CampaignStageError("discovery proposals require the open agent session")
+    return validated
 
 
 def _agent_session_for_freeze(
@@ -1896,7 +2369,923 @@ def _agent_session_for_freeze(
         )
     return _validate_agent_session(
         payload, state=state, agent_protocol_sha256=protocol_sha256,
+        require_finalized=True,
     )
+
+
+def _process_resource_summary(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key in ("elapsed_seconds", "peak_vram_mb"):
+        values: list[float] = []
+        for row in rows:
+            value = row.get(key)
+            if value is None:
+                continue
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) < 0
+            ):
+                raise CampaignStageError(f"process resource {key} is invalid")
+            values.append(float(value))
+        summary = {
+            "reported": len(values),
+            "missing": len(rows) - len(values),
+            "maximum": max(values) if values else None,
+        }
+        if key == "elapsed_seconds":
+            total = math.fsum(values) if values else None
+            summary["total"] = total
+            summary["gpu_attached_job_hours"] = (
+                total / 3600 if total is not None else None
+            )
+        output[key] = summary
+    return output
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the complete validation-only search record frozen before test."""
+    discovery = state.get("discovery")
+    baseline = state.get("baseline")
+    if not isinstance(discovery, dict) or not isinstance(baseline, dict):
+        raise CampaignStageError("process evidence requires discovery and baseline")
+    attempts = discovery.get("attempt_audit")
+    if (
+        discovery.get("attempt_budget") != DISCOVERY_ATTEMPTS
+        or discovery.get("attempts_charged") != DISCOVERY_ATTEMPTS
+        or not isinstance(attempts, list)
+        or len(attempts) != DISCOVERY_ATTEMPTS
+    ):
+        raise CampaignStageError("process evidence requires exactly 60 discovery attempts")
+    audit_fields = {
+        "node_id", "source_spec_sha256", "submitted_at", "agent_session_id",
+        "agent_session_binding_sha256", "candidate_class", "policy_hash",
+        "result_status", "termination_reason", "budget_killed", "outcome_class",
+        "elapsed_seconds", "peak_vram_mb", "eligible", "reason",
+        "candidate_sha256", "validation_mean",
+    }
+    classes = ("config-only", "train-only-source", "inadmissible")
+    ordered: list[dict[str, Any]] = []
+    for row in attempts:
+        if not isinstance(row, dict) or set(row) != audit_fields:
+            raise CampaignStageError("discovery process audit field set is not exact")
+        if row.get("candidate_class") not in classes:
+            raise CampaignStageError("discovery candidate class is invalid")
+        if row.get("outcome_class") not in ATTEMPT_OUTCOME_CLASSES:
+            raise CampaignStageError("discovery outcome class is invalid")
+        if (
+            not isinstance(row.get("budget_killed"), bool)
+            or row.get("outcome_class") != classify_attempt_outcome(
+                row.get("result_status"), row.get("termination_reason"),
+                row.get("budget_killed"),
+            )
+        ):
+            raise CampaignStageError("discovery terminal outcome is inconsistent")
+        if not isinstance(row.get("eligible"), bool):
+            raise CampaignStageError("discovery eligibility must be boolean")
+        for key in ("node_id", "source_spec_sha256", "submitted_at",
+                    "agent_session_id", "agent_session_binding_sha256",
+                    "result_status", "termination_reason", "reason"):
+            if not isinstance(row.get(key), str) or not row[key]:
+                raise CampaignStageError(f"discovery process {key} is invalid")
+        try:
+            submitted = datetime.fromisoformat(row["submitted_at"])
+        except ValueError as exc:
+            raise CampaignStageError("discovery process timestamp is invalid") from exc
+        if submitted.tzinfo is None:
+            raise CampaignStageError("discovery process timestamp lacks timezone")
+        for key in ("elapsed_seconds", "peak_vram_mb"):
+            value = row.get(key)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) < 0
+            ):
+                raise CampaignStageError(f"discovery process {key} is invalid")
+        if row["eligible"] and (
+            row["candidate_class"] == "inadmissible"
+            or row.get("result_status") != "completed"
+            or row.get("outcome_class") != "completed"
+            or row.get("reason") != "complete"
+            or not _is_sha256(row.get("candidate_sha256"))
+            or not _is_sha256(row.get("policy_hash"))
+            or not _is_sha256(row.get("source_spec_sha256"))
+            or not isinstance(row.get("validation_mean"), (int, float))
+            or isinstance(row.get("validation_mean"), bool)
+            or not math.isfinite(float(row["validation_mean"]))
+            or not 0 <= float(row["validation_mean"]) <= 1
+        ):
+            raise CampaignStageError("eligible discovery process row is incomplete")
+        ordered.append(json.loads(json.dumps(row)))
+    ordered.sort(key=lambda row: (row["submitted_at"], row["node_id"]))
+    discovery_baseline_folds = [
+        fold for fold in baseline.get("validation_folds", [])
+        if fold.get("fold_index") in STAGE_FOLDS["discovery"]
+    ]
+    if len(discovery_baseline_folds) != len(STAGE_FOLDS["discovery"]):
+        raise CampaignStageError("baseline lacks the discovery-fold incumbent")
+    baseline_value = _mean(discovery_baseline_folds)
+    best_value = baseline_value
+    best_candidate = "baseline"
+    trajectory: list[dict[str, Any]] = []
+    for attempt_index, row in enumerate(ordered, 1):
+        value = row.get("validation_mean")
+        if row["eligible"] and float(value) > best_value:
+            best_value = float(value)
+            best_candidate = str(row["node_id"])
+        trajectory.append({
+            "attempt_index": attempt_index,
+            "node_id": row["node_id"],
+            "result_status": row["result_status"],
+            "outcome_class": row["outcome_class"],
+            "eligible": row["eligible"],
+            "validation_mean": value,
+            "running_best_candidate_id": best_candidate,
+            "running_best_validation_mean": best_value,
+        })
+    class_counts = {
+        candidate_class: sum(
+            row["candidate_class"] == candidate_class for row in ordered
+        )
+        for candidate_class in classes
+    }
+    result_counts = {
+        status: sum(row["result_status"] == status for row in ordered)
+        for status in sorted({row["result_status"] for row in ordered})
+    }
+    outcome_counts = {
+        outcome: sum(row["outcome_class"] == outcome for row in ordered)
+        for outcome in ATTEMPT_OUTCOME_CLASSES
+    }
+    complete_candidates = sum(row["eligible"] for row in ordered)
+    unique_complete_candidates = len({
+        row["candidate_sha256"] for row in ordered if row["eligible"]
+    })
+    expected_sources = expected_promotion_sources(ordered)
+    expected_promoted = len(expected_sources)
+    promoted = discovery.get("promoted_candidates")
+    actual_sources = [
+        {
+            "source_node_id": str(candidate.get("candidate_id")),
+            "source_candidate_sha256": str(candidate.get("candidate_sha256")),
+            "source_spec_sha256": str(candidate.get("source_spec_sha256")),
+            "candidate_class": str((candidate.get("identity") or {}).get(
+                "candidate_class"
+            )),
+            "policy_hash": str((candidate.get("identity") or {}).get("policy_hash")),
+        }
+        for candidate in promoted
+    ] if isinstance(promoted, list) else []
+    if (
+        discovery.get("complete_candidates") != complete_candidates
+        or discovery.get("unique_complete_candidates") != unique_complete_candidates
+        or actual_sources != expected_sources
+    ):
+        raise CampaignStageError("discovery process counts do not reconcile")
+
+    promotion = state.get("promotion")
+    if not isinstance(promotion, dict):
+        raise CampaignStageError("promotion process evidence is missing")
+    jobs = promotion.get("jobs")
+    if not isinstance(jobs, list) or len(jobs) > PROMOTION_CANDIDATES:
+        raise CampaignStageError("promotion process roster is invalid")
+    if not isinstance(promoted, list) or len(promoted) != len(jobs):
+        raise CampaignStageError("promotion process differs from the discovery freeze")
+    attempts_charged = promotion.get("attempts_charged", 0)
+    if attempts_charged != len(jobs):
+        raise CampaignStageError("promotion charged-attempt count is inconsistent")
+    if jobs and not promotion.get("frozen"):
+        raise CampaignStageError("promotion process is not frozen")
+    frozen_jobs = json.loads(json.dumps(jobs))
+    job_fields = {
+        "rank", "source_node_id", "source_candidate_sha256",
+        "promotion_node_id", "promotion_candidate_sha256",
+        "promotion_identity", "status", "candidate_class", "policy_hash",
+        "result_status", "source_spec_sha256", "promotion_spec_sha256",
+        "submitted_at", "elapsed_seconds", "peak_vram_mb", "validation_mean",
+        "termination_reason", "budget_killed", "outcome_class", "reason",
+    }
+    for rank, (job, source) in enumerate(
+        zip(frozen_jobs, expected_sources, strict=True), 1,
+    ):
+        if (
+            not isinstance(job, dict)
+            or set(job) != job_fields
+            or job.get("rank") != rank
+            or any(job.get(key) != value for key, value in source.items())
+            or not _is_sha256(job.get("promotion_candidate_sha256"))
+            or job.get("status") not in {"eligible", "ineligible"}
+            or not isinstance(job.get("reason"), str)
+            or not job["reason"]
+            or job.get("candidate_class") not in {"config-only", "train-only-source"}
+            or job.get("outcome_class") not in ATTEMPT_OUTCOME_CLASSES
+            or not isinstance(job.get("termination_reason"), str)
+            or not isinstance(job.get("budget_killed"), bool)
+            or job.get("outcome_class") != classify_attempt_outcome(
+                job.get("result_status"), job.get("termination_reason"),
+                job.get("budget_killed"),
+            )
+        ):
+            raise CampaignStageError("promotion process job is incomplete")
+        if job["status"] == "eligible" and (
+            job.get("result_status") != "completed"
+            or job.get("outcome_class") != "completed"
+            or job.get("reason") != "complete five-fold validation"
+            or not _is_sha256(job.get("promotion_spec_sha256"))
+            or isinstance(job.get("validation_mean"), bool)
+            or not isinstance(job.get("validation_mean"), (int, float))
+            or not math.isfinite(float(job["validation_mean"]))
+            or not 0 <= float(job["validation_mean"]) <= 1
+        ):
+            raise CampaignStageError("eligible promotion process job is incomplete")
+    promotion_status_counts = {
+        status: sum(job["status"] == status for job in frozen_jobs)
+        for status in ("eligible", "ineligible")
+    }
+    promotion_outcome_counts = {
+        outcome: sum(job["outcome_class"] == outcome for job in frozen_jobs)
+        for outcome in ATTEMPT_OUTCOME_CLASSES
+    }
+    return {
+        "schema_version": 1,
+        "baseline": {
+            "folds": list(CERTIFICATION_FOLDS),
+            "result_status": baseline.get("result_status"),
+            "resources": baseline.get("resources"),
+        },
+        "discovery": {
+            "attempt_budget": DISCOVERY_ATTEMPTS,
+            "attempts_charged": DISCOVERY_ATTEMPTS,
+            "baseline_validation_mean": baseline_value,
+            "complete_candidates": complete_candidates,
+            "unique_complete_candidates": unique_complete_candidates,
+            "promoted_candidates": len(promoted),
+            "candidate_class_counts": class_counts,
+            "result_status_counts": result_counts,
+            "outcome_class_counts": outcome_counts,
+            "attempts": ordered,
+            "validation_anytime": trajectory,
+            "resources": _process_resource_summary(ordered),
+        },
+        "promotion": {
+            "candidate_budget": PROMOTION_CANDIDATES,
+            "attempts_charged": attempts_charged,
+            "status_counts": promotion_status_counts,
+            "outcome_class_counts": promotion_outcome_counts,
+            "yield": (
+                promotion_status_counts["eligible"] / len(frozen_jobs)
+                if frozen_jobs else None
+            ),
+            "jobs": frozen_jobs,
+            "resources": _process_resource_summary(frozen_jobs),
+        },
+    }
+
+
+def _validate_process_resource_summary(
+    raw: object, *, count: int, label: str,
+) -> None:
+    if not isinstance(raw, dict) or set(raw) != {
+        "elapsed_seconds", "peak_vram_mb",
+    }:
+        raise CampaignStageError(f"{label} resource summary is malformed")
+    elapsed = raw["elapsed_seconds"]
+    vram = raw["peak_vram_mb"]
+    if (
+        not isinstance(elapsed, dict)
+        or set(elapsed) != {
+            "reported", "missing", "maximum", "total",
+            "gpu_attached_job_hours",
+        }
+        or not isinstance(vram, dict)
+        or set(vram) != {"reported", "missing", "maximum"}
+    ):
+        raise CampaignStageError(f"{label} resource fields are malformed")
+    for name, record in (("elapsed_seconds", elapsed), ("peak_vram_mb", vram)):
+        reported = record.get("reported")
+        missing = record.get("missing")
+        if (
+            isinstance(reported, bool) or not isinstance(reported, int)
+            or isinstance(missing, bool) or not isinstance(missing, int)
+            or reported < 0 or missing < 0 or reported + missing != count
+        ):
+            raise CampaignStageError(
+                f"{label} {name} missingness is inconsistent"
+            )
+    if elapsed["reported"] == 0:
+        if any(elapsed[key] is not None for key in (
+            "maximum", "total", "gpu_attached_job_hours",
+        )):
+            raise CampaignStageError(f"{label} missing elapsed time was imputed")
+    else:
+        values = [elapsed[key] for key in (
+            "maximum", "total", "gpu_attached_job_hours",
+        )]
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0
+            for value in values
+        ):
+            raise CampaignStageError(f"{label} elapsed summary is invalid")
+        maximum, total, gpu_hours = map(float, values)
+        if total < maximum or not math.isclose(
+            gpu_hours, total / 3600, rel_tol=0.0, abs_tol=1e-12,
+        ):
+            raise CampaignStageError(f"{label} elapsed summary is inconsistent")
+    maximum_vram = vram["maximum"]
+    if vram["reported"] == 0:
+        if maximum_vram is not None:
+            raise CampaignStageError(f"{label} missing VRAM was imputed")
+    elif (
+        isinstance(maximum_vram, bool)
+        or not isinstance(maximum_vram, (int, float))
+        or not math.isfinite(float(maximum_vram))
+        or float(maximum_vram) < 0
+    ):
+        raise CampaignStageError(f"{label} VRAM maximum is invalid")
+
+
+def _process_unit_interval(value: object, label: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or not 0 <= float(value) <= 1
+    ):
+        raise CampaignStageError(f"{label} must be finite and in [0, 1]")
+    return float(value)
+
+
+def validate_process_evidence_artifact(
+    raw: object,
+    expected_sha256: object,
+    *,
+    cell_id: str,
+    expected_session_id: str,
+    expected_session_binding: str,
+) -> dict[str, Any]:
+    """Validate one complete pre-unblinding search-process census."""
+    if not isinstance(cell_id, str) or not cell_id:
+        raise CampaignStageError("process evidence cell_id is invalid")
+    if not isinstance(expected_session_id, str) or not expected_session_id:
+        raise CampaignStageError(f"{cell_id}: process session id is invalid")
+    if not _is_sha256(expected_session_binding):
+        raise CampaignStageError(f"{cell_id}: process session binding is invalid")
+    if (
+        not isinstance(raw, dict)
+        or expected_sha256 != content_sha256(raw)
+        or set(raw) != {"schema_version", "baseline", "discovery", "promotion"}
+        or raw.get("schema_version") != 1
+    ):
+        raise CampaignStageError(f"{cell_id}: process evidence schema/hash mismatch")
+
+    baseline = raw.get("baseline")
+    if (
+        not isinstance(baseline, dict)
+        or set(baseline) != {"folds", "result_status", "resources"}
+        or baseline.get("folds") != list(CERTIFICATION_FOLDS)
+        or baseline.get("result_status") != "completed"
+    ):
+        raise CampaignStageError(f"{cell_id}: baseline process evidence is invalid")
+    _validate_process_resource_summary(
+        baseline.get("resources"), count=1, label=f"{cell_id}.baseline",
+    )
+
+    discovery = raw.get("discovery")
+    discovery_fields = {
+        "attempt_budget", "attempts_charged", "baseline_validation_mean",
+        "complete_candidates", "unique_complete_candidates",
+        "promoted_candidates", "candidate_class_counts",
+        "result_status_counts", "outcome_class_counts", "attempts",
+        "validation_anytime", "resources",
+    }
+    if not isinstance(discovery, dict) or set(discovery) != discovery_fields:
+        raise CampaignStageError(f"{cell_id}: discovery process schema is invalid")
+    attempts = discovery.get("attempts")
+    anytime = discovery.get("validation_anytime")
+    if (
+        discovery.get("attempt_budget") != DISCOVERY_ATTEMPTS
+        or discovery.get("attempts_charged") != DISCOVERY_ATTEMPTS
+        or not isinstance(attempts, list)
+        or len(attempts) != DISCOVERY_ATTEMPTS
+        or not isinstance(anytime, list)
+        or len(anytime) != DISCOVERY_ATTEMPTS
+    ):
+        raise CampaignStageError(f"{cell_id}: discovery census is not exact")
+    audit_fields = {
+        "node_id", "source_spec_sha256", "submitted_at", "agent_session_id",
+        "agent_session_binding_sha256", "candidate_class", "policy_hash",
+        "result_status", "termination_reason", "budget_killed",
+        "outcome_class", "elapsed_seconds", "peak_vram_mb", "eligible",
+        "reason", "candidate_sha256", "validation_mean",
+    }
+    classes = ("config-only", "train-only-source", "inadmissible")
+    for row in attempts:
+        if not isinstance(row, dict) or set(row) != audit_fields:
+            raise CampaignStageError(f"{cell_id}: discovery attempt schema drift")
+        for key in (
+            "node_id", "submitted_at", "agent_session_id", "result_status",
+            "termination_reason", "reason",
+        ):
+            if not isinstance(row.get(key), str) or not row[key]:
+                raise CampaignStageError(
+                    f"{cell_id}: discovery attempt {key} is invalid"
+                )
+        try:
+            submitted = datetime.fromisoformat(row["submitted_at"])
+        except ValueError as exc:
+            raise CampaignStageError(
+                f"{cell_id}: discovery timestamp is invalid"
+            ) from exc
+        if submitted.tzinfo is None:
+            raise CampaignStageError(f"{cell_id}: discovery timestamp lacks timezone")
+        if (
+            not _is_sha256(row.get("source_spec_sha256"))
+            or row.get("agent_session_id") != expected_session_id
+            or row.get("agent_session_binding_sha256") != expected_session_binding
+            or row.get("candidate_class") not in classes
+            or not isinstance(row.get("budget_killed"), bool)
+            or row.get("outcome_class") not in ATTEMPT_OUTCOME_CLASSES
+            or row.get("outcome_class") != classify_attempt_outcome(
+                row.get("result_status"), row.get("termination_reason"),
+                row.get("budget_killed"),
+            )
+            or not isinstance(row.get("eligible"), bool)
+        ):
+            raise CampaignStageError(f"{cell_id}: discovery attempt value drift")
+        for key in ("elapsed_seconds", "peak_vram_mb"):
+            value = row.get(key)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) < 0
+            ):
+                raise CampaignStageError(
+                    f"{cell_id}: discovery attempt {key} is invalid"
+                )
+        for key in ("policy_hash", "candidate_sha256"):
+            value = row.get(key)
+            if value is not None and not _is_sha256(value):
+                raise CampaignStageError(
+                    f"{cell_id}: discovery attempt {key} is invalid"
+                )
+        value = row.get("validation_mean")
+        if value is not None:
+            _process_unit_interval(value, f"{cell_id}.attempt.validation_mean")
+        if row["eligible"] and (
+            row["candidate_class"] == "inadmissible"
+            or row["result_status"] != "completed"
+            or row["outcome_class"] != "completed"
+            or row["reason"] != "complete"
+            or not _is_sha256(row.get("policy_hash"))
+            or not _is_sha256(row.get("candidate_sha256"))
+            or value is None
+        ):
+            raise CampaignStageError(
+                f"{cell_id}: eligible discovery attempt is incomplete"
+            )
+    if attempts != sorted(
+        attempts, key=lambda row: (row["submitted_at"], row["node_id"]),
+    ):
+        raise CampaignStageError(f"{cell_id}: discovery attempt order drift")
+    if (
+        len({row["node_id"] for row in attempts}) != DISCOVERY_ATTEMPTS
+        or len({row["source_spec_sha256"] for row in attempts})
+        != DISCOVERY_ATTEMPTS
+    ):
+        raise CampaignStageError(
+            f"{cell_id}: discovery attempt identities are not unique"
+        )
+
+    class_counts = {
+        candidate_class: sum(
+            row["candidate_class"] == candidate_class for row in attempts
+        )
+        for candidate_class in classes
+    }
+    result_counts = {
+        status: sum(row["result_status"] == status for row in attempts)
+        for status in sorted({row["result_status"] for row in attempts})
+    }
+    outcome_counts = {
+        outcome: sum(row["outcome_class"] == outcome for row in attempts)
+        for outcome in ATTEMPT_OUTCOME_CLASSES
+    }
+    complete_candidates = sum(row["eligible"] for row in attempts)
+    unique_complete_candidates = len({
+        row["candidate_sha256"] for row in attempts if row["eligible"]
+    })
+    expected_sources = expected_promotion_sources(attempts)
+    if (
+        discovery.get("candidate_class_counts") != class_counts
+        or discovery.get("result_status_counts") != result_counts
+        or discovery.get("outcome_class_counts") != outcome_counts
+        or discovery.get("complete_candidates") != complete_candidates
+        or discovery.get("unique_complete_candidates") != unique_complete_candidates
+        or discovery.get("promoted_candidates") != len(expected_sources)
+        or discovery.get("resources") != _process_resource_summary(attempts)
+    ):
+        raise CampaignStageError(f"{cell_id}: discovery summaries do not reconcile")
+    _validate_process_resource_summary(
+        discovery.get("resources"), count=len(attempts),
+        label=f"{cell_id}.discovery",
+    )
+    best = _process_unit_interval(
+        discovery.get("baseline_validation_mean"),
+        f"{cell_id}.baseline_validation_mean",
+    )
+    best_id = "baseline"
+    for index, (attempt, point) in enumerate(
+        zip(attempts, anytime, strict=True), 1,
+    ):
+        if attempt["eligible"]:
+            candidate = _process_unit_interval(
+                attempt["validation_mean"],
+                f"{cell_id}.attempt.{index}.validation_mean",
+            )
+            if candidate > best:
+                best = candidate
+                best_id = attempt["node_id"]
+        expected_point = {
+            "attempt_index": index,
+            "node_id": attempt["node_id"],
+            "result_status": attempt["result_status"],
+            "outcome_class": attempt["outcome_class"],
+            "eligible": attempt["eligible"],
+            "validation_mean": attempt["validation_mean"],
+            "running_best_candidate_id": best_id,
+            "running_best_validation_mean": best,
+        }
+        if point != expected_point:
+            raise CampaignStageError(
+                f"{cell_id}: validation-anytime trajectory is inconsistent"
+            )
+
+    promotion = raw.get("promotion")
+    promotion_fields = {
+        "candidate_budget", "attempts_charged", "status_counts",
+        "outcome_class_counts", "yield", "jobs", "resources",
+    }
+    if not isinstance(promotion, dict) or set(promotion) != promotion_fields:
+        raise CampaignStageError(f"{cell_id}: promotion process schema is invalid")
+    jobs = promotion.get("jobs")
+    if (
+        promotion.get("candidate_budget") != PROMOTION_CANDIDATES
+        or not isinstance(jobs, list)
+        or len(jobs) != len(expected_sources)
+        or len(jobs) > PROMOTION_CANDIDATES
+        or promotion.get("attempts_charged") != len(jobs)
+    ):
+        raise CampaignStageError(f"{cell_id}: promotion census is inconsistent")
+    job_fields = {
+        "rank", "source_node_id", "source_candidate_sha256",
+        "promotion_node_id", "promotion_candidate_sha256",
+        "promotion_identity", "status", "candidate_class", "policy_hash",
+        "result_status", "source_spec_sha256", "promotion_spec_sha256",
+        "submitted_at", "elapsed_seconds", "peak_vram_mb", "validation_mean",
+        "termination_reason", "budget_killed", "outcome_class", "reason",
+    }
+    for rank, (job, source) in enumerate(
+        zip(jobs, expected_sources, strict=True), 1,
+    ):
+        if not isinstance(job, dict) or set(job) != job_fields:
+            raise CampaignStageError(f"{cell_id}: promotion job schema drift")
+        identity = job.get("promotion_identity")
+        if (
+            job.get("rank") != rank
+            or any(job.get(key) != value for key, value in source.items())
+            or not isinstance(job.get("promotion_node_id"), str)
+            or not job["promotion_node_id"]
+            or not _is_sha256(job.get("promotion_candidate_sha256"))
+            or not isinstance(identity, dict)
+            or set(identity) != {
+                "base_commit", "overlay_manifest", "deletions",
+                "candidate_class", "policy_hash", "variant_selection_hash",
+                "override_hash",
+            }
+            or content_sha256(identity) != job["promotion_candidate_sha256"]
+            or identity.get("candidate_class") != job.get("candidate_class")
+            or job.get("status") not in {"eligible", "ineligible"}
+            or not isinstance(job.get("result_status"), str)
+            or not job["result_status"]
+            or not isinstance(job.get("termination_reason"), str)
+            or not job["termination_reason"]
+            or not isinstance(job.get("budget_killed"), bool)
+            or job.get("outcome_class") not in ATTEMPT_OUTCOME_CLASSES
+            or job.get("outcome_class") != classify_attempt_outcome(
+                job.get("result_status"), job.get("termination_reason"),
+                job.get("budget_killed"),
+            )
+            or not isinstance(job.get("reason"), str)
+            or not job["reason"]
+        ):
+            raise CampaignStageError(f"{cell_id}: promotion job value drift")
+        try:
+            submitted = datetime.fromisoformat(str(job.get("submitted_at")))
+        except ValueError as exc:
+            raise CampaignStageError(
+                f"{cell_id}: promotion timestamp is invalid"
+            ) from exc
+        if submitted.tzinfo is None:
+            raise CampaignStageError(f"{cell_id}: promotion timestamp lacks timezone")
+        for key in ("elapsed_seconds", "peak_vram_mb"):
+            value = job.get(key)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) < 0
+            ):
+                raise CampaignStageError(
+                    f"{cell_id}: promotion job {key} is invalid"
+                )
+        promotion_spec = job.get("promotion_spec_sha256")
+        if not _is_sha256(promotion_spec):
+            raise CampaignStageError(
+                f"{cell_id}: promotion spec hash is invalid"
+            )
+        validation_mean = job.get("validation_mean")
+        if validation_mean is not None:
+            _process_unit_interval(
+                validation_mean, f"{cell_id}.promotion.validation_mean",
+            )
+        if job["status"] == "eligible" and (
+            job["result_status"] != "completed"
+            or job["outcome_class"] != "completed"
+            or job["reason"] != "complete five-fold validation"
+            or not _is_sha256(promotion_spec)
+            or validation_mean is None
+        ):
+            raise CampaignStageError(
+                f"{cell_id}: eligible promotion job is incomplete"
+            )
+    if (
+        len({job["promotion_node_id"] for job in jobs}) != len(jobs)
+        or len({job["promotion_spec_sha256"] for job in jobs}) != len(jobs)
+    ):
+        raise CampaignStageError(
+            f"{cell_id}: promotion job identities are not unique"
+        )
+    status_counts = {
+        status: sum(job["status"] == status for job in jobs)
+        for status in ("eligible", "ineligible")
+    }
+    promotion_outcomes = {
+        outcome: sum(job["outcome_class"] == outcome for job in jobs)
+        for outcome in ATTEMPT_OUTCOME_CLASSES
+    }
+    expected_yield = status_counts["eligible"] / len(jobs) if jobs else None
+    if (
+        promotion.get("status_counts") != status_counts
+        or promotion.get("outcome_class_counts") != promotion_outcomes
+        or promotion.get("yield") != expected_yield
+        or promotion.get("resources") != _process_resource_summary(jobs)
+    ):
+        raise CampaignStageError(f"{cell_id}: promotion summaries do not reconcile")
+    _validate_process_resource_summary(
+        promotion.get("resources"), count=len(jobs),
+        label=f"{cell_id}.promotion",
+    )
+    return json.loads(json.dumps(raw))
+
+
+def _process_matches_session(
+    process: Mapping[str, Any], session: Mapping[str, Any],
+) -> bool:
+    attempts = (process.get("discovery") or {}).get("attempts")
+    if not isinstance(attempts, list):
+        return False
+    expected_id = (session.get("session") or {}).get("session_id")
+    expected_binding = session.get("binding_sha256")
+    return all(
+        isinstance(row, dict)
+        and row.get("agent_session_id") == expected_id
+        and row.get("agent_session_binding_sha256") == expected_binding
+        for row in attempts
+    )
+
+
+def _roster_payload(cells: object) -> dict[str, str]:
+    if not isinstance(cells, list):
+        raise CampaignStageError("campaign roster must be a list")
+    roster: dict[str, str] = {}
+    for row in cells:
+        if not isinstance(row, Mapping):
+            raise CampaignStageError("campaign roster row is invalid")
+        cell_id = row.get("cell_id")
+        cell_sha256 = row.get("cell_sha256")
+        if (
+            not isinstance(cell_id, str) or not cell_id
+            or not isinstance(cell_sha256, str) or len(cell_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in cell_sha256)
+            or cell_id in roster
+        ):
+            raise CampaignStageError("campaign roster row is invalid")
+        roster[cell_id] = cell_sha256
+    return dict(sorted(roster.items()))
+
+
+def _locked_manifest_roster(
+    cell_root: Path, state: Mapping[str, Any],
+) -> dict[str, str]:
+    try:
+        config = yaml.safe_load((cell_root / "automil/config.yaml").read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise CampaignStageError("cell config is unreadable") from exc
+    raw_manifest = (config.get("campaign") or {}).get("manifest")
+    relative = PurePosixPath(str(raw_manifest))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise CampaignStageError("cell manifest path is unsafe")
+    matches: list[Path] = []
+    for ancestor in (cell_root, *cell_root.parents):
+        candidate = ancestor / Path(*relative.parts)
+        if candidate.is_file() and file_sha256(candidate) == state.get("manifest_sha256"):
+            matches.append(candidate)
+    if len(matches) != 1:
+        raise CampaignStageError("cannot resolve the cell's uniquely locked manifest")
+    try:
+        manifest = json.loads(matches[0].read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError("locked campaign manifest is unreadable") from exc
+    if not isinstance(manifest, dict):
+        raise CampaignStageError("locked campaign manifest must be a JSON object")
+    cells = manifest.get("cells")
+    if (
+        manifest.get("campaign_id") != CAMPAIGN_ID
+        or not isinstance(cells, list)
+        or len(cells) != CAMPAIGN_CELL_COUNT
+    ):
+        raise CampaignStageError("locked campaign manifest roster is incomplete")
+    return _roster_payload(cells)
+
+
+def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
+    """Validate the intrinsic, versioned selection-freeze contract."""
+    if not isinstance(artifact, dict):
+        raise CampaignStageError("campaign selection freeze must be a JSON object")
+    recorded = artifact.get("freeze_sha256")
+    payload = {
+        key: value for key, value in artifact.items() if key != "freeze_sha256"
+    }
+    cells = artifact.get("cells")
+    roster = _roster_payload(cells)
+    expected_fields = {
+        "schema_version", "campaign_id", "manifest_sha256",
+        "protocol_sha256", "agent_protocol_sha256", "base_commit",
+        "roster_sha256", "cell_count", "cells", "frozen_at",
+        "freeze_sha256",
+    }
+    entry_fields = {
+        "cell_id", "cell_sha256", "state_sha256", "selection_sha256",
+        "winner_kind", "winner_candidate_id", "winner_candidate_sha256",
+        "winner_promotion_node_id",
+        "winner_validation_mean", "baseline_validation_mean",
+        "baseline_candidate_sha256", "winner_source_folds",
+        "baseline_source_folds",
+        "agent_session_sha256", "agent_session_id",
+        "agent_session_binding_sha256", "agent_usage", "process_sha256",
+        "process_evidence",
+    }
+    def valid_entry(row: object) -> bool:
+        if not isinstance(row, Mapping) or set(row) != entry_fields:
+            return False
+        if (
+            not isinstance(row.get("cell_id"), str)
+            or not row["cell_id"]
+            or row.get("winner_kind") not in {"baseline", "searched"}
+            or not isinstance(row.get("winner_candidate_id"), str)
+            or not row["winner_candidate_id"]
+            or not isinstance(row.get("agent_session_id"), str)
+            or not row["agent_session_id"]
+            or not all(_is_sha256(row.get(key)) for key in (
+                "cell_sha256", "state_sha256", "selection_sha256",
+                "winner_candidate_sha256", "baseline_candidate_sha256",
+                "agent_session_sha256",
+                "agent_session_binding_sha256", "process_sha256",
+            ))
+            or not isinstance(row.get("process_evidence"), dict)
+            or row.get("process_sha256")
+            != content_sha256(row["process_evidence"])
+        ):
+            return False
+        for key in ("winner_validation_mean", "baseline_validation_mean"):
+            value = row.get(key)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0 <= float(value) <= 1
+            ):
+                return False
+        if row["winner_kind"] == "baseline" and (
+            row["winner_candidate_id"] != "baseline"
+            or row["winner_promotion_node_id"] is not None
+            or row["winner_candidate_sha256"]
+            != row["baseline_candidate_sha256"]
+            or row["winner_validation_mean"] != row["baseline_validation_mean"]
+            or row["winner_source_folds"] != row["baseline_source_folds"]
+        ):
+            return False
+        if (
+            row["winner_kind"] == "searched"
+            and (
+                row["winner_candidate_id"] == "baseline"
+                or not isinstance(row.get("winner_promotion_node_id"), str)
+                or not row["winner_promotion_node_id"]
+            )
+        ):
+            return False
+        try:
+            _validate_source_fold_anchors_artifact(
+                row.get("winner_source_folds"), label="winner",
+                expected_cell_id=row["cell_id"],
+            )
+            _validate_source_fold_anchors_artifact(
+                row.get("baseline_source_folds"), label="baseline",
+                expected_cell_id=row["cell_id"],
+            )
+            validate_agent_usage_artifact(row.get("agent_usage"))
+            process = validate_process_evidence_artifact(
+                row.get("process_evidence"),
+                row.get("process_sha256"),
+                cell_id=row["cell_id"],
+                expected_session_id=row["agent_session_id"],
+                expected_session_binding=row["agent_session_binding_sha256"],
+            )
+            if row["winner_kind"] == "searched":
+                matches = [
+                    job for job in process["promotion"]["jobs"]
+                    if job["promotion_node_id"]
+                    == row["winner_promotion_node_id"]
+                ]
+                if len(matches) != 1 or (
+                    matches[0]["status"] != "eligible"
+                    or matches[0]["source_node_id"]
+                    != row["winner_candidate_id"]
+                    or matches[0]["source_candidate_sha256"]
+                    != row["winner_candidate_sha256"]
+                    or matches[0]["validation_mean"]
+                    != row["winner_validation_mean"]
+                ):
+                    raise CampaignStageError(
+                        "searched winner differs from process evidence"
+                    )
+        except CampaignStageError as exc:
+            raise CampaignStageError(
+                f"selection freeze cell {row['cell_id']} is invalid: {exc}"
+            ) from exc
+        return True
+
+    try:
+        frozen_at = datetime.fromisoformat(str(artifact.get("frozen_at")))
+    except ValueError:
+        frozen_at = None
+
+    if (
+        set(artifact) != expected_fields
+        or artifact.get("schema_version") != SELECTION_FREEZE_SCHEMA_VERSION
+        or artifact.get("campaign_id") != CAMPAIGN_ID
+        or artifact.get("protocol_sha256") != content_sha256(PROTOCOL)
+        or not all(_is_sha256(artifact.get(key)) for key in (
+            "manifest_sha256", "protocol_sha256", "agent_protocol_sha256",
+            "roster_sha256", "freeze_sha256",
+        ))
+        or not isinstance(artifact.get("base_commit"), str)
+        or len(artifact["base_commit"]) not in {40, 64}
+        or any(
+            char not in "0123456789abcdef" for char in artifact["base_commit"]
+        )
+        or frozen_at is None
+        or frozen_at.tzinfo is None
+        or artifact.get("cell_count") != CAMPAIGN_CELL_COUNT
+        or not isinstance(cells, list)
+        or len(cells) != CAMPAIGN_CELL_COUNT
+        or any(not valid_entry(row) for row in cells)
+        or len({row.get("cell_id") for row in cells if isinstance(row, dict)})
+        != CAMPAIGN_CELL_COUNT
+        or len({
+            row.get("agent_session_id") for row in cells
+            if isinstance(row, dict)
+        }) != CAMPAIGN_CELL_COUNT
+        or artifact.get("roster_sha256") != content_sha256(roster)
+        or not isinstance(recorded, str)
+        or recorded != content_sha256(payload)
+    ):
+        raise CampaignStageError("campaign selection freeze integrity mismatch")
+    return json.loads(json.dumps(artifact))
 
 
 def _validated_selection_freeze(runtime_root: Path) -> dict[str, Any]:
@@ -1907,34 +3296,495 @@ def _validated_selection_freeze(runtime_root: Path) -> dict[str, Any]:
         raise CampaignStageError(
             "held-out certification requires the global 130-cell selection freeze"
         ) from exc
-    if not isinstance(artifact, dict):
-        raise CampaignStageError("campaign selection freeze must be a JSON object")
-    recorded = artifact.get("freeze_sha256")
-    payload = {
-        key: value for key, value in artifact.items() if key != "freeze_sha256"
+    return validate_selection_freeze_artifact(artifact)
+
+
+def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
+    """Validate the exact self-consistent five-fold certification bundle."""
+    top_fields = {
+        "schema_version", "campaign_id", "cell_id", "winner",
+        "selection_sha256", "selection_freeze_sha256",
+        "selection_state_sha256", "validation_mean", "baseline",
+        "held_out_folds", "held_out", "source_fold_sha256",
+        "baseline_held_out_folds", "baseline_held_out",
+        "baseline_source_fold_sha256", "paired_fold_deltas",
+        "held_out_lift", "retrained", "certified_at", "bundle_sha256",
     }
-    cells = artifact.get("cells")
+    if not isinstance(artifact, dict) or set(artifact) != top_fields:
+        raise CampaignStageError("certification bundle field set is not exact")
+    recorded = artifact.get("bundle_sha256")
+    payload = {
+        key: value for key, value in artifact.items() if key != "bundle_sha256"
+    }
+    winner = artifact.get("winner")
+    baseline = artifact.get("baseline")
     if (
-        artifact.get("schema_version") != 1
+        artifact.get("schema_version") != 2
         or artifact.get("campaign_id") != CAMPAIGN_ID
-        or artifact.get("protocol_sha256") != content_sha256(PROTOCOL)
-        or not isinstance(artifact.get("agent_protocol_sha256"), str)
-        or len(artifact["agent_protocol_sha256"]) != 64
-        or artifact.get("cell_count") != CAMPAIGN_CELL_COUNT
-        or not isinstance(cells, list)
-        or len(cells) != CAMPAIGN_CELL_COUNT
-        or len({row.get("cell_id") for row in cells if isinstance(row, dict)})
-        != CAMPAIGN_CELL_COUNT
-        or not isinstance(recorded, str)
+        or not isinstance(artifact.get("cell_id"), str)
+        or not artifact["cell_id"]
+        or not all(_is_sha256(artifact.get(key)) for key in (
+            "selection_sha256", "selection_freeze_sha256",
+            "selection_state_sha256",
+        ))
         or recorded != content_sha256(payload)
+        or artifact.get("retrained") is not False
+        or not isinstance(winner, dict)
+        or set(winner) != {
+            "kind", "candidate_id", "candidate_sha256", "promotion_node_id",
+        }
+        or winner.get("kind") not in {"baseline", "searched"}
+        or not isinstance(winner.get("candidate_id"), str)
+        or not winner["candidate_id"]
+        or not _is_sha256(winner.get("candidate_sha256"))
+        or (
+            winner["kind"] == "baseline"
+            and winner.get("promotion_node_id") is not None
+        )
+        or (
+            winner["kind"] == "searched"
+            and (
+                not isinstance(winner.get("promotion_node_id"), str)
+                or not winner["promotion_node_id"]
+            )
+        )
+        or not isinstance(baseline, dict)
+        or set(baseline) != {
+            "candidate_id", "candidate_sha256", "validation_mean",
+        }
+        or baseline.get("candidate_id") != "baseline"
+        or not _is_sha256(baseline.get("candidate_sha256"))
+        or (
+            winner["kind"] == "baseline"
+            and (
+                winner.get("candidate_id") != "baseline"
+                or winner.get("candidate_sha256")
+                != baseline.get("candidate_sha256")
+            )
+        )
+        or (
+            winner["kind"] == "searched"
+            and winner.get("candidate_id") == "baseline"
+        )
     ):
-        raise CampaignStageError("campaign selection freeze integrity mismatch")
-    return artifact
+        raise CampaignStageError("certification bundle identity is invalid")
+    for label, value in (
+        ("winner validation_mean", artifact.get("validation_mean")),
+        ("baseline validation_mean", baseline.get("validation_mean")),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or not 0 <= float(value) <= 1
+        ):
+            raise CampaignStageError(f"certification {label} is invalid")
+    try:
+        certified_at = datetime.fromisoformat(str(artifact.get("certified_at")))
+    except ValueError as exc:
+        raise CampaignStageError("certification timestamp is invalid") from exc
+    if certified_at.tzinfo is None:
+        raise CampaignStageError("certification timestamp lacks a timezone")
+
+    def validated_folds(raw: object, label: str) -> tuple[list[dict[str, Any]], set[str]]:
+        if not isinstance(raw, list) or len(raw) != len(CERTIFICATION_FOLDS):
+            raise CampaignStageError(f"{label} must contain exactly five folds")
+        by_fold: dict[int, dict[str, Any]] = {}
+        metric_keys: set[str] | None = None
+        for row in raw:
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"fold_index", "held_out"}
+                or not isinstance(row.get("fold_index"), int)
+                or isinstance(row.get("fold_index"), bool)
+                or row["fold_index"] in by_fold
+                or not isinstance(row.get("held_out"), dict)
+            ):
+                raise CampaignStageError(f"{label} fold schema is invalid")
+            metrics = row["held_out"]
+            keys = set(metrics)
+            if keys not in ({"test_auc", "test_bacc"}, {"test_c_index"}):
+                raise CampaignStageError(f"{label} metric schema is not locked")
+            if metric_keys is None:
+                metric_keys = keys
+            elif keys != metric_keys:
+                raise CampaignStageError(f"{label} metric keys differ across folds")
+            for key, value in metrics.items():
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or not 0 <= float(value) <= 1
+                ):
+                    raise CampaignStageError(f"{label}.{key} is outside [0, 1]")
+            by_fold[row["fold_index"]] = row
+        if set(by_fold) != set(CERTIFICATION_FOLDS):
+            raise CampaignStageError(f"{label} fold roster differs from 0..4")
+        return [by_fold[fold] for fold in CERTIFICATION_FOLDS], metric_keys or set()
+
+    baseline_folds, baseline_keys = validated_folds(
+        artifact.get("baseline_held_out_folds"), "baseline held-out",
+    )
+    winner_folds, winner_keys = validated_folds(
+        artifact.get("held_out_folds"), "winner held-out",
+    )
+    if baseline_keys != winner_keys:
+        raise CampaignStageError("winner and baseline metric schemas differ")
+
+    def validate_aggregate(
+        raw: object, folds: list[dict[str, Any]], label: str,
+    ) -> dict[str, float]:
+        if not isinstance(raw, dict) or set(raw) != baseline_keys:
+            raise CampaignStageError(f"{label} aggregate schema is invalid")
+        normalized: dict[str, float] = {}
+        for key in sorted(baseline_keys):
+            value = raw.get(key)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0 <= float(value) <= 1
+            ):
+                raise CampaignStageError(f"{label}.{key} is invalid")
+            expected = math.fsum(
+                float(row["held_out"][key]) for row in folds
+            ) / len(folds)
+            if not math.isclose(float(value), expected, rel_tol=0.0, abs_tol=1e-12):
+                raise CampaignStageError(f"{label}.{key} disagrees with its folds")
+            normalized[key] = float(value)
+        return normalized
+
+    baseline_aggregate = validate_aggregate(
+        artifact.get("baseline_held_out"), baseline_folds, "baseline held-out",
+    )
+    winner_aggregate = validate_aggregate(
+        artifact.get("held_out"), winner_folds, "winner held-out",
+    )
+    hash_keys = {f"fold_{fold}_result.json" for fold in CERTIFICATION_FOLDS}
+    for label in ("source_fold_sha256", "baseline_source_fold_sha256"):
+        hashes = artifact.get(label)
+        if (
+            not isinstance(hashes, dict)
+            or set(hashes) != hash_keys
+            or any(not _is_sha256(value) for value in hashes.values())
+        ):
+            raise CampaignStageError(f"certification {label} is invalid")
+    if winner["kind"] == "baseline" and (
+        not math.isclose(
+            float(artifact["validation_mean"]),
+            float(baseline["validation_mean"]),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        or winner_folds != baseline_folds
+        or winner_aggregate != baseline_aggregate
+        or artifact["source_fold_sha256"]
+        != artifact["baseline_source_fold_sha256"]
+    ):
+        raise CampaignStageError(
+            "baseline winner evidence differs from its baseline comparator"
+        )
+    paired = artifact.get("paired_fold_deltas")
+    if not isinstance(paired, list) or len(paired) != len(CERTIFICATION_FOLDS):
+        raise CampaignStageError("certification paired deltas are incomplete")
+    for fold, row in enumerate(paired):
+        expected_delta = {
+            key: float(winner_folds[fold]["held_out"][key])
+            - float(baseline_folds[fold]["held_out"][key])
+            for key in sorted(baseline_keys)
+        }
+        observed_delta = row.get("held_out_delta") if isinstance(row, dict) else None
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"fold_index", "held_out_delta"}
+            or row.get("fold_index") != fold
+            or not isinstance(observed_delta, dict)
+            or set(observed_delta) != baseline_keys
+            or any(
+                isinstance(observed_delta.get(key), bool)
+                or not isinstance(observed_delta.get(key), (int, float))
+                or not math.isfinite(float(observed_delta[key]))
+                or not math.isclose(
+                    float(observed_delta[key]), value, rel_tol=0.0, abs_tol=1e-12,
+                )
+                for key, value in expected_delta.items()
+            )
+        ):
+            raise CampaignStageError("certification paired deltas are inconsistent")
+    lift = artifact.get("held_out_lift")
+    if not isinstance(lift, dict) or set(lift) != baseline_keys:
+        raise CampaignStageError("certification held-out lift schema is invalid")
+    for key in sorted(baseline_keys):
+        value = lift.get(key)
+        expected = winner_aggregate[key] - baseline_aggregate[key]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or not math.isclose(float(value), expected, rel_tol=0.0, abs_tol=1e-12)
+        ):
+            raise CampaignStageError(f"certification held-out lift {key} is inconsistent")
+    return json.loads(json.dumps(artifact))
+
+
+def validate_certification_bundle_binding(
+    bundle: object,
+    freeze_entry: object,
+    *,
+    selection_freeze_sha256: str,
+) -> dict[str, Any]:
+    """Bind a strict certification bundle to its frozen validation winner."""
+    normalized = validate_certification_bundle_artifact(bundle)
+    if not isinstance(freeze_entry, Mapping):
+        raise CampaignStageError("certification freeze entry is invalid")
+    winner = normalized.get("winner")
+    baseline = normalized.get("baseline")
+    expected_cell_id = freeze_entry.get("cell_id")
+    winner_sources = _validate_source_fold_anchors_artifact(
+        freeze_entry.get("winner_source_folds"), label="winner",
+        expected_cell_id=(
+            expected_cell_id if isinstance(expected_cell_id, str) else None
+        ),
+    )
+    baseline_sources = _validate_source_fold_anchors_artifact(
+        freeze_entry.get("baseline_source_folds"), label="baseline",
+        expected_cell_id=(
+            expected_cell_id if isinstance(expected_cell_id, str) else None
+        ),
+    )
+    if (
+        not _is_sha256(selection_freeze_sha256)
+        or normalized.get("campaign_id") != CAMPAIGN_ID
+        or normalized.get("cell_id") != freeze_entry.get("cell_id")
+        or normalized.get("selection_freeze_sha256")
+        != selection_freeze_sha256
+        or normalized.get("selection_state_sha256")
+        != freeze_entry.get("state_sha256")
+        or normalized.get("selection_sha256")
+        != freeze_entry.get("selection_sha256")
+        or normalized.get("validation_mean")
+        != freeze_entry.get("winner_validation_mean")
+        or not isinstance(baseline, Mapping)
+        or baseline.get("validation_mean")
+        != freeze_entry.get("baseline_validation_mean")
+        or baseline.get("candidate_sha256")
+        != freeze_entry.get("baseline_candidate_sha256")
+        or normalized.get("source_fold_sha256") != {
+            filename: record["sha256"]
+            for filename, record in winner_sources.items()
+        }
+        or normalized.get("baseline_source_fold_sha256") != {
+            filename: record["sha256"]
+            for filename, record in baseline_sources.items()
+        }
+        or not isinstance(winner, Mapping)
+        or winner.get("kind") != freeze_entry.get("winner_kind")
+        or winner.get("candidate_id")
+        != freeze_entry.get("winner_candidate_id")
+        or winner.get("candidate_sha256")
+        != freeze_entry.get("winner_candidate_sha256")
+        or winner.get("promotion_node_id")
+        != freeze_entry.get("winner_promotion_node_id")
+    ):
+        raise CampaignStageError(
+            "certification bundle differs from the frozen validation winner"
+        )
+    return normalized
+
+
+def validate_certification_timestamp_order(
+    selection_frozen_at: object,
+    bundle: Mapping[str, Any],
+    index_certified_at: object | None = None,
+) -> None:
+    """Require freeze <= bundle <= campaign index certification times."""
+    try:
+        freeze_time = datetime.fromisoformat(str(selection_frozen_at))
+        bundle_time = datetime.fromisoformat(str(bundle.get("certified_at")))
+        index_time = (
+            datetime.fromisoformat(str(index_certified_at))
+            if index_certified_at is not None else None
+        )
+    except ValueError as exc:
+        raise CampaignStageError(
+            "campaign certification timestamp is invalid"
+        ) from exc
+    if (
+        freeze_time.tzinfo is None
+        or bundle_time.tzinfo is None
+        or freeze_time > bundle_time
+        or (
+            index_time is not None
+            and (index_time.tzinfo is None or index_time < bundle_time)
+        )
+    ):
+        raise CampaignStageError(
+            "campaign certification timestamps violate freeze/bundle/index order"
+        )
+
+
+def validate_certification_source_bindings(
+    runtime_root: Path,
+    bundle: Mapping[str, Any],
+    freeze_entry: Mapping[str, Any],
+) -> None:
+    root = runtime_root.resolve()
+
+    def read_anchored(
+        field: str, label: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, float], dict[str, str]]:
+        expected_cell_id = freeze_entry.get("cell_id")
+        anchors = _validate_source_fold_anchors_artifact(
+            freeze_entry.get(field), label=label,
+            expected_cell_id=(
+                expected_cell_id if isinstance(expected_cell_id, str) else None
+            ),
+        )
+        sources: dict[int, Path] = {}
+        for fold in CERTIFICATION_FOLDS:
+            filename = f"fold_{fold}_result.json"
+            record = anchors[filename]
+            path = (root / Path(*PurePosixPath(record["path"]).parts)).resolve()
+            if (
+                not path.is_relative_to(root)
+                or not path.is_file()
+                or file_sha256(path) != record["sha256"]
+            ):
+                raise CampaignStageError(
+                    f"{label} source fold differs from the selection freeze"
+                )
+            sources[fold] = path
+        folds, aggregate, hashes = _read_certification_evidence(sources)
+        expected_hashes = {
+            filename: record["sha256"]
+            for filename, record in anchors.items()
+        }
+        if hashes != expected_hashes:
+            raise CampaignStageError(
+                f"{label} source hashes differ from the selection freeze"
+            )
+        return folds, aggregate, hashes
+
+    winner_folds, winner_aggregate, winner_hashes = read_anchored(
+        "winner_source_folds", "winner",
+    )
+    baseline_folds, baseline_aggregate, baseline_hashes = read_anchored(
+        "baseline_source_folds", "baseline",
+    )
+    if (
+        bundle.get("held_out_folds") != winner_folds
+        or bundle.get("held_out") != winner_aggregate
+        or bundle.get("source_fold_sha256") != winner_hashes
+        or bundle.get("baseline_held_out_folds") != baseline_folds
+        or bundle.get("baseline_held_out") != baseline_aggregate
+        or bundle.get("baseline_source_fold_sha256") != baseline_hashes
+    ):
+        raise CampaignStageError(
+            "certification metrics differ from the anchored source folds"
+        )
+
+
+def validate_certified_runtime_binding(
+    runtime_root: Path,
+    selection_freeze: Mapping[str, Any],
+    freeze_entry: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reconcile published evidence with the pre-unblinding cell ledgers."""
+    root = runtime_root.resolve()
+    cell_id = freeze_entry.get("cell_id")
+    if not isinstance(cell_id, str) or not cell_id:
+        raise CampaignStageError("certified runtime cell identity is invalid")
+    cell_root = (root / cell_id).resolve()
+    if not cell_root.is_relative_to(root) or cell_root.parent != root:
+        raise CampaignStageError("certified runtime cell path is invalid")
+    state = load_stage_state(cell_root)
+    winner = state.get("winner")
+    baseline = state.get("baseline")
+    certification = state.get("certification")
+    if (
+        state.get("phase") != "certified"
+        or not isinstance(winner, Mapping)
+        or not isinstance(baseline, Mapping)
+        or not isinstance(certification, Mapping)
+        or set(certification) != {
+            "bundle", "bundle_sha256", "certified_at",
+            "selection_state_sha256",
+        }
+    ):
+        raise CampaignStageError(f"{cell_id}: certified stage state is incomplete")
+
+    session = _agent_session_for_freeze(
+        cell_root, state, str(selection_freeze.get("agent_protocol_sha256")),
+    )
+    process = _process_evidence(state)
+    winner_hashes = {
+        filename: record["sha256"]
+        for filename, record in _validate_source_fold_anchors_artifact(
+            freeze_entry.get("winner_source_folds"),
+            label="winner", expected_cell_id=cell_id,
+        ).items()
+    }
+    baseline_hashes = {
+        filename: record["sha256"]
+        for filename, record in _validate_source_fold_anchors_artifact(
+            freeze_entry.get("baseline_source_folds"),
+            label="baseline", expected_cell_id=cell_id,
+        ).items()
+    }
+    state_winner_hashes = (
+        baseline.get("sealed_fold_sha256")
+        if winner.get("kind") == "baseline"
+        else winner.get("sealed_fold_sha256")
+    )
+    session_record = session.get("session")
+    if (
+        state.get("campaign_id") != CAMPAIGN_ID
+        or state.get("cell_id") != cell_id
+        or state.get("cell_sha256") != freeze_entry.get("cell_sha256")
+        or state.get("manifest_sha256")
+        != selection_freeze.get("manifest_sha256")
+        or state.get("base_commit") != selection_freeze.get("base_commit")
+        or certification.get("bundle") != "certification/certify.json"
+        or certification.get("bundle_sha256") != bundle.get("bundle_sha256")
+        or certification.get("certified_at") != bundle.get("certified_at")
+        or certification.get("selection_state_sha256")
+        != freeze_entry.get("state_sha256")
+        or winner.get("kind") != freeze_entry.get("winner_kind")
+        or winner.get("candidate_id")
+        != freeze_entry.get("winner_candidate_id")
+        or winner.get("candidate_sha256")
+        != freeze_entry.get("winner_candidate_sha256")
+        or winner.get("promotion_node_id")
+        != freeze_entry.get("winner_promotion_node_id")
+        or winner.get("validation_mean")
+        != freeze_entry.get("winner_validation_mean")
+        or baseline.get("candidate_sha256")
+        != freeze_entry.get("baseline_candidate_sha256")
+        or baseline.get("validation_mean")
+        != freeze_entry.get("baseline_validation_mean")
+        or state_winner_hashes != winner_hashes
+        or baseline.get("sealed_fold_sha256") != baseline_hashes
+        or session.get("attestation_sha256")
+        != freeze_entry.get("agent_session_sha256")
+        or session.get("binding_sha256")
+        != freeze_entry.get("agent_session_binding_sha256")
+        or not isinstance(session_record, Mapping)
+        or session_record.get("session_id")
+        != freeze_entry.get("agent_session_id")
+        or session_record.get("usage") != freeze_entry.get("agent_usage")
+        or process != freeze_entry.get("process_evidence")
+        or content_sha256(process) != freeze_entry.get("process_sha256")
+    ):
+        raise CampaignStageError(
+            f"{cell_id}: published evidence differs from the certified cell state"
+        )
+    return state
 
 
 def _verify_selection_freeze_for_cell(
     cell_root: Path, state: Mapping[str, Any],
-) -> str:
+) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
     artifact = _validated_selection_freeze(cell_root.parent)
     _, agent_protocol_sha256 = _locked_agent_protocol(cell_root.parent)
     if (
@@ -1943,6 +3793,12 @@ def _verify_selection_freeze_for_cell(
         or artifact.get("agent_protocol_sha256") != agent_protocol_sha256
     ):
         raise CampaignStageError("campaign selection freeze binding mismatch")
+    if _roster_payload(artifact["cells"]) != _locked_manifest_roster(
+        cell_root, state,
+    ):
+        raise CampaignStageError(
+            "campaign selection freeze roster differs from the locked manifest"
+        )
     entries = {
         row["cell_id"]: row
         for row in artifact["cells"]
@@ -1955,18 +3811,53 @@ def _verify_selection_freeze_for_cell(
     session = _agent_session_for_freeze(
         cell_root, state, agent_protocol_sha256,
     )
+    process_evidence = _process_evidence(state)
+    certification = state.get("certification")
+    selection_state_sha256 = (
+        certification.get("selection_state_sha256")
+        if isinstance(certification, Mapping)
+        else state.get("state_sha256")
+    )
+    winner_source_folds = _source_fold_anchors(
+        cell_root.parent,
+        _winner_sealed_sources(cell_root, state, winner),
+    )
+    baseline_source_folds = _source_fold_anchors(
+        cell_root.parent,
+        _baseline_sealed_sources(cell_root, state),
+    )
     if (
         entry.get("cell_sha256") != state.get("cell_sha256")
+        or entry.get("state_sha256") != selection_state_sha256
         or entry.get("selection_sha256") != winner.get("selection_sha256")
         or entry.get("winner_candidate_sha256") != winner.get("candidate_sha256")
         or entry.get("winner_candidate_id") != winner.get("candidate_id")
         or entry.get("winner_kind") != winner.get("kind")
+        or entry.get("winner_promotion_node_id")
+        != winner.get("promotion_node_id")
+        or entry.get("winner_validation_mean") != winner.get("validation_mean")
+        or entry.get("baseline_validation_mean")
+        != (state.get("baseline") or {}).get("validation_mean")
+        or entry.get("baseline_candidate_sha256")
+        != (state.get("baseline") or {}).get("candidate_sha256")
+        or entry.get("winner_source_folds") != winner_source_folds
+        or entry.get("baseline_source_folds") != baseline_source_folds
         or entry.get("agent_session_sha256")
         != session.get("attestation_sha256")
-        or entry.get("agent_usage") != session["sessions"][0]["usage"]
+        or entry.get("agent_session_id") != session["session"]["session_id"]
+        or entry.get("agent_session_binding_sha256") != session["binding_sha256"]
+        or entry.get("agent_usage") != session["session"]["usage"]
+        or entry.get("process_sha256") != content_sha256(process_evidence)
+        or entry.get("process_evidence") != process_evidence
+        or not _process_matches_session(process_evidence, session)
     ):
         raise CampaignStageError("cell winner differs from the global selection freeze")
-    return str(artifact["freeze_sha256"])
+    return (
+        str(artifact["freeze_sha256"]),
+        str(entry["state_sha256"]),
+        json.loads(json.dumps(entry)),
+        artifact,
+    )
 
 
 def freeze_campaign_selections(
@@ -1979,6 +3870,8 @@ def freeze_campaign_selections(
     manifest_sha256 = file_sha256(manifest_path)
     _, agent_protocol_sha256 = _locked_agent_protocol(runtime_root)
     expected = {cell["cell_id"]: cell for cell in manifest["cells"]}
+    expected_roster = _roster_payload(manifest["cells"])
+    roster_sha256 = content_sha256(expected_roster)
     if len(expected) != CAMPAIGN_CELL_COUNT:
         raise CampaignStageError(
             f"selection freeze requires exactly {CAMPAIGN_CELL_COUNT} manifest cells"
@@ -1991,6 +3884,7 @@ def freeze_campaign_selections(
             if (
                 set(entries) != set(expected)
                 or artifact.get("manifest_sha256") != manifest_sha256
+                or artifact.get("roster_sha256") != roster_sha256
                 or artifact.get("agent_protocol_sha256")
                 != agent_protocol_sha256
             ):
@@ -2002,20 +3896,59 @@ def freeze_campaign_selections(
                 session = _agent_session_for_freeze(
                     runtime_root / cell_id, state, agent_protocol_sha256,
                 )
+                process_evidence = _process_evidence(state)
+                winner_source_folds = _source_fold_anchors(
+                    runtime_root,
+                    _winner_sealed_sources(runtime_root / cell_id, state, winner),
+                )
+                baseline_source_folds = _source_fold_anchors(
+                    runtime_root,
+                    _baseline_sealed_sources(runtime_root / cell_id, state),
+                )
                 if (
                     state.get("cell_sha256") != cell["cell_sha256"]
+                    or entry.get("state_sha256") != state.get("state_sha256")
+                    or artifact.get("base_commit") != state.get("base_commit")
                     or entry.get("selection_sha256")
                     != winner.get("selection_sha256")
+                    or entry.get("winner_kind") != winner.get("kind")
+                    or entry.get("winner_candidate_id")
+                    != winner.get("candidate_id")
+                    or entry.get("winner_promotion_node_id")
+                    != winner.get("promotion_node_id")
+                    or entry.get("winner_validation_mean")
+                    != winner.get("validation_mean")
+                    or entry.get("baseline_validation_mean")
+                    != (state.get("baseline") or {}).get("validation_mean")
+                    or entry.get("baseline_candidate_sha256")
+                    != (state.get("baseline") or {}).get("candidate_sha256")
+                    or entry.get("winner_source_folds") != winner_source_folds
+                    or entry.get("baseline_source_folds")
+                    != baseline_source_folds
                     or entry.get("winner_candidate_sha256")
                     != winner.get("candidate_sha256")
                     or entry.get("agent_session_sha256")
                     != session.get("attestation_sha256")
+                    or entry.get("agent_session_id")
+                    != session["session"]["session_id"]
+                    or entry.get("agent_session_binding_sha256")
+                    != session["binding_sha256"]
                     or entry.get("agent_usage")
-                    != session["sessions"][0]["usage"]
+                    != session["session"]["usage"]
+                    or entry.get("process_sha256")
+                    != content_sha256(process_evidence)
+                    or entry.get("process_evidence") != process_evidence
+                    or not _process_matches_session(process_evidence, session)
                 ):
                     raise CampaignStageError(
                         f"{cell_id}: winner drift after campaign selection freeze"
                     )
+            session_ids = [entries[cell_id].get("agent_session_id") for cell_id in expected]
+            if (
+                any(not isinstance(session_id, str) or not session_id for session_id in session_ids)
+                or len(set(session_ids)) != CAMPAIGN_CELL_COUNT
+            ):
+                raise CampaignStageError("campaign cells do not use distinct agent sessions")
             return artifact
 
         actual = {path.name for path in runtime_root.iterdir() if path.is_dir()}
@@ -2049,6 +3982,19 @@ def freeze_campaign_selections(
             session = _agent_session_for_freeze(
                 runtime_root / cell_id, state, agent_protocol_sha256,
             )
+            process_evidence = _process_evidence(state)
+            if not _process_matches_session(process_evidence, session):
+                raise CampaignStageError(
+                    f"{cell_id}: process evidence belongs to another agent session"
+                )
+            winner_sources = _source_fold_anchors(
+                runtime_root,
+                _winner_sealed_sources(runtime_root / cell_id, state, winner),
+            )
+            baseline_sources = _source_fold_anchors(
+                runtime_root,
+                _baseline_sealed_sources(runtime_root / cell_id, state),
+            )
             entries.append({
                 "cell_id": cell_id,
                 "cell_sha256": state["cell_sha256"],
@@ -2057,25 +4003,138 @@ def freeze_campaign_selections(
                 "winner_kind": winner["kind"],
                 "winner_candidate_id": winner["candidate_id"],
                 "winner_candidate_sha256": winner["candidate_sha256"],
+                "winner_promotion_node_id": winner.get("promotion_node_id"),
+                "winner_validation_mean": winner["validation_mean"],
+                "baseline_validation_mean": state["baseline"]["validation_mean"],
+                "baseline_candidate_sha256": state["baseline"]["candidate_sha256"],
+                "winner_source_folds": winner_sources,
+                "baseline_source_folds": baseline_sources,
                 "agent_session_sha256": session["attestation_sha256"],
-                "agent_usage": session["sessions"][0]["usage"],
+                "agent_session_id": session["session"]["session_id"],
+                "agent_session_binding_sha256": session["binding_sha256"],
+                "agent_usage": session["session"]["usage"],
+                "process_sha256": content_sha256(process_evidence),
+                "process_evidence": process_evidence,
             })
         if len(base_commits) != 1 or "" in base_commits:
             raise CampaignStageError("campaign cells do not share one base commit")
+        session_ids = [entry["agent_session_id"] for entry in entries]
+        if len(set(session_ids)) != CAMPAIGN_CELL_COUNT:
+            raise CampaignStageError("campaign cells do not use distinct agent sessions")
         artifact: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": SELECTION_FREEZE_SCHEMA_VERSION,
             "campaign_id": CAMPAIGN_ID,
             "manifest_sha256": manifest_sha256,
             "protocol_sha256": content_sha256(PROTOCOL),
             "agent_protocol_sha256": agent_protocol_sha256,
             "base_commit": next(iter(base_commits)),
+            "roster_sha256": roster_sha256,
             "cell_count": len(entries),
             "cells": entries,
             "frozen_at": _utc_now(),
         }
         artifact["freeze_sha256"] = content_sha256(artifact)
-        _atomic_write_json(path, artifact)
-        return artifact
+        validated = validate_selection_freeze_artifact(artifact)
+        _atomic_write_json(path, validated)
+        return validated
+
+
+def _validated_campaign_certification_index(
+    runtime_root: Path,
+    *,
+    expected_ids: list[str],
+    manifest_sha256: str,
+    selection_freeze: Mapping[str, Any],
+    freeze_entries: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Validate and return an already-published immutable campaign index."""
+    path = runtime_root / CAMPAIGN_CERTIFICATION_FILE
+    try:
+        index = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            "existing campaign certification index is unreadable"
+        ) from exc
+    expected_fields = {
+        "schema_version", "campaign_id", "manifest_sha256",
+        "selection_freeze_sha256", "cell_count", "cells", "certified_at",
+        "certification_sha256",
+    }
+    if not isinstance(index, dict) or set(index) != expected_fields:
+        raise CampaignStageError("campaign certification index schema mismatch")
+    recorded = index.get("certification_sha256")
+    payload = {
+        key: value for key, value in index.items()
+        if key != "certification_sha256"
+    }
+    cells = index.get("cells")
+    try:
+        certified_at = datetime.fromisoformat(str(index.get("certified_at")))
+    except ValueError:
+        certified_at = None
+    if (
+        index.get("schema_version") != 1
+        or index.get("campaign_id") != CAMPAIGN_ID
+        or index.get("manifest_sha256") != manifest_sha256
+        or index.get("selection_freeze_sha256")
+        != selection_freeze.get("freeze_sha256")
+        or index.get("cell_count") != CAMPAIGN_CELL_COUNT
+        or not isinstance(cells, list)
+        or len(cells) != CAMPAIGN_CELL_COUNT
+        or certified_at is None
+        or certified_at.tzinfo is None
+        or recorded != content_sha256(payload)
+    ):
+        raise CampaignStageError("campaign certification index integrity mismatch")
+    entries: dict[str, Mapping[str, Any]] = {}
+    for entry in cells:
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "cell_id", "bundle", "bundle_sha256", "file_sha256",
+        }:
+            raise CampaignStageError("campaign certification entry is malformed")
+        cell_id = entry.get("cell_id")
+        if not isinstance(cell_id, str) or cell_id in entries:
+            raise CampaignStageError("campaign certification cell identity is invalid")
+        entries[cell_id] = entry
+    if sorted(entries) != expected_ids:
+        raise CampaignStageError("campaign certification roster mismatch")
+    for cell_id in expected_ids:
+        entry = entries[cell_id]
+        expected_bundle = f"{cell_id}/certification/certify.json"
+        if entry.get("bundle") != expected_bundle:
+            raise CampaignStageError(
+                f"{cell_id}: certification bundle path is not canonical"
+            )
+        bundle_path = runtime_root / Path(*PurePosixPath(expected_bundle).parts)
+        try:
+            bundle = json.loads(bundle_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignStageError(
+                f"{cell_id}: indexed certification bundle is unreadable"
+            ) from exc
+        bundle = validate_certification_bundle_binding(
+            bundle,
+            freeze_entries.get(cell_id),
+            selection_freeze_sha256=str(selection_freeze["freeze_sha256"]),
+        )
+        validate_certification_timestamp_order(
+            selection_freeze["frozen_at"], bundle, index["certified_at"],
+        )
+        validate_certification_source_bindings(
+            runtime_root, bundle, freeze_entries[cell_id],
+        )
+        validate_certified_runtime_binding(
+            runtime_root, selection_freeze, freeze_entries[cell_id], bundle,
+        )
+        bundle_recorded = bundle["bundle_sha256"]
+        if (
+            file_sha256(bundle_path) != entry.get("file_sha256")
+            or bundle_recorded != entry.get("bundle_sha256")
+        ):
+            raise CampaignStageError(
+                f"{cell_id}: indexed certification bundle integrity mismatch"
+            )
+    return index
 
 
 def certify_campaign(
@@ -2090,15 +4149,33 @@ def certify_campaign(
         raise CampaignStageError(
             f"campaign certification requires {CAMPAIGN_CELL_COUNT} cells"
         )
-    freeze = _validated_selection_freeze(runtime_root)
-    if (
-        freeze.get("manifest_sha256") != file_sha256(manifest_path)
-        or sorted(row["cell_id"] for row in freeze["cells"]) != expected_ids
-    ):
-        raise CampaignStageError("campaign certification freeze roster mismatch")
-
     with _campaign_lock(runtime_root):
+        manifest_sha256 = file_sha256(manifest_path)
+        freeze = _validated_selection_freeze(runtime_root)
+        if (
+            freeze.get("manifest_sha256") != manifest_sha256
+            or freeze.get("roster_sha256")
+            != content_sha256(_roster_payload(manifest["cells"]))
+            or sorted(row["cell_id"] for row in freeze["cells"]) != expected_ids
+        ):
+            raise CampaignStageError("campaign certification freeze roster mismatch")
+        index_path = runtime_root / CAMPAIGN_CERTIFICATION_FILE
+        if index_path.exists():
+            freeze_entries = {
+                str(row["cell_id"]): row for row in freeze["cells"]
+            }
+            return _validated_campaign_certification_index(
+                runtime_root,
+                expected_ids=expected_ids,
+                manifest_sha256=manifest_sha256,
+                selection_freeze=freeze,
+                freeze_entries=freeze_entries,
+            )
+        freeze_entries = {
+            str(row["cell_id"]): row for row in freeze["cells"]
+        }
         entries: list[dict[str, Any]] = []
+        certified_bundles: list[dict[str, Any]] = []
         for cell_id in expected_ids:
             cell_root = runtime_root / cell_id
             state = certify_winner(cell_root)
@@ -2114,10 +4191,20 @@ def certify_campaign(
                 raise CampaignStageError(
                     f"{cell_id}: cannot index certification bundle: {exc}"
                 ) from exc
-            recorded = bundle.pop("bundle_sha256", None)
+            bundle = validate_certification_bundle_binding(
+                bundle,
+                freeze_entries[cell_id],
+                selection_freeze_sha256=str(freeze["freeze_sha256"]),
+            )
+            validate_certification_source_bindings(
+                runtime_root, bundle, freeze_entries[cell_id],
+            )
+            validate_certified_runtime_binding(
+                runtime_root, freeze, freeze_entries[cell_id], bundle,
+            )
+            recorded = bundle["bundle_sha256"]
             if (
-                recorded != content_sha256(bundle)
-                or recorded != certification.get("bundle_sha256")
+                recorded != certification.get("bundle_sha256")
                 or bundle.get("selection_freeze_sha256")
                 != freeze["freeze_sha256"]
             ):
@@ -2130,14 +4217,20 @@ def certify_campaign(
                 "bundle_sha256": recorded,
                 "file_sha256": file_sha256(bundle_path),
             })
+            certified_bundles.append(bundle)
+        index_certified_at = _utc_now()
+        for bundle in certified_bundles:
+            validate_certification_timestamp_order(
+                freeze["frozen_at"], bundle, index_certified_at,
+            )
         index: dict[str, Any] = {
             "schema_version": 1,
             "campaign_id": CAMPAIGN_ID,
-            "manifest_sha256": file_sha256(manifest_path),
+            "manifest_sha256": manifest_sha256,
             "selection_freeze_sha256": freeze["freeze_sha256"],
             "cell_count": len(entries),
             "cells": entries,
-            "certified_at": _utc_now(),
+            "certified_at": index_certified_at,
         }
         index["certification_sha256"] = content_sha256(index)
         _atomic_write_json(runtime_root / CAMPAIGN_CERTIFICATION_FILE, index)
@@ -2152,22 +4245,49 @@ def certify_winner(cell_root: Path) -> dict[str, Any]:
 
 def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     state = load_stage_state(cell_root)
-    selection_freeze_sha256 = _verify_selection_freeze_for_cell(cell_root, state)
+    (
+        selection_freeze_sha256,
+        selection_state_sha256,
+        freeze_entry,
+        selection_freeze,
+    ) = (
+        _verify_selection_freeze_for_cell(cell_root, state)
+    )
     certification = state.get("certification")
     if certification is not None:
+        if (
+            not isinstance(certification, Mapping)
+            or set(certification) != {
+                "bundle", "bundle_sha256", "certified_at",
+                "selection_state_sha256",
+            }
+            or certification.get("bundle") != "certification/certify.json"
+        ):
+            raise CampaignStageError("existing certification state is malformed")
         bundle_path = cell_root / certification["bundle"]
         try:
             bundle = json.loads(bundle_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
             raise CampaignStageError(f"cannot verify existing certification: {exc}") from exc
-        recorded = bundle.pop("bundle_sha256", None)
+        bundle = validate_certification_bundle_binding(
+            bundle,
+            freeze_entry,
+            selection_freeze_sha256=selection_freeze_sha256,
+        )
+        recorded = bundle["bundle_sha256"]
         if (
-            recorded != content_sha256(bundle)
-            or recorded != certification["bundle_sha256"]
-            or bundle.get("selection_freeze_sha256")
-            != selection_freeze_sha256
+            recorded != certification["bundle_sha256"]
         ):
             raise CampaignStageError("existing certification bundle hash mismatch")
+        validate_certification_source_bindings(
+            cell_root.parent, bundle, freeze_entry,
+        )
+        validate_certification_timestamp_order(
+            selection_freeze["frozen_at"], bundle,
+        )
+        validate_certified_runtime_binding(
+            cell_root.parent, selection_freeze, freeze_entry, bundle,
+        )
         return state
     if state["phase"] != "winner-frozen" or not isinstance(state.get("winner"), dict):
         raise CampaignStageError("certification requires an immutable validation winner")
@@ -2180,46 +4300,22 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
             raise CampaignStageError(
                 "certification directory exists without a recoverable bundle"
             ) from exc
-        recorded = recovered.pop("bundle_sha256", None)
-        if recorded != content_sha256(recovered):
-            raise CampaignStageError("recoverable certification bundle hash mismatch")
-        if (
-            recovered.get("campaign_id") != CAMPAIGN_ID
-            or recovered.get("cell_id") != state["cell_id"]
-            or recovered.get("selection_sha256") != winner["selection_sha256"]
-            or (recovered.get("winner") or {}).get("candidate_sha256")
-            != winner["candidate_sha256"]
-            or recovered.get("selection_freeze_sha256")
-            != selection_freeze_sha256
-        ):
-            raise CampaignStageError("certification bundle is not bound to the winner")
-        winner_sources = _winner_sealed_sources(cell_root, state, winner)
-        winner_hashes = {
-            f"fold_{fold}_result.json": file_sha256(winner_sources[fold])
-            for fold in CERTIFICATION_FOLDS
-        }
-        baseline_sources = _baseline_sealed_sources(cell_root, state)
-        baseline_hashes = {
-            f"fold_{fold}_result.json": file_sha256(baseline_sources[fold])
-            for fold in CERTIFICATION_FOLDS
-        }
-        if recovered.get("source_fold_sha256") != winner_hashes:
-            raise CampaignStageError(
-                "certification bundle source hashes differ from the frozen winner"
-            )
-        if recovered.get("baseline_source_fold_sha256") != baseline_hashes:
-            raise CampaignStageError(
-                "certification bundle source hashes differ from the native baseline"
-            )
-        if (
-            recovered.get("schema_version") != 2
-            or (recovered.get("baseline") or {}).get("candidate_sha256")
-            != state["baseline"]["candidate_sha256"]
-        ):
-            raise CampaignStageError("certification bundle baseline binding mismatch")
+        recovered = validate_certification_bundle_binding(
+            recovered,
+            freeze_entry,
+            selection_freeze_sha256=selection_freeze_sha256,
+        )
+        recorded = recovered["bundle_sha256"]
+        validate_certification_source_bindings(
+            cell_root.parent, recovered, freeze_entry,
+        )
+        validate_certification_timestamp_order(
+            selection_freeze["frozen_at"], recovered,
+        )
         return _finalize_certification_state(
             cell_root, state, bundle_sha256=recorded,
             certified_at=recovered["certified_at"],
+            selection_state_sha256=selection_state_sha256,
         )
     winner_sources = _winner_sealed_sources(cell_root, state, winner)
     baseline_sources = _baseline_sealed_sources(cell_root, state)
@@ -2265,6 +4361,7 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         },
         "selection_sha256": winner["selection_sha256"],
         "selection_freeze_sha256": selection_freeze_sha256,
+        "selection_state_sha256": selection_state_sha256,
         "validation_mean": winner["validation_mean"],
         "baseline": {
             "candidate_id": "baseline",
@@ -2283,6 +4380,17 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         "certified_at": certified_at,
     }
     bundle["bundle_sha256"] = content_sha256(bundle)
+    bundle = validate_certification_bundle_binding(
+        bundle,
+        freeze_entry,
+        selection_freeze_sha256=selection_freeze_sha256,
+    )
+    validate_certification_source_bindings(
+        cell_root.parent, bundle, freeze_entry,
+    )
+    validate_certification_timestamp_order(
+        selection_freeze["frozen_at"], bundle,
+    )
     temporary = Path(tempfile.mkdtemp(prefix=".certification-", dir=str(cell_root)))
     try:
         (temporary / "certify.json").write_text(
@@ -2296,6 +4404,7 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     return _finalize_certification_state(
         cell_root, state, bundle_sha256=bundle["bundle_sha256"],
         certified_at=certified_at,
+        selection_state_sha256=selection_state_sha256,
     )
 
 
@@ -2305,12 +4414,14 @@ def _finalize_certification_state(
     *,
     bundle_sha256: str,
     certified_at: str,
+    selection_state_sha256: str,
 ) -> dict[str, Any]:
     winner = state["winner"]
     state["certification"] = {
         "bundle": "certification/certify.json",
         "bundle_sha256": bundle_sha256,
         "certified_at": certified_at,
+        "selection_state_sha256": selection_state_sha256,
     }
     state["phase"] = "certified"
     state["revision"] += 1

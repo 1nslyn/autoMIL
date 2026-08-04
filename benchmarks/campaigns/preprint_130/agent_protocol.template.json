@@ -3,11 +3,13 @@
   "max_sessions_per_cell": 1,
   "model": "REPLACE_WITH_MODEL_NAME",
   "model_version": "REPLACE_WITH_IMMUTABLE_MODEL_VERSION",
+  "proposal_policy_content": "REPLACE_WITH_THE_EXACT_AGENT_INSTRUCTIONS_USED_FOR_EVERY_CELL",
   "proposal_policy_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS",
   "provider": "REPLACE_WITH_PROVIDER",
   "purpose": "publication",
   "runtime": "REPLACE_WITH_AGENT_RUNTIME",
   "runtime_version": "REPLACE_WITH_IMMUTABLE_RUNTIME_VERSION",
   "schema_version": 1,
+  "toolset_content": "REPLACE_WITH_THE_EXACT_TOOL_AND_PERMISSION_DESCRIPTION_EXPOSED_TO_THE_AGENT",
   "toolset_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
 }

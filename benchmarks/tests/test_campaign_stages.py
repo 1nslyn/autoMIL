@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 from dataclasses import replace
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
 import yaml
 
+import autobench.campaign_stages as campaign_stages
 from automil.admissibility import load_candidate_policy
 from automil.cells.state import Cell, CellStatus, read_cell, write_cell
 from autobench.campaign import (
@@ -26,18 +29,28 @@ from autobench.campaign_stages import (
     BASELINE_ATTESTATION_FILE,
     CAMPAIGN_CELL_COUNT,
     SELECTION_FREEZE_FILE,
+    SELECTION_FREEZE_SCHEMA_VERSION,
     CampaignStageError,
+    _baseline_sealed_sources,
+    _process_evidence,
+    _source_fold_anchors,
+    _winner_sealed_sources,
     certify_winner,
+    finalize_agent_session,
     freeze_discovery,
     freeze_promotion,
     initialize_stage_state,
     load_stage_state,
     materialize_promotion,
-    register_agent_session,
+    open_agent_session,
     register_baseline,
     run_native_baseline,
     select_winner,
+    validate_selection_freeze_artifact,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
 
 
 def _folds(indices, base=0.6):
@@ -60,15 +73,19 @@ AGENT_PROTOCOL = {
     "runtime_version": "test-runtime-1",
     "model": "test-model",
     "model_version": "test-model-1",
-    "proposal_policy_sha256": "a" * 64,
-    "toolset_sha256": "b" * 64,
+    "proposal_policy_content": "test proposal policy",
+    "proposal_policy_sha256": hashlib.sha256(
+        b"test proposal policy"
+    ).hexdigest(),
+    "toolset_content": "test toolset",
+    "toolset_sha256": hashlib.sha256(b"test toolset").hexdigest(),
     "max_sessions_per_cell": 1,
 }
 
 
 @pytest.fixture
 def staged_cell(tmp_path):
-    cell_root = tmp_path / "cell"
+    cell_root = tmp_path / "dataset__arm__task"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
     cell_without_hash = {
@@ -98,9 +115,16 @@ def staged_cell(tmp_path):
     }
     cell = {**cell_without_hash, "cell_sha256": content_sha256(cell_without_hash)}
     manifest_path = tmp_path / "manifest.json"
+    manifest_cells = [cell] + [
+        {
+            "cell_id": f"fixture-cell-{index:03d}",
+            "cell_sha256": "a" * 64,
+        }
+        for index in range(CAMPAIGN_CELL_COUNT - 1)
+    ]
     manifest_path.write_text(json.dumps({
         "campaign_id": CAMPAIGN_ID,
-        "cells": [cell],
+        "cells": manifest_cells,
     }))
     manifest_hash = file_sha256(manifest_path)
     (tmp_path / AGENT_PROTOCOL_FILE).write_text(json.dumps(AGENT_PROTOCOL))
@@ -112,7 +136,11 @@ def staged_cell(tmp_path):
             "allowed_override_options": ["--hparams", "--policy-variant"],
             "allowed_variant_kinds": ["policy"],
         },
-        "files": {"editable": ["cell/automil/variants/_policies/*.py"]},
+        "files": {
+            "editable": [
+                "dataset__arm__task/automil/variants/_policies/*.py",
+            ],
+        },
         "run": {"command": cell["commands"]["discovery"], "mil_model": "model"},
         "campaign": {
             "campaign_id": CAMPAIGN_ID,
@@ -151,7 +179,10 @@ def _baseline(
     for fold in CERTIFICATION_FOLDS:
         payload = "not-json-and-must-not-be-parsed" if invalid_sealed else json.dumps({
             "fold_index": fold,
-            "held_out": {"test_auc": 0.5 + fold / 100},
+            "held_out": {
+                "test_auc": 0.5 + fold / 100,
+                "test_bacc": 0.5 + fold / 100,
+            },
         })
         (sealed / f"fold_{fold}_result.json").write_text(payload)
     target = attest_for or cell_root
@@ -201,6 +232,17 @@ def _open_budget_cell(adir: Path, budget_id: str, consumed: int) -> None:
 def _attempts(
     adir: Path, cell_id: str, *, completed=12, source_at: int | None = None,
 ) -> None:
+    cell_root = adir.parent
+    session_path = cell_root / "agent_session.json"
+    if not session_path.exists():
+        open_agent_session(cell_root, {
+            "session_id": "fixture-session",
+            "started_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        })
+    session = json.loads(session_path.read_text())
+    bound_at = datetime.fromisoformat(session["session"]["bound_at"])
     policy = load_candidate_policy(adir)
     archive_root = adir / "orchestrator" / "archive"
     for index in range(DISCOVERY_ATTEMPTS):
@@ -210,7 +252,10 @@ def _attempts(
         candidate_paths = []
         overlay_manifest = {}
         if index == source_at:
-            rel = f"cell/automil/variants/_policies/candidate_{index}.py"
+            rel = (
+                "dataset__arm__task/automil/variants/_policies/"
+                f"candidate_{index}.py"
+            )
             source = archive / rel
             source.parent.mkdir(parents=True)
             source.write_text("# exact train-only policy candidate\n")
@@ -228,8 +273,16 @@ def _attempts(
             "framework_overlay_files": [],
             "run_command_override": override,
             "admissibility": verdict.to_dict(),
+            "submitted_at": (
+                bound_at + timedelta(seconds=index + 1)
+            ).isoformat(),
             "metadata": {
                 "cell_id": "b" * 16,
+                "agent_session": {
+                    "session_id": session["session"]["session_id"],
+                    "agent_protocol_sha256": session["agent_protocol_sha256"],
+                    "binding_sha256": session["binding_sha256"],
+                },
                 "campaign": {
                     "campaign_id": CAMPAIGN_ID,
                     "cell_id": cell_id,
@@ -252,7 +305,10 @@ def _attempts(
             for fold in STAGE_FOLDS["discovery"]:
                 (sealed / f"fold_{fold}_result.json").write_text(json.dumps({
                     "fold_index": fold,
-                    "held_out": {"test_auc": 0.70 + fold / 100},
+                    "held_out": {
+                        "test_auc": 0.70 + fold / 100,
+                        "test_bacc": 0.70 + fold / 100,
+                    },
                 }))
         else:
             result = {"status": "crash", "composite": 0.0, "metrics": {}}
@@ -312,6 +368,24 @@ def test_baseline_registration_rejects_test_bearing_public_result(staged_cell):
         register_baseline(cell_root, _baseline(cell_root, leak=True))
 
 
+@pytest.mark.parametrize("invalid", [True, -1, float("nan"), "12"])
+def test_baseline_registration_rejects_invalid_resource_values(
+    staged_cell, invalid,
+):
+    cell_root, _, _, _, _ = staged_cell
+    source_root = cell_root.parent / "baseline-source"
+    archive = _baseline(source_root, attest_for=cell_root)
+    result_path = archive / "result.json"
+    result = json.loads(result_path.read_text())
+    result["elapsed_seconds"] = invalid
+    result_path.write_text(json.dumps(result))
+
+    with pytest.raises(CampaignStageError, match="elapsed_seconds is invalid"):
+        register_baseline(cell_root, archive)
+
+    assert not (cell_root / "baseline").exists()
+
+
 def test_native_baseline_runs_at_frozen_commit_and_registers(
     staged_cell, monkeypatch,
 ):
@@ -346,7 +420,10 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
         for fold in CERTIFICATION_FOLDS:
             (sealed / f"fold_{fold}_result.json").write_text(json.dumps({
                 "fold_index": fold,
-                "held_out": {"test_auc": 0.5 + fold / 100},
+                "held_out": {
+                    "test_auc": 0.5 + fold / 100,
+                    "test_bacc": 0.5 + fold / 100,
+                },
             }))
         return SimpleNamespace(returncode=0)
 
@@ -442,6 +519,55 @@ def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
     assert freeze_discovery(cell_root) == state
 
 
+def test_discovery_audit_joins_failure_completion_without_reclassifying_spec(
+    staged_cell,
+):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    archive = adir / "orchestrator/archive/node_0001"
+    (archive / "result.json").unlink()
+    completed = adir / "orchestrator/completed"
+    completed.mkdir(parents=True)
+    (completed / "node_0001.json").write_text(json.dumps({
+        "id": "node_0001",
+        "status": "partial",
+        "termination_reason": "sigterm",
+        "budget_killed": True,
+        "elapsed_seconds": 12.5,
+        "peak_vram_mb": 0,
+    }))
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    audit = state["discovery"]["attempt_audit"][0]
+
+    assert audit["candidate_class"] == "config-only"
+    assert audit["result_status"] == "partial"
+    assert audit["budget_killed"] is True
+    assert audit["outcome_class"] == "budget-killed"
+    assert audit["termination_reason"] == "sigterm"
+    assert audit["elapsed_seconds"] == pytest.approx(12.5)
+    assert audit["peak_vram_mb"] is None
+    assert audit["eligible"] is False
+
+
+def test_discovery_excludes_out_of_range_validation_metrics(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=1)
+    result_path = adir / "orchestrator/archive/node_0001/result.json"
+    result = json.loads(result_path.read_text())
+    result["validation_folds"][0]["composite"] = 1.01
+    result_path.write_text(json.dumps(result))
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+
+    assert state["discovery"]["complete_candidates"] == 0
+    assert "outside [0, 1]" in state["discovery"]["attempt_audit"][0]["reason"]
+
+
 def test_discovery_deduplicates_semantically_identical_hparams(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
@@ -529,10 +655,13 @@ def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell
     )
     assert spec["metadata"]["campaign"]["stage"] == "promotion"
     mapped = (
-        promotion / "orchestrator" / "archive"
-        / first["promotion_node_id"]
-        / "cell/promotion/automil/variants/_policies/candidate_11.py"
-    )
+            promotion / "orchestrator" / "archive"
+            / first["promotion_node_id"]
+            / (
+                "dataset__arm__task/promotion/automil/variants/"
+                "_policies/candidate_11.py"
+            )
+        )
     assert mapped.read_text() == "# exact train-only policy candidate\n"
 
     # A restart returns the frozen jobs without duplicating graph/queue entries.
@@ -585,7 +714,10 @@ def _finish_promotion(
             for fold in STAGE_FOLDS["promotion"]:
                 (sealed / f"fold_{fold}_result.json").write_text(json.dumps({
                     "fold_index": fold,
-                    "held_out": {"test_auc": 0.70 + fold / 100},
+                    "held_out": {
+                        "test_auc": 0.70 + fold / 100,
+                        "test_bacc": 0.70 + fold / 100,
+                    },
                 }))
     cell_path = (
         adir / "cells"
@@ -651,8 +783,36 @@ def test_promotion_freeze_marks_missing_terminal_artifacts_ineligible(staged_cel
     assert len(frozen["promotion"]["eligible_candidates"]) == 8
     assert frozen["promotion"]["jobs"][0]["status"] == "ineligible"
     assert "missing result.json" in frozen["promotion"]["jobs"][0]["reason"]
+    assert len(frozen["promotion"]["jobs"][0]["promotion_spec_sha256"]) == 64
+    assert frozen["promotion"]["jobs"][0]["submitted_at"]
     assert frozen["promotion"]["jobs"][1]["status"] == "ineligible"
     assert "missing sealed fold 3" in frozen["promotion"]["jobs"][1]["reason"]
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
+    assert validate_selection_freeze_artifact(artifact) == artifact
+
+
+def test_promotion_freeze_fails_closed_when_durable_spec_is_missing(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10)
+    state = load_stage_state(cell_root)
+    first_id = state["promotion"]["jobs"][0]["promotion_node_id"]
+    (
+        cell_root / "promotion/automil/orchestrator/archive"
+        / first_id / "spec.json"
+    ).unlink()
+
+    with pytest.raises(CampaignStageError, match="lost its durable spec"):
+        freeze_promotion(cell_root)
+    assert not (cell_root.parent / SELECTION_FREEZE_FILE).exists()
 
 
 def test_promotion_freeze_rejects_cross_stage_identity_drift(staged_cell):
@@ -716,6 +876,31 @@ def test_fivefold_validation_mean_can_select_searched_candidate(staged_cell):
         sum(fold["composite"] for fold in winner["validation_folds"]) / 5
     )
     assert winner["lift_over_baseline"] > 0
+
+
+def test_stage_process_evidence_rejects_inconsistent_eligible_promotion(
+    staged_cell,
+):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
+    state = freeze_promotion(cell_root)
+    assert _process_evidence(state)["promotion"]["status_counts"]["eligible"] == 10
+
+    drifted = json.loads(json.dumps(state))
+    drifted["promotion"]["jobs"][0].update({
+        "result_status": "crash",
+        "outcome_class": "crash",
+        "validation_mean": None,
+    })
+    with pytest.raises(CampaignStageError, match="eligible promotion"):
+        _process_evidence(drifted)
 
 
 def test_exact_validation_tie_prefers_native_baseline(staged_cell):
@@ -807,7 +992,10 @@ def _write_searched_sealed_folds(
             ) / f"fold_{fold}_result.json"
             path.write_text(json.dumps({
                 "fold_index": fold,
-                "held_out": {"test_auc": 0.70 + fold / 100},
+                "held_out": {
+                    "test_auc": 0.70 + fold / 100,
+                    "test_bacc": 0.70 + fold / 100,
+                },
             }))
     else:
         (selected_discovery / "fold_0_result.json").write_text("selected-not-json")
@@ -825,21 +1013,16 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         "cost_usd": 0.1,
         "basis": "test fixture",
     }
-    session = {
-        "schema_version": 1,
-        "campaign_id": CAMPAIGN_ID,
-        "cell_id": state["cell_id"],
-        "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
-        "sessions": [{
-            "session_id": "fixture-session",
-            "started_at": "2026-08-04T00:00:00+00:00",
-            "ended_at": "2026-08-04T01:00:00+00:00",
-            "termination_reason": "budget-complete",
-            "usage": usage,
-        }],
-    }
-    session["attestation_sha256"] = content_sha256(session)
-    (cell_root / "agent_session.json").write_text(json.dumps(session))
+    session = finalize_agent_session(cell_root, _agent_session_end(cell_root))
+    process = _process_evidence(state)
+    winner_source_folds = _source_fold_anchors(
+        cell_root.parent,
+        _winner_sealed_sources(cell_root, state, winner),
+    )
+    baseline_source_folds = _source_fold_anchors(
+        cell_root.parent,
+        _baseline_sealed_sources(cell_root, state),
+    )
     entry = {
         "cell_id": state["cell_id"],
         "cell_sha256": state["cell_sha256"],
@@ -848,30 +1031,71 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         "winner_kind": winner["kind"],
         "winner_candidate_id": winner["candidate_id"],
         "winner_candidate_sha256": winner["candidate_sha256"],
+        "winner_promotion_node_id": winner.get("promotion_node_id"),
+        "winner_validation_mean": winner["validation_mean"],
+        "baseline_validation_mean": state["baseline"]["validation_mean"],
+        "baseline_candidate_sha256": state["baseline"]["candidate_sha256"],
+        "winner_source_folds": winner_source_folds,
+        "baseline_source_folds": baseline_source_folds,
         "agent_session_sha256": session["attestation_sha256"],
+        "agent_session_id": session["session"]["session_id"],
+        "agent_session_binding_sha256": session["binding_sha256"],
         "agent_usage": usage,
+        "process_sha256": content_sha256(process),
+        "process_evidence": process,
     }
-    cells = [entry] + [
-        {
-            "cell_id": f"fixture-cell-{index:03d}",
+    def sibling_entry(index: int) -> dict:
+        cell_id = f"fixture-cell-{index:03d}"
+        session_id = f"fixture-session-{index:03d}"
+        session_binding = f"{index + 1:064x}"
+        sibling_process = json.loads(json.dumps(process))
+        for attempt in sibling_process["discovery"]["attempts"]:
+            attempt["agent_session_id"] = session_id
+            attempt["agent_session_binding_sha256"] = session_binding
+        sibling_sources = {
+            filename: {
+                **record,
+                "path": PurePosixPath(
+                    cell_id, "baseline", "archive", "certify", filename,
+                ).as_posix(),
+            }
+            for filename, record in baseline_source_folds.items()
+        }
+        return {
+            "cell_id": cell_id,
             "cell_sha256": "a" * 64,
             "state_sha256": "b" * 64,
             "selection_sha256": "c" * 64,
             "winner_kind": "baseline",
             "winner_candidate_id": "baseline",
             "winner_candidate_sha256": "d" * 64,
+            "winner_promotion_node_id": None,
+            "winner_validation_mean": 0.5,
+            "baseline_validation_mean": 0.5,
+            "baseline_candidate_sha256": "d" * 64,
+            "winner_source_folds": sibling_sources,
+            "baseline_source_folds": sibling_sources,
             "agent_session_sha256": "e" * 64,
+            "agent_session_id": session_id,
+            "agent_session_binding_sha256": session_binding,
             "agent_usage": usage,
+            "process_sha256": content_sha256(sibling_process),
+            "process_evidence": sibling_process,
         }
-        for index in range(CAMPAIGN_CELL_COUNT - 1)
+    cells = [entry] + [
+        sibling_entry(index) for index in range(CAMPAIGN_CELL_COUNT - 1)
     ]
+    roster = dict(sorted(
+        (row["cell_id"], row["cell_sha256"]) for row in cells
+    ))
     artifact = {
-        "schema_version": 1,
+        "schema_version": SELECTION_FREEZE_SCHEMA_VERSION,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": state["manifest_sha256"],
         "protocol_sha256": content_sha256(PROTOCOL),
         "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
         "base_commit": state["base_commit"],
+        "roster_sha256": content_sha256(roster),
         "cell_count": CAMPAIGN_CELL_COUNT,
         "cells": cells,
         "frozen_at": "2026-08-04T00:00:00+00:00",
@@ -880,35 +1104,45 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
     (cell_root.parent / SELECTION_FREEZE_FILE).write_text(json.dumps(artifact))
 
 
-def _agent_attestation(cell_id: str) -> dict:
+def _agent_session_end(cell_root: Path) -> dict:
+    session = json.loads((cell_root / "agent_session.json").read_text())
+    ended_at = (
+        datetime.fromisoformat(session["session"]["bound_at"])
+        + timedelta(hours=1)
+    ).isoformat()
     return {
-        "schema_version": 1,
-        "campaign_id": CAMPAIGN_ID,
-        "cell_id": cell_id,
-        "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
-        "sessions": [{
-            "session_id": "fixture-session",
-            "started_at": "2026-08-04T00:00:00+00:00",
-            "ended_at": "2026-08-04T01:00:00+00:00",
-            "termination_reason": "budget-complete",
-            "usage": {
-                "status": "exact",
-                "input_tokens": 100,
-                "output_tokens": 50,
-                "cached_input_tokens": 0,
-                "cost_usd": 0.1,
-                "basis": "test fixture",
-            },
-        }],
+        "session_id": "fixture-session",
+        "ended_at": ended_at,
+        "termination_reason": "budget-complete",
+        "usage": {
+            "status": "exact",
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cached_input_tokens": 0,
+            "cost_usd": 0.1,
+            "basis": "test fixture",
+        },
     }
 
 
-def test_agent_session_is_single_protocol_bound_and_registered_after_selection(
+def test_agent_session_is_prebound_to_every_proposal_then_finalized(
     staged_cell,
 ):
     cell_root, adir, cell, _, _ = staged_cell
-    with pytest.raises(CampaignStageError, match="requires a frozen winner"):
-        register_agent_session(cell_root, _agent_attestation(cell["cell_id"]))
+    opened = open_agent_session(cell_root, {
+        "session_id": "fixture-session",
+        "started_at": (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat(),
+    })
+    assert opened["status"] == "open"
+    with pytest.raises(CampaignStageError, match="already been opened"):
+        open_agent_session(cell_root, {
+            "session_id": "second-session",
+            "started_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        })
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=0)
     _open_budget_cell(
@@ -917,19 +1151,178 @@ def test_agent_session_is_single_protocol_bound_and_registered_after_selection(
     freeze_discovery(cell_root)
     select_winner(cell_root)
 
-    registered = register_agent_session(
-        cell_root, _agent_attestation(cell["cell_id"]),
-    )
+    registered = finalize_agent_session(cell_root, _agent_session_end(cell_root))
+    assert registered["status"] == "finalized"
     assert registered["attestation_sha256"] == content_sha256({
         key: value for key, value in registered.items()
         if key != "attestation_sha256"
     })
-    assert register_agent_session(cell_root, registered) == registered
-    changed = json.loads(json.dumps(registered))
-    changed["sessions"][0]["session_id"] = "second-session"
-    changed.pop("attestation_sha256")
-    with pytest.raises(CampaignStageError, match="immutable"):
-        register_agent_session(cell_root, changed)
+    assert finalize_agent_session(cell_root, _agent_session_end(cell_root)) == registered
+
+
+def test_checked_in_session_templates_execute_the_controller_contract(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    start = json.loads((CAMPAIGN_DIR / "agent_session.template.json").read_text())
+    start.update({
+        "session_id": "fixture-session",
+        "started_at": (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat(),
+    })
+    opened = open_agent_session(cell_root, start)
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+
+    end = json.loads(
+        (CAMPAIGN_DIR / "agent_session_end.template.json").read_text()
+    )
+    end.update({
+        "session_id": "fixture-session",
+        "ended_at": (
+            datetime.fromisoformat(opened["session"]["bound_at"])
+            + timedelta(hours=1)
+        ).isoformat(),
+    })
+    end["usage"]["basis"] = "fixture runtime does not expose usage"
+    finalized = finalize_agent_session(cell_root, end)
+
+    assert finalized["status"] == "finalized"
+    readme = (CAMPAIGN_DIR / "README.md").read_text()
+    assert "open-agent-session" in readme
+    assert "finalize-agent-session" in readme
+    assert "register-agent-session" not in readme
+
+
+def test_agent_session_open_rejects_preexisting_graph_proposal(staged_cell):
+    cell_root, adir, _, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    graph_path = adir / "graph.json"
+    graph = json.loads(graph_path.read_text())
+    graph["nodes"]["node_9999"] = {"type": "proposed", "status": "pending"}
+    graph_path.write_text(json.dumps(graph))
+
+    with pytest.raises(CampaignStageError, match="non-baseline proposal"):
+        open_agent_session(cell_root, {
+            "session_id": "fixture-session",
+            "started_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        })
+
+
+def test_agent_session_open_rejects_preexisting_candidate_file(staged_cell):
+    cell_root, adir, _, _, _ = staged_cell
+    policy = adir / "variants/_policies/prebuilt.py"
+    policy.parent.mkdir(parents=True)
+    policy.write_text("# created before the bound session\n")
+
+    with pytest.raises(CampaignStageError, match="candidate policy file"):
+        open_agent_session(cell_root, {
+            "session_id": "fixture-session",
+            "started_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        })
+
+
+def test_agent_session_id_is_reserved_across_cells_at_open(staged_cell):
+    cell_root, _, _, _, _ = staged_cell
+    sibling = cell_root.parent / "other-cell"
+    sibling.mkdir()
+    (sibling / "agent_session.json").write_text(json.dumps({
+        "session": {"session_id": "fixture-session"},
+    }))
+
+    with pytest.raises(CampaignStageError, match="already reserved"):
+        open_agent_session(cell_root, {
+            "session_id": "fixture-session",
+            "started_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        })
+
+
+def test_agent_session_open_rejects_nonobject_sibling_reservation(staged_cell):
+    cell_root, _, _, _, _ = staged_cell
+    sibling = cell_root.parent / "other-cell"
+    sibling.mkdir()
+    (sibling / "agent_session.json").write_text("[]")
+
+    with pytest.raises(CampaignStageError, match="cannot verify session reservation"):
+        open_agent_session(cell_root, {
+            "session_id": "fixture-session",
+            "started_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        })
+
+
+def test_agent_session_open_rejects_nonobject_nested_sibling_record(staged_cell):
+    cell_root, _, _, _, _ = staged_cell
+    sibling = cell_root.parent / "other-cell"
+    sibling.mkdir()
+    (sibling / "agent_session.json").write_text(json.dumps({"session": [1]}))
+
+    with pytest.raises(CampaignStageError, match="cannot verify session reservation"):
+        open_agent_session(cell_root, {
+            "session_id": "fixture-session",
+            "started_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        })
+
+
+def test_discovery_rejects_nonobject_agent_session_json(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    (cell_root / "agent_session.json").write_text("[]")
+
+    with pytest.raises(CampaignStageError, match="agent session field set"):
+        freeze_discovery(cell_root)
+
+
+def test_discovery_rejects_a_proposal_before_the_bound_session(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    spec_path = adir / "orchestrator/archive/node_0001/spec.json"
+    spec = json.loads(spec_path.read_text())
+    session = json.loads((cell_root / "agent_session.json").read_text())
+    spec["submitted_at"] = (
+        datetime.fromisoformat(session["session"]["bound_at"])
+        - timedelta(seconds=1)
+    ).isoformat()
+    spec_path.write_text(json.dumps(spec))
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    with pytest.raises(CampaignStageError, match="predates controller session binding"):
+        freeze_discovery(cell_root)
+
+
+def test_finalization_rejects_a_proposal_after_the_session_end(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    session_end = _agent_session_end(cell_root)
+    bound_at = datetime.fromisoformat(
+        json.loads((cell_root / "agent_session.json").read_text())["session"]["bound_at"]
+    )
+    session_end["ended_at"] = (bound_at + timedelta(seconds=30)).isoformat()
+
+    with pytest.raises(CampaignStageError, match="outside the agent session interval"):
+        finalize_agent_session(cell_root, session_end)
 
 
 def test_cell_certification_requires_global_campaign_freeze(staged_cell):
@@ -961,6 +1354,9 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     bundle_path = cell_root / state["certification"]["bundle"]
     bundle = json.loads(bundle_path.read_text())
     assert state["phase"] == "certified"
+    assert state["certification"]["selection_state_sha256"] == (
+        winner_frozen["state_sha256"]
+    )
     assert bundle["winner"]["kind"] == "baseline"
     assert bundle["held_out"]["test_auc"] == pytest.approx(0.52)
     assert bundle["baseline_held_out"]["test_auc"] == pytest.approx(0.52)
@@ -982,6 +1378,205 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     assert recovered["certification"]["bundle_sha256"] == bundle["bundle_sha256"]
 
 
+def test_cell_certification_rejects_nonwinner_state_drift_after_global_freeze(
+    staged_cell,
+):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+
+    state_path = cell_root / "campaign_state.json"
+    state = json.loads(state_path.read_text())
+    state["baseline"]["validation_mean"] += 0.01
+    state["state_sha256"] = content_sha256({
+        key: value for key, value in state.items() if key != "state_sha256"
+    })
+    state_path.write_text(json.dumps(state))
+
+    with pytest.raises(CampaignStageError, match="global selection freeze"):
+        certify_winner(cell_root)
+
+
+def test_selection_freeze_rejects_old_extra_and_incomplete_schemas(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    valid = json.loads(
+        (cell_root.parent / SELECTION_FREEZE_FILE).read_text()
+    )
+
+    variants = []
+    old = json.loads(json.dumps(valid))
+    old["schema_version"] = SELECTION_FREEZE_SCHEMA_VERSION - 1
+    variants.append(old)
+    extra = json.loads(json.dumps(valid))
+    extra["unexpected"] = True
+    variants.append(extra)
+    missing = json.loads(json.dumps(valid))
+    missing["cells"][0].pop("process_evidence")
+    variants.append(missing)
+    for artifact in variants:
+        artifact["freeze_sha256"] = content_sha256({
+            key: value for key, value in artifact.items()
+            if key != "freeze_sha256"
+        })
+        with pytest.raises(CampaignStageError, match="integrity mismatch"):
+            validate_selection_freeze_artifact(artifact)
+
+
+def test_selection_freeze_rejects_rehashed_nonstring_cell_id(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
+    artifact["cells"][0]["cell_id"] = 7
+    artifact["roster_sha256"] = content_sha256({})
+    artifact["freeze_sha256"] = content_sha256({
+        key: value for key, value in artifact.items()
+        if key != "freeze_sha256"
+    })
+
+    with pytest.raises(CampaignStageError, match="roster row is invalid"):
+        validate_selection_freeze_artifact(artifact)
+
+
+def test_selection_freeze_rejects_rehashed_duplicate_session_id(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
+    first_session = artifact["cells"][0]["agent_session_id"]
+    sibling = artifact["cells"][1]
+    sibling["agent_session_id"] = first_session
+    for attempt in sibling["process_evidence"]["discovery"]["attempts"]:
+        attempt["agent_session_id"] = first_session
+    sibling["process_sha256"] = content_sha256(sibling["process_evidence"])
+    artifact["freeze_sha256"] = content_sha256({
+        key: value for key, value in artifact.items()
+        if key != "freeze_sha256"
+    })
+
+    with pytest.raises(CampaignStageError, match="integrity mismatch"):
+        validate_selection_freeze_artifact(artifact)
+
+
+@pytest.mark.parametrize("field", ["node_id", "source_spec_sha256"])
+def test_selection_freeze_rejects_rehashed_duplicate_attempt_identity(
+    staged_cell, field,
+):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
+    entry = artifact["cells"][0]
+    attempts = entry["process_evidence"]["discovery"]["attempts"]
+    attempts[1][field] = attempts[0][field]
+    if field == "node_id":
+        entry["process_evidence"]["discovery"]["validation_anytime"][1][
+            "node_id"
+        ] = attempts[0]["node_id"]
+    entry["process_sha256"] = content_sha256(entry["process_evidence"])
+    artifact["freeze_sha256"] = content_sha256({
+        key: value for key, value in artifact.items()
+        if key != "freeze_sha256"
+    })
+
+    with pytest.raises(CampaignStageError, match="identities are not unique"):
+        validate_selection_freeze_artifact(artifact)
+
+
+def test_certification_rejects_rehashed_incomplete_sibling_process(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    path = cell_root.parent / SELECTION_FREEZE_FILE
+    artifact = json.loads(path.read_text())
+    sibling = artifact["cells"][1]
+    sibling["process_evidence"]["discovery"]["attempts"].pop()
+    sibling["process_sha256"] = content_sha256(sibling["process_evidence"])
+    artifact["freeze_sha256"] = content_sha256({
+        key: value for key, value in artifact.items()
+        if key != "freeze_sha256"
+    })
+    path.write_text(json.dumps(artifact))
+
+    with pytest.raises(CampaignStageError, match="discovery census"):
+        certify_winner(cell_root)
+    assert not (cell_root / "certification/certify.json").exists()
+
+
+def test_cell_certification_rejects_a_rehashed_nonmanifest_freeze_roster(
+    staged_cell,
+):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+
+    path = cell_root.parent / SELECTION_FREEZE_FILE
+    artifact = json.loads(path.read_text())
+    forged = artifact["cells"][1]
+    original_cell_id = forged["cell_id"]
+    forged["cell_id"] = "forged-cell"
+    for field in ("winner_source_folds", "baseline_source_folds"):
+        for record in forged[field].values():
+            record["path"] = record["path"].replace(
+                original_cell_id, "forged-cell", 1,
+            )
+    artifact["roster_sha256"] = content_sha256(dict(sorted(
+        (row["cell_id"], row["cell_sha256"]) for row in artifact["cells"]
+    )))
+    artifact["freeze_sha256"] = content_sha256({
+        key: value for key, value in artifact.items()
+        if key != "freeze_sha256"
+    })
+    path.write_text(json.dumps(artifact))
+
+    with pytest.raises(CampaignStageError, match="locked manifest"):
+        certify_winner(cell_root)
+
+
 def test_searched_certification_reads_winner_and_never_losers(staged_cell):
     cell_root, adir, cell, _, repo_root = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
@@ -996,6 +1591,14 @@ def test_searched_certification_reads_winner_and_never_losers(staged_cell):
     selected = select_winner(cell_root)
     _write_searched_sealed_folds(cell_root, selected)
     _write_global_selection_freeze(cell_root)
+    freeze_artifact = json.loads(
+        (cell_root.parent / SELECTION_FREEZE_FILE).read_text()
+    )
+    process = freeze_artifact["cells"][0]["process_evidence"]["discovery"]
+    assert process["baseline_validation_mean"] == pytest.approx(0.605)
+    assert process["validation_anytime"][-1][
+        "running_best_validation_mean"
+    ] > process["baseline_validation_mean"]
 
     state = certify_winner(cell_root)
     bundle = json.loads((cell_root / "certification/certify.json").read_text())
@@ -1046,11 +1649,11 @@ def test_selected_sealed_corruption_blocks_certification(staged_cell):
     freeze_promotion(cell_root)
     selected = select_winner(cell_root)
     _write_searched_sealed_folds(cell_root, selected, selected_valid=False)
-    _write_global_selection_freeze(cell_root)
 
     with pytest.raises(CampaignStageError, match="sealed artifact changed"):
-        certify_winner(cell_root)
+        _write_global_selection_freeze(cell_root)
     assert load_stage_state(cell_root)["phase"] == "winner-frozen"
+    assert not (cell_root.parent / SELECTION_FREEZE_FILE).exists()
     assert not (cell_root / "certification").exists()
 
 
@@ -1068,5 +1671,116 @@ def test_existing_certification_bundle_is_immutable(staged_cell):
     bundle = cell_root / "certification/certify.json"
     bundle.write_text(bundle.read_text().replace("0.52", "0.99"))
 
-    with pytest.raises(CampaignStageError, match="bundle hash mismatch"):
+    with pytest.raises(CampaignStageError, match="certification bundle"):
+        certify_winner(cell_root)
+
+
+def test_existing_certification_rejects_rehashed_state_timestamp_drift(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    certify_winner(cell_root)
+    state_path = cell_root / "campaign_state.json"
+    state = json.loads(state_path.read_text())
+    state["certification"]["certified_at"] = "2030-01-01T00:00:00+00:00"
+    state["state_sha256"] = content_sha256({
+        key: value for key, value in state.items() if key != "state_sha256"
+    })
+    state_path.write_text(json.dumps(state))
+
+    with pytest.raises(CampaignStageError, match="certified cell state"):
+        certify_winner(cell_root)
+
+
+def test_existing_certification_cannot_predate_selection_freeze(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    certify_winner(cell_root)
+    bundle_path = cell_root / "certification/certify.json"
+    bundle = json.loads(bundle_path.read_text())
+    bundle["certified_at"] = "2000-01-01T00:00:00+00:00"
+    bundle["bundle_sha256"] = content_sha256({
+        key: value for key, value in bundle.items() if key != "bundle_sha256"
+    })
+    bundle_path.write_text(json.dumps(bundle))
+    state_path = cell_root / "campaign_state.json"
+    state = json.loads(state_path.read_text())
+    state["certification"]["certified_at"] = bundle["certified_at"]
+    state["certification"]["bundle_sha256"] = bundle["bundle_sha256"]
+    state["state_sha256"] = content_sha256({
+        key: value for key, value in state.items() if key != "state_sha256"
+    })
+    state_path.write_text(json.dumps(state))
+
+    with pytest.raises(CampaignStageError, match="freeze/bundle/index order"):
+        certify_winner(cell_root)
+
+
+def test_first_certification_rejects_clock_before_selection_freeze(
+    staged_cell, monkeypatch,
+):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    monkeypatch.setattr(
+        campaign_stages, "_utc_now",
+        lambda: "2000-01-01T00:00:00+00:00",
+    )
+
+    with pytest.raises(CampaignStageError, match="freeze/bundle/index order"):
+        certify_winner(cell_root)
+    assert not (cell_root / "certification").exists()
+    assert load_stage_state(cell_root)["phase"] == "winner-frozen"
+
+
+def test_existing_certification_rejects_rehashed_winner_identity(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    certify_winner(cell_root)
+    bundle_path = cell_root / "certification/certify.json"
+    bundle = json.loads(bundle_path.read_text())
+    bundle["selection_sha256"] = "1" * 64
+    bundle["winner"]["candidate_sha256"] = "2" * 64
+    bundle["baseline"]["candidate_sha256"] = "2" * 64
+    bundle["bundle_sha256"] = content_sha256({
+        key: value for key, value in bundle.items()
+        if key != "bundle_sha256"
+    })
+    bundle_path.write_text(json.dumps(bundle))
+    state_path = cell_root / "campaign_state.json"
+    state = json.loads(state_path.read_text())
+    state["certification"]["bundle_sha256"] = bundle["bundle_sha256"]
+    state["state_sha256"] = content_sha256({
+        key: value for key, value in state.items()
+        if key != "state_sha256"
+    })
+    state_path.write_text(json.dumps(state))
+
+    with pytest.raises(CampaignStageError, match="frozen validation winner"):
         certify_winner(cell_root)

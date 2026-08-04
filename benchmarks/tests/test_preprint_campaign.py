@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shlex
 import shutil
 from pathlib import Path
@@ -41,8 +42,12 @@ AGENT_PROTOCOL = {
     "runtime_version": "test-runtime-1",
     "model": "test-model",
     "model_version": "test-model-1",
-    "proposal_policy_sha256": "a" * 64,
-    "toolset_sha256": "b" * 64,
+    "proposal_policy_content": "test proposal policy",
+    "proposal_policy_sha256": hashlib.sha256(
+        b"test proposal policy"
+    ).hexdigest(),
+    "toolset_content": "test toolset",
+    "toolset_sha256": hashlib.sha256(b"test toolset").hexdigest(),
     "max_sessions_per_cell": 1,
 }
 
@@ -144,7 +149,14 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
         "folds": list(CERTIFICATION_FOLDS),
         "retrain": False,
     }
-    assert protocol["fold_trainings_per_cell"] == 60 * 3 + 10 * 2 == 200
+    assert protocol["agentic_fold_trainings_per_cell"] == {
+        "discovery": 60 * 3,
+        "promotion_per_candidate": 2,
+        "promotion_candidates_min": 0,
+        "promotion_candidates_max": 10,
+        "minimum": 180,
+        "maximum": 200,
+    }
     assert protocol["attempt_timeout"] == {
         "minutes": 360,
         "role": "failure-containment-not-search-budget",
@@ -238,6 +250,26 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]
+
+
+def test_materializer_rejects_unresolvable_agent_policy_hashes(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    bad_protocol = {
+        **AGENT_PROTOCOL,
+        "proposal_policy_content": "different instructions",
+    }
+
+    with pytest.raises(CampaignManifestError, match="content/hash binding mismatch"):
+        materialize_discovery_cells(
+            manifest_path,
+            fake_repo / "benchmarks/campaigns/preprint_130/runtime",
+            fake_repo,
+            agent_protocol=bad_protocol,
+            base_commit=BASE_COMMIT,
+        )
 
 
 def test_canary_agent_protocol_cannot_enter_publication_freeze(tmp_path):

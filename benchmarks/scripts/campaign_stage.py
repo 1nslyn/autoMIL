@@ -10,12 +10,13 @@ from typing import Any
 from autobench.campaign_stages import (
     CampaignStageError,
     certify_winner,
+    finalize_agent_session,
     freeze_discovery,
     freeze_promotion,
     load_stage_state,
     materialize_promotion,
+    open_agent_session,
     register_baseline,
-    register_agent_session,
     run_native_baseline,
     select_winner,
 )
@@ -110,7 +111,7 @@ def main(argv: list[str] | None = None) -> None:
             "status", "register-baseline", "freeze-discovery",
             "materialize-promotion", "freeze-promotion", "select-winner",
             "certify", "baseline-command", "run-baseline", "advance",
-            "register-agent-session",
+            "open-agent-session", "finalize-agent-session",
         ),
     )
     parser.add_argument("--cell-root", required=True)
@@ -124,7 +125,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--agent-session",
-        help="Runtime/resource attestation JSON; required by register-agent-session.",
+        help=(
+            "Session JSON: {session_id, started_at} for open-agent-session; "
+            "{session_id, ended_at, termination_reason, usage} for finalization."
+        ),
     )
     args = parser.parse_args(argv)
     repo_root = Path(__file__).resolve().parents[2]
@@ -148,9 +152,9 @@ def main(argv: list[str] | None = None) -> None:
             state = run_native_baseline(
                 cell_root, repo_root=repo_root, gpu_id=args.gpu,
             )
-        elif args.action == "register-agent-session":
+        elif args.action in {"open-agent-session", "finalize-agent-session"}:
             if not args.agent_session:
-                parser.error("register-agent-session requires --agent-session")
+                parser.error(f"{args.action} requires --agent-session")
             session_path = Path(args.agent_session)
             if not session_path.is_absolute():
                 session_path = (repo_root / session_path).resolve()
@@ -158,7 +162,10 @@ def main(argv: list[str] | None = None) -> None:
                 attestation = json.loads(session_path.read_text())
             except (OSError, json.JSONDecodeError) as exc:
                 parser.error(f"cannot read --agent-session: {exc}")
-            register_agent_session(cell_root, attestation)
+            if args.action == "open-agent-session":
+                open_agent_session(cell_root, attestation)
+            else:
+                finalize_agent_session(cell_root, attestation)
             state = load_stage_state(cell_root)
         elif args.action == "freeze-discovery":
             state = freeze_discovery(cell_root)

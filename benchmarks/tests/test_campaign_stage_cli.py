@@ -100,3 +100,77 @@ def test_run_baseline_cli_forwards_physical_gpu(tmp_path, monkeypatch, capsys):
     assert observed["cell_root"] == root
     assert observed["gpu_id"] == 3
     assert json.loads(capsys.readouterr().out)["phase"] == "discovery"
+
+
+@pytest.mark.parametrize(
+    "action,function_name,payload",
+    [
+        (
+            "open-agent-session",
+            "open_agent_session",
+            {
+                "session_id": "session-v1",
+                "started_at": "2026-08-04T00:00:00+00:00",
+            },
+        ),
+        (
+            "finalize-agent-session",
+            "finalize_agent_session",
+            {
+                "session_id": "session-v1",
+                "ended_at": "2026-08-04T01:00:00+00:00",
+                "termination_reason": "budget-complete",
+                "usage": {
+                    "status": "unavailable",
+                    "input_tokens": None,
+                    "output_tokens": None,
+                    "cached_input_tokens": None,
+                    "cost_usd": None,
+                    "basis": "fixture runtime does not expose usage",
+                },
+            },
+        ),
+    ],
+)
+def test_agent_session_cli_actions_load_relative_payload_and_emit_status(
+    tmp_path, monkeypatch, capsys, action, function_name, payload,
+):
+    module = _load_cli()
+    root, state = _state(tmp_path)
+    fake_repo = tmp_path / "repo"
+    fake_repo.mkdir()
+    session_path = fake_repo / "session.json"
+    session_path.write_text(json.dumps(payload))
+    module.__file__ = str(
+        fake_repo / "benchmarks/scripts/campaign_stage.py"
+    )
+    observed = {}
+    monkeypatch.setattr(module, "_cell_root", lambda *_: root)
+    monkeypatch.setattr(
+        module,
+        function_name,
+        lambda cell_root, loaded: observed.update({
+            "cell_root": cell_root,
+            "payload": loaded,
+        }),
+    )
+
+    module.main([
+        action,
+        "--cell-root", "ignored",
+        "--agent-session", "session.json",
+    ])
+
+    assert observed == {"cell_root": root, "payload": payload}
+    assert json.loads(capsys.readouterr().out)["phase"] == state["phase"]
+
+
+def test_agent_session_cli_requires_payload_path(tmp_path, monkeypatch, capsys):
+    module = _load_cli()
+    root, _ = _state(tmp_path)
+    monkeypatch.setattr(module, "_cell_root", lambda *_: root)
+
+    with pytest.raises(SystemExit, match="2"):
+        module.main(["open-agent-session", "--cell-root", "ignored"])
+
+    assert "requires --agent-session" in capsys.readouterr().err

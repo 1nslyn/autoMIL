@@ -25,7 +25,43 @@
         "dataset",
         "framework"
       ],
+      "scale_rule": "classification and survival magnitude summaries are always separate; only sign counts may be pooled across task types",
       "unit": "one predeclared dataset-task-encoder-framework cell"
+    },
+    "search_process": {
+      "candidate_classes": [
+        "config-only",
+        "train-only-source",
+        "inadmissible"
+      ],
+      "candidate_class_scope": "failure-inclusive census of the 60 launched and charged attempts; submit-time refusals are not launched attempts and remain framework validation evidence rather than campaign outcomes",
+      "discovery_fields": [
+        "all 60 charged attempts including failures",
+        "terminal status, reason, budget-killed fact, and deterministically derived outcome class",
+        "candidate class and policy hash",
+        "validation-only running-best trajectory",
+        "elapsed seconds and peak VRAM with explicit missingness"
+      ],
+      "outcome_classes": [
+        "completed",
+        "budget-killed",
+        "timeout",
+        "oom",
+        "cancelled",
+        "partial",
+        "crash",
+        "missing-result",
+        "unknown"
+      ],
+      "promotion_fields": [
+        "the exact stable top-10 unique discovery roster and all of its frozen promotion jobs",
+        "eligible/ineligible status and reason",
+        "promotion yield",
+        "elapsed seconds and peak VRAM with explicit missingness"
+      ],
+      "resource_aggregation": "report the five-fold native baseline, three-fold discovery, and two-fold promotion as separate strata; elapsed_seconds/3600 is named GPU-attached job-hours (not measured accelerator utilization), and any cross-stage agentic-search value is an observed total labelled a lower bound when attempts lack timing",
+      "timing": "process evidence is hashed into the 130-cell selection freeze before any held-out value is opened",
+      "unit": "one predeclared cell with exactly 60 discovery attempts and at most 10 promotion jobs"
     },
     "tile_ranking_response": {
       "arms": [
@@ -63,6 +99,7 @@
   },
   "missingness": {
     "expected_cells": 130,
+    "expected_discovery_attempts_per_cell": 60,
     "expected_folds_per_baseline_and_winner": 5,
     "imputation": "none",
     "policy": "fail closed; do not emit a publication report from an incomplete or inconsistent campaign"

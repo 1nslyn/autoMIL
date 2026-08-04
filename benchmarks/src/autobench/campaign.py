@@ -49,12 +49,70 @@ CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
 BASELINE_FOLDS = CERTIFICATION_FOLDS
 DISCOVERY_ATTEMPTS = 60
 PROMOTION_CANDIDATES = 10
+ATTEMPT_OUTCOME_CLASSES = (
+    "completed", "budget-killed", "timeout", "oom", "cancelled",
+    "partial", "crash", "missing-result", "unknown",
+)
+
+
+def classify_attempt_outcome(
+    result_status: object,
+    termination_reason: object,
+    budget_killed: object,
+) -> str:
+    """Derive one predeclared terminal class from frozen terminal facts."""
+    status = result_status if isinstance(result_status, str) else "missing"
+    reason = termination_reason if isinstance(termination_reason, str) else "unspecified"
+    if budget_killed is True or status == "budget_killed":
+        return "budget-killed"
+    if reason == "timeout":
+        return "timeout"
+    if reason == "oom":
+        return "oom"
+    if status == "cancelled" or reason == "cancelled_by_operator":
+        return "cancelled"
+    if status == "completed":
+        return "completed"
+    if status == "partial":
+        return "partial"
+    if status == "crash":
+        return "crash"
+    if status in {"missing", "missing-result"}:
+        return "missing-result"
+    return "unknown"
+
+
+def expected_promotion_sources(
+    attempts: list[Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    """Recompute the stable top-10 unique discovery roster from its census."""
+    eligible = sorted(
+        (row for row in attempts if row.get("eligible") is True),
+        key=lambda row: (-float(row["validation_mean"]), str(row["node_id"])),
+    )
+    selected: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in eligible:
+        candidate_sha256 = str(row["candidate_sha256"])
+        if candidate_sha256 in seen:
+            continue
+        seen.add(candidate_sha256)
+        selected.append({
+            "source_node_id": str(row["node_id"]),
+            "source_candidate_sha256": candidate_sha256,
+            "source_spec_sha256": str(row["source_spec_sha256"]),
+            "candidate_class": str(row["candidate_class"]),
+            "policy_hash": str(row["policy_hash"]),
+        })
+        if len(selected) == PROMOTION_CANDIDATES:
+            break
+    return selected
 # This is a failure-containment wall clock for one submitted multi-fold attempt,
 # not an optimization budget.  Three CLAM classification folds take about
 # 206 minutes in the committed timing census; six hours leaves a substantial
 # guard band without changing the equal 60-attempt research budget.
 ATTEMPT_TIMEOUT_MIN = 360
-FOLD_TRAININGS_PER_CELL = (
+MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
     DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
     + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])
 )
@@ -63,6 +121,7 @@ PROTOCOL = {
     "split_folds": 5,
     "discovery_attempts": DISCOVERY_ATTEMPTS,
     "promotion_candidates": PROMOTION_CANDIDATES,
+    "attempt_outcome_classes": list(ATTEMPT_OUTCOME_CLASSES),
     "frozen_winners": 1,
     "stage_folds": {key: list(value) for key, value in STAGE_FOLDS.items()},
     "baseline": {
@@ -85,8 +144,17 @@ PROTOCOL = {
         "role": "failure-containment-not-search-budget",
         "scope": "one-multi-fold-attempt",
     },
-    "fold_trainings_per_cell": FOLD_TRAININGS_PER_CELL,
+    "agentic_fold_trainings_per_cell": {
+        "discovery": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),
+        "promotion_per_candidate": len(STAGE_FOLDS["promotion"]),
+        "promotion_candidates_min": 0,
+        "promotion_candidates_max": PROMOTION_CANDIDATES,
+        "minimum": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),
+        "maximum": MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL,
+    },
 }
+_CANARY_PROPOSAL_POLICY = "canary proposal policy"
+_CANARY_TOOLSET = "canary toolset"
 CANARY_AGENT_PROTOCOL = {
     "schema_version": 1,
     "campaign_id": CAMPAIGN_ID,
@@ -96,8 +164,12 @@ CANARY_AGENT_PROTOCOL = {
     "runtime_version": "canary-1",
     "model": "canary",
     "model_version": "canary-1",
-    "proposal_policy_sha256": "a" * 64,
-    "toolset_sha256": "b" * 64,
+    "proposal_policy_content": _CANARY_PROPOSAL_POLICY,
+    "proposal_policy_sha256": hashlib.sha256(
+        _CANARY_PROPOSAL_POLICY.encode()
+    ).hexdigest(),
+    "toolset_content": _CANARY_TOOLSET,
+    "toolset_sha256": hashlib.sha256(_CANARY_TOOLSET.encode()).hexdigest(),
     "max_sessions_per_cell": 1,
 }
 
@@ -113,10 +185,11 @@ def validate_agent_protocol(
     required_strings = (
         "provider", "runtime", "runtime_version", "model", "model_version",
     )
+    required_contents = ("proposal_policy_content", "toolset_content")
     required_hashes = ("proposal_policy_sha256", "toolset_sha256")
     expected_keys = {
         "schema_version", "campaign_id", "purpose", *required_strings,
-        *required_hashes, "max_sessions_per_cell",
+        *required_contents, *required_hashes, "max_sessions_per_cell",
     }
     if not isinstance(raw, Mapping) or set(raw) != expected_keys:
         raise CampaignManifestError("agent protocol field set is not exact")
@@ -134,6 +207,14 @@ def validate_agent_protocol(
             or value.lower() == "unknown"
         ):
             raise CampaignManifestError(f"agent protocol {key} is not publication-ready")
+    for key in required_contents:
+        value = raw.get(key)
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or value.upper().startswith("REPLACE")
+        ):
+            raise CampaignManifestError(f"agent protocol {key} is not archived")
     for key in required_hashes:
         value = raw.get(key)
         if (
@@ -142,6 +223,12 @@ def validate_agent_protocol(
             or any(character not in "0123456789abcdef" for character in value)
         ):
             raise CampaignManifestError(f"agent protocol {key} is not a SHA-256")
+    for stem in ("proposal_policy", "toolset"):
+        observed = hashlib.sha256(str(raw[f"{stem}_content"]).encode()).hexdigest()
+        if raw[f"{stem}_sha256"] != observed:
+            raise CampaignManifestError(
+                f"agent protocol {stem} content/hash binding mismatch"
+            )
     if raw.get("max_sessions_per_cell") != 1:
         raise CampaignManifestError("preprint protocol requires one agent session per cell")
     return json.loads(json.dumps(raw))
