@@ -23,6 +23,8 @@ from autobench.campaign import (
 )
 from autobench.campaign_stages import (
     BASELINE_ATTESTATION_FILE,
+    CAMPAIGN_CELL_COUNT,
+    SELECTION_FREEZE_FILE,
     CampaignStageError,
     certify_winner,
     freeze_discovery,
@@ -792,6 +794,59 @@ def _write_searched_sealed_folds(
         (selected_discovery / "fold_0_result.json").write_text("selected-not-json")
 
 
+def _write_global_selection_freeze(cell_root: Path) -> None:
+    """Build a full-roster freeze fixture around this isolated unit-test cell."""
+    state = load_stage_state(cell_root)
+    winner = state["winner"]
+    entry = {
+        "cell_id": state["cell_id"],
+        "cell_sha256": state["cell_sha256"],
+        "state_sha256": state["state_sha256"],
+        "selection_sha256": winner["selection_sha256"],
+        "winner_kind": winner["kind"],
+        "winner_candidate_id": winner["candidate_id"],
+        "winner_candidate_sha256": winner["candidate_sha256"],
+    }
+    cells = [entry] + [
+        {
+            "cell_id": f"fixture-cell-{index:03d}",
+            "cell_sha256": "a" * 64,
+            "state_sha256": "b" * 64,
+            "selection_sha256": "c" * 64,
+            "winner_kind": "baseline",
+            "winner_candidate_id": "baseline",
+            "winner_candidate_sha256": "d" * 64,
+        }
+        for index in range(CAMPAIGN_CELL_COUNT - 1)
+    ]
+    artifact = {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": state["manifest_sha256"],
+        "protocol_sha256": content_sha256(PROTOCOL),
+        "base_commit": state["base_commit"],
+        "cell_count": CAMPAIGN_CELL_COUNT,
+        "cells": cells,
+        "frozen_at": "2026-08-04T00:00:00+00:00",
+    }
+    artifact["freeze_sha256"] = content_sha256(artifact)
+    (cell_root.parent / SELECTION_FREEZE_FILE).write_text(json.dumps(artifact))
+
+
+def test_cell_certification_requires_global_campaign_freeze(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+
+    with pytest.raises(CampaignStageError, match="global 130-cell selection freeze"):
+        certify_winner(cell_root)
+
+
 def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
@@ -801,6 +856,7 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     )
     freeze_discovery(cell_root)
     winner_frozen = select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
 
     state = certify_winner(cell_root)
     bundle_path = cell_root / state["certification"]["bundle"]
@@ -840,6 +896,7 @@ def test_searched_certification_reads_winner_and_never_losers(staged_cell):
     freeze_promotion(cell_root)
     selected = select_winner(cell_root)
     _write_searched_sealed_folds(cell_root, selected)
+    _write_global_selection_freeze(cell_root)
 
     state = certify_winner(cell_root)
     bundle = json.loads((cell_root / "certification/certify.json").read_text())
@@ -869,6 +926,7 @@ def test_searched_certification_rejects_baseline_comparator_drift(staged_cell):
     freeze_promotion(cell_root)
     selected = select_winner(cell_root)
     _write_searched_sealed_folds(cell_root, selected)
+    _write_global_selection_freeze(cell_root)
     (baseline / "certify/fold_4_result.json").write_text("tampered")
 
     with pytest.raises(CampaignStageError, match="baseline sealed artifact changed"):
@@ -889,6 +947,7 @@ def test_selected_sealed_corruption_blocks_certification(staged_cell):
     freeze_promotion(cell_root)
     selected = select_winner(cell_root)
     _write_searched_sealed_folds(cell_root, selected, selected_valid=False)
+    _write_global_selection_freeze(cell_root)
 
     with pytest.raises(CampaignStageError, match="sealed artifact changed"):
         certify_winner(cell_root)
@@ -905,6 +964,7 @@ def test_existing_certification_bundle_is_immutable(staged_cell):
     )
     freeze_discovery(cell_root)
     select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
     certify_winner(cell_root)
     bundle = cell_root / "certification/certify.json"
     bundle.write_text(bundle.read_text().replace("0.52", "0.99"))
