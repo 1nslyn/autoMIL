@@ -526,6 +526,33 @@ def test_promotion_freeze_excludes_crashes_but_keeps_their_cost(staged_cell):
     assert freeze_promotion(cell_root) == state
 
 
+def test_promotion_freeze_marks_missing_terminal_artifacts_ineligible(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10)
+    state = load_stage_state(cell_root)
+    archives = cell_root / "promotion/automil/orchestrator/archive"
+    first = archives / state["promotion"]["jobs"][0]["promotion_node_id"]
+    second = archives / state["promotion"]["jobs"][1]["promotion_node_id"]
+    (first / "result.json").unlink()
+    (second / "certify/fold_3_result.json").unlink()
+
+    frozen = freeze_promotion(cell_root)
+
+    assert frozen["phase"] == "selection-ready"
+    assert len(frozen["promotion"]["eligible_candidates"]) == 8
+    assert frozen["promotion"]["jobs"][0]["status"] == "ineligible"
+    assert "missing result.json" in frozen["promotion"]["jobs"][0]["reason"]
+    assert frozen["promotion"]["jobs"][1]["status"] == "ineligible"
+    assert "missing sealed fold 3" in frozen["promotion"]["jobs"][1]["reason"]
+
+
 def test_promotion_freeze_rejects_cross_stage_identity_drift(staged_cell):
     cell_root, adir, cell, _, repo_root = staged_cell
     register_baseline(cell_root, _baseline(cell_root))

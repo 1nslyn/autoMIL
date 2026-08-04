@@ -1257,15 +1257,27 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
         archive = adir / "orchestrator" / "archive" / node_id
         spec_path = archive / "spec.json"
         result_path = archive / "result.json"
-        if not spec_path.is_file() or not result_path.is_file():
-            raise CampaignStageError(
-                f"promotion job {node_id} is terminal but lacks spec/result artifact"
-            )
+        missing = [
+            name for name, path in (("spec.json", spec_path), ("result.json", result_path))
+            if not path.is_file()
+        ]
+        if missing:
+            job.update({
+                "status": "ineligible",
+                "reason": f"terminal promotion is missing {', '.join(missing)}",
+            })
+            frozen_jobs.append(job)
+            continue
         try:
             spec = json.loads(spec_path.read_text())
             result = json.loads(result_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            raise CampaignStageError(f"cannot read promotion job {node_id}: {exc}") from exc
+            job.update({
+                "status": "ineligible",
+                "reason": f"terminal promotion artifact is unreadable: {exc}",
+            })
+            frozen_jobs.append(job)
+            continue
         if spec.get("base_commit") != state["base_commit"]:
             raise CampaignStageError(f"promotion base commit drifted for {node_id}")
         link = (spec.get("metadata") or {}).get("promotion") or {}
@@ -1276,11 +1288,6 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             or link.get("expected_folds") != list(STAGE_FOLDS["promotion"])
         ):
             raise CampaignStageError(f"promotion source link drifted for {node_id}")
-        verdict = revalidate_candidate_spec(policy, spec, archive).to_dict()
-        promotion_sha, _ = _candidate_identity(spec, verdict)
-        if promotion_sha != job["promotion_candidate_sha256"]:
-            raise CampaignStageError(f"promotion candidate identity drifted for {node_id}")
-
         if result.get("status") != "completed":
             job.update({
                 "status": "ineligible",
@@ -1288,9 +1295,16 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             })
             frozen_jobs.append(job)
             continue
+        verdict = revalidate_candidate_spec(policy, spec, archive).to_dict()
+        promotion_sha, _ = _candidate_identity(spec, verdict)
+        if promotion_sha != job["promotion_candidate_sha256"]:
+            raise CampaignStageError(f"promotion candidate identity drifted for {node_id}")
         try:
             promotion_folds = _validation_folds(
                 result, STAGE_FOLDS["promotion"],
+            )
+            promotion_sealed = _sealed_fold_hashes(
+                archive, STAGE_FOLDS["promotion"],
             )
         except CampaignStageError as exc:
             job.update({"status": "ineligible", "reason": str(exc)})
@@ -1311,7 +1325,7 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             "validation_mean": _mean(five_folds),
             "sealed_fold_sha256": {
                 **source["sealed_fold_sha256"],
-                **_sealed_fold_hashes(archive, STAGE_FOLDS["promotion"]),
+                **promotion_sealed,
             },
         }
         eligible.append(selection_candidate)
