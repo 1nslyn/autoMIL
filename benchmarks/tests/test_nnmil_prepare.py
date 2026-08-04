@@ -1,7 +1,9 @@
 """Tests for nnMIL data preparation (dataset.json, dataset.csv, dataset_plan.json)."""
 
+import importlib.util
 import json
 import os
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -138,6 +140,71 @@ class TestAnalyzeFeatures:
 
 
 class TestGenerateTrainingConfig:
+    @staticmethod
+    def _upstream_config(task_type, feature_dimension, n_samples):
+        """Run the vendored planner itself as the fidelity oracle."""
+        planner_path = (
+            Path(__file__).resolve().parents[2]
+            / "benchmarks/lib/nnMIL/preprocessing/experiment_planner.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "_autobench_vendored_nnmil_planner", planner_path,
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        planner = object.__new__(module.ExperimentPlanner)
+        planner.task_type = task_type
+        planner.evaluation_setting = "5fold"
+        if task_type == "classification":
+            labels = np.arange(n_samples) % 2
+            planner.df = pd.DataFrame({"label": labels})
+            planner.dataset_info = {
+                "metric": "bacc",
+                "labels": {"0": "negative", "1": "positive"},
+            }
+        else:
+            planner.df = pd.DataFrame({
+                "event": np.arange(n_samples) % 2,
+                "time": np.arange(n_samples, dtype=float) + 1,
+            })
+            planner.dataset_info = {"metric": "c_index"}
+        return planner.generate_training_config({
+            "feature_dimension": feature_dimension,
+            "recommended_max_seq_length": 2048,
+        })
+
+    @pytest.mark.parametrize("task_type", ["classification", "survival"])
+    @pytest.mark.parametrize("feature_dimension", [768, 1536, 2560])
+    @pytest.mark.parametrize("n_samples", [400, 1000])
+    def test_defaults_match_vendored_planner(
+        self, task_type, feature_dimension, n_samples,
+    ):
+        """The adapter must not silently fork nnMIL's self-configuration."""
+        upstream = self._upstream_config(task_type, feature_dimension, n_samples)
+        adapter = _generate_training_config(
+            {
+                "feature_dimension": feature_dimension,
+                "recommended_max_seq_length": 2048,
+            },
+            n_samples=n_samples,
+            n_classes=2,
+            metric="bacc" if task_type == "classification" else "c_index",
+            min_class_count=n_samples // 2 if task_type == "classification" else None,
+            task_type=task_type,
+            survival_loss="cox" if task_type == "survival" else None,
+        )
+        shared_fields = {
+            "feature_dimension", "hidden_dim", "max_seq_length",
+            "use_original_length", "batch_size", "batch_sampler",
+            "learning_rate", "weight_decay", "num_epochs", "warmup_epochs",
+            "dropout", "patience",
+        }
+        assert {key: adapter[key] for key in shared_fields} == {
+            key: upstream[key] for key in shared_fields
+        }
+
     def test_feature_dimension_preserved(self):
         stats = {
             "feature_dimension": 768,
