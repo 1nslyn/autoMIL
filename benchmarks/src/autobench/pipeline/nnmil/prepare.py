@@ -445,16 +445,16 @@ def _generate_survival_training_config(
 ) -> dict:
     """Training config for a survival experiment.
 
-    Mirrors the classification config's feature/seq sizing but bypasses the
-    class-minority batch logic (survival has no classes). ``num_classes`` is
-    the survival head width: 1 for cox/mse/mae, ``nll_bins`` for nllsurv.
-    ``survival_loss`` (+ ``nll_bins`` for nllsurv) are injected so the
-    survival trainers read them from the plan's config fallback. LR follows
-    nnMIL's survival planner default (1e-4); ``c_index`` metric resolves the
-    batch sampler to ``random`` (accepted by the survival trainers).
+    Reproduces the vendored planner's task-specific defaults: survival fixes
+    ``hidden_dim`` at 256 and leaves ``batch_sampler`` unset (``None``), while
+    retaining the shared sequence-length, batch-size, warmup, and weight-decay
+    rules. ``num_classes`` is the survival head width: 1 for cox/mse/mae,
+    ``nll_bins`` for nllsurv. ``survival_loss`` (+ ``nll_bins`` for nllsurv)
+    are injected so the survival trainers read them from the plan's config
+    fallback. LR follows nnMIL's survival planner default (1e-4).
     """
     feat_dim = feature_stats["feature_dimension"]
-    hidden_dim = max(256, feat_dim // 4)
+    hidden_dim = 256
     if "recommended_max_seq_length" in feature_stats:
         max_seq_length = int(feature_stats["recommended_max_seq_length"])
     else:
@@ -477,7 +477,7 @@ def _generate_survival_training_config(
         "max_seq_length": max_seq_length,
         "use_original_length": False,
         "batch_size": batch_size,
-        "batch_sampler": "random",
+        "batch_sampler": None,
         "learning_rate": 1e-4,
         "weight_decay": 0.01 if hidden_dim >= 512 else 1e-4,
         "num_epochs": 100,
