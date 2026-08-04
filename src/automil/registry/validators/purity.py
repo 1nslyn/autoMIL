@@ -32,6 +32,14 @@ _BANNED_OS_ATTRS: frozenset[str] = frozenset({
     "makedirs", "removedirs", "chmod", "chown",
 })
 
+# Imports execute module code.  Variant modules therefore get only the trusted
+# registry API plus annotation-only standard-library helpers at module scope;
+# numerical/framework imports belong inside methods where they cannot execute
+# during registry scanning.
+_TRUSTED_IMPORTS: frozenset[str] = frozenset({
+    "__future__", "automil.registry", "typing", "collections.abc",
+})
+
 
 def _is_immutable_literal(node: ast.AST) -> bool:
     """Return whether an AST expression is an immutable constant.
@@ -112,8 +120,25 @@ class PurityValidator:
     def _check_top_level_node(self, module_path: Path, node: ast.AST) -> None:
         """Inspect one top-level statement for purity violations."""
 
-        # --- always safe ---
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
+        # --- trusted imports only (imports execute code at module load) ---
+        if isinstance(node, ast.Import):
+            denied = [
+                alias.name
+                for alias in node.names
+                if alias.name not in _TRUSTED_IMPORTS
+            ]
+            if denied:
+                self._definition_error(
+                    module_path, node, f"untrusted top-level import(s) {denied}",
+                )
+            return
+        if isinstance(node, ast.ImportFrom):
+            if node.level or node.module not in _TRUSTED_IMPORTS:
+                self._definition_error(
+                    module_path,
+                    node,
+                    f"untrusted top-level import {node.module!r}",
+                )
             return
         if isinstance(node, ast.ClassDef):
             self._check_class_definition(module_path, node)
@@ -145,6 +170,10 @@ class PurityValidator:
 
         # --- module-level assignments ---
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            if isinstance(node, ast.AugAssign):
+                self._definition_error(
+                    module_path, node, "module constants cannot be mutated",
+                )
             # Subscript-target assignments are banned:
             # e.g., os.environ["X"] = "y"   (Assign with Subscript target)
             targets = getattr(node, "targets", None) or [getattr(node, "target", None)]
@@ -167,36 +196,17 @@ class PurityValidator:
             value = getattr(node, "value", None)
             if value is None:
                 return  # bare AnnAssign (`x: int`) is metadata, OK
-
-            # Reject mutable literal containers.
-            if isinstance(value, (ast.List, ast.Dict, ast.Set,
-                                   ast.ListComp, ast.DictComp, ast.SetComp,
-                                   ast.GeneratorExp)):
-                kind_name = type(value).__name__.replace("Comp", "comprehension").lower()
-                raise ValidationError(
-                    validator_name="purity",
-                    path=module_path,
-                    line=node.lineno,
-                    column=node.col_offset,
-                    reason=(
-                        f"mutable module-level global ({kind_name}); "
-                        "module-level state must be immutable (D-30)"
-                    ),
-                    fix_suggestion=(
-                        "Use a tuple/frozenset for an immutable constant, or move "
-                        "the mutable structure into a function/method body."
-                    ),
+            if not _is_immutable_literal(value):
+                # Innermost first preserves the specific root-cause diagnostic
+                # for chains such as ``open(...).read()``.
+                for sub_node in reversed(list(ast.walk(value))):
+                    if isinstance(sub_node, ast.Call):
+                        self._reject_call(module_path, sub_node)
+                self._definition_error(
+                    module_path,
+                    value,
+                    "module attributes must be immutable literals",
                 )
-
-            # Reject calls that produce mutable side effects.
-            # Walk the entire value expression to catch chained calls like
-            # open("/etc/passwd").read() where open() is nested inside a
-            # method-chain call.
-            for sub_node in ast.walk(value):
-                if isinstance(sub_node, ast.Call):
-                    self._reject_call(module_path, sub_node)
-
-            # Otherwise: constant/tuple/name/etc — OK.
             return
 
         # --- if blocks ---
@@ -229,8 +239,11 @@ class PurityValidator:
                         "tests/ file."
                     ),
                 )
-            # Other if-blocks at module level are unusual but not banned.
-            return
+            self._definition_error(
+                module_path,
+                node,
+                "top-level conditional blocks are not declarative",
+            )
 
         # --- anything else (Try, With, While, For, ...) is suspect ---
         raise ValidationError(
@@ -455,3 +468,12 @@ class PurityValidator:
                     reason=f"banned top-level filesystem/I/O call: .{func.attr}(...)",
                     fix_suggestion="Move the I/O into a method body.",
                 )
+
+        raise ValidationError(
+            validator_name="purity",
+            path=module_path,
+            line=call.lineno,
+            column=call.col_offset,
+            reason="top-level calls are not declarative and execute during import",
+            fix_suggestion="Move the call into a function or method body.",
+        )

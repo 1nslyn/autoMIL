@@ -120,7 +120,10 @@ source; then `uv run automil reconcile`.
       `--files automil/variants/_policies/<name>.py --override
       "--policy-variant <name>"`. The protected consumer loop supplies only
       optimizer/scheduler/stopping seams; model, defining loss, measurement,
-      and held-out outputs are unavailable through this interface.
+      and held-out outputs are unavailable through this interface. Keep module
+      scope declarative: only import `automil.registry`, `__future__`, `typing`,
+      or `collections.abc` at top level; import numerical libraries inside the
+      policy methods that use them.
    b. In free mode, model/loss/policy variants may use their registered kind
       directory and normal selection lifecycle.
    c. Free-mode edit: edit project files, then
