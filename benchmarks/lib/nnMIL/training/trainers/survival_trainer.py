@@ -205,6 +205,8 @@ class SurvivalTrainer(BaseTrainer):
             {"params": gain_or_bias_params, "weight_decay": 0.0},
             {"params": rest_params, "weight_decay": self.config.get('weight_decay', 0.01)}
         ], lr=self.config.get('learning_rate', 1e-4))
+        if self.policy_runtime is not None:
+            optimizer = self.policy_runtime.wrap_optimizer(optimizer)
         
         # Setup loss function
         loss_fn = SurvivalLoss(loss_type=self.survival_loss)
@@ -357,7 +359,14 @@ class SurvivalTrainer(BaseTrainer):
                 val_cidx = float(val_cidx.item()) if isinstance(val_cidx, torch.Tensor) else float(val_cidx)
                 self.logger.info(f"Val loss: {val_loss:.4f}, Val c-index: {val_cidx:.4f}")
                 early_stopping(val_loss, val_cidx, self.model)
-                if early_stopping.early_stop:
+                default_stop = early_stopping.early_stop
+                if self.policy_runtime is not None:
+                    default_stop = self.policy_runtime.should_stop(
+                        default_stop,
+                        epoch=epoch,
+                        metrics={'val_loss': val_loss, 'val_c_index': val_cidx},
+                    )
+                if default_stop:
                     self.logger.info(f"Early stopping triggered at epoch {epoch+1}")
                     break
             else:

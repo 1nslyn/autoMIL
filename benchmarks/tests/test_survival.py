@@ -20,6 +20,7 @@ from autobench.config import TaskDef, _parse_tasks
 from autobench.pipeline.config import (
     BenchmarkConfig,
     Framework,
+    TrainConfig,
     build_registries,
     generate_all_experiments,
 )
@@ -581,6 +582,56 @@ class TestSurvivalTrainerSmoke:
             risk.detach(), status, time, [f"p{i}" for i in range(batch)],
         )
         assert ci is None or np.isnan(float(ci)) or 0.0 <= float(ci) <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# CLAM survival optimizer dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestClamSurvivalOptimizerDispatch:
+    """Survival and classification must consume the same declared CLAM knob."""
+
+    @pytest.mark.parametrize(
+        ("name", "expected_type"),
+        [("adam", "Adam"), ("sgd", "SGD")],
+    )
+    def test_declared_optimizer_selects_the_live_optimizer(self, name, expected_type):
+        import torch
+
+        from autobench.pipeline.clam.survival_train import _build_optimizer
+
+        model = torch.nn.Linear(4, 2)
+        cfg = TrainConfig(optimizer=name, lr=3e-4, weight_decay=7e-5)
+        optimizer = _build_optimizer(model, cfg)
+
+        assert type(optimizer).__name__ == expected_type
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(3e-4)
+        assert optimizer.param_groups[0]["weight_decay"] == pytest.approx(7e-5)
+
+    def test_unknown_optimizer_fails_loudly(self):
+        import torch
+
+        from autobench.pipeline.clam.survival_train import _build_optimizer
+
+        model = torch.nn.Linear(4, 2)
+        with pytest.raises(NotImplementedError):
+            _build_optimizer(model, TrainConfig(optimizer="adamw"))
+
+    @pytest.mark.parametrize(
+        ("enabled", "callback_fired", "expected"),
+        [(False, True, False), (True, False, False), (True, True, True)],
+    )
+    def test_early_stopping_switch_is_not_silently_ignored(
+        self, enabled, callback_fired, expected,
+    ):
+        from types import SimpleNamespace
+
+        from autobench.pipeline.clam.survival_train import _should_stop
+
+        cfg = TrainConfig(early_stopping=enabled)
+        state = SimpleNamespace(early_stop=callback_fired)
+        assert _should_stop(cfg, state) is expected
 
 
 # ---------------------------------------------------------------------------

@@ -75,20 +75,22 @@ def _parse_held_out_cells(
         "Auto-selection (--auto-select) is forthcoming (plan 12 calibration pilot)."
     ),
 )
-@click.option("--K", "K", type=int, default=2, show_default=True, help="Min cells that must pass (D-141).")
+@click.option("--K", "K", type=int, default=None,
+              help="Min cells that must pass (D-141). Default: gate.K from "
+                   "automil/config.yaml, else 2.")
 @click.option(
     "--p-threshold",
     type=float,
-    default=0.05,
-    show_default=True,
-    help="Pre-Bonferroni alpha. Effective threshold is p_threshold/K (O-02).",
+    default=None,
+    help="Pre-Bonferroni alpha; effective threshold is p_threshold/K (O-02). "
+         "Default: gate.p_threshold from automil/config.yaml, else 0.05.",
 )
 @click.option(
     "--bootstrap-reps",
     type=int,
-    default=1000,
-    show_default=True,
-    help="GTE-04 locked: 1000 BCa bootstrap resamples for CI.",
+    default=None,
+    help="GTE-04: BCa bootstrap resamples for the CI. Default: "
+         "gate.bootstrap_reps from automil/config.yaml, else 1000.",
 )
 @click.option(
     "--held-out-cells",
@@ -114,8 +116,8 @@ def register_manifest_cmd(
     parent_id: str,
     strategy: str,
     K: int,
-    p_threshold: float,
-    bootstrap_reps: int,
+    p_threshold: float | None,
+    bootstrap_reps: int | None,
     held_out_cells: str | None,
     auto_select: int | None,
 ) -> None:
@@ -137,6 +139,25 @@ def register_manifest_cmd(
     _validate_parent_id(parent_id)
 
     adir = _find_automil_dir()
+
+    # CFG-1: the `gate:` block in automil/config.yaml was read by nothing — every
+    # value came from this command's CLI defaults. For a PRE-REGISTERED gate that
+    # is backwards: the thresholds are meant to be fixed in git before any
+    # held-out evaluation runs, so they must come from the committed config, with
+    # an explicit flag as the override rather than the only source.
+    import yaml as _yaml
+
+    from automil.gate.config import load_gate_config
+
+    _cfg_path = adir / "config.yaml"
+    _raw = _yaml.safe_load(_cfg_path.read_text()) if _cfg_path.exists() else {}
+    _gate_cfg = load_gate_config(_raw)
+    if K is None:
+        K = _gate_cfg.K
+    if p_threshold is None:
+        p_threshold = _gate_cfg.p_threshold
+    if bootstrap_reps is None:
+        bootstrap_reps = _gate_cfg.bootstrap_reps
     git_root = _find_git_root()
 
     # Validate parent_id exists in graph (if graph.json exists)

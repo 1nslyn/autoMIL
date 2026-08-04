@@ -21,7 +21,10 @@ from autobench.pipeline.abmil.survival_train import train_abmil_survival_fold
 from autobench.pipeline.abmil.train import train_abmil_fold
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
-from autobench.pipeline.evaluate import compute_confidence_intervals
+from autobench.pipeline.hparams import all_overrides, apply_overrides
+from autobench.pipeline.results_cache import resolve_results_dir
+from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def _resolve_h5_dir(benchmark_dir: str, exp_cfg: ExperimentConfig) -> str:
@@ -50,6 +53,7 @@ def run_abmil_experiment(
     benchmark_dir: str,
     device: str = "cuda:0",
     cfg: ABMILConfig | None = None,
+    results_dir: str | None = None,
 ) -> dict:
     """Run all folds for a single ABMIL experiment; return aggregated summary.
 
@@ -61,11 +65,25 @@ def run_abmil_experiment(
     """
     if cfg is None:
         cfg = ABMILConfig()
+    # H-3 (audit 2026-07-23): ABMIL previously read ONLY `seed` off exp_cfg, so
+    # --lr / --max_epochs / --patience and any agentic variant's CLAM_ARGS were
+    # silently discarded. ABMILConfig stays the source of truth for defaults;
+    # explicitly-set overrides are layered on top (None values are dropped, so an
+    # unset flag can never pull this arm onto the shared schedule).
+    cfg = apply_overrides(cfg, all_overrides(exp_cfg), arm="abmil")
     torch_device = torch.device(device)
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
-    results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
+    # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
+    # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
+    # never resumed across experiments/seeds/variants. Falls back to the shared
+    # benchmark_dir path for standalone (non-orchestrated) runs.
+    # CR-5b: `cfg` is passed too — ABMIL's M/L/dropout live outside exp_cfg, so a
+    # change there must invalidate this cache as surely as a change to lr.
+    results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir, arm_cfg=cfg)
+    # H-3: ABMIL trains off ABMILConfig (lr 5e-4 / wd 1e-4 / 20 epochs), not the
+    # shared TrainConfig that config.json also carries.
+    exp_cfg.save(os.path.join(results_dir, "config.json"), arm_cfg=cfg)
 
     h5_dir = _resolve_h5_dir(benchmark_dir, exp_cfg)
     task_csv = os.path.join(benchmark_dir, "dataset_csv", f"{exp_cfg.task.name}.csv")
@@ -75,7 +93,7 @@ def run_abmil_experiment(
     model_type = exp_cfg.model.model_type
 
     fold_results: list[dict] = []
-    for fold in range(exp_cfg.n_folds):
+    for fold in exp_cfg.selected_folds:
         fold_dir = os.path.join(results_dir, f"fold_{fold}")
         os.makedirs(fold_dir, exist_ok=True)
         metrics_path = os.path.join(fold_dir, "metrics.json")
@@ -89,6 +107,8 @@ def run_abmil_experiment(
             _write_fold_result_json(fold, result)
             continue
 
+        fold_policy_runtime = policy_runtime.for_fold()
+
         split_csv = os.path.join(splits_dir, f"splits_{fold}.csv")
         if exp_cfg.is_survival:
             train_samples = load_abmil_survival_split(task_csv, split_csv, h5_dir, "train")
@@ -99,6 +119,7 @@ def run_abmil_experiment(
                 embed_dim=exp_cfg.embed_dim, survival_loss=exp_cfg.survival_loss or "cox",
                 nll_bins=exp_cfg.task.nll_bins, cfg=cfg, device=torch_device,
                 seed=exp_cfg.train.seed + fold, fold_dir=fold_dir,
+                policy_runtime=fold_policy_runtime,
             )
         else:
             train_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "train")
@@ -108,11 +129,14 @@ def run_abmil_experiment(
                 model_type, train_slides, val_slides, test_slides,
                 embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+                policy_runtime=fold_policy_runtime,
             )
 
         result = {
             "test_metrics": raw["test_metrics"],
             "val_metrics": raw["val_metrics"],
+            # CR-3: carry the val risk records through for pooled concordance.
+            **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
             "fold": fold,
             "elapsed_seconds": int(raw.get("elapsed_seconds", 0) or 0),
         }
@@ -127,6 +151,7 @@ def run_abmil_experiment(
     elapsed_seconds_total = sum(fr.get("elapsed_seconds", 0) or 0 for fr in fold_results)
 
     exp_summary = {
+        "dataset": exp_cfg.dataset,
         "experiment_id": exp_cfg.experiment_id,
         "task": exp_cfg.task.name,
         "encoder": exp_cfg.encoder_key,
@@ -136,10 +161,13 @@ def run_abmil_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),
         "val": compute_confidence_intervals(val_fold_metrics),
+        # CR-3: pooled cross-fold val concordance (survival only; {} otherwise).
+        "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
     }

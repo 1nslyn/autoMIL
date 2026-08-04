@@ -1,7 +1,9 @@
 """Tests for nnMIL data preparation (dataset.json, dataset.csv, dataset_plan.json)."""
 
+import importlib.util
 import json
 import os
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -51,7 +53,12 @@ def h5_features_dir(tmp_path):
     """Create synthetic H5 feature files."""
     h5_dir = tmp_path / "features_conch_v15"
     h5_dir.mkdir()
-    for i in range(30):
+    # M-9 (nnMIL follow-up, 2026-07-29): the task CSV below has 45 slides. This
+    # used to write only 30 H5 files — a 33% silent drop, which is exactly the
+    # defect the retention guard now refuses. The fixture's purpose is to build a
+    # plan, not to exercise a partially-extracted cohort, so it is now complete;
+    # the drop itself is covered by test_nnmil_prepare_retention.py.
+    for i in range(45):
         n_patches = np.random.randint(50, 200)
         with h5py.File(h5_dir / f"slide_{i:05d}.h5", "w") as f:
             f.create_dataset("features", data=np.random.randn(n_patches, 768).astype(np.float32))
@@ -114,7 +121,7 @@ class TestAnalyzeFeatures:
         assert stats["recommended_max_seq_length"] == expected
 
     def test_max_seq_length_uncapped(self, tmp_path):
-        """Matches nnMIL planner.py:129 — int(median * 0.5) with no upper cap."""
+        """Matches nnMIL experiment_planner.py:129 — int(median * 0.5), no cap."""
         h5_dir = tmp_path / "features_big"
         h5_dir.mkdir()
         for i in range(5):
@@ -133,6 +140,71 @@ class TestAnalyzeFeatures:
 
 
 class TestGenerateTrainingConfig:
+    @staticmethod
+    def _upstream_config(task_type, feature_dimension, n_samples):
+        """Run the vendored planner itself as the fidelity oracle."""
+        planner_path = (
+            Path(__file__).resolve().parents[2]
+            / "benchmarks/lib/nnMIL/preprocessing/experiment_planner.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "_autobench_vendored_nnmil_planner", planner_path,
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        planner = object.__new__(module.ExperimentPlanner)
+        planner.task_type = task_type
+        planner.evaluation_setting = "5fold"
+        if task_type == "classification":
+            labels = np.arange(n_samples) % 2
+            planner.df = pd.DataFrame({"label": labels})
+            planner.dataset_info = {
+                "metric": "bacc",
+                "labels": {"0": "negative", "1": "positive"},
+            }
+        else:
+            planner.df = pd.DataFrame({
+                "event": np.arange(n_samples) % 2,
+                "time": np.arange(n_samples, dtype=float) + 1,
+            })
+            planner.dataset_info = {"metric": "c_index"}
+        return planner.generate_training_config({
+            "feature_dimension": feature_dimension,
+            "recommended_max_seq_length": 2048,
+        })
+
+    @pytest.mark.parametrize("task_type", ["classification", "survival"])
+    @pytest.mark.parametrize("feature_dimension", [768, 1536, 2560])
+    @pytest.mark.parametrize("n_samples", [400, 1000])
+    def test_defaults_match_vendored_planner(
+        self, task_type, feature_dimension, n_samples,
+    ):
+        """The adapter must not silently fork nnMIL's self-configuration."""
+        upstream = self._upstream_config(task_type, feature_dimension, n_samples)
+        adapter = _generate_training_config(
+            {
+                "feature_dimension": feature_dimension,
+                "recommended_max_seq_length": 2048,
+            },
+            n_samples=n_samples,
+            n_classes=2,
+            metric="bacc" if task_type == "classification" else "c_index",
+            min_class_count=n_samples // 2 if task_type == "classification" else None,
+            task_type=task_type,
+            survival_loss="cox" if task_type == "survival" else None,
+        )
+        shared_fields = {
+            "feature_dimension", "hidden_dim", "max_seq_length",
+            "use_original_length", "batch_size", "batch_sampler",
+            "learning_rate", "weight_decay", "num_epochs", "warmup_epochs",
+            "dropout", "patience",
+        }
+        assert {key: adapter[key] for key in shared_fields} == {
+            key: upstream[key] for key in shared_fields
+        }
+
     def test_feature_dimension_preserved(self):
         stats = {
             "feature_dimension": 768,
@@ -150,7 +222,7 @@ class TestGenerateTrainingConfig:
         assert config["batch_size"] == 16
 
     def test_large_dataset_batch_matches_planner(self):
-        """planner.py:639-657 — n_train>800 → batch_size=32 (clamped to [16,48])."""
+        """experiment_planner.py:639-657 — n_train>800 → batch_size=32."""
         stats = {
             "feature_dimension": 768,
             "num_patches_per_slide": {"median": 400},
@@ -159,7 +231,7 @@ class TestGenerateTrainingConfig:
         assert config["batch_size"] == 32
 
     def test_mid_dataset_batch_matches_planner(self):
-        """planner.py:643 — 200<=n_train<=800 → 24 if <400 else 32."""
+        """experiment_planner.py:643 — 200<=n_train<=800 → 24 if <400 else 32."""
         stats = {
             "feature_dimension": 768,
             "num_patches_per_slide": {"median": 400},
@@ -170,7 +242,7 @@ class TestGenerateTrainingConfig:
         assert cfg_600["batch_size"] == 32
 
     def test_max_seq_length_uncapped(self):
-        """planner.py:129 — int(median * 0.5) with no upper cap."""
+        """experiment_planner.py:129 — int(median * 0.5) with no upper cap."""
         stats = {
             "feature_dimension": 768,
             "num_patches_per_slide": {"median": 13236},

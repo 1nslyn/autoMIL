@@ -1,0 +1,146 @@
+# autoMIL configuration — TCGA-LUAD — KRAS mutation (binary) + overall survival
+#
+# Preprint roster cohort (EXPERIMENT_GRID.md §1). Created 2026-07-28 for finding
+# NO-OVERLAY: `benchmarks/experiments/` held only ccrcc / clwd / ovarian_hrd /
+# placeholder, so the agentic layer — the paper's headline — was configured for
+# no preprint cohort at all, which is also why Fig 3's feasibility anchors are
+# off-roster (A-1).
+
+project:
+  name: "tcga_luad"
+  description: "TCGA-LUAD — KRAS mutation (binary) + overall survival"
+
+task:
+  name: "kras"
+  type: "binary"
+  num_classes: 2
+  label_column: "label"
+
+data:
+  # `${...}` is resolved from benchmarks/.env; `automil check` skips path
+  # validation for env-templated values by design (check.py:197).
+  features_dir: "${AUTOBENCH_TCGA_LUAD_ROOT}/benchmark/features"
+  splits_dir: "${AUTOBENCH_TCGA_LUAD_ROOT}/benchmark/splits/standard"
+  mapping_csv: "${AUTOBENCH_TCGA_LUAD_ROOT}/normalized_manifest.csv"
+  num_folds: 5
+  seed: 42
+
+encoders:
+  primary: "uni_v2"
+  available:
+    uni_v2: 1536
+    hoptimus1: 1536
+    virchow2: 2560
+    conch_v15: 768        # TITAN's input features
+
+metrics:
+  primary: "composite"
+  composite_formula: "(val_auc + val_bacc) / 2"
+  track: ["val_auc", "val_bacc"]
+
+# CR-4 / PRELAUNCH_REVIEW O2: the Ladder keep-margin. δ=0.0 (strict dominance) is
+# indefensible here — splits.py carves val at 12.5% of train_val, so selection
+# runs on ~46 validation patients, and the maximum of ~60 discovery candidates
+# drawn from that noise distribution is a large apparent lift that will not
+# survive to the sealed test block. O2's recommendation, scaled to the val SE:
+# δ ≈ 0.05 on the small cohorts (GBM n=99, PDAC n=105) vs ≈ 0.015 on the large
+# ones. This is a predeclared placeholder — CR-4 replaces it with a per-cell
+# δ computed as ≥1 SE of the CV composite.
+scoring:
+  formula: ""
+  technique_map: {}
+  accept_margin: 0.015
+  # CR-4: the applied margin is max(accept_margin, se_multiplier x the parent's
+  #   measured cross-fold SE). accept_margin above is the PREDECLARED floor
+  #   (PRELAUNCH_REVIEW O2: ~0.05 on the ~10-val-patient cohorts, ~0.015 on the
+  #   large ones); the measured noise can raise it at run time but never lower it.
+  se_multiplier: 1.0
+
+# Cohort statistics (EXPERIMENT_GRID.md §1.1), for the agent's context:
+#   patients n=465  ·  OS deaths=167
+cohort:
+  n_patients: 465
+  os_deaths: 167
+
+# H-4 (audit 2026-07-28): the frozen data substrate, ENFORCED.
+# `submit.py` hard-rejects any overlay matching these globs, with no --force
+# escape. Unlike the former files.readonly warning (which explicit --files could
+# bypass), this actually freezes the evaluation protocol,
+# the selection signal and the encoder inputs — the precondition for the paper's
+# equal-effort claim. `mode: architecture-preserving` now REQUIRES a non-empty
+# list, so this can no longer be silently left empty.
+#
+# Note what makes this affordable: H-3b gave every arm an explicit hyperparameter
+# channel (--hparams / a variant's HPARAMS, checked against the declared
+# per-arm search space), so freezing `pipeline/config.py` and `run_experiment.py`
+# no longer costs the agent legitimate scalar tuning reach. Only declared
+# hyperparameters and executable train-only PolicyVariant modules remain open;
+# published model, trainer, and measurement implementations are frozen.
+registry:
+  mode: "architecture-preserving"
+  allowed_override_options: ["--hparams", "--policy-variant"]
+  allowed_variant_kinds: ["policy"]
+  # These scalar switches erase CLAM's defining instance-loss mechanism.
+  identity_locked_hparams: ["no_inst_cluster", "bag_weight"]
+  protected:
+    # --- evaluation protocol: splits, prep, metrics ---
+    - "benchmarks/src/autobench/pipeline/splits.py"
+    - "benchmarks/src/autobench/pipeline/prepare.py"
+    - "benchmarks/src/autobench/pipeline/evaluate.py"
+    - "benchmarks/src/autobench/pipeline/*/prepare.py"    # per-framework prep incl. feature conversion
+    - "benchmarks/src/autobench/pipeline/*/evaluate.py"
+    - "benchmarks/src/autobench/pipeline/dtfd/eval.py"    # named separately: not */evaluate.py
+    - "benchmarks/src/autobench/pipeline/*/dataset.py"    # split + feature consumers
+    # --- the selection signal (the val-firewall guarantee) ---
+    - "benchmarks/src/autobench/pipeline/*/runner.py"     # shared writer = clam/runner.py
+    - "benchmarks/scripts/run_experiment.py"              # entry point + summary_to_result_json
+    - "benchmarks/src/autobench/pipeline/results_cache.py"  # CR-5b cache identity
+    - "benchmarks/src/autobench/pipeline/results.py"
+    # --- the declared search space itself (A-2) ---
+    - "benchmarks/src/autobench/pipeline/search_space.py"
+    - "benchmarks/src/autobench/pipeline/hparams.py"
+    # --- experiment identity: fold count, seed, labels, feature roots ---
+    - "benchmarks/src/autobench/pipeline/config.py"       # TrainConfig.seed, n_folds
+    - "benchmarks/src/autobench/config.py"                # dataset-YAML loader
+    - "benchmarks/datasets/"                              # labels, label_map, feature roots
+    # --- feature extraction / encoder inputs ---
+    - "benchmarks/scripts/run_feature_extraction.py"
+    - "benchmarks/src/autobench/data.py"                  # WSI-list CSV feeding TRIDENT
+
+files:
+  editable:
+    - "benchmarks/experiments/tcga_luad/automil/variants/_policies/*.py"
+run:
+  script: null
+  command: "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model clam_mb --framework clam --no_wandb"
+
+# H-2: the budget. No benchmark config set a `cap:` block at all, so every cell
+# silently ran at the framework's implicit 6h / agent_active default
+# (cells/capconfig.py:17-21). Declared here so the equal-effort claim rests on a
+# predeclared number rather than a default nobody chose.
+cap:
+  budget: 6h
+  safety_buffer: 30m
+  mode: agent_active
+  idle_grace_seconds: 300
+
+orchestrator:
+  poll_interval_sec: 5
+  safety_margin_gb: 2.0
+  default_timeout_min: 150
+  # CFG-2: these two belong under `orchestrator:`, NOT under `cap:` — the daemon
+  # reads them from here (_orchestrator_daemon.py:439-444). The shipped template
+  # puts them under `cap:`, where nothing reads them.
+  max_concurrent_per_gpu: 4
+  default_vram_estimate_gb: 1.0
+
+env:
+  passthrough:
+    - AUTOBENCH_ROOT
+    - AUTOBENCH_TCGA_LUAD_ROOT
+  dotenv_files:
+    - benchmarks/.env
+
+viz:
+  port: 8421
+  host: "127.0.0.1"

@@ -16,10 +16,13 @@ from dataclasses import replace
 
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
-from autobench.pipeline.evaluate import compute_confidence_intervals
+from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.results_cache import resolve_results_dir
+from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import build_split_dataset, build_survival_split_dataset
 from autobench.pipeline.titan.survival_train import train_titan_survival_fold
 from autobench.pipeline.titan.train import train_titan_fold
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 import pandas as pd
 
@@ -28,6 +31,7 @@ def run_titan_experiment(
     exp_cfg: ExperimentConfig,
     benchmark_dir: str,
     device: str = "cuda:0",
+    results_dir: str | None = None,
 ) -> dict:
     """Run all folds for a single TITAN experiment and return aggregated results.
 
@@ -55,16 +59,32 @@ def run_titan_experiment(
     # embed_dim so train_titan_fold builds nn.Linear(true_dim, n_classes)
     # and config.json/summary record the real dimension.
     exp_cfg = replace(exp_cfg, embed_dim=int(manifest["embed_dim"]))
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
-    results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
+    # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
+    # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
+    # never resumed across experiments/seeds/variants. Falls back to the shared
+    # benchmark_dir path for standalone (non-orchestrated) runs.
+    # CR-5b: the head config is built inside the trainer, so stamp its *defaults*
+    # here — the overrides layered on top of them come from exp_cfg, which is
+    # already in the fingerprint. Together that covers TITAN's whole surface.
+    _head_cfg = TitanHeadConfig()
+    results_dir = resolve_results_dir(
+        exp_cfg, benchmark_dir, results_dir, arm_cfg=_head_cfg,
+    )
+    # H-3: TITAN is genuinely MIXED -- the probe's lr/weight_decay/patience come
+    # from TitanHeadConfig (1e-3 / 1e-4), while max_epochs and seed are read off
+    # the shared TrainConfig. The emitted `train_fields_superseded_by_arm` names
+    # exactly which side won for each field, so the split is readable from the
+    # artifact instead of only from this comment.
+    exp_cfg.save(os.path.join(results_dir, "config.json"), arm_cfg=_head_cfg)
 
     task_csv = os.path.join(benchmark_dir, "dataset_csv", f"{exp_cfg.task.name}.csv")
     task_df = pd.read_csv(task_csv)
 
     fold_results: list[dict] = []
-    for fold in range(exp_cfg.n_folds):
+    for fold in exp_cfg.selected_folds:
+        fold_policy_runtime = policy_runtime.for_fold()
         split_csv = os.path.join(
             benchmark_dir, "splits", exp_cfg.strategy, exp_cfg.task.name,
             f"splits_{fold}.csv",
@@ -75,6 +95,7 @@ def run_titan_experiment(
             test_ds = build_survival_split_dataset(split_csv, "test", task_df, features_dir)
             result = train_titan_survival_fold(
                 exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
+                policy_runtime=fold_policy_runtime,
             )
         else:
             train_ds = build_split_dataset(
@@ -88,6 +109,7 @@ def run_titan_experiment(
             )
             result = train_titan_fold(
                 exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
+                policy_runtime=fold_policy_runtime,
             )
         fold_results.append(result)
         _write_fold_result_json(fold, result)
@@ -97,6 +119,7 @@ def run_titan_experiment(
     elapsed_seconds_total = sum(fr.get("elapsed_seconds", 0) or 0 for fr in fold_results)
 
     exp_summary = {
+        "dataset": exp_cfg.dataset,
         "experiment_id": exp_cfg.experiment_id,
         "task": exp_cfg.task.name,
         "encoder": exp_cfg.encoder_key,
@@ -106,10 +129,13 @@ def run_titan_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),
         "val": compute_confidence_intervals(val_fold_metrics),
+        # CR-3: pooled cross-fold val concordance (survival only; {} otherwise).
+        "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
     }

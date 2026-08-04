@@ -203,6 +203,16 @@ def test_setup_gate_passes_on_known_good_config(tmp_git_repo, monkeypatch):
     assert status in {"completed", "executed"}, (
         f"known-good train.py expected status in {{'completed','executed'}}, got status={status!r}"
     )
+    completion = json.loads(
+        (
+            automil_dir
+            / "orchestrator"
+            / "completed"
+            / "node_setup_validation.json"
+        ).read_text()
+    )
+    assert completion["accelerator"] == "cpu"
+    assert completion["gpu"] is None
 
 
 @pytest.mark.skipif(

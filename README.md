@@ -268,8 +268,8 @@ Orchestrator picks up from queue
     |  (creates git worktree at base commit)
     |  (overlays changed files on top)
     v
-Runs on GPU in isolation
-    |  (CUDA_VISIBLE_DEVICES masked)
+Runs on a typed CPU/CUDA/ROCm slot in isolation
+    |  (framework-owned device masks)
     v
 Collects result.json
     |  (Ladder keep-margin on the val composite: keep or discard?)
@@ -328,13 +328,22 @@ schema-location pointer.
 <details>
 <summary><b>Environment variables available to your script</b></summary>
 
-| Variable               | Value                    | Description                                                  |
-| ---------------------- | ------------------------ | ------------------------------------------------------------ |
-| `CUDA_VISIBLE_DEVICES` | Physical GPU ID          | Masked by orchestrator.                                      |
-| `AUTOMIL_GPU`          | `0`                      | Logical device, always 0 because masking is already applied. |
-| `AUTOMIL_NODE_ID`      | `node_0042`              | Experiment identifier.                                       |
-| `AUTOMIL_DESC`         | `"try focal loss"`       | Experiment description.                                      |
-| `AUTOMIL_RUNTIME`      | `claude` / `codex` / ... | Runtime declared by the agent for trajectory tagging.        |
+| Variable | Value | Description |
+| --- | --- | --- |
+| `AUTOMIL_ACCELERATOR` | `cpu` / `cuda` / `rocm` | Authoritative execution substrate. |
+| `CUDA_VISIBLE_DEVICES` | Physical CUDA ID, ROCm logical `0`, or empty | Framework-owned compatibility mask. |
+| `ROCR_VISIBLE_DEVICES` | Physical ROCm ID or empty | Primary ROCm/Linux host-device mask. |
+| `HIP_VISIBLE_DEVICES` / `GPU_DEVICE_ORDINAL` | ROCm logical `0` or empty | Post-ROCR logical-device masks. |
+| `AUTOMIL_GPU` | `0` | Backward-compatible logical slot; CPU consumers ignore it. |
+| `AUTOMIL_NODE_ID` | `node_0042` | Experiment identifier. |
+| `AUTOMIL_DESC` | `"try focal loss"` | Experiment description. |
+| `AUTOMIL_RUNTIME` | `claude` / `codex` / ... | Runtime declared by the agent for trajectory tagging. |
+
+The orchestrator owns all device-mask variables; a per-experiment `spec.env`
+cannot override them. On ROCm/Linux it first selects the physical host GPU with
+`ROCR_VISIBLE_DEVICES`, then exposes that device as logical `0` to HIP-compatible
+training code. CPU consumers receive empty masks and must branch on
+`AUTOMIL_ACCELERATOR`, not on `AUTOMIL_GPU`.
 
 Vars listed under `env.passthrough` in `config.yaml` are forwarded from the
 orchestrator process to each experiment subprocess. `AUTOBENCH_ROOT`-style

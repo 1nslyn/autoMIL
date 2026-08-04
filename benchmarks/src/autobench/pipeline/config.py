@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from enum import Enum
 
 from autobench.config import DatasetConfig
@@ -69,12 +69,24 @@ class ModelConfig:
     dropout: float = 0.25
     bag_weight: float = 0.7
     B: int = 8  # patches sampled for instance-level training
+    # H-3b: CLAM's instance-clustering branch. These were hardcoded in
+    # `_make_clam_args`, so three live upstream knobs (core_utils.py:117 bag_loss,
+    # :141 inst_loss, :185 no_inst_cluster) sat outside the search space while the
+    # rest of CLAM's surface sat inside it. Defaults reproduce the hardcoded
+    # values exactly, so no dispatched experiment changes.
+    bag_loss: str = "ce"              # "ce" | "svm"
+    inst_loss: str | None = None      # None | "svm" | "ce"
+    no_inst_cluster: bool = False     # True disables CLAM's instance-clustering
 
 
 @dataclass
 class TrainConfig:
     max_epochs: int = 200
-    lr: float = 2e-4
+    # 2026-07-28: returned to CLAM's own upstream default (lib/CLAM/main.py:74,
+    # `--lr default=1e-4`). Was 2e-4, a 2x deviation with no recorded rationale
+    # (see provenance.py). CLAM reads this field directly (clam/train.py); no
+    # other arm consumes TrainConfig.lr, so this is CLAM-only in effect.
+    lr: float = 1e-4
     weight_decay: float = 1e-5
     optimizer: str = "adam"
     early_stopping: bool = True
@@ -82,6 +94,46 @@ class TrainConfig:
     stop_epoch: int = 50
     weighted_sample: bool = True
     seed: int = 42
+
+
+def _arm_as_dict(arm_cfg) -> dict | None:
+    """Arm config dataclass / nnMIL plan mapping -> plain dict; ``None`` if absent."""
+    if arm_cfg is None:
+        return None
+    if is_dataclass(arm_cfg) and not isinstance(arm_cfg, type):
+        return asdict(arm_cfg)
+    if isinstance(arm_cfg, dict):
+        return dict(arm_cfg)
+    raise TypeError(
+        f"arm_cfg must be a dataclass instance or a mapping, got {type(arm_cfg).__name__}"
+    )
+
+
+def _train_fields_superseded_by_arm(arm: dict | None) -> list[str]:
+    """Which ``train`` fields this arm's OWN config governs instead (H-3).
+
+    ``TrainConfig`` is the shared transport, but only CLAM actually trains off
+    it: DTFD, nnMIL and TITAN each carry their own ``lr``/``wd``/epoch count.
+    ``config.json`` recorded the shared block regardless, so 102 of the 195
+    campaign configs described a recipe that never ran -- a methods table built
+    from that artifact would be fiction.
+
+    Recording the arm block alone is not enough, because the stale ``train``
+    block sits right next to it and a reader cannot tell which one governed.
+    This list names, per run, exactly which ``train`` entries are superseded.
+    Computed from the arm's real field names (via ``hparams.FIELD_ALIASES``, so
+    DTFD's ``wd`` and nnMIL's ``learning_rate`` resolve correctly), never
+    asserted from a hand-maintained table that could drift.
+    """
+    if not arm:
+        return []
+    from autobench.pipeline.hparams import FIELD_ALIASES
+
+    return sorted(
+        canonical
+        for canonical, aliases in FIELD_ALIASES.items()
+        if any(alias in arm for alias in aliases)
+    )
 
 
 @dataclass
@@ -94,14 +146,57 @@ class ExperimentConfig:
     n_folds: int = 5
     framework: Framework = Framework.CLAM
     strategy: str = "standard"
+    # DATA-ID: dataset identity was recorded in NO results artifact — dataset
+    # existed only as a filesystem path, so summary.json / aggregated/*.csv
+    # carried task/encoder/model/framework/seed but never which cohort
+    # produced them. Defaulted to "" so existing constructions (tests, ad-hoc
+    # scripts) do not break.
+    dataset: str = ""
     # Survival loss variant (cox/mse/mae/nllsurv). None for classification —
     # kept None so classification experiment_id / results_subdir are byte-
     # identical to pre-survival behaviour (no result-dir migration).
     survival_loss: str | None = None
+    # H-3b: the opaque per-arm override channel. The shared transport above is
+    # CLAM-shaped, so DTFD's `numGroup`, ABMIL's `M`/`L` and nnMIL's
+    # `warmup_epochs` have no field to travel in. This dict carries them by name;
+    # `hparams.apply_overrides` checks each against the arm's DECLARED search
+    # space (search_space.py) and raises on anything undeclared or locked.
+    # Empty by default, so a plain grid run is byte-identical to before.
+    hparam_overrides: dict = field(default_factory=dict)
+    # Optional registered train-only PolicyVariant. The protected trainers own
+    # model/forward/loss/measurement code; this selects only the optimizer,
+    # scheduler, and stopping adapter exposed by policy_dispatch.py.
+    policy_variant: str | None = None
+    # Stage controller fold subset. ``n_folds`` remains the immutable split
+    # definition (five for the preprint); this selects which of those prepared
+    # folds the current stage is allowed to train. None means all folds and is
+    # byte-compatible with every static-grid run.
+    fold_indices: tuple[int, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.fold_indices is None:
+            return
+        indices = tuple(self.fold_indices)
+        if not indices:
+            raise ValueError("fold_indices must not be empty")
+        if any(type(index) is not int for index in indices):
+            raise TypeError("fold_indices must contain only integers")
+        if len(set(indices)) != len(indices):
+            raise ValueError("fold_indices must not contain duplicates")
+        if any(index < 0 or index >= self.n_folds for index in indices):
+            raise ValueError(
+                f"fold_indices {indices} must lie in [0, {self.n_folds})"
+            )
+        self.fold_indices = indices
 
     @property
     def is_survival(self) -> bool:
         return self.task.task_type == "survival"
+
+    @property
+    def selected_folds(self) -> tuple[int, ...]:
+        """Prepared fold indices trained by this stage, in declared order."""
+        return self.fold_indices or tuple(range(self.n_folds))
 
     @property
     def experiment_id(self) -> str:
@@ -114,7 +209,15 @@ class ExperimentConfig:
 
     @property
     def results_subdir(self) -> str:
-        """Relative results path: framework/strategy/task/encoder/model[/loss]."""
+        """Relative results path: framework/strategy/task/encoder/model[/loss]/s{seed}.
+
+        CR-5b: the seed segment is load-bearing. Every trainer resumes a fold from
+        ``<results_dir>/fold_N/metrics.json``, so without it a second seed reads
+        the first seed's folds off disk and a multi-seed variance study reports
+        zero variance. Seeds are meant to coexist, hence a path segment rather
+        than the fingerprint guard used for the other knobs (see
+        ``results_cache.py``).
+        """
         parts = [
             self.framework.value,
             self.strategy,
@@ -124,21 +227,58 @@ class ExperimentConfig:
         ]
         if self.survival_loss is not None:
             parts.append(self.survival_loss)
+        parts.append(f"s{self.train.seed}")
         return os.path.join(*parts)
 
     def to_dict(self) -> dict:
+        """The shared transport, verbatim.
+
+        Deliberately NOT widened by ``save``'s H-3 fields: ``results_cache.
+        fingerprint_payload`` is built on this, so an extra key here would change
+        every stored digest and make every existing results directory raise
+        ``StaleResultsCacheError`` on resume. The provenance fields belong to the
+        human-facing artifact only.
+        """
         d = asdict(self)
         d["framework"] = self.framework.value
+        # Preserve every existing baseline fingerprint/config.json byte shape.
+        # The field appears only when a source policy is actually selected.
+        if self.policy_variant is None:
+            d.pop("policy_variant", None)
+        if self.fold_indices is None:
+            d.pop("fold_indices", None)
         return d
 
-    def save(self, path: str) -> None:
+    def save(self, path: str, arm_cfg=None) -> None:
+        """Write ``config.json``: the configuration that ACTUALLY governed the run.
+
+        H-3: the shared ``train`` block is what every arm's ``config.json``
+        recorded, but only CLAM trains off it. Pass the arm's own config
+        (``DTFDConfig``, ``ABMILConfig``, ``TitanHeadConfig``, or nnMIL's computed
+        plan dict) and it is recorded under ``arm``, with
+        ``train_fields_superseded_by_arm`` naming which ``train`` entries it
+        overrides. ``arm: null`` with an empty list is CLAM's honest answer -- the
+        shared block really did govern -- and is written explicitly so an absent
+        arm config reads as a fact rather than as an omission.
+        """
+        arm = _arm_as_dict(arm_cfg)
+        payload = self.to_dict()
+        payload["arm"] = arm
+        payload["train_fields_superseded_by_arm"] = _train_fields_superseded_by_arm(arm)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
+            # default=str mirrors the fingerprint sidecar: nnMIL's plan dict is
+            # externally produced, and a human-facing record is better written
+            # with a stringified value than not written at all.
+            json.dump(payload, f, indent=2, default=str)
 
 
 @dataclass
 class BenchmarkConfig:
+    # DATA-ID: which cohort this benchmark run belongs to (populated from
+    # DatasetConfig.name in from_dataset_config below), threaded into every
+    # generated ExperimentConfig so results are attributable across cohorts.
+    dataset: str = ""
     benchmark_dir: str = ""
     mapping_csv: str = ""
     features_base_dir: str = ""
@@ -162,11 +302,24 @@ class BenchmarkConfig:
     # 768-d); ``_prepare_titan_plans`` is responsible for validating/updating
     # it against the actual feature file, never hard-coding it downstream.
     titan_embed_dim: int = 768
+    # H-5c: the seed axis. EMPTY means "one run at train.seed" — exactly the
+    # single-seed grid, so a config that says nothing is unchanged. A non-empty
+    # list turns the grid into a repeated-measures design: the SAME folds
+    # (splits are cached and not seed-keyed) trained from different
+    # initialisations, which isolates training stochasticity from partition
+    # variance. That is the component the reported cross-fold std cannot see,
+    # and it is the one C3's within-lineage lift analysis has to clear.
+    #
+    # Safe only because CR-5b put the seed in the results path: before that, a
+    # second seed silently resumed the first seed's per-fold metrics.json and a
+    # variance study would have reported exactly zero variance.
+    seeds: list[int] = field(default_factory=list)
 
     @classmethod
     def from_dataset_config(cls, ds: DatasetConfig, **overrides) -> BenchmarkConfig:
         """Create a BenchmarkConfig pre-populated from a DatasetConfig."""
         defaults = {
+            "dataset": ds.name,
             "benchmark_dir": ds.benchmark_dir,
             "mapping_csv": ds.mapping_csv,
             "features_base_dir": ds.features_base_dir,
@@ -400,19 +553,27 @@ def generate_all_experiments(
                                 and survival_loss != "nllsurv"
                             ):
                                 continue
-                            exp = ExperimentConfig(
-                                task=task_cfg,
-                                encoder_key=encoder_key,
-                                embed_dim=embed_dim,
-                                model=model_cfg,
-                                train=cfg.train,
-                                n_folds=cfg.n_folds,
-                                framework=framework,
-                                strategy=strategy,
-                                survival_loss=survival_loss,
-                            )
-                            if exp.experiment_id not in seen_ids:
-                                experiments.append(exp)
-                                seen_ids.add(exp.experiment_id)
+                            # H-5c: one experiment per seed. `cfg.seeds` empty
+                            # reproduces the single-seed grid exactly.
+                            for _seed in (cfg.seeds or [cfg.train.seed]):
+                                _train = (
+                                    cfg.train if _seed == cfg.train.seed
+                                    else replace(cfg.train, seed=_seed)
+                                )
+                                exp = ExperimentConfig(
+                                    task=task_cfg,
+                                    encoder_key=encoder_key,
+                                    embed_dim=embed_dim,
+                                    model=model_cfg,
+                                    train=_train,
+                                    n_folds=cfg.n_folds,
+                                    framework=framework,
+                                    strategy=strategy,
+                                    survival_loss=survival_loss,
+                                    dataset=cfg.dataset,
+                                )
+                                if exp.experiment_id not in seen_ids:
+                                    experiments.append(exp)
+                                    seen_ids.add(exp.experiment_id)
 
     return experiments

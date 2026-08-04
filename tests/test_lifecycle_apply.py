@@ -527,8 +527,9 @@ def test_apply_then_submit_propagates_to_new_node_archive(
     This is the trap-closer. The bug was: apply wrote to archive/<old_node>/
     but submit creates archive/<new_node>/ — the two never intersected, so
     applied_variant.json never reached the new worktree. The fix: apply writes
-    active_variant.json at the automil/ root; submit copies it into
-    archive/<new_node>/applied_variant.json before writing the queue spec.
+    active_variant.json at the automil/ root; submit copies it into the same
+    project-relative automil path under archive/<new_node>/ before writing the
+    queue spec. That location is what the worktree runtime actually reads.
     """
     import json as _json
 
@@ -566,7 +567,7 @@ def test_apply_then_submit_propagates_to_new_node_archive(
     )
 
     # Step 2: submit the NEXT node (node_0002). Submit should copy
-    # active_variant.json → archive/node_0002/applied_variant.json.
+    # active_variant.json → archive/node_0002/automil/applied_variant.json.
     # We need a changed file to snapshot — create a dummy one.
     (tmp_path / "model.py").write_text("# next experiment\n")
     # Mark it as a changed tracked file (git add then unstage so it's dirty)
@@ -596,10 +597,10 @@ def test_apply_then_submit_propagates_to_new_node_archive(
     # This file was NOT placed there by the test setup — it must arrive via
     # submit's propagation of active_variant.json.
     new_archive = adir / "orchestrator" / "archive" / "node_0002"
-    applied_in_new = new_archive / "applied_variant.json"
+    applied_in_new = new_archive / "automil" / "applied_variant.json"
     assert applied_in_new.exists(), (
         f"CR-01 REGRESSION: applied_variant.json NOT found at {applied_in_new}. "
-        "submit must copy active_variant.json → archive/<new_node>/applied_variant.json. "
+        "submit must preserve the project-relative automil path in the archive. "
         "Without this, apply_overlay never carries the selection into the worktree."
     )
 

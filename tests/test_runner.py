@@ -162,3 +162,66 @@ class TestResultCollection:
         collected = runner.collect_result(wt_path, archive_dir)
         assert collected is None
         runner.cleanup_worktree(wt_path)
+
+    def test_collect_result_prefers_an_already_sealed_full_payload(self, runner, project_repo):
+        """L-3: when a training script wrote via runtime_helpers.write_result_json,
+        the sealed certify/result.json already carries the FULL (held_out-included)
+        payload and the worktree copy is a stripped val-only sibling. collect_result
+        must read the sealed copy back rather than let the stripped worktree copy
+        overwrite it -- overwriting would silently discard held_out."""
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        wt_path = runner.create_worktree(base_commit=base, node_id="node_0006")
+        archive_dir = project_repo / "orchestrator" / "archive" / "node_0006"
+        sealed_dir = archive_dir / "certify"
+        sealed_dir.mkdir(parents=True)
+
+        full_payload = {
+            "status": "completed", "composite": 0.845,
+            "metrics": {"val_auc": 0.88}, "held_out": {"test_auc": 0.87},
+        }
+        stripped_payload = {"status": "completed", "composite": 0.845, "metrics": {"val_auc": 0.88}}
+        (sealed_dir / "result.json").write_text(json.dumps(full_payload))
+        (wt_path / "result.json").write_text(json.dumps(stripped_payload))
+
+        collected = runner.collect_result(wt_path, archive_dir)
+
+        assert collected is not None
+        assert collected["held_out"] == {"test_auc": 0.87}, (
+            "collect_result must recover held_out from the sealed copy"
+        )
+        still_sealed = json.loads((sealed_dir / "result.json").read_text())
+        assert "held_out" in still_sealed, (
+            "the stripped worktree copy must not overwrite the already-sealed full payload"
+        )
+        runner.cleanup_worktree(wt_path)
+
+    def test_collect_result_legacy_worktree_only_path_still_seals_and_returns_full(
+        self, runner, project_repo
+    ):
+        """Regression guard for the pre-L-3 shape: an older script that writes the
+        FULL payload straight into the worktree (no sealed copy yet) must still
+        get it copied into certify/ and returned intact."""
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        wt_path = runner.create_worktree(base_commit=base, node_id="node_0007")
+        archive_dir = project_repo / "orchestrator" / "archive" / "node_0007"
+        archive_dir.mkdir(parents=True)
+
+        full_payload = {
+            "status": "completed", "composite": 0.845,
+            "metrics": {"val_auc": 0.88}, "held_out": {"test_auc": 0.87},
+        }
+        (wt_path / "result.json").write_text(json.dumps(full_payload))
+
+        collected = runner.collect_result(wt_path, archive_dir)
+
+        assert collected is not None
+        assert collected["held_out"] == {"test_auc": 0.87}
+        sealed = json.loads((archive_dir / "certify" / "result.json").read_text())
+        assert sealed["held_out"] == {"test_auc": 0.87}
+        runner.cleanup_worktree(wt_path)

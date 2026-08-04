@@ -235,6 +235,7 @@ class SLURMBackend(Backend):
                 worktree_path,
                 spec.overlay_dir,
                 deletions=getattr(spec, "deletions", None),
+                manifest=getattr(spec, "overlay_manifest", None),  # HASH-0
             )
         try:
             job = self._executor.submit(_run_experiment_subprocess, spec, worktree_path)

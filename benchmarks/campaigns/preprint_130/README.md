@@ -1,0 +1,232 @@
+# Preprint 130-cell campaign operations
+
+This directory contains the immutable manifest and the operator entry points for
+the full `automil-preprint-130-v3` campaign. The controller enforces the frozen
+protocol independently for every cell:
+
+- native five-fold baseline on folds `0,1,2,3,4`;
+- exactly 60 charged discovery attempts on validation folds `0,1,2`;
+- promotion of at most 10 unique complete candidates on folds `3,4`;
+- winner selection by the equal-weight mean of validation folds `0` through `4`;
+- one campaign-wide freeze of all 130 validation winners before any held-out
+  read;
+- paired baseline-and-winner reveal of the already sealed five-fold held-out
+  results.
+
+There is no final retraining. Crashes and partial runs consume discovery
+attempts. An incomplete promotion candidate is ineligible. The native baseline
+wins an exact tie against a searched candidate; searched-candidate ties use the
+stable node ID.
+
+## 1. Preflight
+
+Run these commands from the repository root with the environment used for the
+campaign installed in `.venv`:
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_manifest.py check
+.venv/bin/python benchmarks/scripts/campaign_manifest.py canary
+```
+
+`check` rebuilds the canonical roster and compares it with the byte-locked
+manifest. `canary` materializes and audits all 130 roots in a temporary
+directory, checks all 10 arm/task regimes, and starts zero GPU processes.
+The manifest also locks `analysis_plan.json` before certification. It declares
+the task-specific primary metrics, real four-arm tile ranking estimand, separate
+TITAN analysis, and the dependency-aware no-p-value reporting rule.
+
+The campaign loads dataset paths from `benchmarks/.env`. Populate that file
+before launching training. It is deliberately absent from git worktrees, so
+the baseline operator loads it from the main repository and passes its values
+to the detached training worktree.
+
+## 2. Materialize the campaign once
+
+Copy `agent_protocol.template.json`, fill the immutable provider/runtime/model
+versions, embed the exact proposal instructions and tool schema, and record the
+SHA-256 of each embedded string. Materialization recomputes both hashes;
+placeholder, `unknown`, or content/hash mismatches are rejected. The locked
+file therefore archives the resolvable coding-agent policy before any search
+starts; it is not an optimization result.
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_manifest.py materialize \
+  --agent-protocol /path/to/agent_protocol.json
+```
+
+This creates one restart-safe project under
+`benchmarks/campaigns/preprint_130/runtime/<cell-id>/` for every manifest row.
+All roots are pinned to the same full git commit. Re-running materialization is
+an integrity check: it preserves progressed state, plans, learnings, and policy
+files, and fails closed if any immutable input differs.
+
+Choose one materialized root for the commands below:
+
+```bash
+CAMPAIGN_CELL_ROOT="benchmarks/campaigns/preprint_130/runtime/<cell-id>"
+.venv/bin/python benchmarks/scripts/campaign_stage.py status \
+  --cell-root "$CAMPAIGN_CELL_ROOT"
+```
+
+## 3. Establish the native incumbent
+
+The baseline is outside the 60 agentic attempts. The safe operator runs the
+manifest-locked five-fold command in a temporary worktree at the campaign's
+frozen base commit, keeps validation evidence public, stores held-out folds in
+the sealed archive, and registers the discovery root:
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_stage.py run-baseline \
+  --cell-root "$CAMPAIGN_CELL_ROOT" --gpu 0
+```
+
+Use `baseline-command` to inspect the exact command without running it. If an
+equivalent baseline was executed portably elsewhere, import its validation-only
+`result.json` plus `certify/fold_<0..4>_result.json` files with
+`register-baseline --baseline-archive <path>` instead. The archive must also
+carry the deterministic `baseline_attestation.json` emitted by `run-baseline`;
+it binds the artifacts to this campaign, cell, base commit, and exact native
+command. A shape-compatible result from another cell is rejected.
+
+## 4. Run discovery
+
+Fill `agent_session.template.json` with the runtime session identifier and a
+timezone-aware start time, then bind it before the first proposal. The command
+fails if any discovery spec already exists or the attempt budget has been
+consumed. After those pristine-state checks, the controller records its own
+`bound_at`; every charged proposal must carry a timezone-aware `submitted_at`
+at or after that controller timestamp.
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_stage.py open-agent-session \
+  --cell-root "$CAMPAIGN_CELL_ROOT" \
+  --agent-session /path/to/agent_session_start.json
+```
+
+Start the scheduler for the selected cell:
+
+```bash
+.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" check
+.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" orchestrator start
+```
+
+Run one fresh coding-agent session with no cross-cell memory against this
+project and have it follow the autoMIL
+experiment loop. The enforced policy permits source-level train-only policy
+implementations under that cell's `automil/variants/_policies/` directory; it
+does not reduce the campaign to a fixed hyperparameter menu. Submit and launch
+both revalidate the cell identity, frozen base commit, command, budget, file
+manifest, and architecture-preserving boundary.
+
+Monitor without exposing held-out values:
+
+```bash
+.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" status
+.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" rank
+.venv/bin/python benchmarks/scripts/campaign_stage.py status \
+  --cell-root "$CAMPAIGN_CELL_ROOT"
+```
+
+Do not freeze early. When the stage ledger reports exactly 60 charged attempts,
+freeze the complete unique candidates and select up to 10 by the locked
+validation ordering:
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_stage.py freeze-discovery \
+  --cell-root "$CAMPAIGN_CELL_ROOT"
+```
+
+## 5. Run exact promotion
+
+Materialize exact copies of the frozen candidate overlays. No agent proposes or
+edits candidates during promotion:
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_stage.py materialize-promotion \
+  --cell-root "$CAMPAIGN_CELL_ROOT"
+.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT/promotion" orchestrator start
+```
+
+After every queued promotion job is terminal, freeze eligibility and select the
+five-fold validation winner:
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_stage.py freeze-promotion \
+  --cell-root "$CAMPAIGN_CELL_ROOT"
+.venv/bin/python benchmarks/scripts/campaign_stage.py select-winner \
+  --cell-root "$CAMPAIGN_CELL_ROOT"
+```
+
+The winner record is immutable. `advance` may perform the next safe transition
+through selection, but it intentionally stops at `winner-frozen` and never
+reveals held-out data.
+
+After the winner freezes, fill `agent_session_end.template.json` from the runtime
+usage record and finalize the same pre-bound session. Exact, estimated, and
+unavailable usage are represented explicitly; unavailable token/cost fields
+must be null and carry a reason. Finalization verifies that all 60 proposal
+timestamps fall inside this session interval.
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_stage.py finalize-agent-session \
+  --cell-root "$CAMPAIGN_CELL_ROOT" \
+  --agent-session /path/to/agent_session_end.json
+```
+
+Repeat Sections 3–5 for every manifest cell, using a distinct fresh runtime
+session identifier each time. Session opening rejects an identifier already
+reserved by a sibling cell, and the global freeze rechecks uniqueness across
+all 130 attestations. No cell may be certified early.
+
+## 6. Freeze all selections, then certify
+
+After all 130 cells report `winner-frozen`, atomically bind their validation
+selections into one campaign artifact:
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_manifest.py freeze-selections
+.venv/bin/python benchmarks/scripts/campaign_manifest.py certify-all
+```
+
+Before `selection_freeze.json` exists and contains the exact 130-cell roster,
+one locked protocol, 130 immutable session attestations, and the complete
+failure-inclusive search-process evidence, every per-cell
+certification entry point fails closed. `certify-all` is
+restart-safe: it verifies and reveals each frozen winner together with its
+native baseline, emits paired fold deltas, and writes a hashed
+`campaign_certification.json` index. The ordinary `status` output reports only
+bundle identity and timestamps, never held-out metric values.
+
+Each freeze entry binds the winner kind, candidate, promotion node (when
+searched), baseline candidate, and the canonical cell-local path plus SHA-256
+of all five sealed winner and baseline fold files. Certification and reporting
+re-read those files and recompute their fold metrics and aggregates; a newly
+hashed downstream bundle or index therefore cannot relabel a run or replace
+its evidence without conflicting with the independently maintained cell state,
+sealed-fold hashes, process census, or finalized session attestation.
+
+Generate the complete publication artifact only after certification:
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_manifest.py report
+```
+
+This command requires all 130 baseline/winner bundles, derives 30 four-arm tile
+ranking blocks, reports TITAN separately, and fails without writing a report if
+any hash, fold, metric, or cell is missing or inconsistent. It aggregates
+survival c-index within folds and never pools raw risks from independently
+trained fold models.
+
+## Recovery and audit trail
+
+The authoritative per-cell ledger is `<cell-root>/campaign_state.json`. Every
+write is lock-serialized, atomic, revisioned, and content-hashed. Discovery and
+promotion artifacts remain in their respective `automil/orchestrator/archive/`
+directories; the native baseline is imported into `baseline/archive/`; the
+certified winner bundle is recorded by the stage ledger. Re-running a completed
+transition is either idempotent or fails closed on identity drift.
+
+Operate all 130 roots with an external scheduler if desired, but invoke these
+same per-cell commands and preserve the one-GPU-per-training-process contract.
+Never infer campaign progress from directory counts alone; use the validated
+stage ledger and public `status` surface.

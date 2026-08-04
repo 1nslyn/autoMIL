@@ -202,6 +202,7 @@ class RayBackend(Backend):
                 worktree_path,
                 spec.overlay_dir,
                 deletions=getattr(spec, "deletions", None),
+                manifest=getattr(spec, "overlay_manifest", None),  # HASH-0
             )
         log_path = self._running_dir / f"{spec.node_id}.log"
 

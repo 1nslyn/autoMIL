@@ -13,9 +13,12 @@ Usage:
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -69,7 +72,14 @@ _SYSTEM_ENV_WHITELIST_PREFIX: tuple[str, ...] = (
 )
 # Keys the orchestrator owns; per-spec env CANNOT override them
 # (T-00-09 mitigation — prevents GPU-mask spoofing via spec.env).
-_SPEC_ENV_BLOCKED: frozenset[str] = frozenset({"AUTOMIL_GPU", "CUDA_VISIBLE_DEVICES"})
+_SPEC_ENV_BLOCKED: frozenset[str] = frozenset({
+    "AUTOMIL_ACCELERATOR",
+    "AUTOMIL_GPU",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL",
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+})
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +94,8 @@ logger = logging.getLogger(__name__)
 # call, so the cost is paid once and tests can re-resolve via importlib.reload.
 _resolved_nvidia_smi = shutil.which("nvidia-smi")
 NVIDIA_SMI_PATH = _resolved_nvidia_smi or "nvidia-smi"
+_resolved_rocm_smi = shutil.which("rocm-smi")
+ROCM_SMI_PATH = _resolved_rocm_smi or "rocm-smi"
 if _resolved_nvidia_smi:
     logger.info("nvidia-smi resolved to %s", NVIDIA_SMI_PATH)
 else:
@@ -278,6 +290,76 @@ def query_gpus() -> list[GPUInfo]:
         return []
 
 
+def query_rocm_gpus() -> list[GPUInfo]:
+    """Query live ROCm device count and VRAM via pinned ``rocm-smi``.
+
+    ``--showmeminfo vram --json`` reports total and currently used bytes for
+    every device. Any missing, malformed, duplicate, or internally inconsistent
+    record rejects the whole snapshot: partial telemetry must never become
+    permission to launch on an unverified device.
+    """
+    try:
+        result = subprocess.run(
+            [ROCM_SMI_PATH, "--showmeminfo", "vram", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            logger.warning(
+                "rocm-smi failed with return code %s: %s",
+                result.returncode,
+                result.stderr.strip(),
+            )
+            return []
+        payload = json.loads(result.stdout)
+        if not isinstance(payload, dict):
+            raise ValueError("top-level payload is not a mapping")
+
+        devices: list[GPUInfo] = []
+        seen_indices: set[int] = set()
+        for raw_name, raw_metrics in payload.items():
+            if not isinstance(raw_metrics, dict):
+                continue
+            total_raw = raw_metrics.get("VRAM Total Memory (B)")
+            used_raw = raw_metrics.get("VRAM Total Used Memory (B)")
+            if total_raw is None and used_raw is None:
+                continue
+            if total_raw is None or used_raw is None:
+                raise ValueError(f"{raw_name!r} has partial VRAM telemetry")
+
+            match = re.search(r"(\d+)$", str(raw_name))
+            if match is None:
+                raise ValueError(f"cannot derive device index from {raw_name!r}")
+            index = int(match.group(1))
+            if index in seen_indices:
+                raise ValueError(f"duplicate device index {index}")
+
+            total_bytes = int(str(total_raw).strip())
+            used_bytes = int(str(used_raw).strip())
+            if total_bytes <= 0 or used_bytes < 0 or used_bytes > total_bytes:
+                raise ValueError(
+                    f"invalid VRAM values for device {index}: "
+                    f"total={total_bytes}, used={used_bytes}"
+                )
+            devices.append(GPUInfo(
+                index=index,
+                total_mb=total_bytes // (1024 * 1024),
+                free_mb=(total_bytes - used_bytes) // (1024 * 1024),
+                utilization=0,
+            ))
+            seen_indices.add(index)
+
+        if not devices:
+            raise ValueError("no complete device records")
+        devices.sort(key=lambda device: device.index)
+        return devices
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError,
+            json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.warning("rocm-smi failed: %s", exc)
+        return []
+
+
 # ---------------------------------------------------------------------------
 # D-170 / D-171: Cross-backend log unification helpers
 # ---------------------------------------------------------------------------
@@ -379,6 +461,30 @@ def _symlink_slurm_logs(automil_dir: Path, archive_node_dir: Path, spec_data: di
             logger.warning("D-171 stderr symlink failed: %s", exc)
 
 
+def _submitted_at_key(spec: dict) -> str:
+    """Stable, always-comparable sort key for a queue spec's ``submitted_at`` (L-7).
+
+    ``submitted_at`` is normally an ISO-8601 string written by ``automil
+    submit``, but ``_get_pending`` also has to sort specs where it is absent
+    (older or hand-written specs), explicitly ``null`` (a present key reads
+    back as ``None``, which ``dict.get(..., default)`` does NOT paper over —
+    the default only applies when the key is missing), or — from a malformed
+    producer — some other JSON type. Python 3 raises ``TypeError`` comparing
+    ``None``/``str`` or ``int``/``str``, and that exception previously
+    propagated out of ``list.sort()`` inside ``_get_pending``, which is
+    called every ``tick()`` — one bad queue file stalled scheduling for
+    every pending spec, not just its own.
+
+    Coercing to ``str`` makes every comparison well-defined. Specs with no
+    usable timestamp (falsy: absent, ``None``, ``""``) collapse to ``""``,
+    which sorts before every real ISO-8601 timestamp — so they are treated
+    as "submitted before anything timestamped" and fall back to queue
+    (filename) order among themselves via Python's stable sort.
+    """
+    raw = spec.get("submitted_at")
+    return str(raw) if raw else ""
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -451,6 +557,29 @@ class ExperimentOrchestrator:
             orch_cfg.get("editable_overlay_guard", False)
         )
 
+        # Generic CPU consumers (for example examples/sklearn-iris) declare the
+        # execution substrate explicitly.  A CPU-only project still needs one
+        # local scheduling slot, but it must not be represented as a physical
+        # GPU or subjected to VRAM admission checks.
+        hardware_cfg = self.config.get("hardware", {}) if self.config else {}
+        configured_accelerator = str(
+            hardware_cfg.get("accelerator", "")
+        ).strip().lower()
+        try:
+            configured_gpu_count = int(hardware_cfg.get("gpu_count", 0))
+        except (TypeError, ValueError):
+            configured_gpu_count = -1
+        try:
+            configured_min_vram_gb = float(hardware_cfg.get("min_vram_gb", 0.0))
+        except (TypeError, ValueError):
+            configured_min_vram_gb = 0.0
+        self._accelerator = configured_accelerator
+        self._configured_gpu_count = configured_gpu_count
+        self._configured_min_vram_gb = configured_min_vram_gb
+        self._cpu_only = (
+            configured_accelerator == "cpu" and configured_gpu_count == 0
+        )
+
         # CLN-02 / D-04: env.passthrough — literal var names the operator
         # explicitly opts in to forward into experiment subprocesses. The
         # config layer accepts only a list of strings (no globs — globs live
@@ -491,13 +620,70 @@ class ExperimentOrchestrator:
         # _tick_cells falls back to _kill_experiment (direct os.killpg path).
         self.backend: object | None = None
 
-        # Detect GPUs
-        gpus = query_gpus()
-        for g in gpus:
-            self.gpu_allocations[g.index] = []
-        if not self.gpu_allocations:
-            logger.warning("No GPUs detected, using GPU 0 as fallback")
+        # Detect typed execution slots. ``gpu_allocations`` is the legacy
+        # internal accounting map; its integer keys are scheduler slot IDs, not
+        # hardware provenance. CPU slot 0 therefore never becomes ``gpu: 0`` in
+        # an artifact. ROCm has no nvidia-smi-compatible dynamic query, so its
+        # slots come from the hardware report stamped by ``automil init`` and
+        # are admitted against that report's conservative minimum VRAM.
+        if self._cpu_only:
             self.gpu_allocations[0] = []
+            logger.info("CPU-only execution configured; using local slot 0")
+        elif configured_accelerator == "cpu":
+            logger.warning(
+                "CPU execution requires hardware.gpu_count: 0; "
+                "queued jobs will remain pending"
+            )
+        elif configured_accelerator == "rocm":
+            if configured_gpu_count > 0 and configured_min_vram_gb > 0:
+                live_rocm = query_rocm_gpus()
+                live_indices = [device.index for device in live_rocm]
+                expected_indices = list(range(configured_gpu_count))
+                live_min_vram_gb = min(
+                    (device.total_mb / 1024 for device in live_rocm),
+                    default=0.0,
+                )
+                if (
+                    live_indices == expected_indices
+                    and live_min_vram_gb >= configured_min_vram_gb
+                ):
+                    for device_index in live_indices:
+                        self.gpu_allocations[device_index] = []
+                    logger.info(
+                        "ROCm execution configured; verified %d live device slot(s)",
+                        configured_gpu_count,
+                    )
+                else:
+                    logger.warning(
+                        "Live ROCm hardware does not match config "
+                        "(expected indices=%s, min_vram_gb>=%.1f; "
+                        "detected indices=%s, min_vram_gb=%.1f); "
+                        "queued jobs will remain pending",
+                        expected_indices,
+                        configured_min_vram_gb,
+                        live_indices,
+                        live_min_vram_gb,
+                    )
+            else:
+                logger.warning(
+                    "ROCm configuration requires positive hardware.gpu_count and "
+                    "hardware.min_vram_gb; queued jobs will remain pending"
+                )
+        elif configured_accelerator in {"", "cuda"}:
+            for gpu in query_gpus():
+                self.gpu_allocations[gpu.index] = []
+            if self.gpu_allocations and not self._accelerator:
+                self._accelerator = "cuda"
+            if not self.gpu_allocations:
+                logger.warning(
+                    "No CUDA GPUs detected for a GPU-targeted configuration; "
+                    "queued jobs will remain pending"
+                )
+        else:
+            logger.warning(
+                "Unsupported hardware.accelerator %r; queued jobs will remain pending",
+                configured_accelerator,
+            )
 
         # Load .env from project root so worktree processes inherit env vars
         # (worktrees don't contain .env since it's typically gitignored)
@@ -618,9 +804,11 @@ class ExperimentOrchestrator:
             self._recover_orphans()
 
     def _save_state(self):
-        """Persist GPU state and counters to disk."""
-        gpus = query_gpus()
+        """Persist typed execution-slot state and legacy CUDA telemetry."""
+        gpus = query_gpus() if self._accelerator == "cuda" else []
+        rocm_gpus = query_rocm_gpus() if self._accelerator == "rocm" else []
         gpu_data = {}
+        execution_slots = {}
         for g in gpus:
             running_on = self.gpu_allocations.get(g.index, [])
             alloc_vram = sum(
@@ -635,11 +823,49 @@ class ExperimentOrchestrator:
                 "running": running_on,
                 "utilization_pct": g.utilization,
             }
+            execution_slots[f"cuda:{g.index}"] = {
+                "accelerator": "cuda",
+                "device_index": g.index,
+                "running": running_on,
+                "capacity": self.max_per_gpu,
+                "schedulable_free_gb": gpu_data[str(g.index)]["schedulable_free_gb"],
+            }
+
+        if self._cpu_only:
+            execution_slots["cpu:0"] = {
+                "accelerator": "cpu",
+                "device_index": None,
+                "running": self.gpu_allocations.get(0, []),
+                "capacity": self.max_per_gpu,
+            }
+        elif self._accelerator == "rocm":
+            live_by_index = {device.index: device for device in rocm_gpus}
+            for device_index, running_on in sorted(self.gpu_allocations.items()):
+                alloc_vram = sum(
+                    self.running[eid].estimated_vram_gb
+                    for eid in running_on
+                    if eid in self.running
+                )
+                slot_state = {
+                    "accelerator": "rocm",
+                    "device_index": device_index,
+                    "running": running_on,
+                    "capacity": self.max_per_gpu,
+                    "telemetry_available": device_index in live_by_index,
+                }
+                live_device = live_by_index.get(device_index)
+                if live_device is not None:
+                    slot_state["schedulable_free_gb"] = round(
+                        live_device.free_gb - self.safety_margin_gb - alloc_vram,
+                        1,
+                    )
+                execution_slots[f"rocm:{device_index}"] = slot_state
 
         state = {
             "counter": self.counter,
             "last_updated": datetime.now().isoformat(),
             "gpus": gpu_data,
+            "execution_slots": execution_slots,
             "queue_depth": len(list(self.queue_dir.glob("*.json"))),
             "total_running": len(self.running),
             "total_completed": len(list(self.completed_dir.glob("*.json"))),
@@ -677,7 +903,22 @@ class ExperimentOrchestrator:
                 node_id = spec.get("id", f.stem)
                 logger.info(f"Orphaned experiment {node_id} found, marking as crashed")
 
-                self._sigkill_orphan_pg(node_id, spec)
+                _meta = spec.get("metadata") or {}
+                if _meta.get("launch_phase") == "launching":
+                    # M-6: the daemon died between Popen and the running-spec
+                    # write, so no pid was ever recorded. The node is recoverable;
+                    # the process is not. Name the worktree so it can be found.
+                    logger.warning(
+                        "Orphan %s died mid-launch with no pid recorded: a training "
+                        "process may still be alive on %s. Worktree: %s. "
+                        "Check for it manually — recovery cannot signal an "
+                        "unrecorded process group.",
+                        node_id,
+                        self._execution_label_from_metadata(_meta),
+                        _meta.get("worktree"),
+                    )
+                else:
+                    self._sigkill_orphan_pg(node_id, spec)
 
                 archive = self.archive_dir / node_id
                 archive.mkdir(parents=True, exist_ok=True)
@@ -686,8 +927,15 @@ class ExperimentOrchestrator:
                 (self.completed_dir / f"{node_id}.json").write_text(json.dumps({
                     "id": node_id,
                     "status": "crash",
+                    "accelerator": _meta.get("accelerator"),
+                    "gpu": _meta.get("gpu"),
                     "completed_at": datetime.now().isoformat(),
                 }, indent=2))
+                # M-5: same reasoning as _mark_crashed — the graph must not be
+                # left describing a node that is still "running".
+                self._mark_node_terminal_in_graph(
+                    node_id, "crash", "Orchestrator restarted while running",
+                )
 
                 f.unlink()
 
@@ -750,27 +998,51 @@ class ExperimentOrchestrator:
                 pending.append(spec)
             except (json.JSONDecodeError, Exception) as e:
                 logger.error(f"Bad spec {f}: {e}")
-        # Sort by priority ASC, then submitted_at ASC
-        pending.sort(key=lambda s: (s.get("priority", 2), s.get("submitted_at", "")))
+        # Sort by priority ASC, then submitted_at ASC. submitted_at is coerced
+        # via _submitted_at_key (L-7) so a mix of string / absent / explicit-None
+        # / malformed-type values across the queue can never raise TypeError here.
+        pending.sort(key=lambda s: (s.get("priority", 2), _submitted_at_key(s)))
         return pending
 
     def _find_best_gpu(self, needed_gb: float) -> int | None:
         """Find a GPU for the pending job according to self.scheduling_policy (best_fit | round_robin | least_loaded)."""
-        gpus = query_gpus()
-        candidates: list[tuple[int, float]] = []
+        if getattr(self, "_cpu_only", False):
+            running_on = self.gpu_allocations.get(0, [])
+            return 0 if len(running_on) < self.max_per_gpu else None
 
-        for g in gpus:
-            running_on = self.gpu_allocations.get(g.index, [])
-            if len(running_on) >= self.max_per_gpu:
-                continue
-            alloc_vram = sum(
-                self.running[eid].estimated_vram_gb
-                for eid in running_on
-                if eid in self.running
-            )
-            schedulable = g.free_gb - self.safety_margin_gb - alloc_vram
-            if schedulable >= needed_gb:
-                candidates.append((g.index, schedulable))
+        accelerator = getattr(self, "_accelerator", "")
+        if accelerator == "cpu" or accelerator not in {"", "cuda", "rocm"}:
+            return None
+
+        candidates: list[tuple[int, float]] = []
+        if accelerator == "rocm":
+            for device in query_rocm_gpus():
+                running_on = self.gpu_allocations.get(device.index)
+                if running_on is None:
+                    continue
+                if len(running_on) >= self.max_per_gpu:
+                    continue
+                alloc_vram = sum(
+                    self.running[eid].estimated_vram_gb
+                    for eid in running_on
+                    if eid in self.running
+                )
+                schedulable = device.free_gb - self.safety_margin_gb - alloc_vram
+                if schedulable >= needed_gb:
+                    candidates.append((device.index, schedulable))
+        else:
+            for g in query_gpus():
+                running_on = self.gpu_allocations.get(g.index, [])
+                if len(running_on) >= self.max_per_gpu:
+                    continue
+                alloc_vram = sum(
+                    self.running[eid].estimated_vram_gb
+                    for eid in running_on
+                    if eid in self.running
+                )
+                schedulable = g.free_gb - self.safety_margin_gb - alloc_vram
+                if schedulable >= needed_gb:
+                    candidates.append((g.index, schedulable))
 
         if not candidates:
             return None
@@ -797,6 +1069,20 @@ class ExperimentOrchestrator:
 
     def _pre_launch_check(self, gpu_id: int, needed_gb: float) -> bool:
         """Final VRAM check right before launch."""
+        if getattr(self, "_cpu_only", False):
+            return gpu_id == 0
+        accelerator = getattr(self, "_accelerator", "")
+        if accelerator == "cpu" or accelerator not in {"", "cuda", "rocm"}:
+            return False
+        if accelerator == "rocm":
+            running_on = self.gpu_allocations.get(gpu_id)
+            if running_on is None or len(running_on) >= self.max_per_gpu:
+                return False
+            for device in query_rocm_gpus():
+                if device.index == gpu_id:
+                    return device.free_gb >= needed_gb + self.safety_margin_gb
+            return False
+
         gpus = query_gpus()
         for g in gpus:
             if g.index == gpu_id:
@@ -840,10 +1126,40 @@ class ExperimentOrchestrator:
                 env[key] = os.environ[key]
 
         # 3. Orchestrator-injected (always overrides 1 + 2).
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        accelerator = getattr(self, "_accelerator", "cuda") or "cuda"
+        # On Linux ROCm, ROCR_VISIBLE_DEVICES selects the host device first;
+        # HIP/CUDA/GPU_DEVICE_ORDINAL then refer to logical device 0 inside that
+        # restricted view (the same layering used by AMD AgentKernelArena).
+        if accelerator == "rocm":
+            env["ROCR_VISIBLE_DEVICES"] = str(gpu_id)
+            env["HIP_VISIBLE_DEVICES"] = "0"
+            env["CUDA_VISIBLE_DEVICES"] = "0"
+            env["GPU_DEVICE_ORDINAL"] = "0"
+        elif accelerator == "cuda":
+            env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            env["HIP_VISIBLE_DEVICES"] = ""
+            env["ROCR_VISIBLE_DEVICES"] = ""
+            env["GPU_DEVICE_ORDINAL"] = ""
+        else:
+            env["CUDA_VISIBLE_DEVICES"] = ""
+            env["HIP_VISIBLE_DEVICES"] = ""
+            env["ROCR_VISIBLE_DEVICES"] = ""
+            env["GPU_DEVICE_ORDINAL"] = ""
+        # Backward-compatible logical slot. Consumers must use
+        # AUTOMIL_ACCELERATOR to distinguish CPU from accelerator execution.
         env["AUTOMIL_GPU"] = "0"
+        env["AUTOMIL_ACCELERATOR"] = accelerator
         env["AUTOMIL_DESC"] = spec.get("description", "")
         env["AUTOMIL_NODE_ID"] = node_id
+        try:
+            _automil_rel = self.automil_dir.resolve().relative_to(
+                self.project_root.resolve()
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "automil_dir must live under project_root for an isolated launch"
+            ) from exc
+        env["AUTOMIL_DIR_REL"] = _automil_rel.as_posix()
         # Val-firewall (Scope B): born-seal every test-bearing training artifact.
         # AUTOMIL_RESULTS_DIR is the sealed subdir, so fold_*_result.json (the
         # per-fold writer), results/ (framework detail tree), and the SIGTERM
@@ -914,9 +1230,287 @@ class ExperimentOrchestrator:
                     len(new_parts), wt_path,
                 )
 
+    # --- Cell cap enforcement at the launch path (CAP-1 / H-2) ---
+
+    def _cell_for_spec(self, spec: dict, *, warn: bool = True):
+        """Return the Cell this spec is billed to, or None if it has no identity.
+
+        Resolves ``cells/`` from ``self.automil_dir`` rather than through
+        ``cells.get_cell`` — the registry's cwd-walking ``_find_automil_dir()``
+        fallback would find the host project's overlay when the daemon runs from
+        another cwd (same reasoning as ``_tick_cells``).
+
+        ``warn=False`` suppresses the unresolvable-cell warning for repeat
+        lookups within one launch, so the operator sees it once, not per call.
+        """
+        from automil.cells import read_cell
+
+        cell_id = (spec.get("metadata") or {}).get("cell_id")
+        if not cell_id:
+            return None
+        path = self.automil_dir / "cells" / f"{cell_id}.json"
+        if not path.exists():
+            if warn:
+                logger.warning(
+                    "Spec %s references cell %s which has no cells/<id>.json; "
+                    "launching UNCAPPED (this evaluation is billed to no budget).",
+                    spec.get("id"), str(cell_id)[:8],
+                )
+            return None
+        try:
+            return read_cell(path)
+        except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
+            if warn:
+                logger.warning(
+                    "Could not read cell %s for spec %s (%s); launching UNCAPPED.",
+                    str(cell_id)[:8], spec.get("id"), exc,
+                )
+            return None
+
+    def _refuse_closed_cell_spec(self, spec: dict) -> bool:
+        """Refuse a queued spec whose budget cell has closed. True iff refused (CAP-1).
+
+        Until this existed, only ``automil submit`` was gated: any spec already
+        sitting in ``queue/`` when its cell flipped to REFUSING_NEW still
+        launched, so the cap bounded the front door and nothing else.
+
+        Refusal mirrors ``automil dequeue`` — unlink ``queue/<node>.json`` and
+        ``graph.cancel()`` the node. The spec is NOT left queued: the cap state
+        machine is monotone, so a closed cell never re-opens and the spec would
+        strand its node id forever (submit refuses a duplicate queue entry, and
+        children refuse a still-running parent). It is not marked crashed either
+        — nothing ran, so a crash row would poison the failure statistics and,
+        via ``completed/``, would have ``reconcile`` promote a phantom executed
+        node with composite 0.0.
+
+        Specs with no ``metadata.cell_id`` (or a dangling one) are NOT refused:
+        ``Backend.submit`` is a first-class submission path — the gate uses it —
+        and dropping its work would be destructive. They are reported by
+        ``_record_cell_launch`` instead, once per dispatch rather than once per
+        poll: an evaluation billed to no cell dilutes the equal-effort
+        accounting, so it must never be silent.
+
+        This method is called on every poll for every pending spec, so it stays
+        silent unless it actually refuses.
+        """
+        from automil.cells import blocks_new_work
+
+        node_id = spec.get("id")
+        cell = self._cell_for_spec(spec, warn=False)
+        if cell is None or not blocks_new_work(cell):
+            return False
+
+        logger.warning(
+            "Refusing to launch %s: cell %s is %s (consumed_evals=%d/%s). Dequeuing "
+            "the spec and cancelling the node — a closed cell never re-opens.",
+            node_id, cell.cell_id[:8], cell.status.value, cell.consumed_evals,
+            cell.eval_budget if cell.eval_budget is not None else "-",
+        )
+
+        src_file = spec.get("_file")
+        if src_file and Path(src_file).exists():
+            try:
+                Path(src_file).unlink()
+            except OSError as exc:
+                logger.warning("Could not remove refused queue spec %s: %s", src_file, exc)
+
+        # Audit trail: the archived spec records why this node never ran.
+        try:
+            archive = self.archive_dir / node_id
+            archive.mkdir(parents=True, exist_ok=True)
+            spec_clean = {k: v for k, v in spec.items() if k != "_file"}
+            spec_clean["metadata"] = {
+                **(spec_clean.get("metadata") or {}),
+                "cancel_reason": "cap",
+                "cap_refused": True,
+            }
+            (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2))
+        except OSError:
+            logger.exception("Could not archive refused spec for %s", node_id)
+
+        self._cancel_node_for_cap_refusal(node_id, cell.cell_id)
+        return True
+
+    def _cancel_node_for_cap_refusal(self, node_id: str, cell_id: str) -> None:
+        """Mark a cap-refused node cancelled in graph.json (same shape as dequeue)."""
+        from automil.graph import locked_update, merged_metadata
+
+        try:
+            with locked_update(
+                str(self.graph.path),
+                technique_map=getattr(self.graph, "_technique_map", None),
+            ) as g:
+                node = g.get_node(node_id)
+                if node is None:
+                    logger.debug(
+                        "cap refusal: %s is not in the graph; nothing to cancel", node_id
+                    )
+                    return
+                g.cancel(node_id)
+                node["cancel_reason"] = "cap"
+                # L-8a: copy-on-write (graph.merged_metadata) — node["metadata"]
+                # can be aliased with another node's dict (gate/evaluate.py
+                # creates gate-eval children via a shallow dict(node) copy).
+                node["metadata"] = merged_metadata(node, {"cap_refused": True})
+                node.setdefault("cell_id", cell_id)
+        except Exception:  # noqa: BLE001 — a graph failure must not wedge the loop
+            logger.exception("cap refusal: could not cancel graph node %s", node_id)
+
+    def _record_cell_launch(self, spec: dict) -> None:
+        """Bill one evaluation to the dispatching cell (H-2).
+
+        Called once the process is actually spawned. A launch that never got that
+        far (missing base_commit, worktree failure, Popen error) dispatched
+        nothing and is therefore not billed: it is an infrastructure fault, not
+        an attempt by the agent. Everything that DID start counts — crashed,
+        partial and budget-killed alike — because equal effort means equal
+        attempts, not equal successes.
+
+        Also the single place an unbillable launch is reported: exactly once per
+        dispatch, so the operator can find (and the paper can quantify) every
+        evaluation that no cell budget paid for.
+        """
+        if not (spec.get("metadata") or {}).get("cell_id"):
+            logger.warning(
+                "Launched %s with no metadata.cell_id: this evaluation is billed to "
+                "no cell budget and is invisible to per-cell effort accounting "
+                "(legacy spec, or a submission path other than `automil submit`).",
+                spec.get("id"),
+            )
+            return
+        if self._cell_for_spec(spec, warn=True) is None:
+            return  # unresolvable cell — already reported by _cell_for_spec
+        self._bump_cell_counters(spec, consumed_delta=1)
+
+    def _record_cell_completion(self, spec: dict, status: str) -> None:
+        """Record a usable result against the cell (H-2, reported secondary).
+
+        Only ``completed`` / ``partial`` count. This is never the cap — if
+        crashes were free retries the budget would stop being a budget — it
+        exists so per-cell effort can be quoted as both attempts and usable
+        results.
+        """
+        if status not in ("completed", "partial"):
+            return
+        self._bump_cell_counters(spec, completed_delta=1)
+
+    def _bump_cell_counters(self, spec: dict, *, consumed_delta: int = 0,
+                            completed_delta: int = 0) -> None:
+        """Immutable read-modify-write of a cell's eval counters."""
+        from dataclasses import replace
+
+        from automil.cells import write_cell
+
+        cell = self._cell_for_spec(spec, warn=False)
+        if cell is None:
+            return
+        try:
+            write_cell(
+                replace(
+                    cell,
+                    consumed_evals=cell.consumed_evals + consumed_delta,
+                    completed_evals=cell.completed_evals + completed_delta,
+                ),
+                self.automil_dir / "cells",
+            )
+        except OSError:
+            logger.exception(
+                "Could not update eval counters for cell %s (node %s)",
+                cell.cell_id[:8], spec.get("id"),
+            )
+
+    def _mark_node_terminal_in_graph(self, node_id: str, status: str,
+                                     error: str = "") -> None:
+        """Record a terminal status on the graph node (M-5, M-7).
+
+        Both crash paths used to write ``archive/result.json`` and
+        ``completed/<id>.json`` and stop there, leaving ``graph.json`` describing
+        a node that is still queued or running. ``reconcile`` would eventually
+        repair it — but only if somebody ran it, which on a daemon-driven
+        campaign may be never, so ``automil rank`` and ``automil status`` showed
+        a node that never resolves.
+
+        Routed through ``mark_failed`` rather than assigning fields here, because
+        that is also where ``meta.total_executed`` / ``total_proposed`` are
+        maintained (M-7): ``total_executed`` is the UCB exploration denominator
+        (``graph.py``: ``sqrt(log(total) / (1 + child_count))``), so a daemon that
+        never incremented it explored against a frozen count.
+
+        Idempotent. Orphan recovery and ``_mark_crashed`` can both fire for one
+        node, and double-counting the denominator would be its own distortion, so
+        a node already marked executed is left alone.
+        """
+        from automil.graph import locked_update
+
+        try:
+            with locked_update(
+                str(self.graph.path),
+                technique_map=getattr(self.graph, "_technique_map", None),
+            ) as g:
+                node = g.get_node(node_id)
+                if node is None:
+                    return          # Backend.submit path the graph never saw
+                if node.get("type") == "executed":
+                    return          # already terminal — do not re-bill the counters
+                g.mark_failed(node_id, status, error)
+        except Exception:  # noqa: BLE001 — a graph failure must not wedge the daemon
+            logger.exception("could not mark %s as %s in the graph", node_id, status)
+
+    def _device_provenance(self, slot_id: int) -> dict[str, str | int | None]:
+        """Map an internal scheduler slot to truthful hardware provenance."""
+        accelerator = getattr(self, "_accelerator", "") or "cuda"
+        return {
+            "accelerator": accelerator,
+            "gpu": None if accelerator == "cpu" else slot_id,
+        }
+
+    @staticmethod
+    def _execution_label_from_metadata(metadata: dict) -> str:
+        """Human-readable device label without describing CPU as a GPU."""
+        accelerator = str(metadata.get("accelerator") or "cuda").lower()
+        gpu = metadata.get("gpu")
+        if accelerator == "cpu":
+            return "CPU"
+        return f"{accelerator.upper()} GPU {gpu}"
+
+    def _execution_label(self, slot_id: int) -> str:
+        return self._execution_label_from_metadata(self._device_provenance(slot_id))
+
+    def _write_launch_intent(self, spec: dict, gpu_id: int, worktree) -> Path:
+        """Record the intent to launch BEFORE spawning the process (M-6).
+
+        The running spec proper cannot be written before ``Popen`` — it carries
+        the pid. So the window between the spawn and that write was one in which
+        a daemon death left the node queued forever AND the training process
+        alive, holding its GPU, invisible to orphan recovery.
+
+        Writing an intent record first cannot recover the pid; nothing can. What
+        it does is split the failure in two and fix the half that is fixable: the
+        node is now correctly marked crashed on the next start, and the leak is
+        REPORTED with the worktree that identifies it, instead of being silent.
+        ``_launch`` overwrites this file with the real running spec moments later.
+        """
+        path = self._backend_running_dir("local") / f"{spec.get('id')}.json"
+        payload = {k: v for k, v in spec.items() if k != "_file"}
+        meta = dict(payload.get("metadata") or {})
+        meta.update({
+            "launch_phase": "launching",
+            "pid": None,
+            **self._device_provenance(gpu_id),
+            "worktree": str(worktree),
+            "intent_at": datetime.now().isoformat(),
+        })
+        payload["metadata"] = meta
+        path.write_text(json.dumps(payload, indent=2))
+        return path
+
     def _launch(self, spec: dict, gpu_id: int):
         """Launch an experiment in an isolated git worktree."""
         node_id = spec["id"]
+        # CAP-1: the cap must bind here, not only at submit time. Idempotent with
+        # the pre-check in tick() — a refused spec is already gone from queue/.
+        if self._refuse_closed_cell_spec(spec):
+            return
         archive = self.archive_dir / node_id
         archive.mkdir(parents=True, exist_ok=True)
 
@@ -928,6 +1522,85 @@ class ExperimentOrchestrator:
         src_file = spec.get("_file")
         if src_file and Path(src_file).exists():
             Path(src_file).unlink()
+
+        # LCH-1/LCH-3: submit-time admissibility is evidence, not authority.
+        # Recompute it from the live policy and exact archived overlay before a
+        # worktree is created. Architecture-preserving legacy specs, policy
+        # drift, unmanifested files, and changed variant selections fail closed.
+        try:
+            from automil.admissibility import (
+                load_candidate_policy,
+                revalidate_candidate_spec,
+                validate_campaign_binding,
+            )
+
+            _candidate_policy = load_candidate_policy(self.automil_dir)
+            _overlay_rel = spec.get("overlay_dir")
+            _overlay_path = (
+                self.orch_dir / str(_overlay_rel)
+                if _overlay_rel
+                else archive
+            )
+            revalidate_candidate_spec(_candidate_policy, spec, _overlay_path)
+
+            # The candidate overlay is only half the launched identity. Pin the
+            # config-owned base command as well, and for campaign cells recheck
+            # the immutable manifest bytes immediately before worktree creation.
+            _expected_command_hash = spec.get("base_run_command_sha256")
+            _live_command_hash = hashlib.sha256(
+                (self.run_command or "").encode()
+            ).hexdigest()
+            if _expected_command_hash is None:
+                if _candidate_policy.mode == "architecture-preserving":
+                    raise ValueError(
+                        "architecture-preserving spec is missing base_run_command_sha256"
+                    )
+            elif _expected_command_hash != _live_command_hash:
+                raise ValueError(
+                    "base run command changed between submit and launch"
+                )
+
+            _campaign = ((spec.get("metadata") or {}).get("campaign"))
+            if _campaign is not None:
+                if not isinstance(_campaign, dict):
+                    raise ValueError("spec metadata.campaign must be a mapping")
+                _manifest_rel = Path(str(_campaign.get("manifest", "")))
+                if (
+                    not _manifest_rel.parts
+                    or _manifest_rel.is_absolute()
+                    or ".." in _manifest_rel.parts
+                ):
+                    raise ValueError("campaign manifest path is unsafe")
+                _manifest_path = self.project_root / _manifest_rel
+                if not _manifest_path.is_file():
+                    raise ValueError(f"campaign manifest missing: {_manifest_rel}")
+                _actual_manifest_hash = hashlib.sha256(
+                    _manifest_path.read_bytes()
+                ).hexdigest()
+                if _actual_manifest_hash != _campaign.get("manifest_sha256"):
+                    raise ValueError("campaign manifest changed between submit and launch")
+                validate_campaign_binding(
+                    _manifest_path,
+                    _campaign,
+                    base_run_command=self.run_command,
+                    budget_cell_id=str((spec.get("metadata") or {}).get("cell_id", "")),
+                    base_commit=(
+                        str(spec["base_commit"])
+                        if spec.get("base_commit") is not None else None
+                    ),
+                )
+        except Exception as exc:  # fail closed at the last pre-launch seam
+            logger.error(
+                "Spec for %s failed launch-time admissibility: %s",
+                node_id,
+                exc,
+            )
+            self._mark_crashed(
+                node_id,
+                spec,
+                f"launch-time admissibility failed: {exc}",
+            )
+            return
 
         # Reject specs without an explicit base_commit. submit always pins
         # the parent SHA at queue-time; any path that bypasses this would
@@ -958,8 +1631,13 @@ class ExperimentOrchestrator:
         overlay_dir = spec.get("overlay_dir")
         deletions = spec.get("deletions")
         if overlay_dir:
+            # HASH-0: verify the digests `automil submit` recorded before any
+            # file lands. Until now the manifest was written into every spec and
+            # checked by nothing, so an archive edited between submit and launch
+            # would run under the original node's label.
             self.runner.apply_overlay(
-                wt_path, self.orch_dir / overlay_dir, deletions=deletions
+                wt_path, self.orch_dir / overlay_dir, deletions=deletions,
+                manifest=spec.get("overlay_manifest"),
             )
 
         # CLN-02 / D-04 + DEC-01 / D-199: build env from explicit whitelist +
@@ -990,6 +1668,9 @@ class ExperimentOrchestrator:
             override_str = spec.get("run_command_override")
             if override_str:
                 cmd = cmd + shlex.split(override_str)
+            # M-6: intent BEFORE the side effect. Overwritten with the real
+            # running spec (pid/pgid/starttime) a few lines below.
+            self._write_launch_intent(spec, gpu_id, wt_path)
             process = subprocess.Popen(
                 cmd,
                 cwd=str(wt_path),
@@ -1021,6 +1702,11 @@ class ExperimentOrchestrator:
         )
         self.gpu_allocations.setdefault(gpu_id, []).append(node_id)
 
+        # H-2: the experiment is dispatched — bill it to its cell. Done here (not
+        # at completion) so crashed and budget-killed attempts cost the same as
+        # successful ones.
+        self._record_cell_launch(spec)
+
         # Copy spec to running dir for orphan recovery.
         # Use _backend_running_dir to ensure running/local/ exists (created on demand
         # per D-169; __init__ no longer pre-creates the backend subdir).
@@ -1040,6 +1726,7 @@ class ExperimentOrchestrator:
             recorded_pgid = process.pid
         running_spec_meta["pid"] = process.pid
         running_spec_meta["pgid"] = recorded_pgid
+        running_spec_meta.update(self._device_provenance(gpu_id))
         recorded_starttime = _read_proc_starttime(process.pid)
         if recorded_starttime is not None:
             running_spec_meta["starttime_ticks"] = recorded_starttime
@@ -1047,8 +1734,12 @@ class ExperimentOrchestrator:
         running_spec_path.write_text(json.dumps(running_spec_payload, indent=2))
 
         logger.info(
-            f"Launched {node_id} on GPU {gpu_id} "
-            f"(PID {process.pid}, est. {estimated_vram}GB, timeout {timeout_min}min)"
+            "Launched %s on %s (PID %d, est. %sGB, timeout %smin)",
+            node_id,
+            self._execution_label(gpu_id),
+            process.pid,
+            estimated_vram,
+            timeout_min,
         )
 
     def _running_in_cell(self, cell_id: str) -> list:
@@ -1306,6 +1997,24 @@ class ExperimentOrchestrator:
 
         result = self._collect_or_synthesize_result(node_id, archive, returncode, wt_path)
 
+        # H-1 (audit 2026-07-23): run.log is the raw training stdout at the
+        # AGENT-VISIBLE archive root, so a script that prints a test metric leaks
+        # the sealed quantity. Redact held-out lines at the orchestrator boundary
+        # (defence-in-depth over per-script gating, which a re-vendored upstream
+        # can silently regress).
+        from automil.firewall import held_out_keys, redact_held_out, redact_log_file
+        _ho_keys = held_out_keys(result)
+        try:
+            _n_redacted = redact_log_file(archive / "run.log", _ho_keys)
+            if _n_redacted:
+                logger.warning(
+                    "val-firewall: redacted %d held-out line(s) from %s/run.log — "
+                    "the training script printed test metrics to stdout",
+                    _n_redacted, node_id,
+                )
+        except Exception:  # noqa: BLE001 — log hygiene must never fail a completion
+            logger.exception("firewall: run.log redaction failed for %s", node_id)
+
         # Include error details in result for better agent visibility before terminal write
         status = result.get("status", "completed")
         if status in ("crash", "oom", "timeout"):
@@ -1315,7 +2024,8 @@ class ExperimentOrchestrator:
                 lines = log_path.read_text().splitlines()
                 error_tail = "\n".join(lines[-20:])
             result = dict(result)
-            result.setdefault("error", error_tail)
+            # The tail lands in the agent-facing result.json — redact it too.
+            result.setdefault("error", redact_held_out(error_tail, _ho_keys))
             result.setdefault("log_location", str(log_path))
 
         # REC-02 / D-09, D-10: delegate all four artifact writes to terminal_writer.
@@ -1330,8 +2040,13 @@ class ExperimentOrchestrator:
             results_tsv_writer=self._append_results_tsv,
             spec=spec,
             elapsed_s=elapsed_s,
-            gpu_id=gpu_id,
+            gpu_id=self._device_provenance(gpu_id)["gpu"],
+            accelerator=self._device_provenance(gpu_id)["accelerator"],
         )
+
+        # H-2: record a usable result against the cell (reported secondary; the
+        # attempt was already billed at launch).
+        self._record_cell_completion(spec, result.get("status", ""))
 
         # D-170: cross-backend log unification (no-op for local backend).
         self._drain_remote_backend_log(node_id, archive)
@@ -1354,11 +2069,44 @@ class ExperimentOrchestrator:
         status_str = result.get("status", "unknown")
         composite = result.get("composite", 0)
         logger.info(
-            f"Completed {node_id}: status={status_str}, "
-            f"composite={composite:.4f}, elapsed={elapsed_s / 60:.1f}min, GPU {gpu_id}"
+            "Completed %s: status=%s, composite=%.4f, elapsed=%.1fmin, %s",
+            node_id,
+            status_str,
+            composite,
+            elapsed_s / 60,
+            self._execution_label(gpu_id),
         )
 
     # --- _handle_completion helpers (each independently testable) ---
+
+    def _recorded_cancel_reason(self, node_id: str) -> str | None:
+        """The ``metadata.cancel_reason`` recorded for this node, if any (H-7).
+
+        ``'cap'`` is stamped by ``_tick_cells`` and ``_refuse_closed_cell_spec``;
+        ``'cli'`` by ``automil cancel``. Both are written into the running spec
+        BEFORE the kill, so a completion that finds one knows the process did not
+        die of its own accord.
+
+        This exists because a deliberate stop and a real failure are the same
+        observation from the daemon's side — a dead process and no result.json.
+        Without the annotation both became ``crash``, which poisons the failure
+        statistics the gate's health diagnostic reads and makes an operator's
+        cancel indistinguishable from a bug in the training code.
+        """
+        _backend = self._read_backend_name_for_node(node_id)
+        for _spec_path in (
+            self._backend_running_dir(_backend) / f"{node_id}.json",
+            self.archive_dir / node_id / "spec.json",
+        ):
+            if _spec_path.exists():
+                try:
+                    _raw = json.loads(_spec_path.read_text())
+                    reason = (_raw.get("metadata") or {}).get("cancel_reason")
+                    if reason:
+                        return str(reason)
+                except (json.JSONDecodeError, OSError):
+                    pass
+        return None
 
     def _was_cap_killed_completion(self, node_id: str) -> bool:
         """True iff the running or archive spec has metadata.cancel_reason == 'cap'.
@@ -1369,19 +2117,7 @@ class ExperimentOrchestrator:
         running/slurm/ or running/ray/ are found correctly (WR-02 fix / D-169).
         Falls back to archive/<node>/spec.json if running/ was already cleaned.
         """
-        _backend = self._read_backend_name_for_node(node_id)
-        for _spec_path in (
-            self._backend_running_dir(_backend) / f"{node_id}.json",
-            self.archive_dir / node_id / "spec.json",
-        ):
-            if _spec_path.exists():
-                try:
-                    _raw = json.loads(_spec_path.read_text())
-                    if _raw.get("metadata", {}).get("cancel_reason") == "cap":
-                        return True
-                except (json.JSONDecodeError, OSError):
-                    pass
-        return False
+        return self._recorded_cancel_reason(node_id) == "cap"
 
     def _handle_cap_killed_completion(
         self,
@@ -1425,7 +2161,16 @@ class ExperimentOrchestrator:
             results_tsv_writer=self._append_results_tsv,
             spec=spec,
             elapsed_s=elapsed_s,
-            gpu_id=gpu_id,
+            gpu_id=(
+                self._device_provenance(int(gpu_id))["gpu"]
+                if isinstance(gpu_id, int) and gpu_id >= 0
+                else gpu_id
+            ),
+            accelerator=(
+                self._device_provenance(int(gpu_id))["accelerator"]
+                if isinstance(gpu_id, int) and gpu_id >= 0
+                else getattr(self, "_accelerator", "") or "cuda"
+            ),
         )
         logger.info(
             "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
@@ -1433,6 +2178,9 @@ class ExperimentOrchestrator:
             node_id, payload["status"], payload["composite"],
             payload.get("partial_folds", 0), payload.get("expected_folds", 0),
         )
+        # H-2: a budget-killed run that produced folds still yielded a usable
+        # result. The discriminator is the terminal status, not the cause.
+        self._record_cell_completion(spec, payload.get("status", ""))
         # Clean running spec and worktree — use backend-aware path (WR-02 fix / D-169).
         _backend_name_cap = self._read_backend_name_for_node(node_id)
         running_spec = self._backend_running_dir(_backend_name_cap) / f"{node_id}.json"
@@ -1525,7 +2273,18 @@ class ExperimentOrchestrator:
                 # status="crash". The tight enum is:
                 # [completed, crash, budget_killed, cancelled, partial].
                 termination_reason: str | None = None
-                if "CUDA out of memory" in log_text or "OutOfMemoryError" in log_text:
+                # H-7: a deliberate stop looks exactly like a failure from here —
+                # dead process, no result.json. `automil cancel` records its
+                # intent in the running spec before the kill, so honour it rather
+                # than overwriting `cancelled` with `crash`: a cancel counted as a
+                # failure poisons the crash statistics the gate's health
+                # diagnostic reads, and makes an operator stop indistinguishable
+                # from a bug in the training code.
+                _cancel_reason = self._recorded_cancel_reason(node_id)
+                if _cancel_reason == "cli":
+                    status = "cancelled"
+                    termination_reason = "cancelled_by_operator"
+                elif "CUDA out of memory" in log_text or "OutOfMemoryError" in log_text:
                     status = "crash"
                     termination_reason = "oom"
                 elif self._timed_out.get(node_id):
@@ -1541,7 +2300,9 @@ class ExperimentOrchestrator:
                 if termination_reason:
                     result["termination_reason"] = termination_reason
                 if error_tail:
-                    result["error"] = error_tail
+                    # H-1: this tail lands in the agent-facing result.json.
+                    from automil.firewall import redact_held_out
+                    result["error"] = redact_held_out(error_tail)
                 (archive / "result.json").write_text(json.dumps(result, indent=2))
 
         if "status" not in result:
@@ -1730,17 +2491,31 @@ class ExperimentOrchestrator:
         (self.completed_dir / f"{node_id}.json").write_text(
             json.dumps(result, indent=2) + "\n"
         )
+        # M-5 / M-7: the artifacts above are what `reconcile` rebuilds from, but
+        # the graph must not wait for a reconcile that may never be run.
+        self._mark_node_terminal_in_graph(node_id, "crash", error)
+
+    _TSV_TRAILING = ("composite", "vram_gb", "elapsed_min", "status", "description")
 
     def _append_results_tsv(self, node_id: str, result: dict, description: str = ""):
         """Append a row to results.tsv (sole writer, no locking needed).
 
-        Metric columns are derived from the keys of ``result["metrics"]``
-        on first write — no hardcoded MIL-vocabulary. The header is
-        ``node_id, <metric_keys sorted>, composite, vram_gb, elapsed_min,
-        status, description``. Subsequent rows are aligned to the
-        existing header by parsing it from disk; missing keys are filled
-        with empty strings so the file remains a valid TSV across
-        schema drift.
+        Metric columns come from the keys of ``result["metrics"]`` — no hardcoded
+        MIL vocabulary. Header shape is
+        ``node_id, <metric keys sorted>, composite, vram_gb, elapsed_min, status,
+        description``.
+
+        TSV-1: the header used to be locked by the FIRST row, and any later key it
+        did not already carry was silently dropped. The preprint campaign is
+        precisely the breaking case — 65 classification experiments emit
+        ``val_auc``/``val_bacc``, 100 survival experiments emit ``val_c_index``,
+        and whichever finished first decided which group lost its only metric.
+        ``composite`` still landed, so the file looked populated.
+
+        A genuinely new key now WIDENS the header and rewrites the file,
+        backfilling earlier rows with blanks (they really had no value for that
+        column). The rewrite is atomic and only happens on a schema change; a row
+        whose keys the header already covers is a plain append.
         """
         metrics = result.get("metrics", {})
         composite = result.get("composite", 0.0)
@@ -1748,20 +2523,37 @@ class ExperimentOrchestrator:
         elapsed_s = result.get("elapsed_seconds", 0)
         vram_mb = result.get("peak_vram_mb", 0)
 
-        if not self.results_tsv.exists() or self.results_tsv.stat().st_size == 0:
-            metric_cols = sorted(metrics.keys())
-            header_cols = ["node_id"] + metric_cols + [
-                "composite", "vram_gb", "elapsed_min", "status", "description",
-            ]
-            self.results_tsv.write_text("\t".join(header_cols) + "\n")
+        bad = [k for k in metrics if "\t" in str(k) or "\n" in str(k)]
+        if bad:
+            raise ValueError(
+                f"metric name(s) {bad} contain a tab or newline; that would shift "
+                f"every column to their right in results.tsv"
+            )
+
+        trailing = list(self._TSV_TRAILING)
+        existing_rows: list[list[str]] = []
+        if self.results_tsv.exists() and self.results_tsv.stat().st_size:
+            lines = self.results_tsv.read_text().splitlines()
+            header_cols = lines[0].split("\t")
+            metric_cols = [c for c in header_cols
+                           if c != "node_id" and c not in set(trailing)]
+            existing_rows = [ln.split("\t") for ln in lines[1:] if ln]
         else:
-            first_line = self.results_tsv.read_text().split("\n", 1)[0]
-            header_cols = first_line.split("\t")
-            metric_cols = [
-                c for c in header_cols
-                if c not in {"node_id", "composite", "vram_gb",
-                             "elapsed_min", "status", "description"}
-            ]
+            header_cols, metric_cols = [], []
+
+        new_metrics = [k for k in sorted(metrics) if k not in metric_cols]
+        if new_metrics or not header_cols:
+            # Schema change (or first write): widen and rewrite, backfilling the
+            # rows that predate the new column(s) with blanks.
+            old_metric_cols = list(metric_cols)
+            metric_cols = sorted(set(metric_cols) | set(metrics))
+            header_cols = ["node_id"] + metric_cols + trailing
+            rebuilt = ["\t".join(header_cols)]
+            for row in existing_rows:
+                old_header = ["node_id"] + old_metric_cols + trailing
+                by_name = dict(zip(old_header, row))
+                rebuilt.append("\t".join(by_name.get(c, "") for c in header_cols))
+            self._write_tsv_atomic("\n".join(rebuilt) + "\n")
 
         def _fmt(v) -> str:
             if v is None or v == "":
@@ -1778,10 +2570,33 @@ class ExperimentOrchestrator:
             f"{vram_mb / 1024:.1f}",
             f"{elapsed_s / 60:.1f}",
             status,
-            description or node_id,
+            # A newline or tab in a free-text description would forge a row or a
+            # column; the agent writes this text, so flatten rather than trust it.
+            (description or node_id).replace("\n", " ").replace("\r", " ").replace("\t", " "),
         ])
         with open(self.results_tsv, "a") as f:
             f.write("\t".join(cells) + "\n")
+
+    def _write_tsv_atomic(self, text: str) -> None:
+        """Replace results.tsv in one step.
+
+        The schema-widening rewrite is the only path that touches bytes already
+        on disk, and the viz dashboard reads this file unlocked (L-8), so a
+        partial write would be observable as a truncated table.
+        """
+        import tempfile
+
+        directory = self.results_tsv.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".results-", suffix=".tsv")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(text)
+            os.replace(tmp, self.results_tsv)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
     # --- Main loop ---
 
@@ -1866,6 +2681,12 @@ class ExperimentOrchestrator:
                     self.counter += 1
                     spec["id"] = f"{self.counter:04d}"
 
+                # CAP-1: decide admission BEFORE the GPU search, so a spec whose
+                # cell has closed is withdrawn immediately instead of lingering
+                # in the queue for as long as the cluster stays busy.
+                if self._refuse_closed_cell_spec(spec):
+                    continue
+
                 needed_gb = spec.get("estimated_vram_gb", self.default_vram)
                 gpu = self._find_best_gpu(needed_gb)
 
@@ -1902,8 +2723,11 @@ class ExperimentOrchestrator:
         self._recover_orphans()
 
         logger.info(
-            f"Orchestrator started. GPUs: {list(self.gpu_allocations.keys())}, "
-            f"poll={self.poll_interval}s, safety={self.safety_margin_gb}GB"
+            "Orchestrator started. Accelerator: %s, slots: %s, poll=%ss, safety=%sGB",
+            self._accelerator or "cuda",
+            list(self.gpu_allocations.keys()),
+            self.poll_interval,
+            self.safety_margin_gb,
         )
 
         # Signal handlers
@@ -1975,7 +2799,7 @@ class ExperimentOrchestrator:
         else:
             print("Orchestrator: NOT RUNNING")
 
-        # GPU state
+        # Typed execution state (with legacy GPU-only fallback).
         if self.gpu_state_file.exists():
             state = json.loads(self.gpu_state_file.read_text())
             print(f"\nLast updated: {state.get('last_updated', 'unknown')}")
@@ -1983,12 +2807,32 @@ class ExperimentOrchestrator:
             print(f"Running: {state.get('total_running', 0)}")
             print(f"Completed: {state.get('total_completed', 0)}")
             print(f"Counter: {state.get('counter', 0)}")
-            print("\nGPUs:")
-            for idx, gpu in sorted(state.get("gpus", {}).items()):
-                running_ids = gpu.get("running", [])
-                sched = gpu.get("schedulable_free_gb", 0)
-                util = gpu.get("utilization_pct", 0)
-                print(f"  GPU {idx}: {sched:.1f}GB schedulable, {util}% util, running={running_ids}")
+            slots = state.get("execution_slots")
+            if isinstance(slots, dict):
+                print("\nExecution slots:")
+                for slot_name, slot in sorted(slots.items()):
+                    running_ids = slot.get("running", [])
+                    capacity = slot.get("capacity", "?")
+                    sched = slot.get("schedulable_free_gb")
+                    sched_text = (
+                        f", {sched:.1f}GB schedulable"
+                        if isinstance(sched, (int, float))
+                        else ""
+                    )
+                    print(
+                        f"  {slot_name}: running={running_ids}, "
+                        f"capacity={capacity}{sched_text}"
+                    )
+            else:
+                print("\nGPUs:")
+                for idx, gpu in sorted(state.get("gpus", {}).items()):
+                    running_ids = gpu.get("running", [])
+                    sched = gpu.get("schedulable_free_gb", 0)
+                    util = gpu.get("utilization_pct", 0)
+                    print(
+                        f"  GPU {idx}: {sched:.1f}GB schedulable, "
+                        f"{util}% util, running={running_ids}"
+                    )
         else:
             gpus = query_gpus()
             print("\nGPUs (live):")
@@ -2028,30 +2872,75 @@ class ExperimentOrchestrator:
             self.pid_file.unlink()
 
     def cmd_submit(self, spec_path: str):
-        """Submit an experiment spec to the queue."""
+        """Submit an experiment spec to the queue.
+
+        L-6 (audit 2026-07-23): this is the legacy in-daemon submit path
+        (``automil.backends._orchestrator_daemon.main()``'s ``submit``
+        subcommand). The supported path is ``automil submit`` ->
+        ``cli/submit.py``, which allocates ids from graph.json under
+        ``locked_update``. This path instead derives the next id from
+        ``gpu_state.json``'s ``"counter"`` field, which only the daemon's
+        main tick loop (``_save_state``) persists -- ``cmd_submit`` never
+        advances it itself. Two near-simultaneous calls on this path
+        (including one racing a daemon tick) could therefore read the same
+        stale counter, compute the same id, and the second call's
+        unconditional write would silently overwrite the first's queue
+        spec -- the first submission lost with no error.
+
+        Fixed with two independent guards:
+          1. The id read + write is serialized under the SAME lock
+             graph.json writers use (``locked_update``'s
+             ``<graph_path>.lock`` sidecar). This path never touches
+             graph.json's contents, but sharing its lock file makes id
+             allocation mutually exclusive with every other allocator in
+             the process, including a concurrent legacy submit.
+          2. The write itself refuses (does not overwrite) when the target
+             queue file already exists -- so any collision that still
+             slips through (e.g. a caller-supplied id, or a lock-holder
+             that crashed mid-write on a prior run) fails loudly instead
+             of silently discarding the earlier submission.
+        """
         src = Path(spec_path)
         if not src.exists():
             print(f"File not found: {spec_path}")
             sys.exit(1)
 
         spec = json.loads(src.read_text())
-        if not spec.get("id"):
-            # Auto-assign ID from counter
-            counter = 0
-            if self.gpu_state_file.exists():
-                try:
-                    counter = json.loads(self.gpu_state_file.read_text()).get("counter", 0)
-                except Exception:
-                    pass
-            counter += 1
-            spec["id"] = f"{counter:04d}"
 
-        if not spec.get("submitted_at"):
-            spec["submitted_at"] = datetime.now().isoformat()
+        lock_path = self.graph.path.with_suffix(self.graph.path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_f = open(lock_path, "w")
+        try:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
 
-        dst = self.queue_dir / f"{spec['id']}.json"
-        dst.write_text(json.dumps(spec, indent=2) + "\n")
-        print(f"Submitted experiment {spec['id']}: {spec.get('description', '?')}")
+            if not spec.get("id"):
+                # Auto-assign ID from counter
+                counter = 0
+                if self.gpu_state_file.exists():
+                    try:
+                        counter = json.loads(self.gpu_state_file.read_text()).get("counter", 0)
+                    except Exception:
+                        pass
+                counter += 1
+                spec["id"] = f"{counter:04d}"
+
+            if not spec.get("submitted_at"):
+                spec["submitted_at"] = datetime.now().isoformat()
+
+            dst = self.queue_dir / f"{spec['id']}.json"
+            if dst.exists():
+                print(
+                    f"Refusing to submit: a queue spec already exists for id "
+                    f"{spec['id']!r} ({dst}). Not overwriting it."
+                )
+                sys.exit(1)
+            dst.write_text(json.dumps(spec, indent=2) + "\n")
+            print(f"Submitted experiment {spec['id']}: {spec.get('description', '?')}")
+        finally:
+            try:
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_f.close()
 
 
 def main():

@@ -10,12 +10,15 @@ shape ``[N, embed_dim]``. Clone of ``dtfd/dataset.py`` (identical contract).
 from __future__ import annotations
 
 import os
+from collections import Counter
 from dataclasses import dataclass
 
 import h5py
 import numpy as np
 import pandas as pd
 import torch
+
+from autobench.pipeline.dataset_guards import check_split_retention
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,10 @@ def load_abmil_split(
     """Load one split (train/val/test) as a list of ``ABMILSlide`` bags.
 
     Slides missing an H5 file are dropped with a warning (mirrors the other
-    arms' behaviour), so a partially-extracted cohort still runs.
+    arms' behaviour), so a partially-extracted cohort still runs -- but M-9's
+    retained-fraction / per-class-floor guard (``check_split_retention``)
+    fails loudly on val/test if the drop is severe enough to corrupt the
+    split. Train only warns (see that function's docstring for why).
     """
     task_df = pd.read_csv(task_csv, dtype=str)
     label_lookup: dict[str, int] = {}
@@ -81,9 +87,10 @@ def load_abmil_split(
         raw = row["label"]
         label_lookup[str(row["slide_id"])] = int(label_dict.get(raw, raw))
 
+    expected_ids = _load_split_ids(split_csv, split)
     slides: list[ABMILSlide] = []
     missing: list[str] = []
-    for sid in _load_split_ids(split_csv, split):
+    for sid in expected_ids:
         if sid not in label_lookup:
             continue
         h5_path = os.path.join(h5_dir, f"{sid}.h5")
@@ -99,6 +106,18 @@ def load_abmil_split(
             f"  [ABMIL] {split}: dropping {len(missing)} slide(s) missing H5 "
             f"features (first: {missing[:3]!r})"
         )
+
+    check_split_retention(
+        context=f"ABMIL task_csv={task_csv} split_csv={split_csv}",
+        split=split,
+        expected_total=len(expected_ids),
+        retained_total=len(slides),
+        expected_by_class=Counter(
+            label_lookup[sid] for sid in expected_ids if sid in label_lookup
+        ),
+        retained_by_class=Counter(s.label for s in slides),
+        warn_only=(split == "train"),
+    )
     return slides
 
 
@@ -108,15 +127,20 @@ def load_abmil_survival_split(
     h5_dir: str,
     split: str,
 ) -> list[ABMILSurvivalSlide]:
-    """Load one split (train/val/test) as a list of ``ABMILSurvivalSlide`` bags."""
+    """Load one split (train/val/test) as a list of ``ABMILSurvivalSlide`` bags.
+
+    See ``load_abmil_split`` -- same retained-fraction guard (M-9); no
+    per-class floor here since survival tasks have no classes.
+    """
     task_df = pd.read_csv(task_csv, dtype=str)
     status_map = dict(zip(task_df["slide_id"], task_df["status"]))
     time_map = dict(zip(task_df["slide_id"], task_df["time"]))
     case_map = dict(zip(task_df["slide_id"], task_df["case_id"]))
 
+    expected_ids = _load_split_ids(split_csv, split)
     slides: list[ABMILSurvivalSlide] = []
     missing: list[str] = []
-    for sid in _load_split_ids(split_csv, split):
+    for sid in expected_ids:
         if sid not in status_map:
             continue
         h5_path = os.path.join(h5_dir, f"{sid}.h5")
@@ -138,4 +162,12 @@ def load_abmil_survival_split(
             f"  [ABMIL-surv] {split}: dropping {len(missing)} slide(s) missing H5 "
             f"features (first: {missing[:3]!r})"
         )
+
+    check_split_retention(
+        context=f"ABMIL-surv task_csv={task_csv} split_csv={split_csv}",
+        split=split,
+        expected_total=len(expected_ids),
+        retained_total=len(slides),
+        warn_only=(split == "train"),
+    )
     return slides

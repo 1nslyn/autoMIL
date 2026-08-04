@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -40,6 +41,105 @@ def _setup_project(tmp_path: Path, protected: list[str]) -> tuple[Path, Path]:
     cfg.setdefault("registry", {})["protected"] = protected
     cfg_path.write_text(yaml.safe_dump(cfg))
     return tmp_path, adir
+
+
+def _campaign_record() -> tuple[dict, dict]:
+    cell = {
+        "cell_id": "cohort__arm__task",
+        "budget_identity": {"cell_id": "budget-123"},
+        "commands": {"discovery": "python train.py --folds 0,1,2"},
+    }
+    canonical = json.dumps(
+        cell, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()
+    cell["cell_sha256"] = hashlib.sha256(canonical).hexdigest()
+    manifest = {
+        "campaign_id": "campaign-v1",
+        "cells": [cell],
+    }
+    campaign = {
+        "campaign_id": "campaign-v1",
+        "manifest": "campaign/manifest.json",
+        "manifest_sha256": "set-by-caller",
+        "cell_id": cell["cell_id"],
+        "cell_sha256": cell["cell_sha256"],
+        "budget_cell_id": "budget-123",
+        "stage": "discovery",
+    }
+    return manifest, campaign
+
+
+def test_campaign_binding_requires_one_manifest_source_of_truth(tmp_path):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    bound = validate_campaign_binding(
+        path,
+        campaign,
+        base_run_command="python train.py --folds 0,1,2",
+        budget_cell_id="budget-123",
+    )
+    assert bound == campaign
+
+
+def test_campaign_binding_rejects_base_commit_drift(tmp_path):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    campaign["base_commit"] = "a" * 40
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="base commit"):
+        validate_campaign_binding(
+            path,
+            campaign,
+            base_run_command="python train.py --folds 0,1,2",
+            budget_cell_id="budget-123",
+            base_commit="b" * 40,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("cell_sha256", "0" * 64, "cell hash"),
+        ("budget_cell_id", "other", "budget identity"),
+        ("stage", "promotion", "stage command"),
+    ],
+)
+def test_campaign_binding_rejects_config_manifest_drift(
+    tmp_path, field, value, message,
+):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    campaign[field] = value
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match=message):
+        validate_campaign_binding(
+            path,
+            campaign,
+            base_run_command="python train.py --folds 0,1,2",
+            budget_cell_id="budget-123",
+        )
+
+
+def test_campaign_binding_rejects_command_drift(tmp_path):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="base run command"):
+        validate_campaign_binding(
+            path,
+            campaign,
+            base_run_command="python other.py",
+            budget_cell_id="budget-123",
+        )
 
 
 def test_protected_glob_match_rejects(tmp_path, cli_runner, monkeypatch):
@@ -200,3 +300,231 @@ def test_protected_reject_runs_before_path_validation(tmp_path, cli_runner, monk
     # "registry.protected" and does contain "must be relative".
     # The test enforces that the protected message is present.
     assert "registry.protected" in result.output
+
+
+def _enable_recipe_only_mode(adir: Path) -> None:
+    cfg_path = adir / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    cfg.setdefault("registry", {}).update({
+        "mode": "architecture-preserving",
+        "protected": ["models/**", "evaluate.py"],
+        "allowed_override_options": ["--hparams", "--policy-variant"],
+        "allowed_variant_kinds": ["policy"],
+    })
+    cfg.setdefault("files", {})["editable"] = ["recipes/**"]
+    cfg.setdefault("run", {})["mil_model"] = "clam_mb"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+
+
+def test_architecture_preserving_explicit_files_cannot_escape_editable(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    monkeypatch.chdir(proj)
+    (proj / "train.py").write_text("# unauthorized trainer edit\n")
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "escape",
+         "--files", "train.py", "--mil-model", "clam_mb"],
+    )
+    assert result.exit_code != 0
+    assert "files.editable" in result.output
+    assert "protected-surface-violation" in result.output
+
+
+def test_architecture_preserving_submit_persists_train_only_verdict(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    monkeypatch.chdir(proj)
+    recipe = proj / "recipes" / "cosine.py"
+    recipe.parent.mkdir()
+    recipe.write_text("NAME = 'cosine'\n")
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "recipe",
+         "--files", "recipes/cosine.py", "--mil-model", "clam_mb"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    spec = json.loads(
+        (adir / "orchestrator" / "queue" / "node_0001.json").read_text()
+    )
+    assert spec["admissibility"]["candidate_class"] == "train-only-source"
+    assert spec["admissibility"]["accepted"] is True
+    assert spec["admissibility"]["files"] == ["recipes/cosine.py"]
+    assert spec["admissibility"]["policy_hash"]
+
+
+def test_architecture_preserving_hparam_only_submit_is_config_only(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    monkeypatch.chdir(proj)
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "hp",
+         "--override", "--hparams '{\"lr\":0.0001}'", "--mil-model", "clam_mb"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    spec = json.loads(
+        (adir / "orchestrator" / "queue" / "node_0001.json").read_text()
+    )
+    assert spec["overlay_manifest"] == {}
+    assert spec["admissibility"]["candidate_class"] == "config-only"
+    base_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=proj, capture_output=True,
+        text=True, check=True,
+    ).stdout.strip()
+    expected_hash = hashlib.sha256(
+        (base_commit + "\nOVERRIDE:--hparams '{\"lr\":0.0001}'").encode()
+    ).hexdigest()[:16]
+    assert spec["graph_metadata"]["config_hash"] == expected_hash
+
+
+def test_architecture_preserving_forbidden_command_override_is_rejected(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    monkeypatch.chdir(proj)
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "identity escape",
+         "--override", "--dataset other", "--mil-model", "clam_mb"],
+    )
+    assert result.exit_code != 0
+    assert "allowed_override_options" in result.output
+
+
+def test_architecture_preserving_policy_module_and_selector_form_one_candidate(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    cfg_path = adir / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    cfg["files"]["editable"] = ["automil/variants/_policies/*.py"]
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    policy = adir / "variants" / "_policies" / "identity.py"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text('''
+from automil.registry import PolicyVariant, VariantSpec, register
+@register(VariantSpec(
+    name="identity", kind="policy", parent=None, base_commit="abc",
+    composite=0.5, node_id="node_0001",
+    created_at="2026-08-02T00:00:00+00:00",
+))
+class Identity(PolicyVariant):
+    def wrap_optimizer(self, opt):
+        return opt
+''')
+    monkeypatch.chdir(proj)
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "policy source",
+         "--files", "automil/variants/_policies/identity.py",
+         "--override", "--policy-variant identity", "--mil-model", "clam_mb"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    spec = json.loads(
+        (adir / "orchestrator" / "queue" / "node_0001.json").read_text()
+    )
+    assert spec["admissibility"]["candidate_class"] == "train-only-source"
+    assert spec["run_command_override"] == "--policy-variant identity"
+    assert "automil/variants/_policies/identity.py" in spec["overlay_manifest"]
+
+
+def test_architecture_preserving_policy_source_without_selector_is_rejected(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    cfg_path = adir / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    cfg["files"]["editable"] = ["automil/variants/_policies/*.py"]
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    policy = adir / "variants" / "_policies" / "identity.py"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text('''
+from automil.registry import PolicyVariant, VariantSpec, register
+@register(VariantSpec(
+    name="identity", kind="policy", parent=None, base_commit="abc",
+    composite=0.5, node_id="node_0001",
+    created_at="2026-08-02T00:00:00+00:00",
+))
+class Identity(PolicyVariant):
+    def wrap_optimizer(self, opt):
+        return opt
+''')
+    monkeypatch.chdir(proj)
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "inert policy",
+         "--files", "automil/variants/_policies/identity.py",
+         "--mil-model", "clam_mb"],
+    )
+    assert result.exit_code != 0
+    assert "would execute as a no-op" in result.output
+
+
+def test_architecture_preserving_policy_selectors_cannot_disagree(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    (adir / "active_variant.json").write_text(json.dumps({
+        "model": {"variant": None},
+        "loss": {"variant": None},
+        "policy": {"variant": "lookahead"},
+    }))
+    monkeypatch.chdir(proj)
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "ambiguous policy",
+         "--override", "--policy-variant cosine", "--mil-model", "clam_mb"],
+    )
+    assert result.exit_code != 0
+    assert "disagrees with active_variant.json" in result.output
+
+
+def test_architecture_preserving_stale_model_variant_cannot_ride_next_submit(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    monkeypatch.chdir(proj)
+    (adir / "active_variant.json").write_text(json.dumps({
+        "model": {"variant": "clam_as_abmil", "parent": "clam_mb"},
+        "loss": {"variant": None},
+        "policy": {"variant": None},
+    }))
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "variant escape",
+         "--override", "--hparams '{\"lr\":0.0001}'", "--mil-model", "clam_mb"],
+    )
+    assert result.exit_code != 0
+    assert "allowed_variant_kinds" in result.output
+    assert "model" in result.output

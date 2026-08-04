@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import time
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -19,6 +19,7 @@ import torch
 
 from autobench.pipeline.clam._imports import clam_train, initiate_model, summary
 from autobench.pipeline.config import ExperimentConfig
+from autobench.pipeline.determinism import seed_everything
 from autobench.pipeline.evaluate import compute_extended_metrics
 
 # CLAM's core_utils and utils.utils use a module-level ``device`` variable.
@@ -38,30 +39,20 @@ def _set_clam_device(device: torch.device) -> None:
 # Reproducibility
 # CLAM has an identical seed_torch() in main.py, but it's defined after
 # module-level parser.parse_args() and captures a module-level device
-# variable — importing it triggers argparse side effects.  We replicate
-# the same logic here.
-# ---------------------------------------------------------------------------
-
-
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-
-
+# variable — importing it triggers argparse side effects. We use the shared
+# autobench.pipeline.determinism.seed_everything (L-2), which replicates the
+# same logic and is the canonical copy every other trainer imports too.
 # ---------------------------------------------------------------------------
 # Build the args namespace that CLAM's train() expects
 # ---------------------------------------------------------------------------
 
 
 def _make_clam_args(
-    exp_cfg: ExperimentConfig, fold_dir: str, *, log_data: bool = False,
+    exp_cfg: ExperimentConfig,
+    fold_dir: str,
+    *,
+    log_data: bool = False,
+    policy_runtime: Any | None = None,
 ) -> SimpleNamespace:
     """Construct the full args namespace expected by clam_train()."""
     return SimpleNamespace(
@@ -73,10 +64,12 @@ def _make_clam_args(
         drop_out=exp_cfg.model.dropout,
         subtyping=(exp_cfg.task.n_classes > 2),
         B=exp_cfg.model.B,
-        inst_loss=None,
-        no_inst_cluster=False,
+        # H-3b: read from ModelConfig instead of hardcoding. Defaults are the
+        # previous literals, so this changes no dispatched experiment.
+        inst_loss=exp_cfg.model.inst_loss,
+        no_inst_cluster=exp_cfg.model.no_inst_cluster,
         bag_weight=exp_cfg.model.bag_weight,
-        bag_loss="ce",
+        bag_loss=exp_cfg.model.bag_loss,
         # Training
         max_epochs=exp_cfg.train.max_epochs,
         opt=exp_cfg.train.optimizer,
@@ -90,6 +83,7 @@ def _make_clam_args(
         results_dir=fold_dir,
         log_data=log_data,
         testing=False,
+        policy_runtime=policy_runtime,
     )
 
 
@@ -100,14 +94,15 @@ def _make_clam_args(
 
 def train_fold(
     exp_cfg: ExperimentConfig,
-    train_split,
-    val_split,
-    test_split,
+    train_split: Any,
+    val_split: Any,
+    test_split: Any,
     fold: int,
     results_dir: str,
     device: torch.device,
     wandb_project: str | None = None,
-) -> dict:
+    policy_runtime: Any | None = None,
+) -> dict[str, Any]:
     """Train one fold.
 
     Delegates entirely to CLAM's train() for model creation, training,
@@ -164,7 +159,12 @@ def train_fold(
     # --- Call CLAM's train() directly ---
     # Enable tensorboard (log_data) when wandb is active so CLAM writes
     # per-epoch metrics that wandb captures via sync_tensorboard.
-    args = _make_clam_args(exp_cfg, fold_dir, log_data=bool(wandb_project))
+    args = _make_clam_args(
+        exp_cfg,
+        fold_dir,
+        log_data=bool(wandb_project),
+        policy_runtime=policy_runtime,
+    )
     datasets = (train_split, val_split, test_split)
 
     _timer_start = time.perf_counter()

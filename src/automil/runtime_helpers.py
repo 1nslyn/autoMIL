@@ -24,10 +24,111 @@ logger = logging.getLogger(__name__)
 
 _SIGTERM_REGISTERED: bool = False  # module-level idempotent guard
 
+#: Keys stripped from the worktree-visible result.json (L-3 / val-firewall).
+#: Mirrors terminal_writer._seal_node_archive's sealed-key set exactly.
+#: Duplicated rather than imported: importing from automil.terminal_writer here
+#: would make it a hard dependency of runtime_helpers (imported by training
+#: scripts), the same circular-import concern _handler's atomic-write already
+#: works around by inlining rather than importing (see below).
+_SEALED_RESULT_KEYS = ("held_out", "summary")
+
 
 def get_fold_count() -> int:
     """Read AUTOMIL_FOLD_COUNT env var (injected by orchestrator). Default 5."""
     return int(os.environ.get("AUTOMIL_FOLD_COUNT", "5"))
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    """Write JSON atomically via tempfile + os.replace (CR-04 pattern).
+
+    A SIGKILL (e.g. the daemon's grace-timer expiry) can arrive between a
+    plain write_text's open() and close() syscalls, leaving a torn/zero-byte
+    result.json on disk. The daemon's ingestion path reads that file first,
+    and a partial JSON silently falls through to log-heuristic synthesis,
+    discarding every real result. Shared by register_sigterm_flush's handler
+    and write_result_json so both get the same crash-safety.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path_str = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as fh:
+            fh.write(json.dumps(payload, indent=2) + "\n")
+        os.replace(tmp_path_str, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp_path_str)
+        except OSError:
+            pass
+        raise
+
+
+def _resolve_sealed_results_dir() -> Path | None:
+    """Return AUTOMIL_RESULTS_DIR as an absolute Path, or None if unusable.
+
+    T-09-06: a relative value is rejected rather than resolved against an
+    unknown base (same validation register_sigterm_flush's handler applies).
+    None means "no sealed location available" -- either the var is unset (a
+    manual, non-orchestrated run) or malformed.
+    """
+    results_dir_env = os.environ.get("AUTOMIL_RESULTS_DIR")
+    if not results_dir_env:
+        return None
+    candidate = Path(results_dir_env)
+    return candidate if candidate.is_absolute() else None
+
+
+def write_result_json(payload: dict, *, worktree_dir: str | Path | None = None) -> None:
+    """Split-write a training script's final result across the val-firewall boundary (L-3).
+
+    Training scripts should call this to report their final result instead of
+    writing ``result.json`` directly. It writes to up to two places:
+
+      - The FULL payload (``held_out`` / ``summary`` included, if present) goes
+        to ``AUTOMIL_RESULTS_DIR`` -- the orchestrator-injected, sealed
+        ``archive/<node>/certify/`` directory (see
+        ``_orchestrator_daemon._build_subprocess_env``). ``runner.collect_result``
+        treats a result.json already present there as authoritative and reads
+        it back as-is (see its docstring), so this is the durable, test-bearing
+        copy.
+      - A STRIPPED payload (``held_out`` and ``summary`` removed) goes to
+        ``result.json`` under ``worktree_dir`` (default: ``Path.cwd()``, which
+        is the worktree while a training script runs under the orchestrator --
+        the daemon launches it with ``cwd=`` the worktree path).
+
+    The sealed copy is written FIRST, deliberately: if the process is killed
+    between the two writes, the surviving copy is the more valuable one, and
+    ``collect_result`` already prefers the sealed copy when present, so
+    recovery is correct regardless of whether the worktree write ever ran.
+
+    Before this existed, a script that wrote result.json straight into the
+    worktree left the FULL payload -- test metrics included -- sitting in
+    ``.automil_worktrees/<node>/result.json`` for the whole run (worktree
+    creation to cleanup), a location with no access control of its own.
+    Anything that can read the project directory during search, including the
+    coding agent driving it, could read the sealed held_out block straight off
+    disk without waiting for ``automil certify``. After this, the worktree
+    copy carries at most the same validation-only view already shown in the
+    final, agent-facing ``archive/<node>/result.json`` -- nothing an agent
+    could not already see.
+
+    If ``AUTOMIL_RESULTS_DIR`` is unset or malformed (a manual, unorchestrated
+    run -- no sealed location exists to split into), the FULL payload is
+    written straight to the worktree copy instead: there is nowhere sealed to
+    put ``held_out``, so keeping it in the one file that exists is strictly
+    better than silently dropping it.
+
+    Never mutates ``payload`` -- both copies are freshly built dicts.
+    """
+    target_worktree = Path(worktree_dir) if worktree_dir is not None else Path.cwd()
+    sealed_dir = _resolve_sealed_results_dir()
+
+    if sealed_dir is None:
+        _atomic_write_json(target_worktree / "result.json", dict(payload))
+        return
+
+    stripped = {k: v for k, v in payload.items() if k not in _SEALED_RESULT_KEYS}
+    _atomic_write_json(sealed_dir / "result.json", dict(payload))    # full, sealed -- written first
+    _atomic_write_json(target_worktree / "result.json", stripped)    # val-only, agent-visible
 
 
 def register_sigterm_flush(*, fold_count_env: str = "AUTOMIL_FOLD_COUNT") -> None:
@@ -53,40 +154,20 @@ def register_sigterm_flush(*, fold_count_env: str = "AUTOMIL_FOLD_COUNT") -> Non
         n = int(os.environ.get(fold_count_env, "5"))
         # D-02 (REC-01): write to AUTOMIL_RESULTS_DIR (the archive dir set by
         # orchestrator), not Path.cwd() (the worktree). Falls back to cwd only
-        # when running outside the orchestrator (e.g. manual run).
-        # T-09-06: validate the env-var path is absolute before use; relative
-        # values are rejected and fall back to cwd for safety.
-        results_dir_env = os.environ.get("AUTOMIL_RESULTS_DIR")
-        if results_dir_env:
-            target = Path(results_dir_env)
-            if not target.is_absolute():
-                target = Path.cwd()  # safe fallback for relative/malformed env value
-        else:
-            target = Path.cwd()
+        # when running outside the orchestrator (e.g. manual run). T-09-06:
+        # _resolve_sealed_results_dir validates the env-var path is absolute
+        # before use; a relative/malformed value is treated as unset here too.
+        target = _resolve_sealed_results_dir() or Path.cwd()
         payload = aggregate_folds(target, n)
         payload["termination_reason"] = "sigterm"   # D-05 (REC-03): annotate reason
-        # CR-04 fix: write result.json atomically (tempfile + os.replace).
-        # SIGKILL from the daemon's grace-timer expiry can arrive between
-        # write_text's open() and close() syscalls, leaving a torn zero-byte
-        # result.json. _collect_or_synthesize_result reads this file first;
-        # a partial JSON causes a parse error and falls through to log-heuristic
-        # synthesis, silently discarding all fold results aggregated above.
-        # Circular-import guard: importing terminal_writer._atomic_write_json here
-        # would add automil.terminal_writer as a hard dep of runtime_helpers (used
-        # by training scripts); inline the pattern instead (it is three lines).
-        target.mkdir(parents=True, exist_ok=True)
-        result_path = target / "result.json"
-        tmp_fd, tmp_path_str = tempfile.mkstemp(dir=str(target), suffix=".tmp")
-        try:
-            with os.fdopen(tmp_fd, "w") as fh:
-                fh.write(json.dumps(payload, indent=2) + "\n")
-            os.replace(tmp_path_str, str(result_path))
-        except Exception:
-            try:
-                os.unlink(tmp_path_str)
-            except OSError:
-                pass
-            raise
+        # CR-04 fix: write result.json atomically (tempfile + os.replace) via
+        # the shared _atomic_write_json helper. SIGKILL from the daemon's
+        # grace-timer expiry can arrive between a plain write_text's open()
+        # and close() syscalls, leaving a torn zero-byte result.json.
+        # _collect_or_synthesize_result reads this file first; a partial JSON
+        # causes a parse error and falls through to log-heuristic synthesis,
+        # silently discarding all fold results aggregated above.
+        _atomic_write_json(target / "result.json", payload)
         sys.exit(0)  # NOT sys.exit(130) — clean exit signals graceful flush to daemon
 
     signal.signal(signal.SIGTERM, _handler)

@@ -26,11 +26,13 @@ import numpy as np
 import torch
 
 from autobench import LIB_ROOT
+from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import DTFDSurvivalSlide, _read_bag, min_bag_size
 from autobench.pipeline.dtfd.eval import _split_pseudo_bags
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.dtfd.train import _restore, _snapshot
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -38,14 +40,6 @@ if str(LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(LIB_ROOT))
 from nnMIL.training.losses.survival_loss import survival_c_index  # noqa: E402
 from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss  # noqa: E402
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 def _event_time_bin_edges(times, statuses, n_bins: int) -> np.ndarray:
@@ -217,6 +211,39 @@ def _val_loss(
     return float(np.mean(losses)) if losses else float("nan")
 
 
+def _risk_records(
+    bundle: DTFDBundle,
+    slides: list[DTFDSurvivalSlide],
+    cfg: DTFDConfig,
+    device: torch.device,
+    seed: int,
+    policy_runtime: PolicyRuntime | None = None,
+) -> dict:
+    """Per-slide risk scores (CR-3: pooled across folds by the runner)."""
+    bundle.eval()
+    rng = np.random.default_rng(seed)
+    risks, statuses, times, pids = [], [], [], []
+    for slide in slides:
+        logits = _slide_survival_logits(bundle, _read_bag(slide.h5_path), cfg, device, rng)
+        risks.append(float(_nllsurv_risk(logits).item()))
+        statuses.append(float(slide.status))
+        times.append(float(slide.time))
+        pids.append(slide.patient_id)
+    return {"risks": risks, "statuses": statuses, "times": times, "patient_ids": pids}
+
+
+def _c_index_from(records: dict) -> float:
+    if not records["risks"]:
+        return float("nan")
+    ci = survival_c_index(
+        torch.tensor(records["risks"], dtype=torch.float32),
+        torch.tensor(records["statuses"], dtype=torch.float32),
+        torch.tensor(records["times"], dtype=torch.float32),
+        records["patient_ids"],
+    )
+    return float(ci) if ci is not None else float("nan")
+
+
 def _c_index(
     bundle: DTFDBundle,
     slides: list[DTFDSurvivalSlide],
@@ -224,22 +251,7 @@ def _c_index(
     device: torch.device,
     seed: int,
 ) -> float:
-    bundle.eval()
-    rng = np.random.default_rng(seed)
-    risks, statuses, times, pids = [], [], [], []
-    for slide in slides:
-        logits = _slide_survival_logits(bundle, _read_bag(slide.h5_path), cfg, device, rng)
-        risks.append(float(_nllsurv_risk(logits).item()))
-        statuses.append(slide.status)
-        times.append(slide.time)
-        pids.append(slide.patient_id)
-    ci = survival_c_index(
-        torch.tensor(risks, dtype=torch.float32),
-        torch.tensor(statuses, dtype=torch.float32),
-        torch.tensor(times, dtype=torch.float32),
-        pids,
-    )
-    return float(ci) if ci is not None else float("nan")
+    return _c_index_from(_risk_records(bundle, slides, cfg, device, seed))
 
 
 def train_dtfd_survival_fold(
@@ -275,12 +287,17 @@ def train_dtfd_survival_fold(
 
         opt0 = torch.optim.Adam(bundle.tier1_parameters(), lr=cfg.lr, weight_decay=cfg.wd)
         opt1 = torch.optim.Adam(bundle.att_cls.parameters(), lr=cfg.lr, weight_decay=cfg.wd)
+        policy_runtime = policy_runtime or PolicyRuntime()
+        opt0 = policy_runtime.wrap_optimizer(opt0, role="tier1")
+        opt1 = policy_runtime.wrap_optimizer(opt1, role="tier2")
         sched0 = torch.optim.lr_scheduler.MultiStepLR(
             opt0, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
         )
         sched1 = torch.optim.lr_scheduler.MultiStepLR(
             opt1, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
         )
+        sched0 = policy_runtime.wrap_scheduler(sched0, role="tier1")
+        sched1 = policy_runtime.wrap_scheduler(sched1, role="tier2")
 
         # Select on val LOSS, not the noisy few-event val c-index (as CLAM/
         # ABMIL/TITAN do). DTFDBundle has no unified state_dict, so use DTFD's
@@ -310,22 +327,31 @@ def train_dtfd_survival_fold(
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
-                if cfg.early_stopping and epochs_no_improve >= cfg.patience:
+                default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
+                if policy_runtime.should_stop(
+                    default_stop,
+                    epoch=epoch,
+                    metrics={"val_loss": v_loss, "val_c_index": v_cidx},
+                ):
                     break
         elapsed_seconds = time.time() - start
 
         if best_snap is not None:
             _restore(bundle, best_snap)
 
+        # CR-3: export val risk records so the runner can pool concordance
+        # across folds instead of averaging five ~2-event c-indices.
+        _val_records = (
+            _risk_records(bundle, val_samples, cfg, device, seed) if val_samples
+            else {"risks": [], "statuses": [], "times": [], "patient_ids": []}
+        )
         return {
             "test_metrics": {
                 "c_index": _c_index(bundle, test_samples, cfg, device, seed)
                 if test_samples else float("nan"),
             },
-            "val_metrics": {
-                "c_index": _c_index(bundle, val_samples, cfg, device, seed)
-                if val_samples else float("nan"),
-            },
+            "val_metrics": {"c_index": _c_index_from(_val_records)},
+            "val_records": _val_records,
             "elapsed_seconds": elapsed_seconds,
         }
     finally:

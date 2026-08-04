@@ -30,8 +30,8 @@ def test_doc_covers_six_contract_items(doc_text: str):
     """D-204: all 6 contract items present with the anchor phrasing."""
     anchors = [
         "Read `automil/config.yaml`",
-        "Honor `CUDA_VISIBLE_DEVICES`",
-        "Honor `AUTOMIL_GPU=N`",
+            "Honor the framework-owned device masks",
+            "Branch on `AUTOMIL_ACCELERATOR`",
         "Exit cleanly on `SIGTERM`",
         "Write `result.json`",
         "Declared env vars are present at startup",

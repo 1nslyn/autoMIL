@@ -254,7 +254,8 @@ def test_train_field_override_via_train_config(tmp_path):
     _write_applied_variant_json(automil_dir, variant_name=name, parent=parent)
 
     exp_cfg = _minimal_exp_cfg()
-    assert exp_cfg.train.lr == 2e-4  # default
+    # 2026-07-28: TrainConfig.lr default returned to CLAM upstream 1e-4 (was 2e-4).
+    assert exp_cfg.train.lr == 1e-4  # default
 
     apply_model_variant_to_exp_cfg(exp_cfg, automil_dir)
 
@@ -314,3 +315,74 @@ def test_no_config_yaml_still_dispatches(tmp_path):
         f"APL-02 A1-closure FAILED: dropout not patched via applied_variant.json. "
         f"Got {exp_cfg.model.dropout}. The primary read path is broken."
     )
+
+
+# ---------------------------------------------------------------------------
+# H-3b: arm-specific fields must reach the arm instead of vanishing into a log
+# line. Before this, apply_model_variant_to_exp_cfg dropped any CLAM_ARGS field
+# that was on neither ModelConfig nor TrainConfig -- so a DTFD variant tuning
+# numGroup produced a warning and an untuned run reported under the variant's
+# name. They now route into the opaque hparam_overrides channel, where
+# hparams.apply_overrides checks them against that arm's declared search space.
+# ---------------------------------------------------------------------------
+
+
+def test_arm_specific_clam_args_route_to_hparam_overrides(tmp_path):
+    automil_dir = tmp_path / "automil"
+    automil_dir.mkdir()
+    (automil_dir / "variants").mkdir()
+
+    parent, name = _register_test_variant(
+        clam_args={"dropout": 0.5, "numGroup": 8, "grad_clip": 1.0},
+        name="dtfd_variant_v0",
+        parent="clam_mb",
+    )
+    _write_applied_variant_json(automil_dir, variant_name=name, parent=parent)
+
+    exp_cfg = _minimal_exp_cfg()
+    apply_model_variant_to_exp_cfg(exp_cfg, automil_dir)
+
+    # On the transport -> set directly, as before.
+    assert exp_cfg.model.dropout == 0.5
+    # Off the transport -> carried, not dropped.
+    assert exp_cfg.hparam_overrides == {"numGroup": 8, "grad_clip": 1.0}
+
+
+def test_explicit_hparams_attribute_on_a_variant_is_honoured(tmp_path):
+    automil_dir = tmp_path / "automil"
+    automil_dir.mkdir()
+    (automil_dir / "variants").mkdir()
+
+    class _HparamVariant(ModelVariant):
+        CLAM_ARGS: dict = {}
+        HPARAMS = {"warmup_epochs": 3, "batch_size": 32}
+
+        def forward(self, features: Any, coords: Optional[Any] = None) -> Any:
+            raise NotImplementedError("test variant — not for real use")
+
+    MODEL_VARIANTS[("clam_mb", "nnmil_variant_v0")] = _HparamVariant
+    _write_applied_variant_json(automil_dir, variant_name="nnmil_variant_v0",
+                                parent="clam_mb")
+
+    exp_cfg = _minimal_exp_cfg()
+    apply_model_variant_to_exp_cfg(exp_cfg, automil_dir)
+
+    assert exp_cfg.hparam_overrides == {"warmup_epochs": 3, "batch_size": 32}
+
+
+def test_variant_without_arm_specific_fields_leaves_the_channel_empty(tmp_path):
+    """Freeze guard: an ordinary CLAM variant must not gain a channel entry."""
+    automil_dir = tmp_path / "automil"
+    automil_dir.mkdir()
+    (automil_dir / "variants").mkdir()
+
+    parent, name = _register_test_variant(
+        clam_args={"lr": 3e-4}, name="plain_v0", parent="clam_mb",
+    )
+    _write_applied_variant_json(automil_dir, variant_name=name, parent=parent)
+
+    exp_cfg = _minimal_exp_cfg()
+    apply_model_variant_to_exp_cfg(exp_cfg, automil_dir)
+
+    assert exp_cfg.hparam_overrides == {}
+    assert exp_cfg.train.lr == 3e-4

@@ -155,15 +155,20 @@ def test_server_cmd_start_resolves_config_port(tmp_path: Path) -> None:
         raise _StopBeforeBind
 
     # Patch TCPSite so the resolved (host, port) is captured at the moment the
-    # server would bind, then abort before any socket is opened. cmd_start's
-    # finally-block still runs (observer stop, PID file cleanup).
-    with patch("automil.viz.server.web.TCPSite", side_effect=fake_tcpsite):
+    # server would bind, then abort before any socket is opened. The filesystem
+    # observer must not start before a successful bind.
+    with (
+        patch("automil.viz.server.web.TCPSite", side_effect=fake_tcpsite),
+        patch("automil.viz.server.Observer") as observer_cls,
+    ):
+        observer_cls.return_value.is_alive.return_value = False
         try:
             viz_server.cmd_start(
                 port=None, project_root=tmp_path, host="127.0.0.1"
             )
         except _StopBeforeBind:
             pass
+        observer_cls.return_value.start.assert_not_called()
 
     assert captured.get("port") == 9001, (
         f"server-side resolution should read viz.port=9001 from config, "

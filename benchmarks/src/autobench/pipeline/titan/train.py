@@ -11,7 +11,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import random
 import time
 
 import numpy as np
@@ -19,20 +18,14 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
+from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import compute_extended_metrics
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSlideDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 @torch.no_grad()
@@ -70,6 +63,7 @@ def train_titan_fold(
     results_dir: str,
     device: str = "cuda:0",
     head_cfg: TitanHeadConfig | None = None,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train and evaluate one fold of a TITAN linear probe.
 
@@ -82,6 +76,14 @@ def train_titan_fold(
     """
     if head_cfg is None:
         head_cfg = TitanHeadConfig()
+    # H-3: TitanHeadConfig stays the source of truth for lr/weight_decay/
+    # patience; layer on only the explicitly-set overrides. max_epochs and
+    # early_stopping are deliberately excluded — this arm reads those straight
+    # off exp_cfg.train (its documented mixed provenance), so routing them here
+    # would double-apply and trip the fail-loud guard.
+    _titan_ov = {k: v for k, v in all_overrides(exp_cfg).items()
+                 if k not in ("max_epochs", "early_stopping")}
+    head_cfg = apply_overrides(head_cfg, _titan_ov, arm="titan")
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
@@ -103,6 +105,8 @@ def train_titan_fold(
     optimizer = torch.optim.Adam(
         model.parameters(), lr=head_cfg.lr, weight_decay=head_cfg.weight_decay,
     )
+    policy_runtime = policy_runtime or PolicyRuntime()
+    optimizer = policy_runtime.wrap_optimizer(optimizer)
     criterion = nn.CrossEntropyLoss()
 
     batch_size = min(32, len(train_ds)) or 1
@@ -140,7 +144,13 @@ def train_titan_fold(
         else:
             epochs_without_improvement += 1
 
-        if exp_cfg.train.early_stopping and epochs_without_improvement >= head_cfg.patience:
+        default_stop = (
+            exp_cfg.train.early_stopping
+            and epochs_without_improvement >= head_cfg.patience
+        )
+        if policy_runtime.should_stop(
+            default_stop, epoch=_epoch, metrics={"val_auc": val_auc},
+        ):
             break
 
     elapsed = time.time() - start

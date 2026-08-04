@@ -20,6 +20,7 @@ from autobench.config import DatasetConfig
 # companions do not match.
 _SPLIT_FILE_RE = re.compile(r"splits_\d+\.csv")
 from autobench.data import load_all_slides
+from autobench.pipeline.manifest_guard import check_manifest_fingerprint
 from autobench.pipeline.splits import create_strategy_splits
 
 
@@ -214,6 +215,16 @@ def prepare_all(
 
     Uses task definitions from ``DatasetConfig`` instead of hardcoded values.
     """
+    # M-10: the per-task schema/coverage checks below (B2, and the splits
+    # fold0-vs-csv check) can tell a cached CSV doesn't match ITS OWN task's
+    # shape, but neither can tell the MANIFEST it was derived from has since
+    # been rebuilt with different values -- same columns, same slide_id set,
+    # different content (e.g. a corrected OS date). Check this once, up
+    # front, before touching any task CSV: fails loudly (does not purge) if
+    # this benchmark_dir's cached artefacts came from a different manifest.
+    dataset_csv_dir = os.path.join(benchmark_dir, "dataset_csv")
+    check_manifest_fingerprint(dataset_csv_dir, mapping_csv)
+
     all_slide_ids: set[str] = set()
 
     # Get default strategy (first one defined in the config)

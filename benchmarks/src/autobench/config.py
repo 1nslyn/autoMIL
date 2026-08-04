@@ -34,12 +34,16 @@ def _resolve_env_vars(value: str) -> str:
         var_name = match.group(1)
         default = match.group(2)  # None if no default provided
         env_val = os.environ.get(var_name)
-        if env_val is not None:
+        # L-4 (audit 2026-07-23): a set-but-blank env var (or an explicit empty
+        # ``${VAR:}`` default) previously resolved to "" — a silently-broken
+        # relative path. Treat empty as missing and fail fast.
+        if env_val:
             return env_val
-        if default is not None:
+        if default:
             return default
         raise ValueError(
-            f"Environment variable ${{{var_name}}} is not set and no default provided"
+            f"Environment variable ${{{var_name}}} is not set (or is empty) "
+            f"and no non-empty default was provided"
         )
 
     return _ENV_VAR_RE.sub(_replace, value)
@@ -197,11 +201,17 @@ def _parse_tasks(raw: dict[str, Any]) -> dict[str, TaskDef]:
             )
         else:
             label_map = {int(k): v for k, v in tdef["label_map"].items()}
+            # L-5: label_map is raw-value -> class-name and may be many-to-one
+            # (e.g. {0: "low", 1: "low", 2: "high"} collapsing two raw grades
+            # into one class). len(label_map) counts raw KEYS, not distinct
+            # class names, and silently over-counts n_classes whenever the
+            # map collapses -- count the distinct names instead.
+            n_classes = tdef.get("n_classes", len(set(label_map.values())))
             tasks[name] = TaskDef(
                 name=name,
                 label_col=tdef["label_col"],
                 label_map=label_map,
-                n_classes=tdef.get("n_classes", len(label_map)),
+                n_classes=n_classes,
             )
     return tasks
 
@@ -237,6 +247,16 @@ def load_dataset_config(name_or_path: str) -> DatasetConfig:
         yaml_path = DATASETS_DIR / f"{name_or_path}.yaml"
         if not yaml_path.exists():
             nested = sorted(DATASETS_DIR.glob(f"**/{name_or_path}.yaml"))
+            # M-11 (audit 2026-07-23): a bare name matching multiple grouped YAMLs
+            # (e.g. datasets/templates/foo.yaml and datasets/tcga/foo.yaml) would
+            # silently resolve to the alphabetically-first, mis-resolving every
+            # path/task/encoder downstream. Fail loudly instead.
+            if len(nested) > 1:
+                rels = [str(p.relative_to(DATASETS_DIR)) for p in nested]
+                raise ValueError(
+                    f"Ambiguous dataset name {name_or_path!r}: matches multiple "
+                    f"YAMLs {rels}. Pass an explicit datasets/<group>/<name>.yaml path."
+                )
             if nested:
                 yaml_path = nested[0]
 

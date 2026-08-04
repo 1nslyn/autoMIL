@@ -21,7 +21,10 @@ from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import load_dtfd_split, load_dtfd_survival_split
 from autobench.pipeline.dtfd.survival_train import train_dtfd_survival_fold
 from autobench.pipeline.dtfd.train import train_dtfd_fold
-from autobench.pipeline.evaluate import compute_confidence_intervals
+from autobench.pipeline.hparams import all_overrides, apply_overrides
+from autobench.pipeline.results_cache import resolve_results_dir
+from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def _resolve_h5_dir(benchmark_dir: str, exp_cfg: ExperimentConfig) -> str:
@@ -57,6 +60,7 @@ def run_dtfd_experiment(
     benchmark_dir: str,
     device: str = "cuda:0",
     cfg: DTFDConfig | None = None,
+    results_dir: str | None = None,
 ) -> dict:
     """Run all folds for a single DTFD-MIL experiment; return aggregated summary.
 
@@ -67,11 +71,25 @@ def run_dtfd_experiment(
     """
     if cfg is None:
         cfg = DTFDConfig()
+    # H-3 (audit 2026-07-23): DTFD read ONLY `seed` off exp_cfg, so CLI flags and
+    # agentic variant args were silently discarded. DTFDConfig stays the source of
+    # truth for its paper-exact defaults (lr Main:29, wd Main:30); only
+    # explicitly-set overrides are layered on (note: its field is `wd`, mapped by
+    # FIELD_ALIASES so a canonical `weight_decay` override still lands).
+    cfg = apply_overrides(cfg, all_overrides(exp_cfg), arm="dtfd")
     torch_device = torch.device(device)
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
-    results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
-    exp_cfg.save(os.path.join(results_dir, "config.json"))
+    # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
+    # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
+    # never resumed across experiments/seeds/variants. Falls back to the shared
+    # benchmark_dir path for standalone (non-orchestrated) runs.
+    # CR-5b: `cfg` is passed too — DTFD's numGroup/mDim/droprate/grad_clip live
+    # outside exp_cfg, so a change there must invalidate this cache.
+    results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir, arm_cfg=cfg)
+    # H-3: DTFD trains off DTFDConfig (lr 1e-4 / wd 1e-4), not the shared
+    # TrainConfig that config.json also carries.
+    exp_cfg.save(os.path.join(results_dir, "config.json"), arm_cfg=cfg)
 
     if exp_cfg.is_survival and exp_cfg.survival_loss == "cox":
         raise ValueError(
@@ -91,7 +109,7 @@ def run_dtfd_experiment(
     num_classes = exp_cfg.task.n_classes
 
     fold_results: list[dict] = []
-    for fold in range(exp_cfg.n_folds):
+    for fold in exp_cfg.selected_folds:
         fold_dir = os.path.join(results_dir, f"fold_{fold}")
         os.makedirs(fold_dir, exist_ok=True)
         metrics_path = os.path.join(fold_dir, "metrics.json")
@@ -105,6 +123,8 @@ def run_dtfd_experiment(
             _write_fold_result_json(fold, result)
             continue
 
+        fold_policy_runtime = policy_runtime.for_fold()
+
         split_csv = os.path.join(splits_dir, f"splits_{fold}.csv")
         if exp_cfg.is_survival:
             train_samples = load_dtfd_survival_split(task_csv, split_csv, h5_dir, "train")
@@ -114,6 +134,7 @@ def run_dtfd_experiment(
                 train_samples, val_samples, test_samples,
                 embed_dim=exp_cfg.embed_dim, nll_bins=exp_cfg.task.nll_bins,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+                policy_runtime=fold_policy_runtime,
             )
             elapsed_seconds = int(raw.get("elapsed_seconds", 0) or 0)
         else:
@@ -125,12 +146,15 @@ def run_dtfd_experiment(
                 train_slides, val_slides, test_slides,
                 embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+                policy_runtime=fold_policy_runtime,
             )
             elapsed_seconds = int(time.time() - start)
 
         result = {
             "test_metrics": raw["test_metrics"],
             "val_metrics": raw["val_metrics"],
+            # CR-3: carry the val risk records through for pooled concordance.
+            **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
             "fold": fold,
             "elapsed_seconds": elapsed_seconds,
         }
@@ -145,6 +169,7 @@ def run_dtfd_experiment(
     elapsed_seconds_total = sum(fr.get("elapsed_seconds", 0) or 0 for fr in fold_results)
 
     exp_summary = {
+        "dataset": exp_cfg.dataset,
         "experiment_id": exp_cfg.experiment_id,
         "task": exp_cfg.task.name,
         "encoder": exp_cfg.encoder_key,
@@ -154,10 +179,13 @@ def run_dtfd_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),
         "val": compute_confidence_intervals(val_fold_metrics),
+        # CR-3: pooled cross-fold val concordance (survival only; {} otherwise).
+        "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
     }

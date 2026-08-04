@@ -41,8 +41,8 @@ def test_init_no_healthcheck_flag(tmp_path, monkeypatch):
     result = runner.invoke(cli_main, ["init", "--no-healthcheck"])
     assert result.exit_code == 0, result.output
     cfg = _read_rendered_config(project / "automil")
-    assert cfg["cap"]["default_vram_estimate_gb"] == 8.0
-    assert cfg["cap"]["max_concurrent_per_gpu"] == 4
+    assert cfg["orchestrator"]["default_vram_estimate_gb"] == 8.0
+    assert cfg["orchestrator"]["max_concurrent_per_gpu"] == 4
     assert cfg["hardware"]["accelerator"] == "cpu"
     assert cfg["hardware"]["gpu_count"] == 0
 
@@ -104,7 +104,7 @@ def test_init_recomputes_default_vram_from_results_tsv(tmp_path, monkeypatch):
     cfg = _read_rendered_config(automil_dir)
     import numpy
     expected = float(numpy.quantile(vram_values, 0.95))
-    actual = cfg["cap"]["default_vram_estimate_gb"]
+    actual = cfg["orchestrator"]["default_vram_estimate_gb"]
     assert abs(actual - expected) <= 0.05, f"actual={actual} expected~{expected}"
 
 
@@ -137,7 +137,7 @@ def test_init_uses_conservative_default_below_10_samples(tmp_path, monkeypatch):
 
     cfg = _read_rendered_config(automil_dir)
     # min_vram = 48.0 (from 49140 MB / 1024); conservative = max(8.0, 48.0/8.0) = 8.0
-    assert cfg["cap"]["default_vram_estimate_gb"] == 8.0
+    assert cfg["orchestrator"]["default_vram_estimate_gb"] == 8.0
 
 
 def test_init_aborts_on_failed_detection_user_decline(tmp_path, monkeypatch):

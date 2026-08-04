@@ -104,6 +104,24 @@ def cancel(node_id: str, timeout: int) -> None:
     _pgid: int | None = metadata.get("pgid")
     _starttime: int | None = metadata.get("starttime_ticks")  # absent on non-Linux
 
+    # H-7: record the intent in the RUNNING SPEC before the kill, mirroring the
+    # cap path's ordering (D-124 / Pitfall 4). The graph annotation at the end of
+    # this command is not enough: the daemon observes a dead process with no
+    # result.json and, seeing no reason recorded where it looks, overwrites
+    # `cancelled` with `crash` — so an operator stop became indistinguishable
+    # from a training bug and inflated the failure statistics the gate's health
+    # diagnostic reads. Best-effort: a failure here must not block the kill,
+    # which is the part the operator actually asked for.
+    try:
+        _annotated = dict(running_spec)
+        _annotated["metadata"] = {**metadata, "cancel_reason": "cli"}
+        running_path.write_text(json.dumps(_annotated, indent=2))
+    except OSError as exc:
+        click.echo(
+            f"Warning: could not annotate {running_path} with cancel_reason "
+            f"(the daemon may record this stop as a crash): {exc}"
+        )
+
     if not opaque_id and not (_pid and _pgid):
         raise click.ClickException(
             f"Running spec at {running_path} has neither 'opaque_id' nor "
@@ -130,25 +148,31 @@ def cancel(node_id: str, timeout: int) -> None:
             except (FileNotFoundError, PermissionError, OSError, IndexError):
                 return None
 
-        def _try_reap(pid: int) -> None:
-            """Attempt a non-blocking waitpid to reap a zombie child.
+        def _try_reap(pid: int, *, timeout: float = 0.5) -> None:
+            """Boundedly wait for and reap a child killed by this command.
 
             When the CLI process is the parent of the killed process (e.g. in
             in-process test runners), the dead process becomes a zombie until
-            wait() is called. os.waitpid with WNOHANG reaps it without blocking;
-            this allows os.kill(pid, 0) to subsequently raise ProcessLookupError
-            as callers expect. Safe to call even if the process is not a child
-            (ChildProcessError is silently ignored).
+            wait() is called.  On macOS, ``kill(pid, 0)`` can report the target
+            gone just before its wait status becomes available, so one WNOHANG
+            probe races and leaves the child as a zombie.  Poll for at most a
+            small fixed interval; normal CLI-launched jobs are not children of
+            this fresh CLI process and return ChildProcessError immediately.
 
             WR-02: callers MUST gate this on a starttime cross-check so we never
             reap an unrelated PID-reused child the CLI happens to parent — doing
             so would silently consume that innocent child's exit status and
             desync a still-live job's bookkeeping.
             """
-            try:
-                os.waitpid(pid, os.WNOHANG)
-            except (ChildProcessError, PermissionError, OSError):
-                pass
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    reaped_pid, _status = os.waitpid(pid, os.WNOHANG)
+                except (ChildProcessError, PermissionError, OSError):
+                    return
+                if reaped_pid == pid or time.monotonic() >= deadline:
+                    return
+                time.sleep(0.01)
 
         def _is_alive(pid: int, st: int | None) -> bool:
             """PID-reuse-safe liveness check, zombie-aware.
@@ -168,7 +192,17 @@ def cancel(node_id: str, timeout: int) -> None:
             if st is not None:
                 return _is_pid_alive_with_starttime(pid, st)
             if state is None:
-                # Non-Linux: /proc unavailable; fall back to signal-0 probe.
+                # Non-Linux: /proc is unavailable.  If the CLI happens to be
+                # this PID's parent (notably the in-process command path), reap
+                # an already-exited child before the signal-0 probe.  macOS
+                # otherwise reports a zombie as present indefinitely and the
+                # command incorrectly escalates a successful kill into failure.
+                try:
+                    reaped_pid, _status = os.waitpid(pid, os.WNOHANG)
+                    if reaped_pid == pid:
+                        return False
+                except (ChildProcessError, PermissionError, OSError):
+                    pass
                 try:
                     os.kill(pid, 0)
                     return True
@@ -246,7 +280,8 @@ def cancel(node_id: str, timeout: int) -> None:
 
         # Reap any zombie: when CLI and the killed process share the same parent
         # (e.g. in-process test runners), the dead process lingers as a zombie
-        # until wait() is called. _try_reap uses WNOHANG so it never blocks.
+        # until wait() is called. _try_reap bounds the wait to the short
+        # post-signal status-publication window.
         #
         # WR-02: gate the reap on the starttime cross-check so we never reap an
         # unrelated PID-reused child this CLI happens to parent.
@@ -332,7 +367,7 @@ def cancel(node_id: str, timeout: int) -> None:
     # decrements meta.total_proposed — a running/pending node was counted as
     # proposed (mark_running does NOT decrement), so the raw write previously
     # drifted the proposed counter on every cancel.
-    from automil.graph import locked_update  # noqa: PLC0415
+    from automil.graph import locked_update, merged_metadata  # noqa: PLC0415
     from automil.cli._helpers import _load_technique_map  # noqa: PLC0415
 
     graph_path = adir / "graph.json"
@@ -341,10 +376,14 @@ def cancel(node_id: str, timeout: int) -> None:
             node = graph.get_node(node_id)
             if node:
                 graph.cancel(node_id)  # decrements total_proposed + sets status
-                node.setdefault("metadata", {})["cancelled_at"] = datetime.now(
-                    timezone.utc
-                ).isoformat()
-                node["metadata"]["cancel_reason"] = "cli"
+                # L-8a: copy-on-write — node["metadata"] can be aliased with
+                # another node's dict (gate/evaluate.py creates gate-eval
+                # children via a shallow dict(node) copy); mutating it in
+                # place would silently corrupt whatever it is shared with.
+                node["metadata"] = merged_metadata(node, {
+                    "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                    "cancel_reason": "cli",
+                })
             else:
                 logger.warning(
                     "cancel: node %s vanished from graph during lock", node_id

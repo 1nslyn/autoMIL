@@ -20,3 +20,10 @@ ref/
 .automil_worktrees/
 .automil_active
 outputs/
+
+# LaTeX build intermediates (keep .tex/.sty/.bbl/.pdf, drop regenerable junk)
+*.aux
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.blg

@@ -9,8 +9,10 @@ import torch
 
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.dataset import create_dataset, load_fold_splits
-from autobench.pipeline.evaluate import compute_confidence_intervals
+from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.clam.train import train_fold
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
 def _write_fold_result_json(fold_index: int, result: dict) -> None:
@@ -89,20 +91,29 @@ def run_experiment(
     results_dir: str | None = None,
 ) -> dict:
     """Run all folds for a single CLAM experiment and return aggregated results."""
-    if results_dir is None:
-        results_dir = os.path.join(benchmark_dir, "results", exp_cfg.results_subdir)
-    os.makedirs(results_dir, exist_ok=True)
+    # CR-5b: seed is now a path segment and the rest of the config is
+    # fingerprinted into a sidecar, so a re-run at a different seed or
+    # hyperparameter can no longer resume these folds' metrics.json.
+    results_dir = resolve_results_dir(exp_cfg, benchmark_dir, results_dir)
 
+    # H-3: no `arm_cfg` here, and that is the honest record rather than an
+    # omission -- CLAM is the ONE arm that genuinely trains off the shared
+    # ModelConfig + TrainConfig (they were designed around it). config.json
+    # therefore carries `arm: null` and an empty superseded-fields list, which is
+    # exactly what a reader needs to trust its `train` block.
     exp_cfg.save(os.path.join(results_dir, "config.json"))
+    policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
 
     fold_results: list[dict] = []
     if exp_cfg.is_survival:
         # Survival uses an adapter-side trainer over the CLAM model.
         from autobench.pipeline.clam.survival_train import train_survival_fold
 
-        for fold in range(exp_cfg.n_folds):
+        for fold in exp_cfg.selected_folds:
+            fold_policy_runtime = policy_runtime.for_fold()
             result = train_survival_fold(
                 exp_cfg, benchmark_dir, fold, results_dir, device,
+                policy_runtime=fold_policy_runtime,
             )
             fold_results.append(result)
             _write_fold_result_json(fold, result)
@@ -112,13 +123,16 @@ def run_experiment(
         )
         # Splits directory: splits/{strategy}/{task}/
         splits_subdir = os.path.join(exp_cfg.strategy, exp_cfg.task.name)
-        for fold in range(exp_cfg.n_folds):
+        for fold in exp_cfg.selected_folds:
+            fold_policy_runtime = policy_runtime.for_fold()
             train_split, val_split, test_split = load_fold_splits(
                 dataset, benchmark_dir, splits_subdir, fold,
+                task_csv_name=exp_cfg.task.name,
             )
             result = train_fold(
                 exp_cfg, train_split, val_split, test_split,
                 fold, results_dir, device, wandb_project=wandb_project,
+                policy_runtime=fold_policy_runtime,
             )
             fold_results.append(result)
             _write_fold_result_json(fold, result)
@@ -128,6 +142,7 @@ def run_experiment(
     elapsed_seconds_total = sum(fr.get("elapsed_seconds", 0) or 0 for fr in fold_results)
 
     exp_summary = {
+        "dataset": exp_cfg.dataset,
         "experiment_id": exp_cfg.experiment_id,
         "task": exp_cfg.task.name,
         "encoder": exp_cfg.encoder_key,
@@ -137,10 +152,13 @@ def run_experiment(
         "framework": exp_cfg.framework.value,
         "strategy": exp_cfg.strategy,
         "n_folds": exp_cfg.n_folds,
+        "fold_indices": list(exp_cfg.selected_folds),
         "elapsed_seconds_total": elapsed_seconds_total,
         "seed": exp_cfg.train.seed,
         "test": compute_confidence_intervals(test_fold_metrics),
         "val": compute_confidence_intervals(val_fold_metrics),
+        # CR-3: pooled cross-fold val concordance (survival only; {} otherwise).
+        "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
     }

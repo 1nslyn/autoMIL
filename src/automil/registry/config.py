@@ -30,12 +30,18 @@ class RegistryConfig:
     Defaults (all configurable in consumer automil/config.yaml):
         protected: ()           — no framework defaults (D-33 + D-49)
         mode: "free"            — D-31: default search scope
+        allowed_override_options: () — command options allowed in preserving mode
+        allowed_variant_kinds: () — variant kinds allowed in preserving mode
+        identity_locked_hparams: () — scalar keys that may erase model identity
         repro_tolerance: 0.005  — D-39: CCRCC ±0.005 carried as framework default
         identity_constraints: () — D-31: per-project structural rules
     """
 
     protected: tuple[str, ...] = ()              # glob patterns (relative to project root)
     mode: Mode = "free"                          # D-31: default free
+    allowed_override_options: tuple[str, ...] = ()
+    allowed_variant_kinds: tuple[str, ...] = ()
+    identity_locked_hparams: tuple[str, ...] = ()
     repro_tolerance: float = 0.005               # D-39: default ±0.005
     identity_constraints: tuple[str, ...] = ()   # D-31: per-project identity rules
 
@@ -90,6 +96,18 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
         )
 
     protected = _coerce_str_tuple(registry_section.get("protected"), "registry.protected")
+    allowed_override_options = _coerce_str_tuple(
+        registry_section.get("allowed_override_options"),
+        "registry.allowed_override_options",
+    )
+    allowed_variant_kinds = _coerce_str_tuple(
+        registry_section.get("allowed_variant_kinds"),
+        "registry.allowed_variant_kinds",
+    )
+    identity_locked_hparams = _coerce_str_tuple(
+        registry_section.get("identity_locked_hparams"),
+        "registry.identity_locked_hparams",
+    )
     identity_constraints = _coerce_str_tuple(
         registry_section.get("identity_constraints"), "registry.identity_constraints"
     )
@@ -99,6 +117,23 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
         raise ValueError(
             f"automil/config.yaml: registry.mode must be one of {_VALID_MODES}; "
             f"got {mode_raw!r}. Set to 'free' (default) or 'architecture-preserving'."
+        )
+
+    # H-4: the mode used to be parsed, validated, and then read by no code at
+    # all. Requiring a non-empty protected list makes it self-consistent — a
+    # project cannot announce that it preserves a substrate while naming nothing
+    # to preserve. This matters because submit's gate is written
+    # `if reg_cfg.protected and ...`, so an empty tuple short-circuits the whole
+    # enforcement path (and check.py's drift detection, and revert-baseline) to a
+    # silent no-op.
+    if mode_raw == "architecture-preserving" and not protected:
+        raise ValueError(
+            "automil/config.yaml: registry.mode is 'architecture-preserving' but "
+            "registry.protected is empty. An empty list disables the protected-file "
+            "gate entirely, so the substrate would be declared frozen and not "
+            "enforced. List the paths that must not change (splits/prep/evaluate, "
+            "the composite writer, the feature-extraction entry point), or set "
+            "mode: free."
         )
 
     repro_tolerance_raw = registry_section.get("repro_tolerance", 0.005)
@@ -113,6 +148,9 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
     return RegistryConfig(
         protected=protected,
         mode=mode_raw,  # type: ignore[arg-type]  # validated above
+        allowed_override_options=allowed_override_options,
+        allowed_variant_kinds=allowed_variant_kinds,
+        identity_locked_hparams=identity_locked_hparams,
         repro_tolerance=repro_tolerance,
         identity_constraints=identity_constraints,
     )

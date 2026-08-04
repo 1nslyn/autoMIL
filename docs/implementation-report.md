@@ -52,7 +52,7 @@ Backend ABC  ─►  LocalBackend / SLURMBackend / RayBackend
     │              same submit/poll/cancel/log_iter contract
     │
     │  git worktree + overlay; configurable per-cell wall-clock cap;
-    │  CUDA_VISIBLE_DEVICES masking
+    │  typed CPU/CUDA/ROCm slot + framework-owned masks
     ▼
 Isolated Execution  ─►  result.json (JSON-Schema validated at ingest)
     │                    + trajectory.jsonl (OpenTelemetry gen_ai.* + redaction)

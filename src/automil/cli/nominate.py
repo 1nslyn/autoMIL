@@ -32,17 +32,20 @@ def nominate_cmd(node_id: str, agent: bool) -> None:
     """
     from automil.cli._helpers import _find_automil_dir, _load_technique_map
     from automil.gate import nominate
-    from automil.graph import ExperimentGraph
+    from automil.graph import locked_update
 
     adir = _find_automil_dir()
     graph_path = adir / "graph.json"
     if not graph_path.exists():
         raise click.ClickException(f"No graph.json at {graph_path}")
-    graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
-    try:
-        nominate(node_id, graph, agent_initiated=agent)
-    except ValueError as exc:
-        raise click.ClickException(str(exc))
-    graph.save()
-    status = graph.nodes[node_id].get("status")
+    # CR-2: lock the read-modify-write so a concurrent daemon completion cannot
+    # clobber the status mutation via a stale snapshot.
+    with locked_update(str(graph_path), technique_map=_load_technique_map(adir)) as graph:
+        try:
+            nominate(node_id, graph, agent_initiated=agent)
+        except ValueError as exc:
+            # Exits without save() (lock released) — no partial write.
+            raise click.ClickException(str(exc))
+        status = graph.nodes[node_id].get("status")
+        # graph.save() runs on context exit under the lock.
     click.echo(f"Nominated {node_id}: status -> {status}")

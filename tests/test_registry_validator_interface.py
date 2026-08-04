@@ -194,6 +194,49 @@ def test_happy_path_policy_variant(tmp_path):
     InterfaceValidator().check(path)
 
 
+def test_interface_validation_never_imports_candidate_dependencies(tmp_path):
+    from automil.registry.validators.interface import InterfaceValidator
+
+    body = HAPPY_POLICY.replace(
+        'from automil.registry import register, VariantSpec, PolicyVariant',
+        'from automil.registry import register, VariantSpec, PolicyVariant\n'
+        'import package_that_must_never_be_imported_by_validation',
+    )
+    path = _write_module(tmp_path, body)
+    InterfaceValidator().check(path)
+
+
+def test_validation_is_idempotent_and_preserves_live_registry(tmp_path):
+    """Static validation must neither read nor mutate live registrations."""
+    from automil.registry import PolicyVariant, VariantSpec, register
+    from automil.registry._state import (
+        LOSS_VARIANTS,
+        MODEL_VARIANTS,
+        POLICY_VARIANTS,
+        SPEC_STORE,
+    )
+    from automil.registry.validators.interface import InterfaceValidator
+
+    @register(VariantSpec(
+        name="testpolicy", kind="policy", parent=None,
+        base_commit="existing", composite=0.1, node_id="node_existing",
+        created_at="2026-05-02T10:00:00Z",
+    ))
+    class ExistingPolicy(PolicyVariant):
+        def wrap_optimizer(self, opt):
+            return opt
+
+    stores = (MODEL_VARIANTS, LOSS_VARIANTS, POLICY_VARIANTS, SPEC_STORE)
+    before = tuple(dict(store) for store in stores)
+    path = _write_module(tmp_path, HAPPY_POLICY)
+
+    InterfaceValidator().check(path)
+    InterfaceValidator().check(path)
+
+    assert tuple(dict(store) for store in stores) == before
+    assert POLICY_VARIANTS["testpolicy"] is ExistingPolicy
+
+
 # ---------------------------------------------------------------------------
 # Failure cases
 # ---------------------------------------------------------------------------

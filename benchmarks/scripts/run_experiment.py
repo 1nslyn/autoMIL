@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import time
 
@@ -85,11 +86,157 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--n_folds", type=int, default=None)
+    p.add_argument(
+        "--folds", default=None,
+        help="Comma-separated subset of the prepared fold indices to train "
+             "(for staged campaigns; n_folds still defines the split set).",
+    )
     p.add_argument("--patience", type=int, default=None)
     p.add_argument("--stop_epoch", type=int, default=None)
+    # H-3b: these two had no flag at all, so they were reachable only through a
+    # registered variant's CLAM_ARGS.
+    p.add_argument("--weight_decay", type=float, default=None)
+    p.add_argument("--early_stopping", dest="early_stopping",
+                   action="store_const", const=True, default=None)
+    p.add_argument("--no_early_stopping", dest="early_stopping",
+                   action="store_const", const=False)
+    # H-3b: the opaque per-arm channel. The shared transport is CLAM-shaped, so
+    # DTFD's numGroup, ABMIL's M/L and nnMIL's warmup_epochs have no flag to
+    # travel in — and adding a flag per arm-specific knob would be both endless
+    # and asymmetric. A JSON object keeps the channel arm-agnostic; each name is
+    # checked against that arm's DECLARED search space (search_space.py), so an
+    # undeclared knob fails loudly rather than being silently dropped.
+    #
+    # Note this is a *value*, not a bare flag: `--override "--numGroup 8"` would
+    # reach argparse as an unrecognised flag and SystemExit(2) the run, which is
+    # how this asymmetry stayed invisible.
+    p.add_argument(
+        "--hparams", type=str, default=None,
+        help='JSON object of arm-specific hyperparameter overrides, '
+             'e.g. \'{"numGroup": 8, "grad_clip": 1.0}\'',
+    )
+    p.add_argument(
+        "--policy-variant", default=None,
+        help="Registered train-only PolicyVariant under automil/variants/_policies/.",
+    )
     p.add_argument("--no_wandb", action="store_true")
 
     return p.parse_args()
+
+
+def _parse_hparams(raw: str | None) -> dict:
+    """Parse --hparams, failing loudly on anything that is not a flat JSON object."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--hparams is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SystemExit(
+            f"--hparams must be a JSON object mapping knob -> value, got "
+            f"{type(parsed).__name__}"
+        )
+    bad = [k for k, v in parsed.items() if isinstance(v, (dict, list))]
+    if bad:
+        raise SystemExit(
+            f"--hparams values must be scalars; nested value(s) for {sorted(bad)}"
+        )
+    return parsed
+
+
+def _parse_folds(raw: str | None, n_folds: int) -> tuple[int, ...] | None:
+    """Parse one immutable subset of an already prepared split set."""
+    if raw is None:
+        return None
+    try:
+        values = tuple(int(part.strip()) for part in raw.split(","))
+    except ValueError as exc:
+        raise SystemExit("--folds must be comma-separated integer indices") from exc
+    if not values or any(not part.strip() for part in raw.split(",")):
+        raise SystemExit("--folds must contain at least one integer index")
+    if len(set(values)) != len(values):
+        raise SystemExit("--folds must not contain duplicate indices")
+    if any(value < 0 or value >= n_folds for value in values):
+        raise SystemExit(
+            f"--folds indices must lie in [0, {n_folds}), got {values}"
+        )
+    return values
+
+
+def _per_fold_composites(per_fold_val: list, is_survival: bool) -> list[float]:
+    """The composite recomputed per fold — the input to its cross-fold SE (CR-4).
+
+    The composite reported at the top of ``summary_to_result_json`` is a mean of
+    fold MEANS, so its own spread is not recoverable from that number alone. Here
+    the same formula is applied fold by fold, which is what makes the noise
+    measurable at all.
+
+    A fold missing ANY component of the composite is dropped whole rather than
+    contributing a half-composite: averaging a fold's AUC with a missing balanced
+    accuracy would report a value on a different scale from every other fold and
+    inflate the spread.
+    """
+    out: list[float] = []
+    for fm in per_fold_val or []:
+        if not isinstance(fm, dict):
+            continue
+        keys = ("c_index",) if is_survival else ("auc_roc", "balanced_accuracy")
+        vals = []
+        for k in keys:
+            v = fm.get(k)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                break
+            f = float(v)
+            if not math.isfinite(f):
+                break
+            vals.append(f)
+        else:
+            out.append(sum(vals) / len(vals))
+    return out
+
+
+def _validation_fold_evidence(summary: dict) -> list[dict]:
+    """Return the fold-indexed, validation-only evidence used by campaigns.
+
+    The raw per-fold artifacts are born-sealed because each file also contains
+    held-out metrics.  A stage controller must never open those files merely to
+    recover validation values.  This deliberately narrow projection is safe to
+    leave in the agent-facing ``result.json`` and is sufficient to prove exact
+    fold coverage and recompute an equal-weight cross-stage mean.
+    """
+    per_fold = summary.get("per_fold_val", []) or []
+    indices = summary.get("fold_indices")
+    if not isinstance(indices, list) or len(indices) != len(per_fold):
+        indices = list(range(len(per_fold)))
+    is_survival = "c_index" in (summary.get("test") or {})
+    evidence: list[dict] = []
+    for fold_index, raw_metrics in zip(indices, per_fold):
+        metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        if is_survival:
+            value = metrics.get("c_index")
+            public_metrics = {"val_c_index": value}
+            values = (value,)
+        else:
+            auc = metrics.get("auc_roc")
+            bacc = metrics.get("balanced_accuracy")
+            public_metrics = {"val_auc": auc, "val_bacc": bacc}
+            values = (auc, bacc)
+        finite = all(
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and math.isfinite(float(value))
+            for value in values
+        )
+        evidence.append({
+            "fold_index": fold_index,
+            "metrics": public_metrics,
+            "composite": (
+                sum(float(value) for value in values) / len(values)
+                if finite else None
+            ),
+        })
+    return evidence
 
 
 def summary_to_result_json(summary: dict, elapsed: float) -> dict:
@@ -103,6 +250,7 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     """
     test = summary.get("test", {})
     val = summary.get("val", {})
+    validation_folds = _validation_fold_evidence(summary)
 
     # Try to get peak VRAM
     peak_vram_mb = 0
@@ -114,9 +262,24 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
 
     if "c_index" in test:
         test_ci = test.get("c_index", {}).get("mean", 0.0)
-        val_ci = val.get("c_index", {}).get("mean", 0.0)
+        # The campaign ranks discovery, promotion, and the final winner by the
+        # equal-weight mean of the same fold composites. Keep the graph-facing
+        # result on that exact scale as well; ``val_pooled`` remains a useful
+        # sealed diagnostic but must not silently change the search estimand.
+        fold_values = [
+            float(fold["composite"])
+            for fold in validation_folds
+            if isinstance(fold.get("composite"), (int, float))
+            and not isinstance(fold.get("composite"), bool)
+            and math.isfinite(float(fold["composite"]))
+        ]
+        fallback = val.get("c_index", {}).get("mean", 0.0)
+        val_ci = (
+            math.fsum(fold_values) / len(fold_values)
+            if fold_values else fallback
+        )
         composite = val_ci
-        metrics = {"val_c_index": round(val_ci, 4)}
+        metrics = {"val_c_index": val_ci}
         held_out = {"test_c_index": round(test_ci, 4)}
     else:
         test_auc = test.get("auc_roc", {}).get("mean", 0.0)
@@ -133,15 +296,60 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
             "test_bacc": round(test_bacc, 4),
         }
 
+    # A stage is complete only when every fold it declared has a finite
+    # selection composite.  The old global ``>= 2`` threshold let a 2/3-fold
+    # discovery attempt enter keep/UCB even though freeze later rejected it.
+    # Promotion's declared 2/2 subset remains complete; a full run requires 5/5.
+    per_fold_val = summary.get("per_fold_val", []) or []
+    n_folds_total = summary.get("n_folds", len(per_fold_val))
+    valid_fold_composites = _per_fold_composites(
+        per_fold_val, is_survival="c_index" in test,
+    )
+    n_valid_folds = len(valid_fold_composites)
+    selected = summary.get("fold_indices")
+    if selected is None:
+        required_folds = n_folds_total
+        declared_coverage_valid = (
+            type(required_folds) is int
+            and required_folds > 0
+            and len(per_fold_val) == required_folds
+        )
+    else:
+        declared_coverage_valid = (
+            isinstance(selected, list)
+            and len(selected) == len(per_fold_val)
+            and all(type(fold) is int for fold in selected)
+            and len(set(selected)) == len(selected)
+        )
+        required_folds = len(selected) if declared_coverage_valid else -1
+    status = (
+        "completed"
+        if declared_coverage_valid and n_valid_folds == required_folds
+        else "partial"
+    )
+
+    # CR-4: measure the noise the Ladder keep-margin is supposed to exceed.
+    # `composite_se` is TOP-LEVEL, deliberately: CR-1b recomputes the composite as
+    # the mean of `metrics`, so an extra key in there would corrupt the very
+    # selection signal this is meant to protect. None (not 0.0) when fewer than
+    # two folds are estimable — 0.0 would read as "measured, noise-free".
+    from automil.scoring import cross_fold_se
+
+    composite_se = cross_fold_se(valid_fold_composites)
+
     # ``metrics`` is agent-facing (val only); ``held_out`` (test) + ``summary``
     # are sealed into certify.json by terminal_writer — never seen during search.
     return {
-        "status": "completed",
+        "status": status,
         "metrics": metrics,
         "held_out": held_out,
-        "composite": round(composite, 4),
+        "composite": composite if "c_index" in test else round(composite, 4),
+        "composite_se": composite_se,
         "elapsed_seconds": round(elapsed, 1),
         "peak_vram_mb": round(peak_vram_mb),
+        "n_valid_folds": n_valid_folds,
+        "n_folds": n_folds_total,
+        "validation_folds": validation_folds,
         "summary": summary,
     }
 
@@ -209,6 +417,8 @@ def main() -> None:
         "seed": args.seed,
         "patience": args.patience,
         "stop_epoch": args.stop_epoch,
+        "weight_decay": args.weight_decay,
+        "early_stopping": args.early_stopping,
     }.items() if v is not None}
     train_cfg = TrainConfig(**_train_overrides)
 
@@ -222,8 +432,12 @@ def main() -> None:
 
     # CFG-01 / D-01: pass n_folds only when explicitly supplied; otherwise ExperimentConfig.n_folds applies.
     _exp_kwargs = {}
+    resolved_n_folds = args.n_folds if args.n_folds is not None else 5
     if args.n_folds is not None:
         _exp_kwargs["n_folds"] = args.n_folds
+    fold_indices = _parse_folds(args.folds, resolved_n_folds)
+    if fold_indices is not None:
+        _exp_kwargs["fold_indices"] = fold_indices
     exp_cfg = ExperimentConfig(
         task=task_cfg,
         encoder_key=args.encoder,
@@ -233,6 +447,9 @@ def main() -> None:
         framework=framework,
         strategy=args.strategy,
         survival_loss=survival_loss,
+        hparam_overrides=_parse_hparams(args.hparams),
+        policy_variant=args.policy_variant,
+        dataset=ds.name,  # DATA-ID: prefer the resolved DatasetConfig name over args.dataset
         **_exp_kwargs,
     )
 
@@ -240,9 +457,12 @@ def main() -> None:
     # Reads automil/applied_variant.json (written by `automil apply` and propagated
     # into the worktree by apply_overlay). No-op when no variant is selected or
     # when running outside autoMIL (applied_variant.json absent).
-    from pathlib import Path as _Path
     from autobench.pipeline.variant_dispatch import apply_model_variant_to_exp_cfg
-    _automil_dir = _Path("automil")
+    from autobench.pipeline.policy_dispatch import (
+        resolve_policy_name,
+        runtime_automil_dir,
+    )
+    _automil_dir = runtime_automil_dir()
     # WR-03: warn when automil/ is absent so the operator knows variant dispatch
     # is skipped.  This happens on manual invocations from any directory that is
     # not the worktree root; under the orchestrator the cwd is always the worktree
@@ -254,6 +474,10 @@ def main() -> None:
             flush=True,
         )
     apply_model_variant_to_exp_cfg(exp_cfg, _automil_dir)
+    # Resolve the train-only policy before any runner fingerprints or writes the
+    # ExperimentConfig. An archived selection must be provenance-equivalent to
+    # an explicit --policy-variant, never an invisible runtime side channel.
+    exp_cfg.policy_variant = resolve_policy_name(exp_cfg, _automil_dir)
 
     benchmark_dir = ds.benchmark_dir
 
@@ -300,6 +524,7 @@ def main() -> None:
         )
         summary = run_titan_experiment(
             exp_cfg, benchmark_dir, device=str(device),
+            results_dir=automil_results_dir,  # CR-5: isolate per-experiment results
         )
     else:
         from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
@@ -323,20 +548,32 @@ def main() -> None:
         )
         if framework == Framework.ABMIL:
             from autobench.pipeline.abmil.runner import run_abmil_experiment
-            summary = run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+            summary = run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device),
+                                           results_dir=automil_results_dir)  # CR-5
         elif framework == Framework.DTFD:
             from autobench.pipeline.dtfd import run_dtfd_experiment
-            summary = run_dtfd_experiment(exp_cfg, benchmark_dir, device=str(device))
+            summary = run_dtfd_experiment(exp_cfg, benchmark_dir, device=str(device),
+                                          results_dir=automil_results_dir)  # CR-5
         else:
             from autobench.pipeline.nnmil.runner import run_nnmil_experiment
-            summary = run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+            summary = run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device),
+                                           results_dir=automil_results_dir)  # CR-5
 
     elapsed = time.time() - start_time
 
-    # Write result.json (autoMIL contract)
+    # Write result.json (autoMIL contract).
+    #
+    # L-3: split-written across the val-firewall boundary. The FULL payload —
+    # `held_out` included — goes to the sealed AUTOMIL_RESULTS_DIR; the copy
+    # that lands in the worktree is stripped. Writing it here directly, as this
+    # did, left the test metrics sitting in `.automil_worktrees/<node>/result.json`
+    # for the entire run, in a directory with no access control of its own —
+    # readable by anything that can read the project tree, including the agent
+    # driving the search, without waiting for `automil certify`.
     result = summary_to_result_json(summary, elapsed)
-    with open("result.json", "w") as f:
-        json.dump(result, f, indent=2)
+    from automil.runtime_helpers import write_result_json
+
+    write_result_json(result)
 
     print(f"\nExperiment complete in {elapsed:.0f}s")
     # val-firewall: surface only the validation selection signal to stdout/run.log;

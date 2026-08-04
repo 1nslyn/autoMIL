@@ -1,5 +1,6 @@
 """Generate nnMIL dataset artifacts (dataset.json, dataset.csv, dataset_plan.json).
 
+
 We generate ``dataset_plan.json`` ourselves (not using nnMIL's ExperimentPlanner)
 to control splits precisely -- ensuring they match the shared split CSVs used by
 CLAM.  We DO use nnMIL's ``ClassificationTrainer`` for actual training.
@@ -13,6 +14,7 @@ import os
 import h5py
 import numpy as np
 import pandas as pd
+
 
 
 def nnmil_plan_dir(
@@ -90,6 +92,33 @@ def prepare_nnmil_experiment(
     n_missing = (~has_h5).sum()
     if n_missing > 0:
         print(f"  Skipping {n_missing} slides without H5 features for {encoder_key}")
+        # M-9 (nnMIL follow-up): the drop happens ONCE here, at plan time, for the
+        # whole cohort — before any fold exists — which is why the per-split guard
+        # in the other arms' loaders cannot see it. The consequence is the same:
+        # a partially-extracted cohort silently trains, validates and reports on
+        # whatever survived. Guard the cohort as one "split", and additionally on
+        # the per-class floor, so a minority class wiped out by a partial
+        # extraction fails loudly instead of producing a confident number.
+        #
+        # The plan is CACHED (`if os.path.exists(plan_path): return` above), so
+        # without this an under-extracted cohort would be baked in and reused by
+        # every later experiment on that (strategy, task, encoder).
+        from autobench.pipeline.dataset_guards import check_split_retention
+
+        _label_col = "label" if "label" in task_df.columns else None
+        _expected_by_class = _retained_by_class = None
+        if _label_col is not None:
+            _full = pd.read_csv(task_csv_path)
+            _expected_by_class = _full[_label_col].value_counts().to_dict()
+            _retained_by_class = _full[has_h5][_label_col].value_counts().to_dict()
+        check_split_retention(
+            context=f"nnmil plan {dataset_name}/{task_name}/{encoder_key}",
+            split="cohort",
+            expected_total=int(len(task_df)),
+            retained_total=int(has_h5.sum()),
+            expected_by_class=_expected_by_class,
+            retained_by_class=_retained_by_class,
+        )
         task_df = task_df[has_h5].reset_index(drop=True)
 
     # --- dataset.json ---
@@ -158,6 +187,13 @@ def prepare_nnmil_experiment(
         **dataset_json,
         "feature_statistics": feature_stats,
         "data_splits": data_splits,
+        # H-3b: the plan stays the pure self-configuration artifact. An earlier
+        # attempt applied hyperparameter overrides HERE, but the parameter had no
+        # production caller (so nnMIL's coverage was 0/11) and the plan cache keys
+        # on (strategy, task, encoder, survival_loss) with no hyperparameter
+        # component, so a second experiment would have inherited the first's
+        # values. Overrides are now layered in `nnmil/runner.py`, which
+        # materialises a derived plan inside that experiment's own results dir.
         "training_configuration": _generate_training_config(
             feature_stats,
             len(task_df),
@@ -335,7 +371,7 @@ def _generate_training_config(
     hidden_dim = max(256, feat_dim // 4)
 
     # Prefer the value computed once by _analyze_features to keep the
-    # planner.py:129 formula in one place. Fall back to the live
+    # experiment_planner.py:129 formula in one place. Fall back to the live
     # computation for callers that hand-build a stats dict without going
     # through _analyze_features (e.g. unit tests). Both branches use the
     # same formula; this just keeps them from drifting silently.
@@ -344,10 +380,10 @@ def _generate_training_config(
     else:
         max_seq_length = int(feature_stats["num_patches_per_slide"]["median"] * 0.5)
 
-    # planner.py:596 fallback: train set ≈ 80% of total when split info absent
+    # experiment_planner.py:596 fallback: train set ≈ 80% of total when split info absent
     num_train_samples = int(n_samples * 0.8)
 
-    # planner.py:602-657 batch_size formula (replicated verbatim, including the
+    # experiment_planner.py:602-657 batch_size formula (replicated verbatim, including the
     # buggy minority-visibility upgrade where min(candidates)=16 always no-ops)
     batch_size_candidates: list[int] = []
     if min_class_count is not None and min_class_count > 0:
@@ -375,7 +411,7 @@ def _generate_training_config(
             batch_size = min(min_minority, 48)
     batch_size = max(16, min(48, batch_size))
 
-    # planner.py:660-674 — adaptive batch_sampler on metric
+    # experiment_planner.py:660-674 — adaptive batch_sampler on metric
     metric_lower = metric.lower()
     if "auc" in metric_lower:
         batch_sampler = "auc"
@@ -409,16 +445,16 @@ def _generate_survival_training_config(
 ) -> dict:
     """Training config for a survival experiment.
 
-    Mirrors the classification config's feature/seq sizing but bypasses the
-    class-minority batch logic (survival has no classes). ``num_classes`` is
-    the survival head width: 1 for cox/mse/mae, ``nll_bins`` for nllsurv.
-    ``survival_loss`` (+ ``nll_bins`` for nllsurv) are injected so the
-    survival trainers read them from the plan's config fallback. LR follows
-    nnMIL's survival planner default (1e-4); ``c_index`` metric resolves the
-    batch sampler to ``random`` (accepted by the survival trainers).
+    Reproduces the vendored planner's task-specific defaults: survival fixes
+    ``hidden_dim`` at 256 and leaves ``batch_sampler`` unset (``None``), while
+    retaining the shared sequence-length, batch-size, warmup, and weight-decay
+    rules. ``num_classes`` is the survival head width: 1 for cox/mse/mae,
+    ``nll_bins`` for nllsurv. ``survival_loss`` (+ ``nll_bins`` for nllsurv)
+    are injected so the survival trainers read them from the plan's config
+    fallback. LR follows nnMIL's survival planner default (1e-4).
     """
     feat_dim = feature_stats["feature_dimension"]
-    hidden_dim = max(256, feat_dim // 4)
+    hidden_dim = 256
     if "recommended_max_seq_length" in feature_stats:
         max_seq_length = int(feature_stats["recommended_max_seq_length"])
     else:
@@ -441,7 +477,7 @@ def _generate_survival_training_config(
         "max_seq_length": max_seq_length,
         "use_original_length": False,
         "batch_size": batch_size,
-        "batch_sampler": "random",
+        "batch_sampler": None,
         "learning_rate": 1e-4,
         "weight_decay": 0.01 if hidden_dim >= 512 else 1e-4,
         "num_epochs": 100,

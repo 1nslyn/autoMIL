@@ -66,8 +66,14 @@ orchestrator:
   poll_interval_sec: 5
   safety_margin_gb: 2.0
   default_timeout_min: 150
-  max_concurrent_per_gpu: 1
-  default_vram_estimate_gb: 0.5
+  # CFG-2: these are the ONLY copies. They used to be declared here as literals
+  # AND again under `cap:` as the Jinja expressions `automil init`'s hardware
+  # healthcheck fills in — but the daemon reads `orchestrator:`
+  # (_orchestrator_daemon.py:439-444), so the measured values landed in a dead
+  # block and these literals were what ran. Fallbacks stay conservative, so a
+  # project with no healthcheck data is unchanged.
+  max_concurrent_per_gpu: {{ max_concurrent_per_gpu | default(1) }}
+  default_vram_estimate_gb: {{ default_vram_estimate_gb | default(0.5) }}
   scheduling_policy: "best_fit"   # best_fit | round_robin | least_loaded
 
 viz:
@@ -93,6 +99,15 @@ registry:
   # ("free" runs interface + purity validators; "architecture-preserving"
   # additionally runs identity-strict validation per identity_constraints.)
   mode: "free"
+
+  # Command and registered-variant channels admitted in architecture-preserving
+  # mode. Keep empty unless the consumer has executable adapters for them.
+  allowed_override_options: []
+  allowed_variant_kinds: []
+
+  # Scalar keys that would erase a defining method mechanism when changed.
+  # The submit/launch policy rejects these inside --hparams.
+  identity_locked_hparams: []
 
   # Reproduction tolerance for `automil verify-repro <node_id>` (default ±0.005).
   repro_tolerance: 0.005
@@ -157,6 +172,15 @@ scoring:
   formula: ""
   technique_map: {}
   accept_margin: 0.0   # Ladder keep-margin δ: child kept iff composite > parent + δ. Predeclare per-dataset (0.0 = strict dominance). Read from graph.json meta.scoring.
+  # CR-4: the margin ACTUALLY applied is max(accept_margin, se_multiplier x the
+  #   PARENT's measured cross-fold SE). The noise floor can only ever raise the
+  #   bar, never lower a predeclared δ, and it is derived from the incumbent —
+  #   if it came from the child, taking the argmax over screened candidates would
+  #   also be taking the argmin over their margins.
+  #   1.0 = one SE. 0.0 disables the noise floor and reverts to the bare δ.
+  #   This is a conservative screen during search, NOT a significance test: the
+  #   paired inference lives in the Stage-B gate (gate/stats.py).
+  se_multiplier: 1.0
 
 # --- Variant selection (D-35, REG-07) ---
 # The framework resolves these via registry.resolve_model(parent, variant) etc.
@@ -178,6 +202,17 @@ policy:
 cap:
   budget: 6h               # agent-active working budget; e.g. 6h, 30m, 90s
   safety_buffer: 30m       # pre-termination warning window; must be < budget
+  # eval_budget: how many experiments a cell may LAUNCH. This is the primary
+  #   equal-effort axis — an evaluation count is portable across agent runtimes,
+  #   whereas wall-clock is not, so a count is what another lab can reproduce.
+  #   It is a SECOND AXIS, not a mode: the time budget above stays on as the
+  #   safety wall, and whichever runs out first stops new work.
+  #   Counted at launch, so crashed / partial / budget-killed runs all count:
+  #   equal effort means equal ATTEMPTS, not equal successes (otherwise buggy
+  #   code would earn unlimited free retries). Usable results are reported
+  #   separately per cell as `usable` in `automil budget show`.
+  #   null = no eval cap (time-only). Set an integer to enable, e.g. 40.
+  eval_budget: null
   # mode: how the budget clock is metered.
   #   agent_active (default), bills only while the agent is actually working
   #     (PostToolUse activity); the clock PAUSES while experiments run and the
@@ -187,8 +222,6 @@ cap:
   idle_grace_seconds: 300  # agent_active only: gap (s) since the agent's last
                            # action that still counts as "working" before the
                            # clock pauses. Set ≥ your longest think/edit gap.
-  default_vram_estimate_gb: {{ default_vram_estimate_gb | default(8.0) }}
-  max_concurrent_per_gpu: {{ max_concurrent_per_gpu | default(4) }}
 
 hardware:
   accelerator: {{ healthcheck_accelerator | default("cpu") }}

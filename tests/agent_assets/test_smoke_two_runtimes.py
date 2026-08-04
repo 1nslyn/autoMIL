@@ -83,6 +83,13 @@ def test_smoke_claude_hook_script(
         "AUTOMIL_NODE_ID":  node_id,
         "AUTOMIL_RUNTIME":  runtime,
         "AUTOMIL_DIR":      str(automil_dir),
+        # The hook invokes the installed ``automil`` console script, so make
+        # the active interpreter's scripts directory explicit.  Invoking
+        # ``.venv/bin/python -m pytest`` does not otherwise prepend it to PATH.
+        "PATH": os.pathsep.join((
+            str(Path(sys.executable).parent),
+            os.environ.get("PATH", ""),
+        )),
     }
 
     # Invoke the REAL hook script with the event piped on stdin.

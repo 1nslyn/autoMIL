@@ -71,9 +71,10 @@ Run `automil check` to verify everything is configured correctly.
 
 **Prerequisites:** `automil orchestrator start`
 
-The loop is **Research → Diagnose → Plan → Execute**, propose real
-architectural change grounded in a named failure mode and recent literature,
-NOT a hyperparameter sweep.
+The loop is **Research → Diagnose → Plan → Execute**. Read `registry.mode`
+before proposing: `free` mode explores architecture and recipe;
+`architecture-preserving` mode fixes the published model and explores declared
+scalars plus executable train-only recipe policy.
 
 **LOOP FOREVER, one batch =**
 
@@ -87,14 +88,19 @@ NOT a hyperparameter sweep.
 3. **PLAN.** Rewrite `automil/plan.md`: the diagnosis + a table of proposals,
    each with `kind`, parent, and hypothesis → mechanism. Queue with
    `automil propose --parent <id> --kind <k> --desc "..."` (kinds:
-   architecture · regularization · hp · data · ensemble). Aim **≥50% structural**
-   (architecture/ensemble); run `automil portfolio` and rebalance if it reports
-   BELOW TARGET before executing.
+   architecture · regularization · hp · data · ensemble). Run `automil
+   portfolio` before execution. In `free` mode aim **≥50% structural**
+   (architecture/ensemble). In `architecture-preserving` mode use only
+   regularization/hp; architecture, data, and ensemble are forbidden because
+   the current policy seam exposes no sampling capability.
 4. **EXECUTE.** `automil rank`, then implement and submit, **prefer the
    variant-registry path**:
-   a. Variant of a registered parent: add `automil/variants/<parent>/<name>.py`,
-      select it in `config.yaml`, then `automil submit` (committed code, no cleanup).
-   b. Free-mode edit: edit files, `automil submit --node <id> --desc "..." --files
+   a. In architecture-preserving mode, add
+      `automil/variants/_policies/<name>.py`, then submit with that explicit
+      `--files` path and `--override "--policy-variant <name>"`.
+   b. In free mode, registered model/loss/policy variants use their normal kind
+      directory and selection lifecycle.
+   c. Free-mode edit: edit files, `automil submit --node <id> --desc "..." --files
       <changed files>`, then selectively restore ONLY those files
       (`git restore --source=HEAD -- <each-file>`). Never bulk-restore.
    **Saturate every GPU**, submit until the VRAM bin-packer is full, not one run
@@ -107,14 +113,13 @@ NOT a hyperparameter sweep.
 
 **NEVER STOP** while `.automil_active` exists.
 
-### Architecture modifications are encouraged
+### Search-mode discipline
 
-Beyond hyperparameter tuning and loss/augmentation changes, actively look for
-deficiencies in the model architecture and improve them, modifying attention
-mechanisms, adding layers, changing pooling strategies, or building custom
-architectures inline in the training script. **Architecture improvements are
-preferred over pure hyperparameter tuning when possible.** The portfolio gate
-(`automil portfolio`) exists to keep the loop honest about this.
+In `free` mode, actively consider architecture changes rather than reducing the
+loop to scalar tuning. In `architecture-preserving` mode, never edit the model or
+measurement substrate. Use the dedicated PolicyVariant seam for optimizer,
+scheduler, gradient-update, and stopping logic. The selected
+winner may legitimately be HP-only; do not manufacture an architecture change.
 
 ## Restart Protocol
 
@@ -131,8 +136,12 @@ On every session start or context reset:
 ## Environment Variables
 
 The orchestrator provides these to your training script:
-- `CUDA_VISIBLE_DEVICES`: physical GPU ID (masked)
-- `AUTOMIL_GPU`: logical device, always `0` (use this or `cuda:0`)
+- `AUTOMIL_ACCELERATOR`: execution substrate (`cuda`, `rocm`, or `cpu`)
+- `CUDA_VISIBLE_DEVICES`: physical CUDA ID, ROCm logical `0`, or empty on CPU
+- `ROCR_VISIBLE_DEVICES`: physical ROCm host-device ID; empty outside ROCm
+- `HIP_VISIBLE_DEVICES` / `GPU_DEVICE_ORDINAL`: ROCm logical `0`; empty otherwise
+- `AUTOMIL_GPU`: backward-compatible logical slot, always `0`; use
+  `AUTOMIL_ACCELERATOR` to distinguish CPU
 - `AUTOMIL_NODE_ID`: experiment node ID (for logging)
 - `AUTOMIL_DESC`: experiment description
 

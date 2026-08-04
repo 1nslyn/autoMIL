@@ -7,7 +7,10 @@ promote logic) can identify gate-eval children.
 
 Cap interaction (D-150 / Pitfall 1): cells in REFUSING_NEW / TERMINATING /
 FINALIZED states are SKIPPED — promote.py uses the skipped list to
-adjust K_effective.
+adjust K_effective. Since H-2 a cell that has spent its EVAL budget is skipped
+on the same footing, so an eval budget set too tight relative to K lowers
+K_effective and can push a candidate into the ``inconclusive`` branch (which is
+the intended failure mode: conclude on less evidence is not an option).
 """
 from __future__ import annotations
 
@@ -28,11 +31,31 @@ logger = logging.getLogger(__name__)
 # (automil.gate.evaluate.get_cell and the cap-check helper).
 # Lazy imports inside evaluate_candidate are removed in favour of this top-level
 # import to support deterministic monkeypatching in the test suite.
-from automil.cells import get_cell, is_refusing_new  # noqa: E402
+from automil.cells import blocks_new_work, get_cell  # noqa: E402
 
 # Terminal job states — match the JobState enum from backends/base.py.
 # Use string values so we don't have to import the enum at module load.
 _TERMINAL_STATES = {"completed", "crashed", "cancelled", "budget_killed"}
+
+
+
+def _persist_gate_child(graph, child_id: str, node: dict) -> None:
+    """Write one gate-eval child to graph.json under a short lock (CR-2b).
+
+    Best-effort: a persistence failure must not abandon a job that has already
+    been submitted to the backend. The in-memory node stays authoritative for
+    this run either way.
+    """
+    from automil.graph import locked_update
+
+    try:
+        with locked_update(
+            str(graph.path),
+            technique_map=getattr(graph, "_technique_map", None),
+        ) as g:
+            g.nodes.setdefault(child_id, dict(node))
+    except Exception:  # noqa: BLE001 — the job is already submitted
+        logger.exception("gate-eval: could not persist child node %s", child_id)
 
 
 def evaluate_candidate(
@@ -86,11 +109,16 @@ def evaluate_candidate(
 
         # D-150: cap-exhausted cells skip the eval (promote.py reduces K).
         # get_cell returns None on missing per cells/registry.py — no try/except needed.
+        # H-2: exhaustion is now either axis — a cell with no evaluations left
+        # cannot pay for a held-out eval any more than one with no seconds left,
+        # and the gate must not quietly borrow one.
         cell = get_cell(cell_id)
-        if cell is not None and is_refusing_new(cell):
+        if cell is not None and blocks_new_work(cell):
             logger.info(
-                "gate-eval: skipping cell %s (status=%s, cap-exhausted)",
-                cell_id, cell.status,
+                "gate-eval: skipping cell %s (status=%s, consumed_evals=%d/%s, "
+                "cap-exhausted)",
+                cell_id, cell.status, cell.consumed_evals,
+                cell.eval_budget if cell.eval_budget is not None else "-",
             )
             skipped.append(cell_id)
             continue
@@ -144,6 +172,14 @@ def evaluate_candidate(
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        # CR-2b: persist this child under a SHORT lock, as it is created.
+        # Previously the only write was promote_candidate's single graph.save()
+        # after every held-out evaluation had finished — minutes later — which
+        # meant (a) these nodes existed nowhere on disk while their jobs ran, and
+        # (b) that final whole-snapshot save clobbered any daemon completion that
+        # landed in the meantime. The lock cannot be held across the evaluations
+        # themselves, so the write is split into short transactions instead.
+        _persist_gate_child(graph, child_id, graph.nodes[child_id])
 
         handles[cell_id] = (handle, child_id, hc)
 

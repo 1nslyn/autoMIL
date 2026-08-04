@@ -7,7 +7,8 @@
   4. 4 nominations, all 4 registered → rate=1.0, "too loose"
   5. Response always includes window_days=30
 
-Uses aiohttp.test_utils.loop_context (no pytest-asyncio required).
+Calls the aiohttp handler directly with ``loop_context`` (no pytest-asyncio or
+network socket required). Route registration is tested separately.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from aiohttp.test_utils import TestClient, TestServer, loop_context
+from aiohttp.test_utils import loop_context
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,15 @@ def _run(coro):
         return loop.run_until_complete(coro)
 
 
+async def _promotion_payload() -> dict:
+    """Call the request-independent JSON handler without binding a socket."""
+    from automil.viz.server import promotion_rate_handler
+
+    response = await promotion_rate_handler(None)
+    assert response.status == 200
+    return json.loads(response.text)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -67,17 +77,12 @@ def test_promotion_rate_endpoint_no_graph(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "GRAPH_FILE", tmp_path / "automil" / "graph.json")
 
     async def _test():
-        from automil.viz.server import create_app
-        app = create_app()
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/api/promotion-rate")
-            assert resp.status == 200
-            data = await resp.json()
-            assert data["promotion_rate"] == 0.0
-            assert data["nominated"] == 0
-            assert data["promoted"] == 0
-            assert "no data" in data["health_diagnostic"].lower()
-            assert data["window_days"] == 30
+        data = await _promotion_payload()
+        assert data["promotion_rate"] == 0.0
+        assert data["nominated"] == 0
+        assert data["promoted"] == 0
+        assert "no data" in data["health_diagnostic"].lower()
+        assert data["window_days"] == 30
 
     _run(_test())
 
@@ -91,17 +96,12 @@ def test_promotion_rate_endpoint_with_data(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "GRAPH_FILE", graph_file)
 
     async def _test():
-        from automil.viz.server import create_app
-        app = create_app()
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/api/promotion-rate")
-            assert resp.status == 200
-            data = await resp.json()
-            assert data["promotion_rate"] == pytest.approx(0.5)
-            assert data["nominated"] == 4
-            assert data["promoted"] == 2
-            assert "healthy" in data["health_diagnostic"].lower()
-            assert data["window_days"] == 30
+        data = await _promotion_payload()
+        assert data["promotion_rate"] == pytest.approx(0.5)
+        assert data["nominated"] == 4
+        assert data["promoted"] == 2
+        assert "healthy" in data["health_diagnostic"].lower()
+        assert data["window_days"] == 30
 
     _run(_test())
 
@@ -117,14 +117,9 @@ def test_promotion_rate_endpoint_health_low(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "GRAPH_FILE", graph_file)
 
     async def _test():
-        from automil.viz.server import create_app
-        app = create_app()
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/api/promotion-rate")
-            assert resp.status == 200
-            data = await resp.json()
-            assert data["promotion_rate"] == pytest.approx(0.0)
-            assert "too strict" in data["health_diagnostic"].lower()
+        data = await _promotion_payload()
+        assert data["promotion_rate"] == pytest.approx(0.0)
+        assert "too strict" in data["health_diagnostic"].lower()
 
     _run(_test())
 
@@ -139,14 +134,9 @@ def test_promotion_rate_endpoint_health_high(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "GRAPH_FILE", graph_file)
 
     async def _test():
-        from automil.viz.server import create_app
-        app = create_app()
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/api/promotion-rate")
-            assert resp.status == 200
-            data = await resp.json()
-            assert data["promotion_rate"] == pytest.approx(1.0)
-            assert "too loose" in data["health_diagnostic"].lower()
+        data = await _promotion_payload()
+        assert data["promotion_rate"] == pytest.approx(1.0)
+        assert "too loose" in data["health_diagnostic"].lower()
 
     _run(_test())
 
@@ -158,12 +148,18 @@ def test_promotion_rate_endpoint_window_days_field(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "GRAPH_FILE", tmp_path / "no_graph.json")
 
     async def _test():
-        from automil.viz.server import create_app
-        app = create_app()
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/api/promotion-rate")
-            assert resp.status == 200
-            data = await resp.json()
-            assert data["window_days"] == 30
+        data = await _promotion_payload()
+        assert data["window_days"] == 30
 
     _run(_test())
+
+
+def test_promotion_rate_route_is_registered():
+    """The direct handler under test remains exposed at the public API path."""
+    from automil.viz.server import create_app
+
+    paths = {
+        resource.canonical
+        for resource in create_app().router.resources()
+    }
+    assert "/api/promotion-rate" in paths

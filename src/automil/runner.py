@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -9,6 +10,19 @@ import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _reject_nonfinite_constant(token: str):
+    """``parse_constant`` hook: reject ``Infinity`` / ``-Infinity`` / ``NaN`` tokens.
+
+    CR-1a (audit 2026-07-23): result.json is agent-writable and ``composite`` is
+    trusted verbatim as the val-firewall selection signal. A non-finite composite
+    would rig selection (``Infinity`` captures best_node and forces keep; ``NaN``
+    poisons every ``>`` comparison and persists as an invalid-JSON token). Reject
+    such tokens at the parse boundary — the semantic finite check in
+    ``automil.schemas.validate_result`` is the second line of defense.
+    """
+    raise ValueError(f"non-finite JSON constant {token!r} is not permitted in result.json")
 
 
 class Runner:
@@ -51,8 +65,42 @@ class Runner:
         )
         return wt_path
 
+    @staticmethod
+    def _verify_overlay_manifest(overlay_dir: Path, manifest: dict[str, str]) -> None:
+        """Check every file the manifest claims against its recorded digest.
+
+        Raises:
+            ValueError: a claimed file is missing, its digest does not match, or
+                the recorded digest is malformed. All three are refusals rather
+                than warnings: the manifest is the only record of what the agent
+                actually submitted, so a mismatch means the archive no longer
+                describes the experiment that was queued.
+        """
+        for rel, recorded in sorted(manifest.items()):
+            if not isinstance(recorded, str) or not recorded.startswith("sha256:"):
+                raise ValueError(
+                    f"Overlay rejected: malformed digest for {rel!r} in the "
+                    f"overlay manifest ({recorded!r}); expected 'sha256:<hex>'."
+                )
+            expected = recorded.split(":", 1)[1]
+            src = overlay_dir / rel
+            if not src.is_file():
+                raise ValueError(
+                    f"Overlay rejected: manifest claims {rel!r} but it is missing "
+                    f"from {overlay_dir}."
+                )
+            actual = hashlib.sha256(src.read_bytes()).hexdigest()
+            if actual != expected:
+                raise ValueError(
+                    f"Overlay rejected: digest mismatch for {rel!r} — the archived "
+                    f"file no longer matches what `automil submit` recorded "
+                    f"(expected {expected[:12]}…, got {actual[:12]}…). The archive "
+                    f"was modified after submit; refusing to run it."
+                )
+
     def apply_overlay(self, worktree_path: Path, overlay_dir: Path,
-                      deletions: list[str] | None = None) -> None:
+                      deletions: list[str] | None = None,
+                      *, manifest: dict[str, str] | None = None) -> None:
         """Copy modified files from overlay_dir on top of worktree.
 
         Also removes files listed in ``deletions`` from the worktree to
@@ -64,10 +112,25 @@ class Runner:
         and symlinks pointing outside the worktree so a malicious or
         corrupt overlay (or deletions list) cannot land arbitrary files
         on disk.
+
+        Args:
+            manifest: HASH-0 — the ``{path: "sha256:..."}`` map recorded by
+                ``automil submit``. Until now it was written into every queue
+                spec and verified by nothing, so an archived overlay edited
+                between submit and launch would run unnoticed. Verification
+                happens BEFORE any copy, so a rejected overlay leaves the
+                worktree untouched rather than half-applied. Only files the
+                manifest actually claims are checked — the archive also holds
+                run artifacts (``fold_*_result.json``, ``summary.json``) that
+                were never part of the overlay. ``None`` skips verification, for
+                legacy specs that carry no manifest.
         """
         wt_resolved = worktree_path.resolve()
         ov_resolved = overlay_dir.resolve()
         metadata_files = {Path("spec.json"), Path("run.log"), Path("result.json")}
+
+        if manifest:
+            self._verify_overlay_manifest(overlay_dir, manifest)
 
         for src_file in overlay_dir.rglob("*"):
             if not src_file.is_file():
@@ -118,24 +181,73 @@ class Runner:
                     target.unlink()
 
     def collect_result(self, worktree_path: Path, archive_dir: Path) -> dict | None:
-        """Persist the worktree result.json and return the parsed payload (or None).
+        """Persist the sealed result.json and return the parsed payload (or None).
 
-        Val-firewall (Scope B): the raw result.json carries the sealed ``held_out``
-        (test) block, so the durable copy is written into the off-limits
+        Val-firewall (Scope B): the FULL result payload carries the sealed
+        ``held_out`` (test) block, so the durable copy lives in the off-limits
         ``archive/<node>/certify/`` subdir, never the agent-visible node-archive
         root. terminal_writer is the sole writer of the root ``result.json`` and
         strips test before writing it. The raw dict is still returned (held_out
         intact) so terminal_writer can route held_out into certify.json.
+
+        L-3 (audit 2026-07-23): two shapes are handled here, because two
+        writers exist for the worktree's result.json:
+
+          - NEW: the training script called ``automil.runtime_helpers.
+            write_result_json``, which already wrote the FULL payload
+            directly into ``AUTOMIL_RESULTS_DIR`` (== ``sealed_dir`` below)
+            and a STRIPPED (val-only, no ``held_out``/``summary``) sibling
+            into the worktree. Before that helper existed, the worktree copy
+            carried the full payload -- test metrics included -- for the
+            entire run, and anything reading the project directory during
+            search (including the coding agent driving it) could read the
+            sealed metrics straight off disk. Now, at most, it can read the
+            same validation-only view already shown in the final,
+            agent-facing ``archive/<node>/result.json``. Because the sealed
+            copy is already correct and authoritative in this case, it is
+            read as-is -- the stripped worktree copy is NOT copied over it,
+            which would silently overwrite the sealed ``held_out`` with
+            nothing.
+          - LEGACY: an older script wrote the FULL payload straight into the
+            worktree and no sealed copy exists yet. Preserves the original
+            behaviour byte-for-byte: copy the worktree file into
+            ``sealed_dir`` and read it back from there.
+
+        Neither file existing means the process produced no result at all
+        (crash before any write) -- returns None, as before.
         """
+        sealed_dir = archive_dir / "certify"
+        sealed_file = sealed_dir / "result.json"
         result_file = worktree_path / "result.json"
-        if not result_file.exists():
+
+        if sealed_file.exists():
+            source = sealed_file
+        elif result_file.exists():
+            sealed_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(result_file, sealed_file)
+            source = sealed_file
+        else:
             return None
 
-        sealed_dir = archive_dir / "certify"
-        sealed_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(result_file, sealed_dir / "result.json")
-
-        return json.loads(result_file.read_text())
+        try:
+            return json.loads(
+                source.read_text(), parse_constant=_reject_nonfinite_constant
+            )
+        except ValueError as exc:
+            # CR-1a: a non-finite (Infinity/NaN) or otherwise malformed result.json
+            # cannot be trusted as the selection signal. Degrade to a crash result —
+            # the same outcome as a schema-invalid result at terminal_writer
+            # ingestion — so it never influences keep/discard or best_node.
+            logger.warning(
+                "collect_result: rejected result.json for %s (%s) — treating as crash",
+                archive_dir.name, exc,
+            )
+            return {
+                "status": "crash",
+                "composite": 0.0,
+                "metrics": {},
+                "error": f"result.json rejected at ingestion: {exc}",
+            }
 
     def cleanup_worktree(self, worktree_path: Path) -> None:
         """Remove a git worktree."""

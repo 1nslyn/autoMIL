@@ -38,6 +38,9 @@ def make_cell(
     idle_grace_seconds: int = 300,
     consumed_active_seconds: float = 0.0,
     last_tick_at: float | None = None,
+    eval_budget: int | None = None,
+    consumed_evals: int = 0,
+    completed_evals: int = 0,
 ) -> Cell:
     """Construct a ``Cell`` with sensible defaults; override any field as needed.
 
@@ -45,6 +48,9 @@ def make_cell(
     args inline without fixture injection ceremony. ``mode`` defaults to the
     legacy ``"wall_clock"`` so existing cap-state tests keep their now-started_at
     semantics; activity-gated tests pass ``mode="agent_active"``.
+
+    ``eval_budget`` defaults to ``None`` (no eval cap, H-2), so every pre-existing
+    cap test keeps its time-only semantics unchanged.
     """
     return Cell(
         cell_id=cell_id,
@@ -59,4 +65,7 @@ def make_cell(
         idle_grace_seconds=idle_grace_seconds,
         consumed_active_seconds=consumed_active_seconds,
         last_tick_at=last_tick_at,
+        eval_budget=eval_budget,
+        consumed_evals=consumed_evals,
+        completed_evals=completed_evals,
     )

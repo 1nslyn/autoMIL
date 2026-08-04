@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import sys
 import time
 
@@ -21,10 +20,13 @@ import torch
 from torch.utils.data import DataLoader
 
 from autobench import LIB_ROOT
+from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
+from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -33,15 +35,6 @@ if str(LIB_ROOT) not in sys.path:
 from nnMIL.training.losses.survival_loss import SurvivalLoss, survival_c_index  # noqa: E402
 from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss  # noqa: E402
 from nnMIL.training.callbacks.early_stopping import EarlyStoppingSurvival  # noqa: E402
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 def _event_time_bin_edges(times, statuses, n_bins: int) -> np.ndarray:
@@ -114,6 +107,7 @@ def train_titan_survival_fold(
     results_dir: str,
     device: str = "cuda:0",
     head_cfg: TitanHeadConfig | None = None,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train and evaluate one TITAN survival fold.
 
@@ -124,6 +118,14 @@ def train_titan_survival_fold(
     """
     if head_cfg is None:
         head_cfg = TitanHeadConfig()
+    # H-3: TitanHeadConfig stays the source of truth for lr/weight_decay/
+    # patience; layer on only the explicitly-set overrides. max_epochs and
+    # early_stopping are deliberately excluded — this arm reads those straight
+    # off exp_cfg.train (its documented mixed provenance), so routing them here
+    # would double-apply and trip the fail-loud guard.
+    _titan_ov = {k: v for k, v in all_overrides(exp_cfg).items()
+                 if k not in ("max_epochs", "early_stopping")}
+    head_cfg = apply_overrides(head_cfg, _titan_ov, arm="titan")
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
@@ -147,6 +149,8 @@ def train_titan_survival_fold(
     optimizer = torch.optim.Adam(
         model.parameters(), lr=head_cfg.lr, weight_decay=head_cfg.weight_decay,
     )
+    policy_runtime = policy_runtime or PolicyRuntime()
+    optimizer = policy_runtime.wrap_optimizer(optimizer)
 
     if is_nll:
         loss_fn = NLLSurvLoss()
@@ -186,6 +190,16 @@ def train_titan_survival_fold(
             return float(_batch_loss(embeddings, status, time_).item())
         return float("nan")
 
+    def _risk_records(loader: DataLoader) -> dict:
+        """Per-sample risk scores (CR-3: pooled across folds by the runner)."""
+        risks, statuses, times, pids = _predict_risks(model, loader, torch_device, survival_loss)
+        return {
+            "risks": [float(r) for r in risks],
+            "statuses": [float(s) for s in statuses],
+            "times": [float(t) for t in times],
+            "patient_ids": list(pids),
+        }
+
     def _c_index(loader: DataLoader) -> float:
         risks, statuses, times, pids = _predict_risks(model, loader, torch_device, survival_loss)
         if not risks:
@@ -217,7 +231,12 @@ def train_titan_survival_fold(
         # Always save the best (val-loss) checkpoint; early_stopping only gates
         # stopping early (matches classification/DTFD).
         early_stopping(v_loss, v_cidx, model)
-        if exp_cfg.train.early_stopping and early_stopping.early_stop:
+        default_stop = exp_cfg.train.early_stopping and early_stopping.early_stop
+        if policy_runtime.should_stop(
+            default_stop,
+            epoch=epoch,
+            metrics={"val_loss": v_loss, "val_c_index": v_cidx},
+        ):
             break
     elapsed = time.time() - start
 
@@ -233,6 +252,8 @@ def train_titan_survival_fold(
     fold_result = {
         "test_metrics": {"c_index": _c_index(test_loader)},
         "val_metrics": {"c_index": _c_index(val_loader)},
+        # CR-3: pooled cross-fold val concordance is computed by the runner.
+        "val_records": _risk_records(val_loader),
         "fold": fold,
         "elapsed_seconds": elapsed,
     }

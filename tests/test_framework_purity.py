@@ -44,7 +44,10 @@ _ALLOWLIST: dict[str, str] = {
     # 1. Informational comment about consumer-specific vars; documents the
     #    env.passthrough seam without auto-injecting any value.
     #    Line shifted to :60 by DBT-03 (14-02): removed 2-line deferral comment block.
-    "src/automil/backends/_orchestrator_daemon.py:60":
+    #    Line shifted to :61 by L-6 (audit 2026-07-23): added `import fcntl` for
+    #    cmd_submit's id-allocation lock; to :62 by the campaign-boundary hash
+    #    imports; to :63 by the live ROCm parser's `re` import.
+    "src/automil/backends/_orchestrator_daemon.py:63":
         "Consumer-specific vars (e.g. AUTOBENCH_*_ROOT)",
     # 2. Comment in verify_repro about the clean env not leaking AUTOBENCH_*.
     "src/automil/cli/lifecycle/verify_repro.py:84":
@@ -59,15 +62,19 @@ _ALLOWLIST: dict[str, str] = {
     #    consumers to the CHANGELOG 8.0.0 BREAKING section. Informational only;
     #    not a code path. Retained by 08-04 executor.
     #    Line shifted +1 by 12-02 (added scheduling_policy key above it),
-    #    +4 by the run.mil_model addition to the run: block.
-    "src/automil/templates/config.yaml.j2:114":
+    #    +4 by the run.mil_model addition to the run: block,
+    #    +6 by the H-4 registry block, -2 by CFG-2 (dead cap: duplicates removed),
+    #    +9 by CR-4's se_multiplier documentation in the scoring: block,
+    #    +9 by the architecture-preserving command/identity channels.
+    "src/automil/templates/config.yaml.j2:129":
         "autobench-shaped consumers",
     # 5. Inline example comment in the scoring.formula block showing what an
     #    autobench consumer formula looks like. Documentation only. Retained by
     #    08-04 executor.
     #    Line shifted +1 by 12-02 (added scheduling_policy key to orchestrator block),
-    #    +4 by the run.mil_model addition to the run: block.
-    "src/automil/templates/config.yaml.j2:140":
+    #    +4 by the run.mil_model addition to the run: block,
+    #    +6 by H-4, -2 by CFG-2, +9 by CR-4, +9 by the preserving channels.
+    "src/automil/templates/config.yaml.j2:155":
         "autobench consumer",
 }
 
@@ -94,8 +101,16 @@ def test_framework_purity_no_autobench_refs():
       1 = no matches (success path)
       2 = grep error
     """
+    # Source only. Without these two flags the scan also walks __pycache__, and a
+    # .pyc embeds its module's docstrings and string literals -- so every
+    # ALLOWLISTED source line reappears as a `Binary file ... matches` line with
+    # no line number, which _is_allowlisted can never match. pytest compiles the
+    # modules during collection, so the test could not pass in a normal run and
+    # was permanently deselected -- which is worse than useless, because a
+    # deselected purity test hides real violations too.
     result = subprocess.run(
-        ["grep", "-rEn", "autobench|AUTOBENCH_|benchmarks/", str(_SRC_AUTOMIL)],
+        ["grep", "-rEn", "--exclude-dir=__pycache__", "--binary-files=without-match",
+         "autobench|AUTOBENCH_|benchmarks/", str(_SRC_AUTOMIL)],
         capture_output=True, text=True,
     )
 
@@ -193,3 +208,20 @@ def test_purity_test_does_not_execute_consumer_code():
             f"from the construction block). Extra occurrences indicate a real "
             f"consumer import was added."
         )
+
+
+def test_the_scan_is_source_only():
+    """Guard the fix above: the scan must not walk compiled bytecode.
+
+    A .pyc embeds its module's docstrings and string literals, so scanning
+    __pycache__ makes every allowlisted source line reappear as an unmatchable
+    `Binary file ... matches` row. That made this test fail on any run where the
+    modules had been imported -- i.e. every run, since pytest compiles them
+    during collection -- so it was permanently deselected, and a deselected
+    purity test also stops catching the real violations it exists for.
+    """
+    import inspect
+
+    src = inspect.getsource(test_framework_purity_no_autobench_refs)
+    assert "--exclude-dir=__pycache__" in src
+    assert "--binary-files=without-match" in src

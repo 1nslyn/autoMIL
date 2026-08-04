@@ -45,31 +45,54 @@ training:
   batch_size: 32
   max_seq_length: 4096
 
-# --- Frozen data substrate (example wiring; see paper/preprint/PLAN.md §5) ---
-# registry.protected is a HARD submit-time gate: any submitted file matching one of
-# these project-root-relative fnmatch globs is refused (src/automil/cli/submit.py:263),
-# with no --force escape. Unlike files.readonly below (warning-only, bypassed by an
-# explicit --files), this actually freezes the split / prep / eval / feature-extraction
-# code so the agent's recipe search cannot alter the evaluation protocol or the encoder
-# inputs — the precondition for a fair encoder-vs-aggregator comparison.
+
+# H-4 (audit 2026-07-28): the frozen data substrate, ENFORCED.
+# `submit.py` hard-rejects any overlay matching these globs, with no --force
+# escape. Unlike the former files.readonly warning (which explicit --files could
+# bypass), this actually freezes the evaluation protocol,
+# the selection signal and the encoder inputs — the precondition for the paper's
+# equal-effort claim. `mode: architecture-preserving` now REQUIRES a non-empty
+# list, so this can no longer be silently left empty.
+#
+# Note what makes this affordable: H-3b gave every arm an explicit hyperparameter
+# channel (--hparams / a variant's HPARAMS, checked against the declared
+# per-arm search space), so freezing `pipeline/config.py` and `run_experiment.py`
+# no longer costs the agent legitimate scalar tuning reach. Only declared
+# hyperparameters and executable train-only PolicyVariant modules remain open;
+# published model, trainer, and measurement implementations are frozen.
 registry:
+  mode: "architecture-preserving"
+  allowed_override_options: ["--hparams", "--policy-variant"]
+  allowed_variant_kinds: ["policy"]
+  # These scalar switches erase CLAM's defining instance-loss mechanism.
+  identity_locked_hparams: ["no_inst_cluster", "bag_weight"]
   protected:
-    # evaluation protocol: splits + metrics
+    # --- evaluation protocol: splits, prep, metrics ---
     - "benchmarks/src/autobench/pipeline/splits.py"
     - "benchmarks/src/autobench/pipeline/prepare.py"
     - "benchmarks/src/autobench/pipeline/evaluate.py"
-    - "benchmarks/src/autobench/pipeline/*/dataset.py"   # clam/abmil/dtfd/nnmil loaders
-    # composite writers (the val-selection guarantee)
-    - "benchmarks/src/autobench/pipeline/*/runner.py"    # shared writer = clam/runner.py
-    - "benchmarks/scripts/run_experiment.py"             # entry point + summary_to_result_json
-    # feature extraction / encoder inputs
+    - "benchmarks/src/autobench/pipeline/*/prepare.py"    # per-framework prep incl. feature conversion
+    - "benchmarks/src/autobench/pipeline/*/evaluate.py"
+    - "benchmarks/src/autobench/pipeline/dtfd/eval.py"    # named separately: not */evaluate.py
+    - "benchmarks/src/autobench/pipeline/*/dataset.py"    # split + feature consumers
+    # --- the selection signal (the val-firewall guarantee) ---
+    - "benchmarks/src/autobench/pipeline/*/runner.py"     # shared writer = clam/runner.py
+    - "benchmarks/scripts/run_experiment.py"              # entry point + summary_to_result_json
+    - "benchmarks/src/autobench/pipeline/results_cache.py"  # CR-5b cache identity
+    - "benchmarks/src/autobench/pipeline/results.py"
+    # --- the declared search space itself (A-2) ---
+    - "benchmarks/src/autobench/pipeline/search_space.py"
+    - "benchmarks/src/autobench/pipeline/hparams.py"
+    # --- experiment identity: fold count, seed, labels, feature roots ---
+    - "benchmarks/src/autobench/pipeline/config.py"       # TrainConfig.seed, n_folds
+    - "benchmarks/src/autobench/config.py"                # dataset-YAML loader
+    - "benchmarks/datasets/"                              # labels, label_map, feature roots
+    # --- feature extraction / encoder inputs ---
     - "benchmarks/scripts/run_feature_extraction.py"
-    - "benchmarks/src/autobench/data.py"                 # WSI-list CSV feeding TRIDENT
+    - "benchmarks/src/autobench/data.py"                  # WSI-list CSV feeding TRIDENT
 
 files:
-  editable: ["train.py", "models/"]
-  readonly: ["evaluate.py", "prepare.py"]
-
+  editable: ["benchmarks/experiments/ovarian_hrd/automil/variants/_policies/*.py"]
 run:
   script: "train.py"
   command: null

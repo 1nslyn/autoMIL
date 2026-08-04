@@ -66,12 +66,7 @@ def test_phase7_acceptance_clause_02_init_stamps_and_no_healthcheck_flag():
         [sys.executable, "-m", "automil", "init", "--help"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
-    # Fall back to `uv run automil` if the above fails (no __main__.py).
-    if help_out.returncode != 0:
-        help_out = subprocess.run(
-            ["uv", "run", "automil", "init", "--help"],
-            cwd=_REPO_ROOT, capture_output=True, text=True,
-        )
+    assert help_out.returncode == 0, help_out.stderr
     assert "--no-healthcheck" in help_out.stdout, (
         f"--no-healthcheck flag absent from `automil init --help`:\n{help_out.stdout}"
     )

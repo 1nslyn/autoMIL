@@ -606,9 +606,11 @@ class LocalBackend(Backend):
         ROCm 5/6/7. Parse defensively, swallow any exception, return None.
         Leo's CUDA-only environment never reaches this path; tests mock it.
         """
+        from automil.backends._orchestrator_daemon import ROCM_SMI_PATH  # noqa: PLC0415
+
         try:
             result = subprocess.run(
-                ["rocm-smi", "--showmeminfo", "vram", "--csv"],
+                [ROCM_SMI_PATH, "--showmeminfo", "vram", "--csv"],
                 capture_output=True,
                 text=True,
                 timeout=10,

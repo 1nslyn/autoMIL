@@ -130,6 +130,51 @@ class TestBudgetCLI:
         assert result.exit_code != 0
         assert "0 < buffer < budget" in result.output
 
+    def test_budget_show_reports_the_eval_axis(self, cli_runner, tmp_path, monkeypatch):
+        """H-2: the eval budget is a first-class axis, so `show` must surface it."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        result = cli_runner.invoke(main, ["budget", "show"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        assert "eval_budget:" in result.output
+        assert "none (time-only)" in result.output, (
+            "the shipped template sets eval_budget: null — show must say so plainly"
+        )
+
+    def test_budget_set_writes_the_eval_budget(self, cli_runner, tmp_path, monkeypatch):
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        result = cli_runner.invoke(main, ["budget", "set", "6h", "--eval-budget", "40"],
+                                   catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        cfg = yaml.safe_load((tmp_path / "automil" / "config.yaml").read_text())
+        assert resolve_cap_config(cfg).eval_budget == 40
+
+    def test_budget_set_can_clear_the_eval_budget(self, cli_runner, tmp_path, monkeypatch):
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+        cli_runner.invoke(main, ["budget", "set", "6h", "--eval-budget", "40"])
+
+        result = cli_runner.invoke(main, ["budget", "set", "6h", "--eval-budget", "none"],
+                                   catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        cfg = yaml.safe_load((tmp_path / "automil" / "config.yaml").read_text())
+        assert resolve_cap_config(cfg).eval_budget is None
+
+    def test_budget_set_rejects_a_non_count_eval_budget(self, cli_runner, tmp_path, monkeypatch):
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        result = cli_runner.invoke(main, ["budget", "set", "6h", "--eval-budget", "6h"])
+        assert result.exit_code != 0
+        assert "eval_budget" in result.output
+
     def test_budget_set_rejects_bad_duration(self, cli_runner, tmp_path, monkeypatch):
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)

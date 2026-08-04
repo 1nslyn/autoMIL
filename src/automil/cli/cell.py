@@ -56,6 +56,12 @@ def _format_budget(seconds: int) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def _format_evals(cell) -> str:
+    """Render the eval axis as consumed/budget ('-' when the cell is time-only)."""
+    budget = cell.eval_budget if cell.eval_budget is not None else "-"
+    return f"{cell.consumed_evals}/{budget}"
+
+
 @cell_group.command("status")
 @click.argument("cell_id", required=False)
 @click.option("--no-header", is_flag=True, default=False, help="Suppress header row.")
@@ -89,7 +95,8 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
 
     header = (
         f"{'cell_id':<8}  {'dataset':<10}  {'encoder':<10}  {'mil_model':<10}  "
-        f"{'started':<19}  {'consumed/budget':<19}  {'status':<14}  {'running':<7}"
+        f"{'started':<19}  {'consumed/budget':<19}  {'evals':<9}  {'usable':<6}  "
+        f"{'status':<14}  {'running':<7}"
     )
     if not no_header:
         click.echo(header)
@@ -104,7 +111,8 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
         click.echo(
             f"{cell.cell_id[:8]:<8}  {cell.dataset[:10]:<10}  {cell.encoder[:10]:<10}  "
             f"{cell.mil_model[:10]:<10}  {started_str:<19}  "
-            f"{cb:<19}  {cell.status.value:<14}  {running_count:<7}"
+            f"{cb:<19}  {_format_evals(cell):<9}  {cell.completed_evals:<6}  "
+            f"{cell.status.value:<14}  {running_count:<7}"
         )
 
 
@@ -119,10 +127,15 @@ def cell_list(no_header: bool) -> None:
         click.echo("(no cells)")
         return
     if not no_header:
-        click.echo(f"{'cell_id':<8}  {'status':<14}  {'consumed/budget':<19}")
-        click.echo("-" * 45)
+        click.echo(
+            f"{'cell_id':<8}  {'status':<14}  {'consumed/budget':<19}  {'evals':<9}"
+        )
+        click.echo("-" * 56)
     for cell in cells:
         consumed_str = _format_consumed(consumed_seconds(cell))
         budget_str = _format_budget(cell.budget_seconds)
         cb = f"{consumed_str}/{budget_str}"
-        click.echo(f"{cell.cell_id[:8]:<8}  {cell.status.value:<14}  {cb:<19}")
+        click.echo(
+            f"{cell.cell_id[:8]:<8}  {cell.status.value:<14}  {cb:<19}  "
+            f"{_format_evals(cell):<9}"
+        )

@@ -86,7 +86,9 @@ class TestTrainConfig:
     def test_defaults(self):
         t = TrainConfig()
         assert t.max_epochs == 200
-        assert t.lr == 2e-4
+        # 2026-07-28: returned to CLAM's own upstream default (lib/CLAM/main.py:74);
+        # was 2e-4, a 2x deviation with no recorded rationale (see provenance.py).
+        assert t.lr == 1e-4
         assert t.early_stopping is True
         assert t.weighted_sample is True
         assert t.seed == 42
@@ -224,7 +226,9 @@ class TestExperimentConfig:
             framework=Framework.CLAM,
             strategy="standard",
         )
-        assert exp.results_subdir == "clam/standard/brca/conch_v15/clam_sb"
+        # CR-5b: the trailing seed segment keeps two seeds from resuming each
+        # other's per-fold metrics.json.
+        assert exp.results_subdir == "clam/standard/brca/conch_v15/clam_sb/s42"
 
     def test_to_dict(self, exp):
         d = exp.to_dict()
@@ -233,6 +237,27 @@ class TestExperimentConfig:
         assert d["task"]["name"] == "brca"
         assert d["framework"] == "clam"
         assert d["strategy"] == "standard"
+        assert "fold_indices" not in d
+
+    def test_stage_subset_keeps_split_definition_fixed(self, exp):
+        exp.fold_indices = (0, 1, 2)
+        exp.__post_init__()
+        assert exp.n_folds == 5
+        assert exp.selected_folds == (0, 1, 2)
+        assert exp.to_dict()["fold_indices"] == (0, 1, 2)
+
+    @pytest.mark.parametrize("indices", [(), (0, 0), (-1,), (5,)])
+    def test_invalid_stage_subset_fails_loudly(self, exp, indices):
+        with pytest.raises((TypeError, ValueError)):
+            ExperimentConfig(
+                task=exp.task,
+                encoder_key=exp.encoder_key,
+                embed_dim=exp.embed_dim,
+                model=exp.model,
+                train=exp.train,
+                n_folds=5,
+                fold_indices=indices,
+            )
 
     def test_save_creates_file(self, exp, tmp_path):
         path = str(tmp_path / "config.json")

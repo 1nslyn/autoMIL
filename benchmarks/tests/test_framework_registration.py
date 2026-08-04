@@ -79,7 +79,7 @@ class TestDtfdGrid:
 
     def test_results_subdir(self, ds, registries):
         exps = generate_all_experiments(self._cfg(ds), registries)
-        assert exps[0].results_subdir == "dtfd/standard/brca/conch_v15/dtfd_mil"
+        assert exps[0].results_subdir == "dtfd/standard/brca/conch_v15/dtfd_mil/s42"
 
     def test_sweeps_encoders(self, ds, registries):
         cfg = self._cfg(ds, encoder_keys=["conch_v15", "uni_v2"])

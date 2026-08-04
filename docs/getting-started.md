@@ -180,8 +180,9 @@ Your training script must honor the 6 items documented in
 [training-script-contract.md](training-script-contract.md):
 
 1. Read `automil/config.yaml` (or honor a `--config` flag).
-2. Honor `CUDA_VISIBLE_DEVICES` for GPU masking.
-3. Honor `AUTOMIL_GPU=N` (always 0 because masking is already applied).
+2. Honor the framework-owned CUDA/ROCm device masks; never override them.
+3. Branch on `AUTOMIL_ACCELERATOR` (`cpu`, `cuda`, or `rocm`) and treat
+   `AUTOMIL_GPU=0` only as the backward-compatible logical slot.
 4. Exit cleanly on `SIGTERM` with a partial `result.json`.
 5. Write `result.json` matching `automil/schemas/result.schema.json`.
 6. Declared env vars (under `env.required`) must be present at startup.
@@ -294,8 +295,9 @@ automil orchestrator status # daemon health
 4. The orchestrator picks up the spec, creates a git worktree at the base
    commit, and overlays the changed files. Each experiment runs in isolation;
    only its diff is stored.
-5. The experiment runs on the assigned backend (local, SLURM, or Ray) with
-   `CUDA_VISIBLE_DEVICES` masked to a single GPU.
+5. The experiment runs on the assigned backend (local, SLURM, or Ray) in a
+   typed CPU/CUDA/ROCm execution slot. The orchestrator owns the matching
+   device-isolation variables and maps any accelerator to logical device 0.
 6. The agent (and a SIGTERM handler if installed) writes `result.json`.
 7. The daemon validates the payload, ingests it, and updates the graph.
 8. The agent runs `automil reconcile` to sync state, reads `learnings.md`,

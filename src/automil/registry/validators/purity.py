@@ -1,9 +1,9 @@
 """Static purity validator: rejects top-level I/O, network, mutable globals (REG-03 / D-30).
 
 Pure AST walk — never imports the module. Safe to run on untrusted code because
-no user code is executed. The submit hook (Plan 01-07) runs this BEFORE
-InterfaceValidator (which does import) to prevent privilege escalation via
-malicious modules (T-01-14).
+no user code is executed. The submit hook (Plan 01-07) runs this before the
+also-static InterfaceValidator; neither validator imports candidate modules
+(T-01-14).
 """
 from __future__ import annotations
 
@@ -32,6 +32,14 @@ _BANNED_OS_ATTRS: frozenset[str] = frozenset({
     "makedirs", "removedirs", "chmod", "chown",
 })
 
+# Imports execute module code.  Variant modules therefore get only the trusted
+# registry API plus annotation-only standard-library helpers at module scope;
+# numerical/framework imports belong inside methods where they cannot execute
+# during registry scanning.
+_TRUSTED_IMPORTS: frozenset[str] = frozenset({
+    "__future__", "automil.registry", "typing", "collections.abc",
+})
+
 
 def _is_immutable_literal(node: ast.AST) -> bool:
     """Return whether an AST expression is an immutable constant.
@@ -56,8 +64,12 @@ def _is_immutable_literal(node: ast.AST) -> bool:
     if isinstance(node, ast.Call):
         func = node.func
         # Allow tuple(...) and frozenset(...) — both produce immutable results.
-        if isinstance(func, ast.Name) and func.id in {"tuple", "frozenset"}:
-            return True
+        if (
+            isinstance(func, ast.Name)
+            and func.id in {"tuple", "frozenset"}
+            and not node.keywords
+        ):
+            return all(_is_immutable_literal(arg) for arg in node.args)
         return False
     return False
 
@@ -78,6 +90,9 @@ class PurityValidator:
       - Constants, class/function definitions, imports, and the docstring
         are all allowed.
     """
+
+    def __init__(self, *, strict_policy: bool = False) -> None:
+        self.strict_policy = strict_policy
 
     def check(self, module_path: Path) -> None:
         """Validate a variant module for purity. Raises ValidationError on failure."""
@@ -102,16 +117,100 @@ class PurityValidator:
                 fix_suggestion="Fix the Python syntax error in the module.",
             ) from e
 
+        strict_policy = self.strict_policy and any(
+            self._registered_kind(node) == "policy"
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        )
+        evaluate_annotations = not any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == "__future__"
+            and any(alias.name == "annotations" for alias in node.names)
+            for node in tree.body
+        )
+        shared_names = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        }
         for node in tree.body:
-            self._check_top_level_node(module_path, node)
+            self._check_top_level_node(
+                module_path,
+                node,
+                strict_policy=strict_policy,
+                shared_names=shared_names,
+                evaluate_annotations=evaluate_annotations,
+            )
 
-    def _check_top_level_node(self, module_path: Path, node: ast.AST) -> None:
+    @staticmethod
+    def _registered_kind(node: ast.ClassDef) -> str | None:
+        for decorator in node.decorator_list:
+            if not (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Name)
+                and decorator.func.id == "register"
+                and len(decorator.args) == 1
+                and isinstance(decorator.args[0], ast.Call)
+            ):
+                continue
+            for keyword in decorator.args[0].keywords:
+                if (
+                    keyword.arg == "kind"
+                    and isinstance(keyword.value, ast.Constant)
+                    and isinstance(keyword.value.value, str)
+                ):
+                    return keyword.value.value
+        return None
+
+    def _check_top_level_node(
+        self,
+        module_path: Path,
+        node: ast.AST,
+        *,
+        strict_policy: bool,
+        shared_names: set[str],
+        evaluate_annotations: bool,
+    ) -> None:
         """Inspect one top-level statement for purity violations."""
 
-        # --- always safe ---
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
+        # Policy modules execute inside the protected training seam, so their
+        # imports are narrowly trusted. Free-mode model/loss variants preserve
+        # the public API's numerical-library imports.
+        if isinstance(node, ast.Import):
+            denied = [] if not strict_policy else [
+                alias.name for alias in node.names
+                if alias.name not in _TRUSTED_IMPORTS
+            ]
+            if denied:
+                self._definition_error(
+                    module_path, node, f"untrusted top-level import(s) {denied}",
+                )
             return
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, ast.ImportFrom):
+            if strict_policy and (node.level or node.module not in _TRUSTED_IMPORTS):
+                self._definition_error(
+                    module_path,
+                    node,
+                    f"untrusted top-level import {node.module!r}",
+                )
+            return
+        if isinstance(node, ast.ClassDef):
+            self._check_class_definition(
+                module_path,
+                node,
+                strict_policy=strict_policy,
+                shared_names=shared_names,
+                evaluate_annotations=evaluate_annotations,
+            )
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._check_function_header(
+                module_path,
+                node,
+                reject_shared_state=strict_policy,
+                shared_names=shared_names,
+                evaluate_annotations=evaluate_annotations,
+            )
             return
 
         # --- module-level expressions ---
@@ -137,10 +236,20 @@ class PurityValidator:
 
         # --- module-level assignments ---
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            if isinstance(node, ast.AugAssign):
+                self._definition_error(
+                    module_path, node, "module constants cannot be mutated",
+                )
             # Subscript-target assignments are banned:
             # e.g., os.environ["X"] = "y"   (Assign with Subscript target)
             targets = getattr(node, "targets", None) or [getattr(node, "target", None)]
             for tgt in (t for t in targets if t is not None):
+                if strict_policy and isinstance(tgt, ast.Attribute):
+                    self._definition_error(
+                        module_path,
+                        tgt,
+                        "strict policy modules cannot assign object attributes",
+                    )
                 if isinstance(tgt, ast.Subscript):
                     raise ValidationError(
                         validator_name="purity",
@@ -157,38 +266,26 @@ class PurityValidator:
                     )
 
             value = getattr(node, "value", None)
+            annotation = getattr(node, "annotation", None)
+            if evaluate_annotations and annotation is not None and any(
+                isinstance(part, ast.Call) for part in ast.walk(annotation)
+            ):
+                self._definition_error(
+                    module_path, annotation, "annotation contains a call",
+                )
             if value is None:
                 return  # bare AnnAssign (`x: int`) is metadata, OK
-
-            # Reject mutable literal containers.
-            if isinstance(value, (ast.List, ast.Dict, ast.Set,
-                                   ast.ListComp, ast.DictComp, ast.SetComp,
-                                   ast.GeneratorExp)):
-                kind_name = type(value).__name__.replace("Comp", "comprehension").lower()
-                raise ValidationError(
-                    validator_name="purity",
-                    path=module_path,
-                    line=node.lineno,
-                    column=node.col_offset,
-                    reason=(
-                        f"mutable module-level global ({kind_name}); "
-                        "module-level state must be immutable (D-30)"
-                    ),
-                    fix_suggestion=(
-                        "Use a tuple/frozenset for an immutable constant, or move "
-                        "the mutable structure into a function/method body."
-                    ),
+            if not _is_immutable_literal(value):
+                # Innermost first preserves the specific root-cause diagnostic
+                # for chains such as ``open(...).read()``.
+                for sub_node in reversed(list(ast.walk(value))):
+                    if isinstance(sub_node, ast.Call):
+                        self._reject_call(module_path, sub_node)
+                self._definition_error(
+                    module_path,
+                    value,
+                    "module attributes must be immutable literals",
                 )
-
-            # Reject calls that produce mutable side effects.
-            # Walk the entire value expression to catch chained calls like
-            # open("/etc/passwd").read() where open() is nested inside a
-            # method-chain call.
-            for sub_node in ast.walk(value):
-                if isinstance(sub_node, ast.Call):
-                    self._reject_call(module_path, sub_node)
-
-            # Otherwise: constant/tuple/name/etc — OK.
             return
 
         # --- if blocks ---
@@ -221,7 +318,17 @@ class PurityValidator:
                         "tests/ file."
                     ),
                 )
-            # Other if-blocks at module level are unusual but not banned.
+            for part in ast.walk(test):
+                if isinstance(part, ast.Call):
+                    self._reject_call(module_path, part)
+            for statement in [*node.body, *node.orelse]:
+                self._check_top_level_node(
+                    module_path,
+                    statement,
+                    strict_policy=strict_policy,
+                    shared_names=shared_names,
+                    evaluate_annotations=evaluate_annotations,
+                )
             return
 
         # --- anything else (Try, With, While, For, ...) is suspect ---
@@ -237,6 +344,268 @@ class PurityValidator:
                 "imports, and immutable constants."
             ),
         )
+
+    def _definition_error(
+        self, module_path: Path, node: ast.AST, reason: str,
+    ) -> None:
+        raise ValidationError(
+            validator_name="purity",
+            path=module_path,
+            line=getattr(node, "lineno", None),
+            column=getattr(node, "col_offset", None),
+            reason=f"unsafe definition-time expression: {reason}",
+            fix_suggestion=(
+                "Keep decorators, bases, annotations, defaults, and class-body "
+                "constants declarative; move executable work into a method body."
+            ),
+        )
+
+    def _check_function_header(
+        self,
+        module_path: Path,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        *,
+        reject_shared_state: bool = False,
+        shared_names: set[str] | None = None,
+        evaluate_annotations: bool = True,
+    ) -> None:
+        safe_decorators = {"staticmethod", "classmethod", "property", "abstractmethod"}
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Name) or decorator.id not in safe_decorators:
+                self._definition_error(
+                    module_path, decorator, "function decorator is not allowlisted",
+                )
+        defaults = [*node.args.defaults, *node.args.kw_defaults]
+        for default in defaults:
+            if default is not None and not _is_immutable_literal(default):
+                self._definition_error(
+                    module_path, default, "function default is executable or mutable",
+                )
+        annotations = [
+            arg.annotation
+            for arg in [
+                *node.args.posonlyargs, *node.args.args,
+                *node.args.kwonlyargs,
+            ]
+            if arg.annotation is not None
+        ]
+        if node.args.vararg and node.args.vararg.annotation is not None:
+            annotations.append(node.args.vararg.annotation)
+        if node.args.kwarg and node.args.kwarg.annotation is not None:
+            annotations.append(node.args.kwarg.annotation)
+        if node.returns is not None:
+            annotations.append(node.returns)
+        for annotation in annotations:
+            if evaluate_annotations and any(
+                isinstance(part, ast.Call) for part in ast.walk(annotation)
+            ):
+                self._definition_error(
+                    module_path, annotation, "annotation contains a call",
+                )
+        for statement in ast.walk(node):
+            if reject_shared_state and isinstance(statement, (ast.Global, ast.Nonlocal)):
+                self._definition_error(
+                    module_path,
+                    statement,
+                    "methods cannot mutate global or enclosing-scope state",
+                )
+        if reject_shared_state:
+            self._check_shared_state_writes(
+                module_path, node, shared_names or set(),
+            )
+
+    @staticmethod
+    def _shared_owner(node: ast.AST, shared_names: set[str]) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id == "cls" or node.id in shared_names
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+            and node.attr == "__class__"
+        ):
+            return True
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "type"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "self"
+        )
+
+    def _check_shared_state_writes(
+        self,
+        module_path: Path,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        shared_names: set[str],
+    ) -> None:
+        shared_aliases = set(shared_names)
+        shared_aliases.add("cls")
+        changed = True
+        while changed:
+            changed = False
+            for statement in ast.walk(node):
+                value: ast.AST | None = None
+                target: ast.AST | None = None
+                if (
+                    isinstance(statement, ast.Assign)
+                    and len(statement.targets) == 1
+                ):
+                    target, value = statement.targets[0], statement.value
+                elif isinstance(statement, ast.AnnAssign):
+                    target, value = statement.target, statement.value
+                if (
+                    isinstance(target, ast.Name)
+                    and value is not None
+                    and target.id not in shared_aliases
+                    and self._shared_owner(value, shared_aliases)
+                ):
+                    shared_aliases.add(target.id)
+                    changed = True
+
+        for statement in ast.walk(node):
+            targets: list[ast.AST] = []
+            if isinstance(statement, ast.Assign):
+                targets.extend(statement.targets)
+            elif isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+                targets.append(statement.target)
+            elif isinstance(statement, ast.Delete):
+                targets.extend(statement.targets)
+            for target in targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and self._shared_owner(target.value, shared_aliases)
+                ):
+                    self._definition_error(
+                        module_path,
+                        target,
+                        "policy methods cannot write shared class/helper state",
+                    )
+            if (
+                isinstance(statement, ast.Call)
+                and isinstance(statement.func, ast.Name)
+                and statement.func.id in {"setattr", "delattr"}
+                and statement.args
+                and self._shared_owner(statement.args[0], shared_aliases)
+            ):
+                self._definition_error(
+                    module_path,
+                    statement,
+                    "policy methods cannot write shared class/helper state",
+                )
+
+    def _check_register_decorator(
+        self, module_path: Path, decorator: ast.AST,
+    ) -> None:
+        if not (
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Name)
+            and decorator.func.id == "register"
+            and len(decorator.args) == 1
+            and not decorator.keywords
+        ):
+            self._definition_error(
+                module_path, decorator, "class decorator must be register(VariantSpec(...))",
+            )
+        spec = decorator.args[0]
+        if not (
+            isinstance(spec, ast.Call)
+            and isinstance(spec.func, ast.Name)
+            and spec.func.id == "VariantSpec"
+            and not spec.args
+            and all(keyword.arg is not None for keyword in spec.keywords)
+            and all(_is_immutable_literal(keyword.value) for keyword in spec.keywords)
+        ):
+            self._definition_error(
+                module_path, spec, "VariantSpec fields must be immutable literals",
+            )
+
+    def _check_class_definition(
+        self,
+        module_path: Path,
+        node: ast.ClassDef,
+        *,
+        strict_policy: bool,
+        shared_names: set[str],
+        evaluate_annotations: bool,
+    ) -> None:
+        register_decorators = [
+            decorator for decorator in node.decorator_list
+            if isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Name)
+            and decorator.func.id == "register"
+        ]
+        if register_decorators and len(node.decorator_list) != 1:
+            self._definition_error(
+                module_path, node, "variant class must have exactly one register decorator",
+            )
+        if register_decorators:
+            self._check_register_decorator(module_path, register_decorators[0])
+        elif node.decorator_list:
+            self._definition_error(
+                module_path, node.decorator_list[0],
+                "helper class decorators are not allowed",
+            )
+        if node.keywords:
+            self._definition_error(
+                module_path, node.keywords[0], "class keywords/metaclasses are not allowed",
+            )
+        for base in node.bases:
+            if not isinstance(base, (ast.Name, ast.Attribute)):
+                self._definition_error(
+                    module_path, base, "class base must be a dotted name",
+                )
+        for statement in node.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._check_function_header(
+                    module_path,
+                    statement,
+                    reject_shared_state=strict_policy,
+                    shared_names=shared_names,
+                    evaluate_annotations=evaluate_annotations,
+                )
+                continue
+            if isinstance(statement, ast.Pass):
+                continue
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                continue
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                value = getattr(statement, "value", None)
+                annotation = getattr(statement, "annotation", None)
+                if evaluate_annotations and annotation is not None and any(
+                    isinstance(part, ast.Call) for part in ast.walk(annotation)
+                ):
+                    self._definition_error(
+                        module_path, annotation, "annotation contains a call",
+                    )
+                if value is None:
+                    continue
+                if strict_policy and not _is_immutable_literal(value):
+                    self._definition_error(
+                        module_path,
+                        value,
+                        "class attributes must be immutable literals",
+                    )
+                if not strict_policy and any(
+                    isinstance(part, (ast.Call, ast.ListComp, ast.DictComp,
+                                      ast.SetComp, ast.GeneratorExp, ast.Lambda))
+                    for part in ast.walk(value)
+                ):
+                    self._definition_error(
+                        module_path,
+                        value,
+                        "class attribute contains executable syntax",
+                    )
+                continue
+            self._definition_error(
+                module_path, statement,
+                f"unsupported class-body construct {type(statement).__name__}",
+            )
 
     def _reject_call(self, module_path: Path, call: ast.Call) -> None:
         """Raise ValidationError for banned call patterns."""
@@ -307,3 +676,12 @@ class PurityValidator:
                     reason=f"banned top-level filesystem/I/O call: .{func.attr}(...)",
                     fix_suggestion="Move the I/O into a method body.",
                 )
+
+        raise ValidationError(
+            validator_name="purity",
+            path=module_path,
+            line=call.lineno,
+            column=call.col_offset,
+            reason="top-level calls are not declarative and execute during import",
+            fix_suggestion="Move the call into a function or method body.",
+        )

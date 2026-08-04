@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -134,7 +135,8 @@ def write_terminal_state(
     results_tsv_writer: Callable,
     spec: dict,
     elapsed_s: float,
-    gpu_id: int | str,
+    gpu_id: int | str | None,
+    accelerator: str = "cuda",
 ) -> None:
     """Write all four terminal artifacts in fixed order (D-09).
 
@@ -155,7 +157,8 @@ def write_terminal_state(
                             This is the daemon's _append_results_tsv, bound as a method.
         spec:               The experiment spec dict (for graph_metadata, description).
         elapsed_s:          Wall-clock elapsed seconds.
-        gpu_id:             GPU ID used by this experiment.
+        gpu_id:             Physical GPU ID, or ``None`` for CPU execution.
+        accelerator:        Execution substrate (``cuda``, ``rocm``, or ``cpu``).
     """
     # Step 1 — Canonicalize status
     result = _canonicalize(result)
@@ -186,8 +189,21 @@ def write_terminal_state(
 
     raw_status = result.get("status", "crash")
 
+    # Step 2b — CR-1b (audit 2026-07-23): derive the selection signal from the
+    # declared VALIDATION metrics instead of trusting the reported scalar.
+    # result.json is written by agent-editable training code, so a composite
+    # computed from the sealed test block would otherwise drive selection
+    # undetected — the exact leak the val-firewall exists to prevent. The
+    # recomputed value is authoritative; a disagreement is logged at ERROR and
+    # recorded on the node so the audit trail survives.
+    # Resolved inside the lock (the formula lives in graph meta.scoring).
+    composite_recomputed: float | None = None
+    composite_disagreement: dict | None = None
+
     # Step 3 — Graph node update via locked_update (D-10, D-01)
-    from automil.graph import locked_update, _accept, _accept_margin
+    from automil.graph import (locked_update, _accept, _accept_margin,
+                           effective_accept_margin, merged_metadata,
+                           node_composite_se as _node_se_reader)
     try:
         # _technique_map is the internal attribute on ExperimentGraph
         _tm = getattr(graph, "_technique_map", None)
@@ -204,6 +220,34 @@ def write_terminal_state(
                 p_comp = parent.get("composite", 0.0) if parent else 0.0
                 composite = result.get("composite", 0.0)
 
+                # CR-1b: recompute from the val metrics; the val-derived value wins.
+                from automil.scoring import composite_disagrees, recompute_composite
+                _formula = (g.meta.get("scoring") or {}).get("formula")
+                try:
+                    composite_recomputed = recompute_composite(
+                        result.get("metrics") or {}, _formula
+                    )
+                except ValueError as exc:
+                    logger.error("terminal_writer: %s — trusting reported composite", exc)
+                    composite_recomputed = None
+                if composite_recomputed is not None and composite_disagrees(
+                    composite, composite_recomputed
+                ):
+                    logger.error(
+                        "terminal_writer: VAL-FIREWALL — reported composite %.6f for %s "
+                        "disagrees with the value recomputed from its val metrics "
+                        "(%.6f, formula=%r). Using the val-derived value; the reported "
+                        "scalar may have been computed from test.",
+                        composite, node_id, composite_recomputed, _formula,
+                    )
+                    composite_disagreement = {
+                        "reported": composite,
+                        "recomputed": composite_recomputed,
+                        "formula": _formula,
+                    }
+                if composite_recomputed is not None:
+                    composite = composite_recomputed
+
                 # D-01: partial nodes stay quarantined — never get keep/discard
                 # crash nodes stay crash (composite=0.0 should not become discard)
                 if raw_status == "partial":
@@ -214,28 +258,63 @@ def write_terminal_state(
                     # completed, budget_killed, cancelled — Ladder-gated dominance
                     graph_status = (
                         "keep"
-                        if _accept(composite, p_comp, _accept_margin(g.meta) if parent else 0.0)
+                        if _accept(composite, p_comp,
+                                   effective_accept_margin(g.meta, parent) if parent else 0.0)
                         else "discard"
                     )
 
+                # M-7: the daemon's terminal path never maintained the counters.
+                # `meta.total_executed` is the UCB exploration denominator
+                # (graph.py: sqrt(log(total) / (1 + child_count))), so a campaign
+                # driven entirely by the daemon explored against a frozen count
+                # while every CLI path kept it moving. Idempotent on `type`: a
+                # re-processed completion must not double-count.
+                if gnode.get("type") != "executed":
+                    g.meta["total_executed"] = g.meta.get("total_executed", 0) + 1
+                    g.meta["total_proposed"] = max(
+                        0, g.meta.get("total_proposed", 0) - 1
+                    )
                 gnode["type"] = "executed"
                 gnode["status"] = graph_status
                 gnode["composite"] = composite
+                # CR-4: the measured cross-fold SE travels with the composite, so
+                # this node can serve as an incumbent whose noise sets the bar for
+                # its own children. None when <2 folds were estimable.
+                gnode["composite_se"] = _node_se_reader({"composite_se": result.get("composite_se")})
+                # CELL-1: backfill budget-cell membership for nodes that did not
+                # come through `automil submit` (Backend.submit paths stamp the
+                # spec but never touch the graph). Submit-time identity wins.
+                _spec_cell_id = (spec.get("metadata") or {}).get("cell_id")
+                if _spec_cell_id and not gnode.get("cell_id"):
+                    gnode["cell_id"] = _spec_cell_id
                 if result.get("metrics"):
                     gnode["metrics"] = dict(result["metrics"])
-                # Propagate metadata from result (e.g. budget_killed flag)
-                if result.get("metadata"):
-                    gnode.setdefault("metadata", {}).update(result["metadata"])
+                # Propagate metadata from result (e.g. budget_killed flag).
+                # L-8a: copy-on-write via merged_metadata — a plain setdefault+
+                # update/assign would mutate node["metadata"] in place, and that
+                # dict object can be aliased with another node's (gate/evaluate.py
+                # creates gate-eval children via a shallow dict(node) copy).
+                if isinstance(result.get("metadata"), Mapping):
+                    gnode["metadata"] = merged_metadata(gnode, result["metadata"])
+                # CR-1b: durable audit trail when the reported scalar could not be
+                # explained by the node's own validation metrics.
+                if composite_disagreement is not None:
+                    gnode["metadata"] = merged_metadata(
+                        gnode, {"composite_disagreement": composite_disagreement}
+                    )
 
                 # Only re-evaluate descendants for non-partial, non-crash completions
                 if raw_status not in ("partial", "crash"):
                     g._reevaluate_descendants(node_id)
 
-                # D-01: only update best_node for non-partial, non-crash results
+                # D-01 + H-6 (audit 2026-07-23): only touch best for non-partial,
+                # non-crash completions, and recompute it from keep nodes only. An
+                # inline ``composite > best`` could set best to a node that is (or
+                # just became, via _reevaluate_descendants above) discarded — e.g.
+                # under a Ladder δ>0 a within-margin child is discarded yet would
+                # win the inline strict-``>`` update.
                 if raw_status not in ("partial", "crash"):
-                    if composite > g.meta.get("best_composite", 0.0):
-                        g.meta["best_composite"] = composite
-                        g.meta["best_node_id"] = node_id
+                    g.recompute_best()
                 # g.save() called automatically on context exit
     except Exception:
         logger.exception(
@@ -243,16 +322,44 @@ def write_terminal_state(
             node_id,
         )
 
+    # CR-1b: keep the downstream artifacts (completed/, archive result.json,
+    # results.tsv) consistent with the graph's authoritative val-derived
+    # composite. Rebuilt immutably — never mutating the caller's dict.
+    if composite_recomputed is not None:
+        result = {**result, "composite": composite_recomputed}
+        if composite_disagreement is not None:
+            existing_metadata = (
+                result.get("metadata")
+                if isinstance(result.get("metadata"), Mapping)
+                else {}
+            )
+            result = {
+                **result,
+                "metadata": {
+                    **existing_metadata,
+                    "composite_disagreement": composite_disagreement,
+                },
+            }
+
     # Step 4 — completed/<node>.json (atomic write)
     completion = {
         "id": node_id,
         "status": result.get("status", "crash"),
         "composite": result.get("composite", 0.0),
+        # CR-4: reconcile() rebuilds nodes from this artifact, so the measured
+        # noise has to survive the round trip or a recovered node would silently
+        # revert to the bare predeclared margin.
+        "composite_se": _node_se_reader({"composite_se": result.get("composite_se")}),
         "metrics": result.get("metrics", {}),
         "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
         "peak_vram_mb": result.get("peak_vram_mb", 0),
+        "accelerator": accelerator,
         "gpu": gpu_id,
         "completed_at": datetime.now().isoformat(),
+        "budget_killed": bool(
+            result.get("metadata", {}).get("budget_killed", False)
+            if isinstance(result.get("metadata"), Mapping) else False
+        ),
         "graph_metadata": result.get("graph_metadata") or spec.get("graph_metadata") or {},
     }
     if result.get("termination_reason"):

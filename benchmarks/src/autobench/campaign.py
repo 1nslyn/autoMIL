@@ -1,0 +1,909 @@
+"""Immutable campaign manifests and isolated per-cell runtime materialization.
+
+The preprint campaign must not derive its command from one source and its
+budget identity from another.  This module makes one checked-in manifest the
+source for both, then materializes one independent ``automil/`` state root per
+cell.  It contains no scheduler or ranking policy; stage transitions live in
+``campaign_stages.py``.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any, Mapping
+
+import yaml
+
+from automil.cells.state import make_cell_id, normalize_mil_model
+
+SCHEMA_VERSION = 3
+CAMPAIGN_ID = "automil-preprint-130-v3"
+ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
+AGENT_PROTOCOL_FILE = "agent_protocol.json"
+DATASETS = (
+    "tcga_luad",
+    "tcga_lgg",
+    "cptac_gbm",
+    "cptac_pdac",
+    "tcga_hnsc",
+)
+ENCODERS = ("uni_v2", "virchow2", "hoptimus1")
+TILE_ARMS = (
+    ("clam", "clam_models"),
+    ("nnmil", "nnmil_models"),
+    ("abmil", "abmil_models"),
+    ("dtfd", "dtfd_models"),
+)
+STAGE_FOLDS = {
+    "discovery": (0, 1, 2),
+    "promotion": (3, 4),
+}
+CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
+BASELINE_FOLDS = CERTIFICATION_FOLDS
+DISCOVERY_ATTEMPTS = 60
+PROMOTION_CANDIDATES = 10
+ATTEMPT_OUTCOME_CLASSES = (
+    "completed", "budget-killed", "timeout", "oom", "cancelled",
+    "partial", "crash", "missing-result", "unknown",
+)
+
+
+def classify_attempt_outcome(
+    result_status: object,
+    termination_reason: object,
+    budget_killed: object,
+) -> str:
+    """Derive one predeclared terminal class from frozen terminal facts."""
+    status = result_status if isinstance(result_status, str) else "missing"
+    reason = termination_reason if isinstance(termination_reason, str) else "unspecified"
+    if budget_killed is True or status == "budget_killed":
+        return "budget-killed"
+    if reason == "timeout":
+        return "timeout"
+    if reason == "oom":
+        return "oom"
+    if status == "cancelled" or reason == "cancelled_by_operator":
+        return "cancelled"
+    if status == "completed":
+        return "completed"
+    if status == "partial":
+        return "partial"
+    if status == "crash":
+        return "crash"
+    if status in {"missing", "missing-result"}:
+        return "missing-result"
+    return "unknown"
+
+
+def expected_promotion_sources(
+    attempts: list[Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    """Recompute the stable top-10 unique discovery roster from its census."""
+    eligible = sorted(
+        (row for row in attempts if row.get("eligible") is True),
+        key=lambda row: (-float(row["validation_mean"]), str(row["node_id"])),
+    )
+    selected: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in eligible:
+        candidate_sha256 = str(row["candidate_sha256"])
+        if candidate_sha256 in seen:
+            continue
+        seen.add(candidate_sha256)
+        selected.append({
+            "source_node_id": str(row["node_id"]),
+            "source_candidate_sha256": candidate_sha256,
+            "source_spec_sha256": str(row["source_spec_sha256"]),
+            "candidate_class": str(row["candidate_class"]),
+            "policy_hash": str(row["policy_hash"]),
+        })
+        if len(selected) == PROMOTION_CANDIDATES:
+            break
+    return selected
+# This is a failure-containment wall clock for one submitted multi-fold attempt,
+# not an optimization budget.  Three CLAM classification folds take about
+# 206 minutes in the committed timing census; six hours leaves a substantial
+# guard band without changing the equal 60-attempt research budget.
+ATTEMPT_TIMEOUT_MIN = 360
+MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
+    DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
+    + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])
+)
+PROTOCOL = {
+    "seed": 42,
+    "split_folds": 5,
+    "discovery_attempts": DISCOVERY_ATTEMPTS,
+    "promotion_candidates": PROMOTION_CANDIDATES,
+    "attempt_outcome_classes": list(ATTEMPT_OUTCOME_CLASSES),
+    "frozen_winners": 1,
+    "stage_folds": {key: list(value) for key, value in STAGE_FOLDS.items()},
+    "baseline": {
+        "folds": list(BASELINE_FOLDS),
+        "incumbent": True,
+        "counts_toward_agentic_budget": False,
+    },
+    "winner_selection": {
+        "metric_source": "validation",
+        "aggregation": "mean",
+        "folds": list(CERTIFICATION_FOLDS),
+    },
+    "certification": {
+        "mode": "unseal-existing-held-out",
+        "folds": list(CERTIFICATION_FOLDS),
+        "retrain": False,
+    },
+    "attempt_timeout": {
+        "minutes": ATTEMPT_TIMEOUT_MIN,
+        "role": "failure-containment-not-search-budget",
+        "scope": "one-multi-fold-attempt",
+    },
+    "agentic_fold_trainings_per_cell": {
+        "discovery": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),
+        "promotion_per_candidate": len(STAGE_FOLDS["promotion"]),
+        "promotion_candidates_min": 0,
+        "promotion_candidates_max": PROMOTION_CANDIDATES,
+        "minimum": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),
+        "maximum": MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL,
+    },
+}
+_CANARY_PROPOSAL_POLICY = "canary proposal policy"
+_CANARY_TOOLSET = "canary toolset"
+CANARY_AGENT_PROTOCOL = {
+    "schema_version": 1,
+    "campaign_id": CAMPAIGN_ID,
+    "purpose": "canary",
+    "provider": "canary",
+    "runtime": "canary",
+    "runtime_version": "canary-1",
+    "model": "canary",
+    "model_version": "canary-1",
+    "proposal_policy_content": _CANARY_PROPOSAL_POLICY,
+    "proposal_policy_sha256": hashlib.sha256(
+        _CANARY_PROPOSAL_POLICY.encode()
+    ).hexdigest(),
+    "toolset_content": _CANARY_TOOLSET,
+    "toolset_sha256": hashlib.sha256(_CANARY_TOOLSET.encode()).hexdigest(),
+    "max_sessions_per_cell": 1,
+}
+
+
+class CampaignManifestError(ValueError):
+    """A campaign artifact is malformed or has drifted from its lock."""
+
+
+def validate_agent_protocol(
+    raw: Mapping[str, Any], *, allow_canary: bool = False,
+) -> dict[str, Any]:
+    """Validate the coding-agent policy that must be locked before search."""
+    required_strings = (
+        "provider", "runtime", "runtime_version", "model", "model_version",
+    )
+    required_contents = ("proposal_policy_content", "toolset_content")
+    required_hashes = ("proposal_policy_sha256", "toolset_sha256")
+    expected_keys = {
+        "schema_version", "campaign_id", "purpose", *required_strings,
+        *required_contents, *required_hashes, "max_sessions_per_cell",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected_keys:
+        raise CampaignManifestError("agent protocol field set is not exact")
+    purpose = raw.get("purpose")
+    if purpose not in ({"publication", "canary"} if allow_canary else {"publication"}):
+        raise CampaignManifestError("agent protocol purpose is not allowed here")
+    if raw.get("schema_version") != 1 or raw.get("campaign_id") != CAMPAIGN_ID:
+        raise CampaignManifestError("agent protocol identity is invalid")
+    for key in required_strings:
+        value = raw.get(key)
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or value.upper().startswith("REPLACE")
+            or value.lower() == "unknown"
+        ):
+            raise CampaignManifestError(f"agent protocol {key} is not publication-ready")
+    for key in required_contents:
+        value = raw.get(key)
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or value.upper().startswith("REPLACE")
+        ):
+            raise CampaignManifestError(f"agent protocol {key} is not archived")
+    for key in required_hashes:
+        value = raw.get(key)
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise CampaignManifestError(f"agent protocol {key} is not a SHA-256")
+    for stem in ("proposal_policy", "toolset"):
+        observed = hashlib.sha256(str(raw[f"{stem}_content"]).encode()).hexdigest()
+        if raw[f"{stem}_sha256"] != observed:
+            raise CampaignManifestError(
+                f"agent protocol {stem} content/hash binding mismatch"
+            )
+    if raw.get("max_sessions_per_cell") != 1:
+        raise CampaignManifestError("preprint protocol requires one agent session per cell")
+    return json.loads(json.dumps(raw))
+
+
+def resolve_campaign_base_commit(repo_root: Path) -> str:
+    """Return the full git commit that every run in one materialization uses."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise CampaignManifestError(
+            f"cannot resolve campaign base commit under {repo_root}"
+        ) from exc
+    commit = completed.stdout.strip().lower()
+    if len(commit) not in {40, 64} or any(char not in "0123456789abcdef" for char in commit):
+        raise CampaignManifestError(f"git returned an invalid base commit {commit!r}")
+    return commit
+
+
+def _canonical_bytes(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def content_sha256(value: object) -> str:
+    """Hash a JSON-compatible value independently of whitespace/key order."""
+    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _dataset_config_path(repo_root: Path, dataset: str) -> Path:
+    source = "cptac" if dataset.startswith("cptac_") else "tcga"
+    return repo_root / "benchmarks" / "datasets" / source / f"{dataset}.yaml"
+
+
+def _policy_template_path(repo_root: Path, dataset: str) -> Path:
+    return (
+        repo_root / "benchmarks" / "experiments" / dataset
+        / "automil" / "config.yaml"
+    )
+
+
+def _run_command(cell: Mapping[str, Any], stage: str) -> str:
+    command_folds = {"baseline": BASELINE_FOLDS, **STAGE_FOLDS}
+    if stage not in command_folds:
+        raise CampaignManifestError(f"unknown campaign stage {stage!r}")
+    tokens = [
+        "python", "benchmarks/scripts/run_experiment.py",
+        "--dataset", str(cell["dataset"]),
+        "--task", str(cell["task"]),
+        "--encoder", str(cell["encoder"]),
+        "--model", str(cell["model"]),
+        "--framework", str(cell["framework"]),
+        "--strategy", "standard",
+        "--seed", str(PROTOCOL["seed"]),
+        "--n_folds", str(PROTOCOL["split_folds"]),
+        "--folds", ",".join(str(i) for i in command_folds[stage]),
+    ]
+    if cell["survival_loss"] is not None:
+        tokens.extend(["--survival_loss", str(cell["survival_loss"])])
+    tokens.append("--no_wandb")
+    return shlex.join(tokens)
+
+
+def _cell_record(
+    *,
+    dataset: str,
+    task: str,
+    task_type: str,
+    encoder: str,
+    framework: str,
+    model: str,
+    survival_loss: str | None,
+    dataset_config: str,
+    dataset_config_sha256: str,
+    policy_template: str,
+    policy_template_sha256: str,
+) -> dict[str, Any]:
+    suffix = f"__{survival_loss}" if survival_loss else ""
+    experiment_id = (
+        f"{dataset}__{framework}__standard__{task}__{encoder}__{model}"
+        f"__s{PROTOCOL['seed']}{suffix}"
+    )
+    normalized_model = normalize_mil_model(model)
+    cell = {
+        "cell_id": experiment_id,
+        "dataset": dataset,
+        "task": task,
+        "task_type": task_type,
+        "encoder": encoder,
+        "framework": framework,
+        "model": model,
+        "survival_loss": survival_loss,
+        "regime": "slide" if framework == "titan" else "tile",
+        "strategy": "standard",
+        "seed": PROTOCOL["seed"],
+        "dataset_config": dataset_config,
+        "dataset_config_sha256": dataset_config_sha256,
+        "policy_template": policy_template,
+        "policy_template_sha256": policy_template_sha256,
+        "budget_identity": {
+            "dataset": dataset,
+            "task": task,
+            "encoder": encoder,
+            "mil_model": normalized_model,
+            "cell_id": make_cell_id(dataset, encoder, normalized_model, task),
+        },
+    }
+    # There is deliberately no ``final`` training command.  The frozen winner
+    # already owns folds 0-2 from discovery and folds 3-4 from promotion; final
+    # reporting unseals only that candidate's existing five-fold held-out data.
+    cell["commands"] = {
+        stage: _run_command(cell, stage)
+        for stage in ("baseline", *STAGE_FOLDS)
+    }
+    cell["cell_sha256"] = content_sha256(cell)
+    return cell
+
+
+def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
+    """Build the exact 130-cell manifest from the five pinned dataset YAMLs."""
+    repo_root = repo_root.resolve()
+    cells: list[dict[str, Any]] = []
+    sources: dict[str, str] = {}
+    policy_sources: dict[str, str] = {}
+    for dataset in DATASETS:
+        config_path = _dataset_config_path(repo_root, dataset)
+        policy_path = _policy_template_path(repo_root, dataset)
+        raw = yaml.safe_load(config_path.read_text()) or {}
+        tasks = raw.get("tasks") or {}
+        classification = [
+            name for name, spec in tasks.items()
+            if (spec or {}).get("task_type", "classification") != "survival"
+        ]
+        survival = [
+            name for name, spec in tasks.items()
+            if (spec or {}).get("task_type", "classification") == "survival"
+        ]
+        if len(classification) != 1 or survival != ["os"]:
+            raise CampaignManifestError(
+                f"{dataset}: expected one classification task plus os, got "
+                f"classification={classification}, survival={survival}"
+            )
+        losses = list((tasks["os"] or {}).get("survival_losses") or [])
+        if losses != ["nllsurv"]:
+            raise CampaignManifestError(
+                f"{dataset}: preprint survival_losses must be exactly ['nllsurv'], "
+                f"got {losses}"
+            )
+        encoder_dims = ((raw.get("encoders") or {}).get("dims") or {})
+        if not set(ENCODERS).issubset(encoder_dims):
+            raise CampaignManifestError(
+                f"{dataset}: missing roster encoder(s) "
+                f"{sorted(set(ENCODERS) - set(encoder_dims))}"
+            )
+        config_rel = config_path.relative_to(repo_root).as_posix()
+        config_hash = file_sha256(config_path)
+        sources[config_rel] = config_hash
+        policy_rel = policy_path.relative_to(repo_root).as_posix()
+        policy_hash = file_sha256(policy_path)
+        policy_sources[policy_rel] = policy_hash
+        task_pairs = ((classification[0], "classification", None),
+                      ("os", "survival", "nllsurv"))
+        for task, task_type, loss in task_pairs:
+            for framework, roster_key in TILE_ARMS:
+                models = list(raw.get(roster_key) or [])
+                if len(models) != 1:
+                    raise CampaignManifestError(
+                        f"{dataset}: {roster_key} must pin exactly one model, got {models}"
+                    )
+                for encoder in ENCODERS:
+                    cells.append(_cell_record(
+                        dataset=dataset, task=task, task_type=task_type,
+                        encoder=encoder, framework=framework, model=models[0],
+                        survival_loss=loss, dataset_config=config_rel,
+                        dataset_config_sha256=config_hash,
+                        policy_template=policy_rel,
+                        policy_template_sha256=policy_hash,
+                    ))
+            cells.append(_cell_record(
+                dataset=dataset, task=task, task_type=task_type,
+                encoder="titan", framework="titan", model="titan",
+                survival_loss=loss, dataset_config=config_rel,
+                dataset_config_sha256=config_hash,
+                policy_template=policy_rel,
+                policy_template_sha256=policy_hash,
+            ))
+    analysis_plan_path = repo_root / ANALYSIS_PLAN_PATH
+    try:
+        analysis_plan = json.loads(analysis_plan_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignManifestError(
+            f"cannot read frozen analysis plan {analysis_plan_path}: {exc}"
+        ) from exc
+    if (
+        not isinstance(analysis_plan, dict)
+        or analysis_plan.get("schema_version") != 1
+        or analysis_plan.get("campaign_id") != CAMPAIGN_ID
+        or analysis_plan.get("status") != "frozen-before-held-out-certification"
+    ):
+        raise CampaignManifestError("frozen analysis plan contract is invalid")
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "campaign_id": CAMPAIGN_ID,
+        "protocol": PROTOCOL,
+        "analysis_plan": {
+            "path": ANALYSIS_PLAN_PATH,
+            "sha256": file_sha256(analysis_plan_path),
+        },
+        "dataset_sources": sources,
+        "policy_sources": policy_sources,
+        "cells": cells,
+    }
+    validate_manifest(manifest)
+    return manifest
+
+
+def validate_manifest(manifest: Mapping[str, Any]) -> None:
+    """Fail closed on roster, identity, hash, or command drift."""
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        raise CampaignManifestError("unsupported campaign manifest schema")
+    if manifest.get("campaign_id") != CAMPAIGN_ID:
+        raise CampaignManifestError("unexpected campaign_id")
+    if manifest.get("protocol") != PROTOCOL:
+        raise CampaignManifestError("campaign protocol differs from the frozen contract")
+    analysis_plan = manifest.get("analysis_plan")
+    if (
+        not isinstance(analysis_plan, dict)
+        or analysis_plan.get("path") != ANALYSIS_PLAN_PATH
+        or not isinstance(analysis_plan.get("sha256"), str)
+        or len(analysis_plan["sha256"]) != 64
+    ):
+        raise CampaignManifestError("campaign analysis-plan lock is invalid")
+    cells = manifest.get("cells")
+    if not isinstance(cells, list) or len(cells) != 130:
+        raise CampaignManifestError(f"campaign must contain exactly 130 cells, got {len(cells or [])}")
+    ids: set[str] = set()
+    budgets: set[str] = set()
+    dataset_sources = manifest.get("dataset_sources")
+    policy_sources = manifest.get("policy_sources")
+    if not isinstance(dataset_sources, dict) or not isinstance(policy_sources, dict):
+        raise CampaignManifestError("campaign source locks must be objects")
+    per_dataset: dict[str, int] = {}
+    per_task_type: dict[str, int] = {}
+    for raw in cells:
+        if not isinstance(raw, dict):
+            raise CampaignManifestError("every campaign cell must be an object")
+        cell = dict(raw)
+        recorded_hash = cell.pop("cell_sha256", None)
+        if recorded_hash != content_sha256(cell):
+            raise CampaignManifestError(f"cell hash mismatch for {cell.get('cell_id')}")
+        cell_id = str(cell["cell_id"])
+        budget_id = str((cell.get("budget_identity") or {})["cell_id"])
+        if cell_id in ids or budget_id in budgets:
+            raise CampaignManifestError(f"duplicate cell or budget identity: {cell_id}")
+        ids.add(cell_id)
+        budgets.add(budget_id)
+        dataset_config = cell.get("dataset_config")
+        policy_template = cell.get("policy_template")
+        if dataset_sources.get(dataset_config) != cell.get("dataset_config_sha256"):
+            raise CampaignManifestError(f"dataset source lock mismatch for {cell_id}")
+        if policy_sources.get(policy_template) != cell.get("policy_template_sha256"):
+            raise CampaignManifestError(f"policy source lock mismatch for {cell_id}")
+        per_dataset[cell["dataset"]] = per_dataset.get(cell["dataset"], 0) + 1
+        per_task_type[cell["task_type"]] = per_task_type.get(cell["task_type"], 0) + 1
+        expected_commands = {
+            stage: _run_command(cell, stage)
+            for stage in ("baseline", *STAGE_FOLDS)
+        }
+        if cell.get("commands") != expected_commands:
+            raise CampaignManifestError(f"command drift for {cell_id}")
+    if per_dataset != {dataset: 26 for dataset in DATASETS}:
+        raise CampaignManifestError(f"per-dataset census mismatch: {per_dataset}")
+    if per_task_type != {"classification": 65, "survival": 65}:
+        raise CampaignManifestError(f"task-axis census mismatch: {per_task_type}")
+
+
+def write_manifest(manifest: Mapping[str, Any], path: Path) -> str:
+    """Write a deterministic manifest plus adjacent SHA-256 lock."""
+    validate_manifest(manifest)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    path.write_text(payload)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    path.with_suffix(path.suffix + ".sha256").write_text(
+        f"{digest}  {path.name}\n"
+    )
+    return digest
+
+
+def load_manifest(path: Path, *, verify_lock: bool = True) -> dict[str, Any]:
+    """Load, schema-check, and optionally verify the adjacent byte lock."""
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignManifestError(f"cannot read campaign manifest {path}: {exc}") from exc
+    validate_manifest(manifest)
+    if verify_lock:
+        lock_path = path.with_suffix(path.suffix + ".sha256")
+        try:
+            expected = lock_path.read_text().split()[0]
+        except (OSError, IndexError) as exc:
+            raise CampaignManifestError(f"cannot read manifest lock {lock_path}") from exc
+        actual = file_sha256(path)
+        if actual != expected:
+            raise CampaignManifestError(
+                f"manifest byte hash mismatch ({actual} != {expected})"
+            )
+    return manifest
+
+
+def _task_block(cell: Mapping[str, Any], dataset_raw: Mapping[str, Any]) -> dict[str, Any]:
+    source = dict((dataset_raw.get("tasks") or {})[cell["task"]])
+    if cell["task_type"] == "survival":
+        return {
+            "name": cell["task"], "type": "survival",
+            "event_column": source["event_col"],
+            "time_column": source["time_col"],
+            "survival_loss": "nllsurv", "nll_bins": source.get("nll_bins", 4),
+        }
+    return {
+        "name": cell["task"], "type": "classification",
+        "num_classes": source["n_classes"], "label_column": source["label_col"],
+    }
+
+
+def materialize_discovery_cells(
+    manifest_path: Path,
+    output_root: Path,
+    repo_root: Path,
+    *,
+    agent_protocol: Mapping[str, Any],
+    base_commit: str | None = None,
+    allow_canary_protocol: bool = False,
+) -> list[Path]:
+    """Create 130 isolated discovery roots from the immutable manifest.
+
+    Each root has its own graph/plan/learnings/orchestrator namespace.  The
+    generated config's run command, budget identity, fold subset, and source
+    hashes all come from the same cell record.
+    """
+    manifest = load_manifest(manifest_path)
+    manifest_hash = file_sha256(manifest_path)
+    locked_agent_protocol = validate_agent_protocol(
+        agent_protocol, allow_canary=allow_canary_protocol,
+    )
+    agent_protocol_sha256 = content_sha256(locked_agent_protocol)
+    repo_root = repo_root.resolve()
+    output_root = output_root.resolve()
+    base_commit = base_commit or resolve_campaign_base_commit(repo_root)
+    if (
+        len(base_commit) not in {40, 64}
+        or any(char not in "0123456789abcdef" for char in base_commit.lower())
+    ):
+        raise CampaignManifestError("campaign base_commit must be a full git hash")
+    base_commit = base_commit.lower()
+    try:
+        output_root.relative_to(repo_root)
+    except ValueError as exc:
+        raise CampaignManifestError("campaign output_root must live inside the git repo") from exc
+    output_root.mkdir(parents=True, exist_ok=True)
+    agent_protocol_path = output_root / AGENT_PROTOCOL_FILE
+    if agent_protocol_path.exists():
+        try:
+            existing_agent_protocol = json.loads(agent_protocol_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignManifestError("existing agent protocol is unreadable") from exc
+        if existing_agent_protocol != locked_agent_protocol:
+            raise CampaignManifestError("existing campaign uses a different agent protocol")
+    else:
+        fd, temporary = tempfile.mkstemp(
+            dir=str(output_root), prefix=".agent-protocol-", suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(
+                    json.dumps(locked_agent_protocol, indent=2, sort_keys=True) + "\n"
+                )
+            os.replace(temporary, agent_protocol_path)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+    written: list[Path] = []
+    for cell in manifest["cells"]:
+        cell_root = output_root / cell["cell_id"]
+        adir = cell_root / "automil"
+        template_path = repo_root / cell["policy_template"]
+        if not template_path.exists():
+            raise CampaignManifestError(f"missing cohort template {template_path}")
+        if file_sha256(template_path) != cell["policy_template_sha256"]:
+            raise CampaignManifestError(
+                f"policy template drift for {cell['dataset']}; regenerate the manifest"
+            )
+        config = copy.deepcopy(yaml.safe_load(template_path.read_text()) or {})
+        dataset_path = repo_root / cell["dataset_config"]
+        if file_sha256(dataset_path) != cell["dataset_config_sha256"]:
+            raise CampaignManifestError(
+                f"dataset config drift for {cell['dataset']}; regenerate the manifest"
+            )
+        dataset_raw = yaml.safe_load(dataset_path.read_text()) or {}
+        config["project"] = {
+            "name": cell["dataset"],
+            "description": f"{CAMPAIGN_ID}: {cell['cell_id']}",
+        }
+        config["task"] = _task_block(cell, dataset_raw)
+        config.setdefault("data", {})["num_folds"] = PROTOCOL["split_folds"]
+        config["data"]["seed"] = PROTOCOL["seed"]
+        config.setdefault("encoders", {})["primary"] = cell["encoder"]
+        if cell["task_type"] == "survival":
+            config["metrics"] = {
+                "primary": "val_c_index", "composite_formula": "val_c_index",
+                "track": ["val_c_index"],
+            }
+        else:
+            config["metrics"] = {
+                "primary": "composite",
+                "composite_formula": "(val_auc + val_bacc) / 2",
+                "track": ["val_auc", "val_bacc"],
+            }
+        adir_rel = adir.relative_to(repo_root).as_posix()
+        config["files"] = {
+            "editable": [f"{adir_rel}/variants/_policies/*.py"],
+        }
+        config["run"] = {
+            "script": None,
+            "command": cell["commands"]["discovery"],
+            "mil_model": cell["model"],
+        }
+        config.setdefault("cap", {})["eval_budget"] = PROTOCOL["discovery_attempts"]
+        config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
+        config.setdefault("orchestrator", {})["default_timeout_min"] = (
+            ATTEMPT_TIMEOUT_MIN
+        )
+        config["campaign"] = {
+            "campaign_id": CAMPAIGN_ID,
+            "manifest": manifest_path.relative_to(repo_root).as_posix(),
+            "manifest_sha256": manifest_hash,
+            "cell_id": cell["cell_id"],
+            "cell_sha256": cell["cell_sha256"],
+            "budget_cell_id": cell["budget_identity"]["cell_id"],
+            "stage": "discovery",
+            "base_commit": base_commit,
+            "agent_protocol_sha256": agent_protocol_sha256,
+        }
+
+        # Materialization is a restart-safe initializer, never a reset command.
+        # A repeated invocation verifies the immutable inputs but preserves the
+        # agent-owned plan/learnings/policies and the progressed stage ledger.
+        if cell_root.exists():
+            from autobench.campaign_stages import load_stage_state
+
+            try:
+                state = load_stage_state(cell_root)
+                existing_cell = json.loads((adir / "campaign_cell.json").read_text())
+                existing_config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+            except (OSError, json.JSONDecodeError, yaml.YAMLError, ValueError) as exc:
+                raise CampaignManifestError(
+                    f"existing discovery root is incomplete or corrupt: {cell_root}"
+                ) from exc
+            expected_state = (
+                cell["cell_id"], cell["cell_sha256"], manifest_hash, base_commit,
+            )
+            actual_state = (
+                state.get("cell_id"), state.get("cell_sha256"),
+                state.get("manifest_sha256"), state.get("base_commit"),
+            )
+            if existing_cell != cell or existing_config != config or actual_state != expected_state:
+                raise CampaignManifestError(
+                    f"existing discovery root is bound to different inputs: {cell_root}"
+                )
+            written.append(adir)
+            continue
+
+        # Publish a fully initialized cell directory in one rename.  A crash
+        # before os.replace leaves only a hidden temporary directory and never
+        # exposes a half-created campaign root as resumable state.
+        staging_root = Path(tempfile.mkdtemp(prefix=".materialize-", dir=str(output_root)))
+        try:
+            staging_adir = staging_root / "automil"
+            staging_adir.mkdir(parents=True)
+            (staging_adir / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
+            )
+            (staging_adir / "campaign_cell.json").write_text(
+                json.dumps(cell, indent=2, sort_keys=True) + "\n"
+            )
+            (staging_adir / ".gitignore").write_text(
+                "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
+                ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
+            )
+            (staging_adir / "plan.md").write_text(
+                f"# Discovery plan — {cell['cell_id']}\n\nNo proposals queued yet.\n"
+            )
+            (staging_adir / "learnings.md").write_text(
+                f"# Cell-local learnings — {cell['cell_id']}\n"
+            )
+            policy_dir = staging_adir / "variants" / "_policies"
+            policy_dir.mkdir(parents=True)
+            (policy_dir / ".gitkeep").touch()
+            from autobench.campaign_stages import initialize_stage_state
+
+            initialize_stage_state(
+                staging_root,
+                cell=cell,
+                manifest_sha256=manifest_hash,
+                base_commit=base_commit,
+            )
+            os.replace(staging_root, cell_root)
+        finally:
+            if staging_root.exists():
+                shutil.rmtree(staging_root)
+        written.append(adir)
+    return written
+
+
+def audit_materialized_campaign(
+    *,
+    roots: list[Path],
+    manifest_path: Path,
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Audit all 130 launch roots without executing a GPU training process."""
+    from automil.admissibility import (
+        load_candidate_policy,
+        validate_campaign_binding,
+    )
+    from autobench.campaign_stages import load_stage_state
+
+    manifest = load_manifest(manifest_path)
+    repo_root = repo_root.resolve()
+    if len(roots) != len(manifest["cells"]):
+        raise CampaignManifestError(
+            f"materialized root count mismatch: {len(roots)} != {len(manifest['cells'])}"
+        )
+    runtime_roots = {adir.parent.parent.resolve() for adir in roots}
+    if len(runtime_roots) != 1:
+        raise CampaignManifestError("materialized cells do not share one runtime root")
+    runtime_root = next(iter(runtime_roots))
+    try:
+        agent_protocol = validate_agent_protocol(
+            json.loads((runtime_root / AGENT_PROTOCOL_FILE).read_text()),
+            allow_canary=True,
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignManifestError("cannot read locked campaign agent protocol") from exc
+    agent_protocol_sha256 = content_sha256(agent_protocol)
+    by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
+    seen: set[str] = set()
+    base_commits: set[str] = set()
+    regimes: dict[tuple[str, str], str] = {}
+    manifest_hash = file_sha256(manifest_path)
+    for adir in roots:
+        if not adir.is_dir():
+            raise CampaignManifestError(f"missing materialized root: {adir}")
+        try:
+            cell = json.loads((adir / "campaign_cell.json").read_text())
+            config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+        except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
+            raise CampaignManifestError(f"cannot read materialized root {adir}: {exc}") from exc
+        cell_id = cell.get("cell_id")
+        if cell_id in seen or cell_id not in by_id or cell != by_id[cell_id]:
+            raise CampaignManifestError(f"materialized cell identity drift: {cell_id}")
+        seen.add(cell_id)
+        campaign = config.get("campaign") or {}
+        if campaign.get("manifest_sha256") != manifest_hash:
+            raise CampaignManifestError(f"manifest binding drift for {cell_id}")
+        validate_campaign_binding(
+            manifest_path,
+            campaign,
+            base_run_command=(config.get("run") or {}).get("command"),
+            budget_cell_id=cell["budget_identity"]["cell_id"],
+            base_commit=str(campaign.get("base_commit", "")),
+        )
+        if campaign.get("stage") != "discovery":
+            raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
+        if campaign.get("agent_protocol_sha256") != agent_protocol_sha256:
+            raise CampaignManifestError(f"{cell_id}: agent protocol binding drift")
+        base_commits.add(str(campaign.get("base_commit", "")))
+        if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
+            raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
+        if (config.get("training") or {}).get("fold_count") != len(
+            STAGE_FOLDS["discovery"]
+        ):
+            raise CampaignManifestError(f"{cell_id}: discovery fold count drift")
+        if (config.get("orchestrator") or {}).get(
+            "default_timeout_min"
+        ) != ATTEMPT_TIMEOUT_MIN:
+            raise CampaignManifestError(f"{cell_id}: attempt timeout drift")
+        policy = load_candidate_policy(adir)
+        expected_editable = (
+            f"{adir.relative_to(repo_root).as_posix()}/variants/_policies/*.py",
+        )
+        if (
+            policy.mode != "architecture-preserving"
+            or policy.editable != expected_editable
+            or policy.allowed_variant_kinds != ("policy",)
+        ):
+            raise CampaignManifestError(f"{cell_id}: candidate boundary drift")
+        state = load_stage_state(adir.parent)
+        if (
+            state["phase"] != "discovery"
+            or state["cell_id"] != cell_id
+            or state["manifest_sha256"] != manifest_hash
+            or state["base_commit"] != campaign.get("base_commit")
+        ):
+            raise CampaignManifestError(f"{cell_id}: stage ledger drift")
+        for command_name, expected_folds in {
+            "baseline": BASELINE_FOLDS,
+            **STAGE_FOLDS,
+        }.items():
+            tokens = shlex.split(cell["commands"][command_name])
+            try:
+                actual_folds = tokens[tokens.index("--folds") + 1]
+            except (ValueError, IndexError) as exc:
+                raise CampaignManifestError(
+                    f"{cell_id}: {command_name} command lacks --folds"
+                ) from exc
+            if actual_folds != ",".join(map(str, expected_folds)):
+                raise CampaignManifestError(
+                    f"{cell_id}: {command_name} fold command drift"
+                )
+        regimes.setdefault((cell["framework"], cell["task_type"]), cell_id)
+
+    expected_regimes = {
+        (framework, task_type)
+        for framework in ("clam", "nnmil", "abmil", "dtfd", "titan")
+        for task_type in ("classification", "survival")
+    }
+    if set(regimes) != expected_regimes:
+        raise CampaignManifestError(
+            f"arm/task canary coverage mismatch: {sorted(set(regimes))}"
+        )
+    if len(base_commits) != 1 or "" in base_commits:
+        raise CampaignManifestError(
+            f"materialized cells do not share one base commit: {sorted(base_commits)}"
+        )
+    return {
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": manifest_hash,
+        "agent_protocol_sha256": agent_protocol_sha256,
+        "cells": len(seen),
+        "base_commit": next(iter(base_commits)),
+        "regimes": {
+            f"{framework}/{task_type}": regimes[(framework, task_type)]
+            for framework, task_type in sorted(regimes)
+        },
+        "gpu_processes_started": 0,
+    }
+
+
+def run_materialization_canary(
+    manifest_path: Path, *, repo_root: Path, base_commit: str | None = None,
+) -> dict[str, Any]:
+    """Materialize, audit, and automatically remove one full dry-run campaign."""
+    parent = manifest_path.resolve().parent
+    with tempfile.TemporaryDirectory(prefix=".canary-", dir=str(parent)) as raw:
+        roots = materialize_discovery_cells(
+            manifest_path, Path(raw) / "runtime", repo_root,
+            agent_protocol=CANARY_AGENT_PROTOCOL,
+            base_commit=base_commit,
+            allow_canary_protocol=True,
+        )
+        return audit_materialized_campaign(
+            roots=roots, manifest_path=manifest_path, repo_root=repo_root,
+        )

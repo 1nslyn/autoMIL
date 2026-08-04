@@ -58,6 +58,9 @@ def _setup_project(tmp_path: Path, monkeypatch) -> tuple[CliRunner, Path]:
     cfg = yaml.safe_load(config_path.read_text()) or {}
     cfg["project"] = {**(cfg.get("project") or {}), "name": "test_ds"}
     cfg["encoders"] = {**(cfg.get("encoders") or {}), "primary": "test_enc"}
+    # M-14: task participates in cell identity — pin it so the ids stay
+    # deterministic (otherwise the init template's task name leaks in).
+    cfg["task"] = {**(cfg.get("task") or {}), "name": "test_task"}
     config_path.write_text(yaml.safe_dump(cfg))
 
     return runner, adir
@@ -90,8 +93,9 @@ def _cells_dir(adir: Path) -> Path:
 
 
 def _cell_id_for(dataset: str = "test_ds", encoder: str = "test_enc",
-                 parent_id: str = "root") -> str:
-    return make_cell_id(dataset, encoder, parent_id)
+                 parent_id: str = "root", task: str | None = "test_task") -> str:
+    # M-14: the task is part of cell identity (see _setup_project).
+    return make_cell_id(dataset, encoder, parent_id, task)
 
 
 def _read_cell_json(adir: Path, cell_id: str) -> dict:
@@ -221,6 +225,62 @@ class TestSubmitCellLayer:
         assert data_after["budget_seconds"] == 21600, (
             f"Expected cell budget unchanged at 21600 after override, "
             f"got {data_after['budget_seconds']}"
+        )
+
+    def test_submit_seeds_the_eval_budget_from_config(self, tmp_path, monkeypatch):
+        """H-2: cap.eval_budget is carried onto the cell it opens."""
+        runner, adir = _setup_project(tmp_path, monkeypatch)
+        _make_model_file(tmp_path)
+        cfg_path = adir / "config.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text()) or {}
+        cfg["cap"] = {**(cfg.get("cap") or {}), "eval_budget": 25}
+        cfg_path.write_text(yaml.safe_dump(cfg))
+
+        result = _submit_node(runner, "node_0001")
+        assert result.exit_code == 0, f"submit failed: {result.output}"
+
+        data = _read_cell_json(adir, _cell_id_for())
+        assert data["eval_budget"] == 25
+        assert data["consumed_evals"] == 0
+
+    def test_submit_defaults_to_no_eval_budget(self, tmp_path, monkeypatch):
+        """A config without cap.eval_budget stays time-only (pre-H-2 behaviour)."""
+        runner, adir = _setup_project(tmp_path, monkeypatch)
+        _make_model_file(tmp_path)
+
+        assert _submit_node(runner, "node_0001").exit_code == 0
+        assert _read_cell_json(adir, _cell_id_for())["eval_budget"] is None
+
+    def test_submit_rejects_when_the_eval_budget_is_spent(self, tmp_path, monkeypatch):
+        """H-2: an exhausted eval budget refuses new work even while status is ACTIVE.
+
+        ``consumed_evals`` advances at launch; ``status`` only advances on the
+        next daemon tick, so a status-only check would admit submissions in
+        between.
+        """
+        runner, adir = _setup_project(tmp_path, monkeypatch)
+        _make_model_file(tmp_path)
+
+        cell_id = _cell_id_for()
+        cells_dir = _cells_dir(adir)
+        cells_dir.mkdir(parents=True, exist_ok=True)
+        write_cell(
+            Cell(
+                cell_id=cell_id, dataset="test_ds", encoder="test_enc", mil_model="root",
+                started_at=time.time() - 60,      # nowhere near the time wall
+                budget_seconds=21600, safety_buffer_seconds=1800,
+                status=CellStatus.ACTIVE, mode="wall_clock",
+                eval_budget=5, consumed_evals=5,
+            ),
+            cells_dir,
+        )
+
+        result = _submit_node(runner, "node_0001")
+        assert result.exit_code != 0, "Expected submit to fail for an eval-exhausted cell"
+        combined = (result.output or "") + (str(result.exception) if result.exception else "")
+        assert cell_id[:8] in combined, combined
+        assert "5/5" in combined and "evaluation" in combined.lower(), (
+            f"the refusal must name the binding axis; got: {combined}"
         )
 
     def test_submit_validation_fails_on_invalid_buffer(self, tmp_path, monkeypatch):

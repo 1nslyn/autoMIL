@@ -70,7 +70,7 @@ def test_init_emits_warning_on_under_utilization(tmp_git_repo, monkeypatch):
 
     cfg = yaml.safe_load((tmp_git_repo / "automil" / "config.yaml").read_text())
     min_vram = cfg["hardware"]["min_vram_gb"]
-    default = cfg["cap"]["default_vram_estimate_gb"]
+    default = cfg["orchestrator"]["default_vram_estimate_gb"]
     # Operator-visibility check: the gap is observable via the rendered config.
     assert min_vram >= 70.0, f"min_vram_gb={min_vram} not >= 70"
     assert default <= 12.0, f"default_vram_estimate_gb={default} not conservative enough"

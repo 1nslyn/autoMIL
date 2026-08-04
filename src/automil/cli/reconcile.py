@@ -52,7 +52,8 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
     # Default reconcile (no --from-archive) stays missing-node-only.
     if from_archive is not None:
         import json as _json
-        from automil.graph import locked_update, _accept, _accept_margin
+        from automil.graph import (locked_update, _accept, _accept_margin,
+                           effective_accept_margin, merged_metadata)
         archive_dir = adir / "orchestrator" / "archive"
         graph_path = adir / "graph.json"
 
@@ -106,10 +107,16 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                         parent = g.get_node(parent_id) if parent_id else None
                         p_comp = parent.get("composite", 0.0) if parent else 0.0
                         composite = gnode["composite"]  # already updated above
-                        gnode["status"] = "keep" if _accept(composite, p_comp, _accept_margin(g.meta) if parent else 0.0) else "discard"
+                        gnode["status"] = ("keep" if _accept(
+                            composite, p_comp,
+                            effective_accept_margin(g.meta, parent) if parent else 0.0,
+                        ) else "discard")
                     # else: unknown status value — leave gnode["status"] unchanged
                     # Preserve raw result status for traceability (operator-visible).
-                    gnode.setdefault("metadata", {})["result_status"] = raw_result_status
+                    # L-8a: copy-on-write (graph.merged_metadata) — node["metadata"]
+                    # can be aliased with another node's dict (gate/evaluate.py
+                    # creates gate-eval children via a shallow dict(node) copy).
+                    gnode["metadata"] = merged_metadata(gnode, {"result_status": raw_result_status})
 
                 if payload.get("metrics"):
                     gnode["metrics"] = payload["metrics"]
@@ -122,8 +129,16 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
     if recompute_best:
         # CLI-07 path: rebuild meta.best_node_id from executed/keep nodes.
         graph_path = adir / "graph.json"
-        graph = ExperimentGraph.load(graph_path, technique_map=_load_technique_map(adir))
-        old_id, old_c, new_id, new_c = graph.recompute_best()
+        # CR-2 (audit 2026-07-23): persist under the lock; --dry-run stays a
+        # read-only load (no lock, no write).
+        if dry_run:
+            graph = ExperimentGraph.load(graph_path, technique_map=_load_technique_map(adir))
+            old_id, old_c, new_id, new_c = graph.recompute_best()
+        else:
+            from automil.graph import locked_update
+            with locked_update(str(graph_path), technique_map=_load_technique_map(adir)) as graph:
+                old_id, old_c, new_id, new_c = graph.recompute_best()
+                # graph.save() runs on context exit under the lock.
 
         old_id_str = old_id if old_id is not None else "None"
         new_id_str = new_id if new_id is not None else "None"
@@ -142,19 +157,22 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                 f"→ {new_id_str} (composite {new_c:.6f})"
             )
 
-        if not dry_run:
-            graph.save()
         return
 
-    # Default path (D-14): orchestrator-state sync. Body byte-identical to
-    # Plan 01's lift from the original cli.py:510-524.
+    # Default path (D-14): orchestrator-state sync.
+    # CR-2 (audit 2026-07-23): this path scans queue/running/completed/archive and
+    # rewrites the whole graph — the widest lost-update window against a concurrent
+    # daemon completion — so hold the lock across the read-modify-write.
     orch = adir / "orchestrator"
-    graph = ExperimentGraph(path=str(adir / "graph.json"), technique_map=_load_technique_map(adir))
-    graph.reconcile(
-        queue_dir=str(orch / "queue"),
-        running_dir=str(orch / "running"),
-        completed_dir=str(orch / "completed"),
-        archive_dir=str(orch / "archive"),
-    )
-    graph.save()
+    from automil.graph import locked_update
+    with locked_update(
+        str(adir / "graph.json"), technique_map=_load_technique_map(adir)
+    ) as graph:
+        graph.reconcile(
+            queue_dir=str(orch / "queue"),
+            running_dir=str(orch / "running"),
+            completed_dir=str(orch / "completed"),
+            archive_dir=str(orch / "archive"),
+        )
+        # graph.save() runs on context exit under the lock.
     click.echo("Graph reconciled with orchestrator state.")

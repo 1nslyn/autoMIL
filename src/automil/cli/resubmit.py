@@ -99,6 +99,20 @@ def resubmit(node_id: str) -> None:
             f"Use `automil propose` to create a new proposal instead."
         )
 
+    # A direct backend resubmit does not pass through `automil submit`, so it
+    # cannot mint a fresh admissibility record or a stage-budget identity. In a
+    # fail-closed campaign mode, require a new proposal+submit instead of
+    # silently creating a policy bypass for terminal overlays.
+    from automil.admissibility import load_candidate_policy
+    candidate_policy = load_candidate_policy(adir)
+    if candidate_policy.mode == "architecture-preserving":
+        raise click.ClickException(
+            "Refusing to resubmit in architecture-preserving mode: this legacy "
+            "path bypasses submit-time admissibility and staged attempt accounting. "
+            "Create a new proposal and run `automil submit` so the candidate is "
+            "reclassified, rehashed, and billed as a new attempt."
+        )
+
     # Step 3: discover overlay files (exclude metadata and result files).
     overlay_paths: list[Path] = [
         p for p in archive_node_dir.iterdir()

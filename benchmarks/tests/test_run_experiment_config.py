@@ -101,13 +101,16 @@ class TestCFG01NoneDefaults:
     def test_no_lr_flag_uses_trainconfig_default(self, run_experiment_mod):
         """RED: args.lr must be None when --lr is not supplied.
 
-        Fails today because parse_args() defaults --lr to 1e-4.
-        Fix (D-01): change default to None so TrainConfig.lr (2e-4) is honored.
+        Fails today because parse_args() defaults --lr to 1e-4 (a pre-D-01 CLI
+        bug, unrelated to and coincidentally numerically equal to TrainConfig's
+        post-2026-07-28 default below).
+        Fix (D-01): change default to None so TrainConfig.lr (1e-4, was 2e-4
+        pre-2026-07-28) is honored.
         """
         args = _parse(run_experiment_mod, _REQUIRED_ARGS)
         assert args.lr is None, (
             f"When --lr is not supplied, args.lr must be None so the TrainConfig "
-            f"dataclass default (2e-4) is honored. Got args.lr={args.lr!r}. "
+            f"dataclass default (1e-4) is honored. Got args.lr={args.lr!r}. "
             f"Fix: change parse_args --lr default to None (D-01, CFG-01)."
         )
 
@@ -152,3 +155,17 @@ class TestCFG01ExplicitFlagsHonored:
         assert args.n_folds == 3, (
             f"Explicit --n_folds 3 must be honored; got args.n_folds={args.n_folds!r}."
         )
+
+
+class TestStageFoldSubset:
+    def test_cli_preserves_fold_subset_literal(self, run_experiment_mod):
+        args = _parse(run_experiment_mod, _REQUIRED_ARGS + ["--folds", "0,1,2"])
+        assert args.folds == "0,1,2"
+
+    def test_parser_accepts_declared_subset(self, run_experiment_mod):
+        assert run_experiment_mod._parse_folds("0,1,2", 5) == (0, 1, 2)
+
+    @pytest.mark.parametrize("raw", ["", "0,0", "-1", "5", "a"])
+    def test_parser_rejects_invalid_subset(self, run_experiment_mod, raw):
+        with pytest.raises(SystemExit):
+            run_experiment_mod._parse_folds(raw, 5)

@@ -1,0 +1,114 @@
+{
+  "aggregation": {
+    "cell_metric": "equal-weight arithmetic mean across the five predeclared folds",
+    "classification_primary": "(test_auc + test_bacc) / 2",
+    "survival_primary": "test_c_index",
+    "survival_scale_rule": "aggregate fold-level c-index values; never pool raw risks across independently trained folds"
+  },
+  "campaign_id": "automil-preprint-130-v3",
+  "estimands": {
+    "agent_resources": {
+      "fields": [
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "cost_usd"
+      ],
+      "missingness": "report unavailable explicitly; never coerce it to zero",
+      "unit": "the one locked coding-agent session assigned to each cell"
+    },
+    "agentic_lift": {
+      "contrast": "frozen autoMIL winner minus native baseline within the same cell",
+      "report_by": [
+        "task_type",
+        "regime",
+        "dataset",
+        "framework"
+      ],
+      "scale_rule": "classification and survival magnitude summaries are always separate; only sign counts may be pooled across task types",
+      "unit": "one predeclared dataset-task-encoder-framework cell"
+    },
+    "search_process": {
+      "candidate_classes": [
+        "config-only",
+        "train-only-source",
+        "inadmissible"
+      ],
+      "candidate_class_scope": "failure-inclusive census of the 60 launched and charged attempts; submit-time refusals are not launched attempts and remain framework validation evidence rather than campaign outcomes",
+      "discovery_fields": [
+        "all 60 charged attempts including failures",
+        "terminal status, reason, budget-killed fact, and deterministically derived outcome class",
+        "candidate class and policy hash",
+        "validation-only running-best trajectory",
+        "elapsed seconds and peak VRAM with explicit missingness"
+      ],
+      "outcome_classes": [
+        "completed",
+        "budget-killed",
+        "timeout",
+        "oom",
+        "cancelled",
+        "partial",
+        "crash",
+        "missing-result",
+        "unknown"
+      ],
+      "promotion_fields": [
+        "the exact stable top-10 unique discovery roster and all of its frozen promotion jobs",
+        "eligible/ineligible status and reason",
+        "promotion yield",
+        "elapsed seconds and peak VRAM with explicit missingness"
+      ],
+      "resource_aggregation": "report the five-fold native baseline, three-fold discovery, and two-fold promotion as separate strata; elapsed_seconds/3600 is named GPU-attached job-hours (not measured accelerator utilization), and any cross-stage agentic-search value is an observed total labelled a lower bound when attempts lack timing",
+      "timing": "process evidence is hashed into the 130-cell selection freeze before any held-out value is opened",
+      "unit": "one predeclared cell with exactly 60 discovery attempts and at most 10 promotion jobs"
+    },
+    "tile_ranking_response": {
+      "arms": [
+        "clam",
+        "nnmil",
+        "abmil",
+        "dtfd"
+      ],
+      "block": [
+        "dataset",
+        "task",
+        "encoder"
+      ],
+      "measures": [
+        "baseline_rank",
+        "automil_rank",
+        "rank_shift",
+        "kendall_tau_b",
+        "top_arm_set_changed"
+      ],
+      "stratify_by": "task_type"
+    },
+    "titan_lift": {
+      "contrast": "frozen TITAN-lineage winner minus native TITAN baseline",
+      "restriction": "reported separately; never ranked against tile-feature arms"
+    }
+  },
+  "inference": {
+    "confirmatory_p_values": false,
+    "folds_are_independent_replicates": false,
+    "multiplicity_adjustment": "not applicable because no null-hypothesis tests are declared",
+    "scope": "descriptive inference over the complete frozen 130-cell census",
+    "single_seed_limitation": true,
+    "warning": "shared patients, cohorts, encoders, tasks, and one seed prohibit treating 130 cells or five folds as independent samples"
+  },
+  "missingness": {
+    "expected_cells": 130,
+    "expected_discovery_attempts_per_cell": 60,
+    "expected_folds_per_baseline_and_winner": 5,
+    "imputation": "none",
+    "policy": "fail closed; do not emit a publication report from an incomplete or inconsistent campaign"
+  },
+  "ranking": {
+    "direction": "higher is better",
+    "tie_method": "average ranks",
+    "top_arm_definition": "the complete set tied at the maximum primary metric"
+  },
+  "schema_version": 1,
+  "status": "frozen-before-held-out-certification"
+}

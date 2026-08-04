@@ -20,7 +20,7 @@ tasks:
     task_type: survival
     event_col: OS_event
     time_col: OS_time
-    survival_losses: [cox, nllsurv]
+    survival_losses: [nllsurv]
     nll_bins: 4
 
 split_strategies:

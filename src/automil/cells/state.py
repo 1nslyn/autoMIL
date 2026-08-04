@@ -28,6 +28,15 @@ class CellStatus(str, Enum):
     FINALIZED = "finalized"
 
 
+#: Statuses in which a cell must refuse new work (D-116). Declared once here so
+#: the registry predicate and the cap predicates cannot drift apart.
+BLOCKING_STATUSES: tuple[CellStatus, ...] = (
+    CellStatus.REFUSING_NEW,
+    CellStatus.TERMINATING,
+    CellStatus.FINALIZED,
+)
+
+
 @dataclass(frozen=True)
 class Cell:
     """Immutable snapshot of a (dataset, encoder, mil_model) budget cell (D-108, REC-04).
@@ -95,18 +104,55 @@ class Cell:
     """``agent_active`` bookkeeping — wall-clock of the last daemon tick that
     evaluated this cell. ``None`` is treated as ``started_at`` on the first tick."""
 
+    # --- Eval-count budget axis (H-2) -----------------------------------------
+    # ORTHOGONAL to the time cap, not a third mode: ``mode`` still selects how
+    # SECONDS are metered, and the time cap remains the safety wall. The eval
+    # count is the primary comparison axis because it is the only one portable
+    # across LLM runtimes — a wall-clock comparison is not reproducible by
+    # anyone running a different agent harness. All three fields are
+    # default-valued so cells written before this feature deserialize unchanged
+    # (same contract as the P2.2 block above).
 
-def make_cell_id(dataset: str, encoder: str, mil_model: str) -> str:
-    """Return a 16-char deterministic hex id for the (dataset, encoder, mil_model) triple.
+    eval_budget: int | None = None
+    """Maximum number of experiment LAUNCHES this cell may dispatch.
+    ``None`` = no eval cap: the cell is time-only, exactly as before H-2."""
+
+    consumed_evals: int = 0
+    """Evaluations dispatched by this cell — the counter the eval cap is checked
+    against. Counted at LAUNCH, so crashed, partial and budget-killed nodes all
+    count. "Equal effort" must mean equal ATTEMPTS, not equal successes: if
+    crashes were free, an agent that writes buggy code would get unlimited
+    retries and the budget would stop being a budget. Advanced by the
+    orchestrator at dispatch — never by an agent-reported value."""
+
+    completed_evals: int = 0
+    """Evaluations that reached a terminal status of ``completed`` or ``partial``
+    — i.e. produced usable results. REPORTED ONLY: this is never the cap, so the
+    paper can quote both attempts and usable results per cell."""
+
+
+def make_cell_id(dataset: str, encoder: str, mil_model: str,
+                 task: str | None = None) -> str:
+    """Return a 16-char deterministic hex id for a budget cell.
 
     mil_model must be pre-normalized via normalize_mil_model() before calling (D-14).
     Same input always maps to the same id — re-submits join the existing cell.
     Collision space: ~6.4×10¹⁹ (sha256 prefix, 64-bit).
 
+    M-14 (audit 2026-07-23): ``task`` participates in the identity when supplied.
+    Without it, a cohort's classification search and its survival search shared one
+    budget, so whichever ran first drained the clock and starved the other. ``None``
+    reproduces the legacy 3-tuple id exactly, so existing cells keep their ids.
+
     >>> make_cell_id("ccrcc", "uni-v2", "clam_sb") == make_cell_id("ccrcc", "uni-v2", "clam_sb")
     True
+    >>> make_cell_id("luad", "uni_v2", "clam mb", "kras") != make_cell_id("luad", "uni_v2", "clam mb", "os")
+    True
     """
-    return hashlib.sha256(f"{dataset}|{encoder}|{mil_model}".encode("utf-8")).hexdigest()[:16]
+    key = f"{dataset}|{encoder}|{mil_model}"
+    if task:
+        key = f"{key}|{task}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
 def normalize_mil_model(raw: str) -> str:
