@@ -407,6 +407,29 @@ def test_annotation_calls_are_rejected(tmp_path, annotation_site):
         PurityValidator().check(_write_module(tmp_path, body))
 
 
+@pytest.mark.parametrize(
+    "write",
+    [
+        "type(self).COUNT += 1",
+        "Clean.COUNT = 2",
+        "helper.calls += 1",
+    ],
+)
+def test_policy_shared_class_or_helper_writes_are_rejected(tmp_path, write):
+    from automil.registry.errors import ValidationError
+    from automil.registry.validators.purity import PurityValidator
+
+    body = POLICY_MODULE.replace(
+        "CONST = \"ok\"",
+        "CONST = \"ok\"\ndef helper():\n    return None\n",
+    ).replace(
+        "        # Function-body I/O is allowed.",
+        f"        {write}\n        # Function-body I/O is allowed.",
+    )
+    with pytest.raises(ValidationError, match="shared class/helper state"):
+        PurityValidator(strict_policy=True).check(_write_module(tmp_path, body))
+
+
 # ---------------------------------------------------------------------------
 # Error format
 # ---------------------------------------------------------------------------

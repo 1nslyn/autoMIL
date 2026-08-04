@@ -121,7 +121,13 @@ class PolicyRuntime:
     def _resolved_policy(self) -> Any | None:
         """Instantiate once, at first use inside an already-seeded trainer."""
         if self.policy is None and self.policy_factory is not None:
-            self.policy = self.policy_factory()
+            factory = self.policy_factory
+            fold_local_type = type(
+                f"{factory.__name__}FoldLocal",
+                (factory,),
+                {"__module__": factory.__module__},
+            )
+            self.policy = fold_local_type()
         return self.policy
 
     def wrap_optimizer(self, optimizer: Any, *, role: str = "main") -> Any:
