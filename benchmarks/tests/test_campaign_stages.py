@@ -808,6 +808,12 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     assert state["phase"] == "certified"
     assert bundle["winner"]["kind"] == "baseline"
     assert bundle["held_out"]["test_auc"] == pytest.approx(0.52)
+    assert bundle["baseline_held_out"]["test_auc"] == pytest.approx(0.52)
+    assert bundle["held_out_lift"]["test_auc"] == pytest.approx(0.0)
+    assert all(
+        row["held_out_delta"]["test_auc"] == pytest.approx(0.0)
+        for row in bundle["paired_fold_deltas"]
+    )
     assert bundle["retrained"] is False
     assert certify_winner(cell_root) == state
 
@@ -839,7 +845,35 @@ def test_searched_certification_reads_winner_and_never_losers(staged_cell):
     bundle = json.loads((cell_root / "certification/certify.json").read_text())
     assert bundle["winner"]["candidate_id"] == selected["winner"]["candidate_id"]
     assert bundle["held_out"]["test_auc"] == pytest.approx(0.72)
+    assert bundle["baseline_held_out"]["test_auc"] == pytest.approx(0.52)
+    assert bundle["held_out_lift"]["test_auc"] == pytest.approx(0.20)
+    assert all(
+        row["held_out_delta"]["test_auc"] == pytest.approx(0.20)
+        for row in bundle["paired_fold_deltas"]
+    )
     assert len(bundle["source_fold_sha256"]) == 5
+    assert len(bundle["baseline_source_fold_sha256"]) == 5
+
+
+def test_searched_certification_rejects_baseline_comparator_drift(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    baseline = _baseline(cell_root)
+    register_baseline(cell_root, baseline)
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
+    freeze_promotion(cell_root)
+    selected = select_winner(cell_root)
+    _write_searched_sealed_folds(cell_root, selected)
+    (baseline / "certify/fold_4_result.json").write_text("tampered")
+
+    with pytest.raises(CampaignStageError, match="baseline sealed artifact changed"):
+        certify_winner(cell_root)
+    assert not (cell_root / "certification").exists()
 
 
 def test_selected_sealed_corruption_blocks_certification(staged_cell):
