@@ -1,7 +1,7 @@
 {
   "analysis_plan": {
     "path": "benchmarks/campaigns/preprint_130/analysis_plan.json",
-    "sha256": "e7e5c644b5826ecf7cc88017df2ee552bf7d797a0a5ada503d5fcc71e57ed043"
+    "sha256": "090a1ae27a479760f209dd5633eef25583bcb18b6b634c94f0a8b7af6416ae33"
   },
   "campaign_id": "automil-preprint-130-v3",
   "cells": [
@@ -3921,6 +3921,25 @@
     "benchmarks/experiments/tcga_luad/automil/config.yaml": "17db3c1eccb163e795a1c98a5e3a600839012b9aabafda1bcfb38a0c4c8dc782"
   },
   "protocol": {
+    "agentic_fold_trainings_per_cell": {
+      "discovery": 180,
+      "maximum": 200,
+      "minimum": 180,
+      "promotion_candidates_max": 10,
+      "promotion_candidates_min": 0,
+      "promotion_per_candidate": 2
+    },
+    "attempt_outcome_classes": [
+      "completed",
+      "budget-killed",
+      "timeout",
+      "oom",
+      "cancelled",
+      "partial",
+      "crash",
+      "missing-result",
+      "unknown"
+    ],
     "attempt_timeout": {
       "minutes": 360,
       "role": "failure-containment-not-search-budget",
@@ -3949,7 +3968,6 @@
       "retrain": false
     },
     "discovery_attempts": 60,
-    "fold_trainings_per_cell": 200,
     "frozen_winners": 1,
     "promotion_candidates": 10,
     "seed": 42,
