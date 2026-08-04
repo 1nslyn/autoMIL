@@ -90,6 +90,35 @@ def test_each_fold_gets_an_isolated_policy_class_namespace():
     assert ClassStatePolicy.COUNT == 0
 
 
+def test_each_fold_gets_an_isolated_module_helper_namespace():
+    namespace = {"__name__": "_fold_policy_fixture"}
+    exec('''
+class Helper:
+    COUNT = 0
+
+class ModulePolicy:
+    def wrap_optimizer_for(self, opt, *, role):
+        alias = Helper
+        alias.COUNT += 1
+        return opt
+''', namespace)
+    policy_type = namespace["ModulePolicy"]
+    helper_type = namespace["Helper"]
+    template = PolicyRuntime(name="module-state", policy=policy_type())
+    fold_zero = template.for_fold()
+    fold_one = template.for_fold()
+    optimizer = Mock(zero_grad=Mock(), step=Mock())
+    fold_zero.wrap_optimizer(optimizer)
+    fold_one.wrap_optimizer(optimizer)
+
+    helper_zero = fold_zero.policy.wrap_optimizer_for.__globals__["Helper"]
+    helper_one = fold_one.policy.wrap_optimizer_for.__globals__["Helper"]
+    assert helper_zero is not helper_one
+    assert helper_zero.COUNT == 1
+    assert helper_one.COUNT == 1
+    assert helper_type.COUNT == 0
+
+
 def test_nested_runtime_automil_dir_comes_from_orchestrator_env(monkeypatch):
     monkeypatch.setenv(
         "AUTOMIL_DIR_REL", "benchmarks/experiments/ccrcc/automil",
