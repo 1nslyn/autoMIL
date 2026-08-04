@@ -1,11 +1,11 @@
-"""CR-3 (audit 2026-07-23): the survival selection signal must not be the mean of
-five ~2-event per-fold c-indices.
+"""Pooled survival concordance remains available as a sealed diagnostic.
 
 The survival trainers explicitly refuse to select checkpoints on the per-fold val
 c-index ("With ~2 events per val fold the val c-index is near-random, so
-maximizing it would overfit to noise" — clam/survival_train.py), yet autoMIL's
-agentic search selected recipes on the mean of exactly that quantity. The
-composite now uses concordance pooled over every fold's validation risks.
+maximizing it would overfit to noise" — clam/survival_train.py). The frozen
+campaign nevertheless requires equal-weight fold means at every selection stage,
+so pooled concordance is reported for diagnosis and never substitutes for that
+predeclared estimand.
 """
 from __future__ import annotations
 

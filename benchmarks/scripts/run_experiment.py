@@ -250,6 +250,7 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     """
     test = summary.get("test", {})
     val = summary.get("val", {})
+    validation_folds = _validation_fold_evidence(summary)
 
     # Try to get peak VRAM
     peak_vram_mb = 0
@@ -261,19 +262,24 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
 
     if "c_index" in test:
         test_ci = test.get("c_index", {}).get("mean", 0.0)
-        # CR-3 (audit 2026-07-23): prefer the POOLED cross-fold val concordance as
-        # the selection signal. The per-fold val c-index is computed on ~2 events —
-        # the survival trainers themselves refuse to select checkpoints on it
-        # ("near-random"), yet autoMIL's search was selecting recipes on the mean
-        # of five such values. Pooling scores concordance once over every fold's
-        # val risks (~5x the events); it stays a concordance, so it remains
-        # comparable across recipes and across cox/nllsurv. Falls back to the
-        # fold-mean when a runner has not yet exported val_records.
-        pooled = (summary.get("val_pooled") or {}).get("c_index")
-        fold_mean_ci = val.get("c_index", {}).get("mean", 0.0)
-        val_ci = pooled if isinstance(pooled, float) and math.isfinite(pooled) else fold_mean_ci
+        # The campaign ranks discovery, promotion, and the final winner by the
+        # equal-weight mean of the same fold composites. Keep the graph-facing
+        # result on that exact scale as well; ``val_pooled`` remains a useful
+        # sealed diagnostic but must not silently change the search estimand.
+        fold_values = [
+            float(fold["composite"])
+            for fold in validation_folds
+            if isinstance(fold.get("composite"), (int, float))
+            and not isinstance(fold.get("composite"), bool)
+            and math.isfinite(float(fold["composite"]))
+        ]
+        fallback = val.get("c_index", {}).get("mean", 0.0)
+        val_ci = (
+            math.fsum(fold_values) / len(fold_values)
+            if fold_values else fallback
+        )
         composite = val_ci
-        metrics = {"val_c_index": round(val_ci, 4)}
+        metrics = {"val_c_index": val_ci}
         held_out = {"test_c_index": round(test_ci, 4)}
     else:
         test_auc = test.get("auc_roc", {}).get("mean", 0.0)
@@ -324,13 +330,13 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
         "status": status,
         "metrics": metrics,
         "held_out": held_out,
-        "composite": round(composite, 4),
+        "composite": composite if "c_index" in test else round(composite, 4),
         "composite_se": composite_se,
         "elapsed_seconds": round(elapsed, 1),
         "peak_vram_mb": round(peak_vram_mb),
         "n_valid_folds": n_valid_folds,
         "n_folds": n_folds_total,
-        "validation_folds": _validation_fold_evidence(summary),
+        "validation_folds": validation_folds,
         "summary": summary,
     }
 
