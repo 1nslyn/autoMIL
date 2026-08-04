@@ -374,6 +374,12 @@ def test_external_baseline_rejects_a_foreign_attestation(staged_cell, tmp_path):
 
     with pytest.raises(CampaignStageError, match="not bound to this cell/base/command"):
         register_baseline(cell_root, external)
+    assert not (cell_root / "baseline").exists()
+
+    # A failed registration must not poison the cell for a corrected archive.
+    external = _baseline(tmp_path / "corrected", attest_for=cell_root)
+    state = register_baseline(cell_root, external)
+    assert state["baseline"]["candidate_id"] == "baseline"
 
 
 def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):

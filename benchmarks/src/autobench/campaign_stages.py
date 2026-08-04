@@ -196,28 +196,42 @@ def _initialize_stage_state_unlocked(
     return _commit_state(cell_root, state)
 
 
-def _import_baseline_archive(cell_root: Path, source: Path) -> Path:
-    """Atomically import only the baseline artifacts the campaign consumes."""
+def _import_baseline_archive(
+    cell_root: Path,
+    source: Path,
+    expected_sha256: Mapping[str, str],
+) -> Path:
+    """Verify, then atomically import the exact attested baseline artifacts."""
     source = source.resolve()
     target_root = cell_root / "baseline"
     target = target_root / "archive"
+    required = {
+        relative: source / relative
+        for relative in expected_sha256
+    }
+    if set(required) != {
+        "result.json",
+        BASELINE_ATTESTATION_FILE,
+        *(f"certify/fold_{fold}_result.json" for fold in CERTIFICATION_FOLDS),
+    }:
+        raise CampaignStageError("baseline import artifact set is not exact")
+    if not all(path.is_file() for path in required.values()):
+        raise CampaignStageError("external baseline archive is incomplete")
+    actual_source = {
+        relative: file_sha256(path) for relative, path in required.items()
+    }
+    if actual_source != dict(expected_sha256):
+        raise CampaignStageError("baseline artifacts differ from their attestation")
     if source == target.resolve():
         return target
 
-    required = [source / "result.json", source / BASELINE_ATTESTATION_FILE] + [
-        source / "certify" / f"fold_{fold}_result.json"
-        for fold in CERTIFICATION_FOLDS
-    ]
-    if not all(path.is_file() for path in required):
-        raise CampaignStageError("external baseline archive is incomplete")
-    expected = {path.relative_to(source).as_posix(): file_sha256(path) for path in required}
     if target_root.exists():
         actual = {
             relative: file_sha256(target / relative)
-            for relative in expected
+            for relative in expected_sha256
             if (target / relative).is_file()
         }
-        if actual != expected:
+        if actual != dict(expected_sha256):
             raise CampaignStageError(
                 "cell-local baseline import exists with different artifact bytes"
             )
@@ -226,11 +240,16 @@ def _import_baseline_archive(cell_root: Path, source: Path) -> Path:
     temporary = Path(tempfile.mkdtemp(prefix=".baseline-", dir=str(cell_root)))
     temporary_archive = temporary / "archive"
     try:
-        for source_file in required:
-            relative = source_file.relative_to(source)
+        for relative, source_file in required.items():
             destination = temporary_archive / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, destination)
+        copied = {
+            relative: file_sha256(temporary_archive / relative)
+            for relative in expected_sha256
+        }
+        if copied != dict(expected_sha256):
+            raise CampaignStageError("baseline artifacts changed during import")
         os.replace(temporary, target_root)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -497,10 +516,6 @@ def _register_baseline_unlocked(
         if not sealed.is_file():
             raise CampaignStageError(f"baseline is missing sealed fold {fold_index}")
         sealed_hashes[f"fold_{fold_index}_result.json"] = file_sha256(sealed)
-    imported_archive = _import_baseline_archive(cell_root, baseline_archive)
-    imported_result = imported_archive / "result.json"
-    if file_sha256(imported_result) != file_sha256(result_path):
-        raise CampaignStageError("cell-local baseline import changed result bytes")
     identity_payload = {
         "result_sha256": file_sha256(result_path),
         "sealed_fold_sha256": sealed_hashes,
@@ -518,6 +533,15 @@ def _register_baseline_unlocked(
         raise CampaignStageError(
             "baseline attestation is not bound to this cell/base/command/artifact set"
         )
+    import_hashes = {
+        "result.json": identity_payload["result_sha256"],
+        BASELINE_ATTESTATION_FILE: file_sha256(attestation_path),
+        **{
+            f"certify/{filename}": digest
+            for filename, digest in sealed_hashes.items()
+        },
+    }
+    _import_baseline_archive(cell_root, baseline_archive, import_hashes)
     baseline = {
         "candidate_id": "baseline",
         "candidate_sha256": content_sha256(identity_payload),
