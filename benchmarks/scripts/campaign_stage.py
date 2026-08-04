@@ -15,6 +15,7 @@ from autobench.campaign_stages import (
     load_stage_state,
     materialize_promotion,
     register_baseline,
+    register_agent_session,
     run_native_baseline,
     select_winner,
 )
@@ -109,6 +110,7 @@ def main(argv: list[str] | None = None) -> None:
             "status", "register-baseline", "freeze-discovery",
             "materialize-promotion", "freeze-promotion", "select-winner",
             "certify", "baseline-command", "run-baseline", "advance",
+            "register-agent-session",
         ),
     )
     parser.add_argument("--cell-root", required=True)
@@ -119,6 +121,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--baseline-archive",
         help="Agent-facing native-baseline archive; required by register-baseline.",
+    )
+    parser.add_argument(
+        "--agent-session",
+        help="Runtime/resource attestation JSON; required by register-agent-session.",
     )
     args = parser.parse_args(argv)
     repo_root = Path(__file__).resolve().parents[2]
@@ -142,6 +148,18 @@ def main(argv: list[str] | None = None) -> None:
             state = run_native_baseline(
                 cell_root, repo_root=repo_root, gpu_id=args.gpu,
             )
+        elif args.action == "register-agent-session":
+            if not args.agent_session:
+                parser.error("register-agent-session requires --agent-session")
+            session_path = Path(args.agent_session)
+            if not session_path.is_absolute():
+                session_path = (repo_root / session_path).resolve()
+            try:
+                attestation = json.loads(session_path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                parser.error(f"cannot read --agent-session: {exc}")
+            register_agent_session(cell_root, attestation)
+            state = load_stage_state(cell_root)
         elif args.action == "freeze-discovery":
             state = freeze_discovery(cell_root)
         elif args.action == "materialize-promotion":

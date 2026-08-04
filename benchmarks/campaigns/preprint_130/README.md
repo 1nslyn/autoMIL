@@ -42,8 +42,14 @@ to the detached training worktree.
 
 ## 2. Materialize the campaign once
 
+Copy `agent_protocol.template.json`, fill the immutable provider/runtime/model
+versions, and hash the exact proposal instructions and tool schema. Placeholder
+or `unknown` values are rejected. This file fixes the coding-agent policy before
+any search starts; it is not an optimization result.
+
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_manifest.py materialize
+.venv/bin/python benchmarks/scripts/campaign_manifest.py materialize \
+  --agent-protocol /path/to/agent_protocol.json
 ```
 
 This creates one restart-safe project under
@@ -139,6 +145,16 @@ The winner record is immutable. `advance` may perform the next safe transition
 through selection, but it intentionally stops at `winner-frozen` and never
 reveals held-out data.
 
+Fill `agent_session.template.json` from the runtime usage record and register it
+for the frozen cell. Exact, estimated, and unavailable usage are all represented
+explicitly; unavailable token/cost fields must be null and carry a reason.
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_stage.py register-agent-session \
+  --cell-root "$CAMPAIGN_CELL_ROOT" \
+  --agent-session /path/to/agent_session.json
+```
+
 Repeat Sections 3–5 for every manifest cell. No cell may be certified early.
 
 ## 6. Freeze all selections, then certify
@@ -152,7 +168,8 @@ selections into one campaign artifact:
 ```
 
 Before `selection_freeze.json` exists and contains the exact 130-cell roster,
-every per-cell certification entry point fails closed. `certify-all` is
+one locked protocol, and 130 immutable session attestations, every per-cell
+certification entry point fails closed. `certify-all` is
 restart-safe: it verifies and reveals each frozen winner together with its
 native baseline, emits paired fold deltas, and writes a hashed
 `campaign_certification.json` index. The ordinary `status` output reports only

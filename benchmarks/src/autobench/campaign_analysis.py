@@ -20,6 +20,7 @@ from autobench.campaign import (
 from autobench.campaign_stages import (
     CAMPAIGN_CERTIFICATION_FILE,
     CAMPAIGN_CELL_COUNT,
+    SELECTION_FREEZE_FILE,
 )
 
 PUBLICATION_REPORT_FILE = "publication_report.json"
@@ -203,6 +204,31 @@ def _grouped_lift(cells: list[dict[str, Any]], key: str) -> dict[str, Any]:
     return {name: _summary(values) for name, values in sorted(grouped.items())}
 
 
+def _resource_summary(cells: list[dict[str, Any]]) -> dict[str, Any]:
+    statuses: dict[str, int] = defaultdict(int)
+    numeric = (
+        "input_tokens", "output_tokens", "cached_input_tokens", "cost_usd",
+    )
+    observed: dict[str, list[float]] = {key: [] for key in numeric}
+    for cell in cells:
+        usage = cell["agent_usage"]
+        statuses[str(usage["status"])] += 1
+        for key in numeric:
+            value = usage.get(key)
+            if value is not None:
+                observed[key].append(float(value))
+    return {
+        "usage_status": dict(sorted(statuses.items())),
+        **{
+            key: {
+                "reported_cells": len(values),
+                "total": math.fsum(values) if values else None,
+            }
+            for key, values in observed.items()
+        },
+    }
+
+
 def _ranking_blocks(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
     expected_arms = {framework for framework, _ in TILE_ARMS}
     grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -310,11 +336,33 @@ def build_publication_report(
     manifest_cells = {cell["cell_id"]: cell for cell in manifest["cells"]}
     if len(entries) != CAMPAIGN_CELL_COUNT or set(entries) != set(manifest_cells):
         raise CampaignAnalysisError("campaign certification roster is incomplete")
+    freeze = _read_json(
+        runtime_root / SELECTION_FREEZE_FILE, "campaign selection freeze",
+    )
+    freeze_hash = freeze.get("freeze_sha256")
+    if (
+        freeze_hash != index.get("selection_freeze_sha256")
+        or freeze_hash != content_sha256({
+            key: value for key, value in freeze.items() if key != "freeze_sha256"
+        })
+        or freeze.get("cell_count") != CAMPAIGN_CELL_COUNT
+    ):
+        raise CampaignAnalysisError("campaign selection freeze integrity mismatch")
+    freeze_entries = {
+        row.get("cell_id"): row for row in freeze.get("cells", [])
+        if isinstance(row, dict) and isinstance(row.get("cell_id"), str)
+    }
+    if set(freeze_entries) != set(manifest_cells):
+        raise CampaignAnalysisError("campaign selection freeze roster is incomplete")
 
     cells: list[dict[str, Any]] = []
     for cell_id in sorted(manifest_cells):
         cell = manifest_cells[cell_id]
         entry = entries[cell_id]
+        freeze_entry = freeze_entries[cell_id]
+        agent_usage = freeze_entry.get("agent_usage")
+        if not isinstance(agent_usage, dict):
+            raise CampaignAnalysisError(f"{cell_id}: agent usage is missing")
         bundle_path = _safe_relative(runtime_root, entry.get("bundle"), cell_id)
         if _file_hash(bundle_path, f"{cell_id} certification bundle") != entry.get("file_sha256"):
             raise CampaignAnalysisError(f"{cell_id}: certification file hash mismatch")
@@ -358,6 +406,7 @@ def build_publication_report(
             "winner_primary": winner_primary,
             "primary_lift": winner_primary - baseline_primary,
             "bundle_sha256": recorded_bundle_hash,
+            "agent_usage": agent_usage,
         })
 
     blocks = _ranking_blocks(cells)
@@ -378,6 +427,7 @@ def build_publication_report(
             "by_dataset": _grouped_lift(cells, "dataset"),
             "by_framework": _grouped_lift(cells, "framework"),
             "tile_ranking_response": _ranking_summary(blocks),
+            "agent_resources": _resource_summary(cells),
             "titan": _summary(
                 cell["primary_lift"] for cell in cells if cell["regime"] == "slide"
             ),

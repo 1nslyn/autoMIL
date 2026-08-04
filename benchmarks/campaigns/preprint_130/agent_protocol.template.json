@@ -1,0 +1,13 @@
+{
+  "campaign_id": "automil-preprint-130-v3",
+  "max_sessions_per_cell": 1,
+  "model": "REPLACE_WITH_MODEL_NAME",
+  "model_version": "REPLACE_WITH_IMMUTABLE_MODEL_VERSION",
+  "proposal_policy_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS",
+  "provider": "REPLACE_WITH_PROVIDER",
+  "purpose": "publication",
+  "runtime": "REPLACE_WITH_AGENT_RUNTIME",
+  "runtime_version": "REPLACE_WITH_IMMUTABLE_RUNTIME_VERSION",
+  "schema_version": 1,
+  "toolset_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+}

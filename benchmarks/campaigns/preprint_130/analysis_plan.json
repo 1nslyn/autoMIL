@@ -7,6 +7,16 @@
   },
   "campaign_id": "automil-preprint-130-v3",
   "estimands": {
+    "agent_resources": {
+      "fields": [
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "cost_usd"
+      ],
+      "missingness": "report unavailable explicitly; never coerce it to zero",
+      "unit": "the one locked coding-agent session assigned to each cell"
+    },
     "agentic_lift": {
       "contrast": "frozen autoMIL winner minus native baseline within the same cell",
       "report_by": [

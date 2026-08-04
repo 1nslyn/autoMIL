@@ -1,0 +1,22 @@
+{
+  "agent_protocol_sha256": "REPLACE_WITH_PROTOCOL_CONTENT_SHA256",
+  "campaign_id": "automil-preprint-130-v3",
+  "cell_id": "REPLACE_WITH_CELL_ID",
+  "schema_version": 1,
+  "sessions": [
+    {
+      "ended_at": "REPLACE_WITH_ISO_8601_TIMESTAMP",
+      "session_id": "REPLACE_WITH_RUNTIME_SESSION_ID",
+      "started_at": "REPLACE_WITH_ISO_8601_TIMESTAMP",
+      "termination_reason": "budget-complete",
+      "usage": {
+        "basis": "REPLACE_WITH_API_USAGE_SOURCE_OR_UNAVAILABILITY_REASON",
+        "cached_input_tokens": null,
+        "cost_usd": null,
+        "input_tokens": null,
+        "output_tokens": null,
+        "status": "unavailable"
+      }
+    }
+  ]
+}

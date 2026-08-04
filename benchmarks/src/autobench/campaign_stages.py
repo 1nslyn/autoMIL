@@ -37,6 +37,7 @@ from automil.cells.state import read_cell
 from automil.cells.state import Cell, CellStatus, write_cell
 
 from autobench.campaign import (
+    AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
     DATASETS,
@@ -47,6 +48,7 @@ from autobench.campaign import (
     content_sha256,
     file_sha256,
     load_manifest,
+    validate_agent_protocol,
 )
 
 STATE_SCHEMA_VERSION = 2
@@ -54,6 +56,7 @@ STATE_FILE = "campaign_state.json"
 BASELINE_ATTESTATION_FILE = "baseline_attestation.json"
 SELECTION_FREEZE_FILE = "selection_freeze.json"
 CAMPAIGN_CERTIFICATION_FILE = "campaign_certification.json"
+AGENT_SESSION_FILE = "agent_session.json"
 CAMPAIGN_CELL_COUNT = len(DATASETS) * 26
 
 
@@ -1756,6 +1759,146 @@ def _read_certification_evidence(
     return held_out_folds, aggregate, source_hashes
 
 
+def _locked_agent_protocol(runtime_root: Path) -> tuple[dict[str, Any], str]:
+    path = runtime_root / AGENT_PROTOCOL_FILE
+    try:
+        raw = json.loads(path.read_text())
+        protocol = validate_agent_protocol(raw, allow_canary=True)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise CampaignStageError(f"cannot verify locked agent protocol: {exc}") from exc
+    return protocol, content_sha256(protocol)
+
+
+def _validate_agent_session(
+    payload: Mapping[str, Any], *, state: Mapping[str, Any],
+    agent_protocol_sha256: str,
+) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "cell_id", "agent_protocol_sha256",
+        "sessions", "attestation_sha256",
+    }
+    if not isinstance(payload, Mapping) or set(payload) != required:
+        raise CampaignStageError("agent session attestation field set is not exact")
+    recorded = payload.get("attestation_sha256")
+    canonical = {
+        key: value for key, value in payload.items()
+        if key != "attestation_sha256"
+    }
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("campaign_id") != CAMPAIGN_ID
+        or payload.get("cell_id") != state.get("cell_id")
+        or payload.get("agent_protocol_sha256") != agent_protocol_sha256
+        or recorded != content_sha256(canonical)
+    ):
+        raise CampaignStageError("agent session attestation binding mismatch")
+    sessions = payload.get("sessions")
+    if not isinstance(sessions, list) or len(sessions) != 1:
+        raise CampaignStageError("preprint requires exactly one agent session per cell")
+    session = sessions[0]
+    session_fields = {
+        "session_id", "started_at", "ended_at", "termination_reason", "usage",
+    }
+    if not isinstance(session, dict) or set(session) != session_fields:
+        raise CampaignStageError("agent session record field set is not exact")
+    for key in ("session_id", "termination_reason"):
+        if not isinstance(session.get(key), str) or not session[key].strip():
+            raise CampaignStageError(f"agent session {key} is invalid")
+    try:
+        started = datetime.fromisoformat(str(session["started_at"]))
+        ended = datetime.fromisoformat(str(session["ended_at"]))
+    except ValueError as exc:
+        raise CampaignStageError("agent session timestamps are invalid") from exc
+    if started.tzinfo is None or ended.tzinfo is None or ended < started:
+        raise CampaignStageError("agent session time interval is invalid")
+    usage = session.get("usage")
+    usage_fields = {
+        "status", "input_tokens", "output_tokens", "cached_input_tokens",
+        "cost_usd", "basis",
+    }
+    if not isinstance(usage, dict) or set(usage) != usage_fields:
+        raise CampaignStageError("agent session usage field set is not exact")
+    if usage.get("status") not in {"exact", "estimated", "unavailable"}:
+        raise CampaignStageError("agent session usage status is invalid")
+    if not isinstance(usage.get("basis"), str) or not usage["basis"].strip():
+        raise CampaignStageError("agent session usage basis is required")
+    numeric_fields = ("input_tokens", "output_tokens", "cached_input_tokens")
+    for key in numeric_fields:
+        value = usage.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise CampaignStageError(f"agent session usage {key} is invalid")
+    cost = usage.get("cost_usd")
+    if cost is not None and (
+        isinstance(cost, bool)
+        or not isinstance(cost, (int, float))
+        or not math.isfinite(float(cost))
+        or float(cost) < 0
+    ):
+        raise CampaignStageError("agent session usage cost_usd is invalid")
+    if usage["status"] == "unavailable":
+        if any(usage[key] is not None for key in (*numeric_fields, "cost_usd")):
+            raise CampaignStageError("unavailable usage must use null numeric fields")
+    elif usage["input_tokens"] is None or usage["output_tokens"] is None:
+        raise CampaignStageError("reported usage requires input and output tokens")
+    return json.loads(json.dumps(payload))
+
+
+def register_agent_session(
+    cell_root: Path, attestation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Import the one runtime/resource attestation allowed for this cell."""
+    with _stage_lock(cell_root):
+        state = load_stage_state(cell_root)
+        if state.get("phase") != "winner-frozen":
+            raise CampaignStageError("agent session is registered after winner freeze")
+        _, protocol_sha256 = _locked_agent_protocol(cell_root.parent)
+        config = yaml.safe_load((cell_root / "automil/config.yaml").read_text()) or {}
+        if (config.get("campaign") or {}).get(
+            "agent_protocol_sha256"
+        ) != protocol_sha256:
+            raise CampaignStageError("cell config agent protocol binding mismatch")
+        prepared = json.loads(json.dumps(attestation))
+        if "attestation_sha256" not in prepared:
+            prepared["attestation_sha256"] = content_sha256(prepared)
+        validated = _validate_agent_session(
+            prepared, state=state, agent_protocol_sha256=protocol_sha256,
+        )
+        target = cell_root / AGENT_SESSION_FILE
+        if target.exists():
+            try:
+                existing = json.loads(target.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CampaignStageError("existing agent session is corrupt") from exc
+            if existing != validated:
+                raise CampaignStageError("agent session attestation is immutable")
+            return validated
+        _atomic_write_json(target, validated)
+        return validated
+
+
+def _agent_session_for_freeze(
+    cell_root: Path, state: Mapping[str, Any], protocol_sha256: str,
+) -> dict[str, Any]:
+    try:
+        config = yaml.safe_load((cell_root / "automil/config.yaml").read_text()) or {}
+        payload = json.loads((cell_root / AGENT_SESSION_FILE).read_text())
+    except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise CampaignStageError(
+            f"{state.get('cell_id')}: agent session attestation is missing"
+        ) from exc
+    if (config.get("campaign") or {}).get(
+        "agent_protocol_sha256"
+    ) != protocol_sha256:
+        raise CampaignStageError(
+            f"{state.get('cell_id')}: cell agent protocol binding drift"
+        )
+    return _validate_agent_session(
+        payload, state=state, agent_protocol_sha256=protocol_sha256,
+    )
+
+
 def _validated_selection_freeze(runtime_root: Path) -> dict[str, Any]:
     path = runtime_root / SELECTION_FREEZE_FILE
     try:
@@ -1775,6 +1918,8 @@ def _validated_selection_freeze(runtime_root: Path) -> dict[str, Any]:
         artifact.get("schema_version") != 1
         or artifact.get("campaign_id") != CAMPAIGN_ID
         or artifact.get("protocol_sha256") != content_sha256(PROTOCOL)
+        or not isinstance(artifact.get("agent_protocol_sha256"), str)
+        or len(artifact["agent_protocol_sha256"]) != 64
         or artifact.get("cell_count") != CAMPAIGN_CELL_COUNT
         or not isinstance(cells, list)
         or len(cells) != CAMPAIGN_CELL_COUNT
@@ -1791,9 +1936,11 @@ def _verify_selection_freeze_for_cell(
     cell_root: Path, state: Mapping[str, Any],
 ) -> str:
     artifact = _validated_selection_freeze(cell_root.parent)
+    _, agent_protocol_sha256 = _locked_agent_protocol(cell_root.parent)
     if (
         artifact.get("manifest_sha256") != state.get("manifest_sha256")
         or artifact.get("base_commit") != state.get("base_commit")
+        or artifact.get("agent_protocol_sha256") != agent_protocol_sha256
     ):
         raise CampaignStageError("campaign selection freeze binding mismatch")
     entries = {
@@ -1805,12 +1952,18 @@ def _verify_selection_freeze_for_cell(
     winner = state.get("winner")
     if not isinstance(entry, dict) or not isinstance(winner, dict):
         raise CampaignStageError("cell is absent from the global selection freeze")
+    session = _agent_session_for_freeze(
+        cell_root, state, agent_protocol_sha256,
+    )
     if (
         entry.get("cell_sha256") != state.get("cell_sha256")
         or entry.get("selection_sha256") != winner.get("selection_sha256")
         or entry.get("winner_candidate_sha256") != winner.get("candidate_sha256")
         or entry.get("winner_candidate_id") != winner.get("candidate_id")
         or entry.get("winner_kind") != winner.get("kind")
+        or entry.get("agent_session_sha256")
+        != session.get("attestation_sha256")
+        or entry.get("agent_usage") != session["sessions"][0]["usage"]
     ):
         raise CampaignStageError("cell winner differs from the global selection freeze")
     return str(artifact["freeze_sha256"])
@@ -1824,6 +1977,7 @@ def freeze_campaign_selections(
     manifest_path = manifest_path.resolve()
     manifest = load_manifest(manifest_path)
     manifest_sha256 = file_sha256(manifest_path)
+    _, agent_protocol_sha256 = _locked_agent_protocol(runtime_root)
     expected = {cell["cell_id"]: cell for cell in manifest["cells"]}
     if len(expected) != CAMPAIGN_CELL_COUNT:
         raise CampaignStageError(
@@ -1837,18 +1991,27 @@ def freeze_campaign_selections(
             if (
                 set(entries) != set(expected)
                 or artifact.get("manifest_sha256") != manifest_sha256
+                or artifact.get("agent_protocol_sha256")
+                != agent_protocol_sha256
             ):
                 raise CampaignStageError("selection freeze cell roster mismatch")
             for cell_id, cell in expected.items():
                 state = load_stage_state(runtime_root / cell_id)
                 winner = state.get("winner") or {}
                 entry = entries[cell_id]
+                session = _agent_session_for_freeze(
+                    runtime_root / cell_id, state, agent_protocol_sha256,
+                )
                 if (
                     state.get("cell_sha256") != cell["cell_sha256"]
                     or entry.get("selection_sha256")
                     != winner.get("selection_sha256")
                     or entry.get("winner_candidate_sha256")
                     != winner.get("candidate_sha256")
+                    or entry.get("agent_session_sha256")
+                    != session.get("attestation_sha256")
+                    or entry.get("agent_usage")
+                    != session["sessions"][0]["usage"]
                 ):
                     raise CampaignStageError(
                         f"{cell_id}: winner drift after campaign selection freeze"
@@ -1883,6 +2046,9 @@ def freeze_campaign_selections(
             ):
                 raise CampaignStageError(f"{cell_id}: campaign binding drift")
             base_commits.add(str(state.get("base_commit", "")))
+            session = _agent_session_for_freeze(
+                runtime_root / cell_id, state, agent_protocol_sha256,
+            )
             entries.append({
                 "cell_id": cell_id,
                 "cell_sha256": state["cell_sha256"],
@@ -1891,6 +2057,8 @@ def freeze_campaign_selections(
                 "winner_kind": winner["kind"],
                 "winner_candidate_id": winner["candidate_id"],
                 "winner_candidate_sha256": winner["candidate_sha256"],
+                "agent_session_sha256": session["attestation_sha256"],
+                "agent_usage": session["sessions"][0]["usage"],
             })
         if len(base_commits) != 1 or "" in base_commits:
             raise CampaignStageError("campaign cells do not share one base commit")
@@ -1899,6 +2067,7 @@ def freeze_campaign_selections(
             "campaign_id": CAMPAIGN_ID,
             "manifest_sha256": manifest_sha256,
             "protocol_sha256": content_sha256(PROTOCOL),
+            "agent_protocol_sha256": agent_protocol_sha256,
             "base_commit": next(iter(base_commits)),
             "cell_count": len(entries),
             "cells": entries,

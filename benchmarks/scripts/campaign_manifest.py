@@ -31,6 +31,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--output-root", default="benchmarks/campaigns/preprint_130/runtime",
     )
+    parser.add_argument(
+        "--agent-protocol",
+        help="Publication-ready agent protocol JSON; required by materialize.",
+    )
     args = parser.parse_args(argv)
     repo_root = Path(__file__).resolve().parents[2]
     manifest_path = (repo_root / args.manifest).resolve()
@@ -49,8 +53,20 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit("manifest differs from the current canonical roster")
         print(f"verified 130 cells ({file_sha256(manifest_path)})")
     elif args.action == "materialize":
+        if not args.agent_protocol:
+            parser.error("materialize requires --agent-protocol")
+        import json
+
+        agent_protocol_path = Path(args.agent_protocol)
+        if not agent_protocol_path.is_absolute():
+            agent_protocol_path = (repo_root / agent_protocol_path).resolve()
+        try:
+            agent_protocol = json.loads(agent_protocol_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"cannot read --agent-protocol: {exc}")
         roots = materialize_discovery_cells(
             manifest_path, output_root, repo_root,
+            agent_protocol=agent_protocol,
         )
         print(f"materialized {len(roots)} isolated discovery roots")
     elif args.action == "canary":

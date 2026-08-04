@@ -26,6 +26,7 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 SCHEMA_VERSION = 3
 CAMPAIGN_ID = "automil-preprint-130-v3"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
+AGENT_PROTOCOL_FILE = "agent_protocol.json"
 DATASETS = (
     "tcga_luad",
     "tcga_lgg",
@@ -86,10 +87,64 @@ PROTOCOL = {
     },
     "fold_trainings_per_cell": FOLD_TRAININGS_PER_CELL,
 }
+CANARY_AGENT_PROTOCOL = {
+    "schema_version": 1,
+    "campaign_id": CAMPAIGN_ID,
+    "purpose": "canary",
+    "provider": "canary",
+    "runtime": "canary",
+    "runtime_version": "canary-1",
+    "model": "canary",
+    "model_version": "canary-1",
+    "proposal_policy_sha256": "a" * 64,
+    "toolset_sha256": "b" * 64,
+    "max_sessions_per_cell": 1,
+}
 
 
 class CampaignManifestError(ValueError):
     """A campaign artifact is malformed or has drifted from its lock."""
+
+
+def validate_agent_protocol(
+    raw: Mapping[str, Any], *, allow_canary: bool = False,
+) -> dict[str, Any]:
+    """Validate the coding-agent policy that must be locked before search."""
+    required_strings = (
+        "provider", "runtime", "runtime_version", "model", "model_version",
+    )
+    required_hashes = ("proposal_policy_sha256", "toolset_sha256")
+    expected_keys = {
+        "schema_version", "campaign_id", "purpose", *required_strings,
+        *required_hashes, "max_sessions_per_cell",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected_keys:
+        raise CampaignManifestError("agent protocol field set is not exact")
+    purpose = raw.get("purpose")
+    if purpose not in ({"publication", "canary"} if allow_canary else {"publication"}):
+        raise CampaignManifestError("agent protocol purpose is not allowed here")
+    if raw.get("schema_version") != 1 or raw.get("campaign_id") != CAMPAIGN_ID:
+        raise CampaignManifestError("agent protocol identity is invalid")
+    for key in required_strings:
+        value = raw.get(key)
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or value.upper().startswith("REPLACE")
+            or value.lower() == "unknown"
+        ):
+            raise CampaignManifestError(f"agent protocol {key} is not publication-ready")
+    for key in required_hashes:
+        value = raw.get(key)
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise CampaignManifestError(f"agent protocol {key} is not a SHA-256")
+    if raw.get("max_sessions_per_cell") != 1:
+        raise CampaignManifestError("preprint protocol requires one agent session per cell")
+    return json.loads(json.dumps(raw))
 
 
 def resolve_campaign_base_commit(repo_root: Path) -> str:
@@ -428,7 +483,9 @@ def materialize_discovery_cells(
     output_root: Path,
     repo_root: Path,
     *,
+    agent_protocol: Mapping[str, Any],
     base_commit: str | None = None,
+    allow_canary_protocol: bool = False,
 ) -> list[Path]:
     """Create 130 isolated discovery roots from the immutable manifest.
 
@@ -438,6 +495,10 @@ def materialize_discovery_cells(
     """
     manifest = load_manifest(manifest_path)
     manifest_hash = file_sha256(manifest_path)
+    locked_agent_protocol = validate_agent_protocol(
+        agent_protocol, allow_canary=allow_canary_protocol,
+    )
+    agent_protocol_sha256 = content_sha256(locked_agent_protocol)
     repo_root = repo_root.resolve()
     output_root = output_root.resolve()
     base_commit = base_commit or resolve_campaign_base_commit(repo_root)
@@ -452,6 +513,30 @@ def materialize_discovery_cells(
     except ValueError as exc:
         raise CampaignManifestError("campaign output_root must live inside the git repo") from exc
     output_root.mkdir(parents=True, exist_ok=True)
+    agent_protocol_path = output_root / AGENT_PROTOCOL_FILE
+    if agent_protocol_path.exists():
+        try:
+            existing_agent_protocol = json.loads(agent_protocol_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CampaignManifestError("existing agent protocol is unreadable") from exc
+        if existing_agent_protocol != locked_agent_protocol:
+            raise CampaignManifestError("existing campaign uses a different agent protocol")
+    else:
+        fd, temporary = tempfile.mkstemp(
+            dir=str(output_root), prefix=".agent-protocol-", suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(
+                    json.dumps(locked_agent_protocol, indent=2, sort_keys=True) + "\n"
+                )
+            os.replace(temporary, agent_protocol_path)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
     written: list[Path] = []
     for cell in manifest["cells"]:
         cell_root = output_root / cell["cell_id"]
@@ -512,6 +597,7 @@ def materialize_discovery_cells(
             "budget_cell_id": cell["budget_identity"]["cell_id"],
             "stage": "discovery",
             "base_commit": base_commit,
+            "agent_protocol_sha256": agent_protocol_sha256,
         }
 
         # Materialization is a restart-safe initializer, never a reset command.
@@ -603,6 +689,18 @@ def audit_materialized_campaign(
         raise CampaignManifestError(
             f"materialized root count mismatch: {len(roots)} != {len(manifest['cells'])}"
         )
+    runtime_roots = {adir.parent.parent.resolve() for adir in roots}
+    if len(runtime_roots) != 1:
+        raise CampaignManifestError("materialized cells do not share one runtime root")
+    runtime_root = next(iter(runtime_roots))
+    try:
+        agent_protocol = validate_agent_protocol(
+            json.loads((runtime_root / AGENT_PROTOCOL_FILE).read_text()),
+            allow_canary=True,
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignManifestError("cannot read locked campaign agent protocol") from exc
+    agent_protocol_sha256 = content_sha256(agent_protocol)
     by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
     seen: set[str] = set()
     base_commits: set[str] = set()
@@ -632,6 +730,8 @@ def audit_materialized_campaign(
         )
         if campaign.get("stage") != "discovery":
             raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
+        if campaign.get("agent_protocol_sha256") != agent_protocol_sha256:
+            raise CampaignManifestError(f"{cell_id}: agent protocol binding drift")
         base_commits.add(str(campaign.get("base_commit", "")))
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
@@ -694,6 +794,7 @@ def audit_materialized_campaign(
     return {
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": manifest_hash,
+        "agent_protocol_sha256": agent_protocol_sha256,
         "cells": len(seen),
         "base_commit": next(iter(base_commits)),
         "regimes": {
@@ -712,7 +813,9 @@ def run_materialization_canary(
     with tempfile.TemporaryDirectory(prefix=".canary-", dir=str(parent)) as raw:
         roots = materialize_discovery_cells(
             manifest_path, Path(raw) / "runtime", repo_root,
+            agent_protocol=CANARY_AGENT_PROTOCOL,
             base_commit=base_commit,
+            allow_canary_protocol=True,
         )
         return audit_materialized_campaign(
             roots=roots, manifest_path=manifest_path, repo_root=repo_root,
