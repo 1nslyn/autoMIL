@@ -96,9 +96,11 @@ def test_d179_clause_04_no_extras_install_works():
     import automil  # must succeed
     import automil.backends  # must succeed
 
-    # Use the installed script entry point; -m automil would need __main__.py.
+    # Exercise the package installed in the active test environment.  Calling
+    # ``uv run`` here couples an acceptance test to a writable global uv cache
+    # and can silently resolve a different environment.
     out = subprocess.run(
-        ["uv", "run", "automil", "--help"],
+        [sys.executable, "-m", "automil", "--help"],
         cwd=_REPO_ROOT, capture_output=True, text=True,
     )
     assert out.returncode == 0, f"automil --help failed: {out.stderr}"
