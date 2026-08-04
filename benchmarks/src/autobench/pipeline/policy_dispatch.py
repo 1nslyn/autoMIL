@@ -10,9 +10,104 @@ from __future__ import annotations
 
 import json
 import os
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+
+
+def _clone_function(
+    function: types.FunctionType,
+    globals_dict: dict[str, Any],
+) -> types.FunctionType:
+    """Clone a function onto a fold-local module-global namespace."""
+    cloned = types.FunctionType(
+        function.__code__,
+        globals_dict,
+        name=function.__name__,
+        argdefs=function.__defaults__,
+        closure=function.__closure__,
+    )
+    cloned.__kwdefaults__ = (
+        dict(function.__kwdefaults__) if function.__kwdefaults__ else None
+    )
+    cloned.__annotations__ = dict(function.__annotations__)
+    cloned.__dict__.update(function.__dict__)
+    cloned.__doc__ = function.__doc__
+    cloned.__module__ = function.__module__
+    cloned.__qualname__ = function.__qualname__
+    return cloned
+
+
+def _fold_local_class(
+    source: type[Any],
+    globals_dict: dict[str, Any],
+    *,
+    suffix: str,
+) -> type[Any]:
+    """Subclass one module-local class with cloned methods/globals."""
+    namespace: dict[str, Any] = {"__module__": source.__module__}
+    for name, value in source.__dict__.items():
+        if isinstance(value, types.FunctionType):
+            namespace[name] = _clone_function(value, globals_dict)
+        elif isinstance(value, staticmethod):
+            namespace[name] = staticmethod(_clone_function(value.__func__, globals_dict))
+        elif isinstance(value, classmethod):
+            namespace[name] = classmethod(_clone_function(value.__func__, globals_dict))
+        elif isinstance(value, property):
+            namespace[name] = property(
+                _clone_function(value.fget, globals_dict) if value.fget else None,
+                _clone_function(value.fset, globals_dict) if value.fset else None,
+                _clone_function(value.fdel, globals_dict) if value.fdel else None,
+                value.__doc__,
+            )
+    return type(f"{source.__name__}{suffix}", (source,), namespace)
+
+
+def _fold_local_policy_type(factory: type[Any]) -> type[Any]:
+    """Clone a policy's module-local function/class namespace for one fold."""
+    # Local test/programmatic classes have closure state rather than a variant
+    # module namespace. A unique subclass still isolates their class rebinding.
+    if "<locals>" in factory.__qualname__:
+        return type(
+            f"{factory.__name__}FoldLocal",
+            (factory,),
+            {"__module__": factory.__module__},
+        )
+
+    source_globals = next((
+        value.__globals__
+        for value in factory.__dict__.values()
+        if isinstance(value, types.FunctionType)
+    ), None)
+    if source_globals is None:
+        source_globals = {"__builtins__": __builtins__}
+    isolated_globals = dict(source_globals)
+
+    # Clone module-local helpers first. Their functions all share the same new
+    # globals dict, so aliases resolve to the fold-local helper objects below.
+    for name, value in list(source_globals.items()):
+        if (
+            isinstance(value, types.FunctionType)
+            and value.__module__ == factory.__module__
+        ):
+            isolated_globals[name] = _clone_function(value, isolated_globals)
+    for name, value in list(source_globals.items()):
+        if (
+            isinstance(value, type)
+            and value is not factory
+            and value.__module__ == factory.__module__
+            and "<locals>" not in value.__qualname__
+        ):
+            isolated_globals[name] = _fold_local_class(
+                value, isolated_globals, suffix="FoldLocal",
+            )
+
+    policy_type = _fold_local_class(
+        factory, isolated_globals, suffix="FoldLocal",
+    )
+    isolated_globals[factory.__name__] = policy_type
+    return policy_type
 
 
 def runtime_automil_dir() -> Path:
@@ -121,13 +216,7 @@ class PolicyRuntime:
     def _resolved_policy(self) -> Any | None:
         """Instantiate once, at first use inside an already-seeded trainer."""
         if self.policy is None and self.policy_factory is not None:
-            factory = self.policy_factory
-            fold_local_type = type(
-                f"{factory.__name__}FoldLocal",
-                (factory,),
-                {"__module__": factory.__module__},
-            )
-            self.policy = fold_local_type()
+            self.policy = _fold_local_policy_type(self.policy_factory)()
         return self.policy
 
     def wrap_optimizer(self, optimizer: Any, *, role: str = "main") -> Any:
