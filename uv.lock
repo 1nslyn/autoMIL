@@ -313,6 +313,8 @@ dev = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pytest" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -342,6 +344,7 @@ provides-extras = ["examples-iris", "ml", "ray", "slurm"]
 dev = [
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pytest", specifier = ">=9.0.2" },
+    { name = "scikit-learn", specifier = ">=1.4" },
     { name = "scipy", specifier = ">=1.15.3" },
 ]
 
