@@ -74,6 +74,24 @@ class TestCandidateClassification:
         assert first.override_hash == second.override_hash
         assert first.override_hash != changed.override_hash
 
+    def test_override_hash_canonicalizes_option_spelling_and_order(self):
+        policy = CandidatePolicy(
+            mode="architecture-preserving",
+            allowed_override_options=("--hparams", "--policy-variant"),
+        )
+        first = policy.classify(
+            [],
+            override='--hparams \'{"lr":0.001,"wd":0.01}\' '
+            '--policy-variant cosine',
+        )
+        second = policy.classify(
+            [],
+            override='--policy-variant=cosine '
+            '--hparams=\'{ "wd": 0.01, "lr": 0.001 }\'',
+        )
+        assert first.accepted and second.accepted
+        assert first.override_hash == second.override_hash
+
     @pytest.mark.parametrize("key", ["no_inst_cluster", "bag_weight"])
     def test_identity_erasing_hparam_is_rejected(self, recipe_policy, key):
         verdict = recipe_policy.classify(
@@ -106,6 +124,17 @@ class TestCandidateClassification:
 
     def test_malformed_override_is_invalid(self, recipe_policy):
         verdict = recipe_policy.classify([], override='--hparams "unterminated')
+        assert verdict.accepted is False
+        assert verdict.candidate_class is CandidateClass.INVALID
+
+    @pytest.mark.parametrize(
+        "override",
+        ["extra --hparams '{}'", "--hparams '{}' trailing", "--hparams '{}' --hparams '{}'"],
+    )
+    def test_override_rejects_positional_tokens_and_duplicate_options(
+        self, recipe_policy, override,
+    ):
+        verdict = recipe_policy.classify([], override=override)
         assert verdict.accepted is False
         assert verdict.candidate_class is CandidateClass.INVALID
 
