@@ -14,8 +14,8 @@ Examples
 --------
 python benchmarks/scripts/collect_results.py \
     --roots /data/tcga-luad/benchmark /data/cptac-gbm/benchmark \
-    --out paper/preprint/figures/results.csv \
-    --per-fold-out paper/preprint/figures/per_fold.csv
+    --out reports/results.csv \
+    --per-fold-out reports/per_fold.csv
 """
 
 from __future__ import annotations
