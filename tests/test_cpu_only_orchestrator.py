@@ -178,15 +178,17 @@ def test_rocm_subprocess_masks_one_physical_device_and_blocks_spoofing(
                 "CUDA_VISIBLE_DEVICES": "99",
                 "HIP_VISIBLE_DEVICES": "99",
                 "ROCR_VISIBLE_DEVICES": "99",
+                "GPU_DEVICE_ORDINAL": "99",
                 "AUTOMIL_GPU": "99",
                 "AUTOMIL_ACCELERATOR": "cpu",
             },
         },
     )
 
-    assert env["CUDA_VISIBLE_DEVICES"] == "1"
-    assert env["HIP_VISIBLE_DEVICES"] == "1"
+    assert env["CUDA_VISIBLE_DEVICES"] == "0"
+    assert env["HIP_VISIBLE_DEVICES"] == "0"
     assert env["ROCR_VISIBLE_DEVICES"] == "1"
+    assert env["GPU_DEVICE_ORDINAL"] == "0"
     assert env["AUTOMIL_GPU"] == "0"
     assert env["AUTOMIL_ACCELERATOR"] == "rocm"
 
