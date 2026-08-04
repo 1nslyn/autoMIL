@@ -9,6 +9,11 @@ import json
 import subprocess
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 compatibility
+    import tomli as tomllib
+
 
 # ---------------------------------------------------------------------------
 # Task 1: pyproject.toml + config.yaml.j2 static assertions
@@ -17,8 +22,6 @@ from pathlib import Path
 
 def test_scipy_in_core_deps():
     """T-1: scipy>=1.11 must be in [project.dependencies] core deps."""
-    import tomllib
-
     pyproject = tomllib.loads(
         (Path(__file__).parent.parent.parent / "pyproject.toml").read_text()
     )
@@ -30,8 +33,6 @@ def test_scipy_in_core_deps():
 
 def test_scipy_no_longer_only_in_ml_optional():
     """T-2: scipy presence in core deps (complement of T-1 for readability)."""
-    import tomllib
-
     pyproject = tomllib.loads(
         (Path(__file__).parent.parent.parent / "pyproject.toml").read_text()
     )
