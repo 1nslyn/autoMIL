@@ -201,3 +201,26 @@ class TestNotifyAndGetInitialUseTheRetryingReader:
         _run(watcher._notify())
 
         assert queue.empty(), "nothing should be broadcast when graph.json cannot be read"
+
+
+def test_running_overlay_reads_typed_cpu_execution_slots(tmp_path, monkeypatch):
+    import automil.viz.server as srv
+
+    state_file = tmp_path / "gpu_state.json"
+    state_file.write_text(json.dumps({
+        "gpus": {},
+        "execution_slots": {
+            "cpu:0": {
+                "accelerator": "cpu",
+                "device_index": None,
+                "running": ["node_0001"],
+                "capacity": 1,
+            }
+        },
+    }))
+    monkeypatch.setattr(srv, "GPU_STATE_FILE", state_file)
+    data = {"nodes": {"node_0001": {"status": "pending"}}}
+
+    srv.GraphWatcher._overlay_running_status(data)
+
+    assert data["nodes"]["node_0001"]["status"] == "running"
