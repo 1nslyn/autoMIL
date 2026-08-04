@@ -3917,6 +3917,11 @@
     "benchmarks/experiments/tcga_luad/automil/config.yaml": "17db3c1eccb163e795a1c98a5e3a600839012b9aabafda1bcfb38a0c4c8dc782"
   },
   "protocol": {
+    "attempt_timeout": {
+      "minutes": 360,
+      "role": "failure-containment-not-search-budget",
+      "scope": "one-multi-fold-attempt"
+    },
     "baseline": {
       "counts_toward_agentic_budget": false,
       "folds": [

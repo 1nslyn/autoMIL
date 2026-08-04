@@ -47,6 +47,11 @@ CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
 BASELINE_FOLDS = CERTIFICATION_FOLDS
 DISCOVERY_ATTEMPTS = 60
 PROMOTION_CANDIDATES = 10
+# This is a failure-containment wall clock for one submitted multi-fold attempt,
+# not an optimization budget.  Three CLAM classification folds take about
+# 206 minutes in the committed timing census; six hours leaves a substantial
+# guard band without changing the equal 60-attempt research budget.
+ATTEMPT_TIMEOUT_MIN = 360
 FOLD_TRAININGS_PER_CELL = (
     DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
     + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])
@@ -72,6 +77,11 @@ PROTOCOL = {
         "mode": "unseal-existing-held-out",
         "folds": list(CERTIFICATION_FOLDS),
         "retrain": False,
+    },
+    "attempt_timeout": {
+        "minutes": ATTEMPT_TIMEOUT_MIN,
+        "role": "failure-containment-not-search-budget",
+        "scope": "one-multi-fold-attempt",
     },
     "fold_trainings_per_cell": FOLD_TRAININGS_PER_CELL,
 }
@@ -463,6 +473,9 @@ def materialize_discovery_cells(
         }
         config.setdefault("cap", {})["eval_budget"] = PROTOCOL["discovery_attempts"]
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
+        config.setdefault("orchestrator", {})["default_timeout_min"] = (
+            ATTEMPT_TIMEOUT_MIN
+        )
         config["campaign"] = {
             "campaign_id": CAMPAIGN_ID,
             "manifest": manifest_path.relative_to(repo_root).as_posix(),
@@ -599,6 +612,10 @@ def audit_materialized_campaign(
             STAGE_FOLDS["discovery"]
         ):
             raise CampaignManifestError(f"{cell_id}: discovery fold count drift")
+        if (config.get("orchestrator") or {}).get(
+            "default_timeout_min"
+        ) != ATTEMPT_TIMEOUT_MIN:
+            raise CampaignManifestError(f"{cell_id}: attempt timeout drift")
         policy = load_candidate_policy(adir)
         expected_editable = (
             f"{adir.relative_to(repo_root).as_posix()}/variants/_policies/*.py",
