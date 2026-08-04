@@ -148,25 +148,31 @@ def cancel(node_id: str, timeout: int) -> None:
             except (FileNotFoundError, PermissionError, OSError, IndexError):
                 return None
 
-        def _try_reap(pid: int) -> None:
-            """Attempt a non-blocking waitpid to reap a zombie child.
+        def _try_reap(pid: int, *, timeout: float = 0.5) -> None:
+            """Boundedly wait for and reap a child killed by this command.
 
             When the CLI process is the parent of the killed process (e.g. in
             in-process test runners), the dead process becomes a zombie until
-            wait() is called. os.waitpid with WNOHANG reaps it without blocking;
-            this allows os.kill(pid, 0) to subsequently raise ProcessLookupError
-            as callers expect. Safe to call even if the process is not a child
-            (ChildProcessError is silently ignored).
+            wait() is called.  On macOS, ``kill(pid, 0)`` can report the target
+            gone just before its wait status becomes available, so one WNOHANG
+            probe races and leaves the child as a zombie.  Poll for at most a
+            small fixed interval; normal CLI-launched jobs are not children of
+            this fresh CLI process and return ChildProcessError immediately.
 
             WR-02: callers MUST gate this on a starttime cross-check so we never
             reap an unrelated PID-reused child the CLI happens to parent — doing
             so would silently consume that innocent child's exit status and
             desync a still-live job's bookkeeping.
             """
-            try:
-                os.waitpid(pid, os.WNOHANG)
-            except (ChildProcessError, PermissionError, OSError):
-                pass
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    reaped_pid, _status = os.waitpid(pid, os.WNOHANG)
+                except (ChildProcessError, PermissionError, OSError):
+                    return
+                if reaped_pid == pid or time.monotonic() >= deadline:
+                    return
+                time.sleep(0.01)
 
         def _is_alive(pid: int, st: int | None) -> bool:
             """PID-reuse-safe liveness check, zombie-aware.
@@ -186,7 +192,17 @@ def cancel(node_id: str, timeout: int) -> None:
             if st is not None:
                 return _is_pid_alive_with_starttime(pid, st)
             if state is None:
-                # Non-Linux: /proc unavailable; fall back to signal-0 probe.
+                # Non-Linux: /proc is unavailable.  If the CLI happens to be
+                # this PID's parent (notably the in-process command path), reap
+                # an already-exited child before the signal-0 probe.  macOS
+                # otherwise reports a zombie as present indefinitely and the
+                # command incorrectly escalates a successful kill into failure.
+                try:
+                    reaped_pid, _status = os.waitpid(pid, os.WNOHANG)
+                    if reaped_pid == pid:
+                        return False
+                except (ChildProcessError, PermissionError, OSError):
+                    pass
                 try:
                     os.kill(pid, 0)
                     return True
@@ -264,7 +280,8 @@ def cancel(node_id: str, timeout: int) -> None:
 
         # Reap any zombie: when CLI and the killed process share the same parent
         # (e.g. in-process test runners), the dead process lingers as a zombie
-        # until wait() is called. _try_reap uses WNOHANG so it never blocks.
+        # until wait() is called. _try_reap bounds the wait to the short
+        # post-signal status-publication window.
         #
         # WR-02: gate the reap on the starttime cross-check so we never reap an
         # unrelated PID-reused child this CLI happens to parent.
