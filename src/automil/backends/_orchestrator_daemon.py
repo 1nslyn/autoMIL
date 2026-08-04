@@ -477,6 +477,19 @@ class ExperimentOrchestrator:
             orch_cfg.get("editable_overlay_guard", False)
         )
 
+        # Generic CPU consumers (for example examples/sklearn-iris) declare the
+        # execution substrate explicitly.  A CPU-only project still needs one
+        # local scheduling slot, but it must not be represented as a physical
+        # GPU or subjected to VRAM admission checks.
+        hardware_cfg = self.config.get("hardware", {}) if self.config else {}
+        configured_accelerator = str(
+            hardware_cfg.get("accelerator", "")
+        ).strip().lower()
+        configured_gpu_count = hardware_cfg.get("gpu_count")
+        self._cpu_only = (
+            configured_accelerator == "cpu" and configured_gpu_count == 0
+        )
+
         # CLN-02 / D-04: env.passthrough — literal var names the operator
         # explicitly opts in to forward into experiment subprocesses. The
         # config layer accepts only a list of strings (no globs — globs live
@@ -517,13 +530,21 @@ class ExperimentOrchestrator:
         # _tick_cells falls back to _kill_experiment (direct os.killpg path).
         self.backend: object | None = None
 
-        # Detect GPUs
-        gpus = query_gpus()
-        for g in gpus:
-            self.gpu_allocations[g.index] = []
-        if not self.gpu_allocations:
-            logger.warning("No GPUs detected, using GPU 0 as fallback")
+        # Detect execution slots. CPU-only mode intentionally ignores any host
+        # GPU and uses logical slot 0 solely for the existing local-concurrency
+        # accounting. GPU-targeted configurations fail closed when no GPU is
+        # visible: their jobs stay queued instead of running on CPU by accident.
+        if self._cpu_only:
             self.gpu_allocations[0] = []
+            logger.info("CPU-only execution configured; using local slot 0")
+        else:
+            for gpu in query_gpus():
+                self.gpu_allocations[gpu.index] = []
+            if not self.gpu_allocations:
+                logger.warning(
+                    "No GPUs detected for a GPU-targeted configuration; "
+                    "queued jobs will remain pending"
+                )
 
         # Load .env from project root so worktree processes inherit env vars
         # (worktrees don't contain .env since it's typically gitignored)
@@ -802,6 +823,10 @@ class ExperimentOrchestrator:
 
     def _find_best_gpu(self, needed_gb: float) -> int | None:
         """Find a GPU for the pending job according to self.scheduling_policy (best_fit | round_robin | least_loaded)."""
+        if getattr(self, "_cpu_only", False):
+            running_on = self.gpu_allocations.get(0, [])
+            return 0 if len(running_on) < self.max_per_gpu else None
+
         gpus = query_gpus()
         candidates: list[tuple[int, float]] = []
 
@@ -843,6 +868,9 @@ class ExperimentOrchestrator:
 
     def _pre_launch_check(self, gpu_id: int, needed_gb: float) -> bool:
         """Final VRAM check right before launch."""
+        if getattr(self, "_cpu_only", False):
+            return gpu_id == 0
+
         gpus = query_gpus()
         for g in gpus:
             if g.index == gpu_id:
@@ -886,7 +914,9 @@ class ExperimentOrchestrator:
                 env[key] = os.environ[key]
 
         # 3. Orchestrator-injected (always overrides 1 + 2).
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        env["CUDA_VISIBLE_DEVICES"] = (
+            "" if getattr(self, "_cpu_only", False) else str(gpu_id)
+        )
         env["AUTOMIL_GPU"] = "0"
         env["AUTOMIL_DESC"] = spec.get("description", "")
         env["AUTOMIL_NODE_ID"] = node_id
