@@ -16,7 +16,13 @@ class _DetectedGpu:
 
 
 def _orchestrator(
-    tmp_path, monkeypatch, *, accelerator: str, gpu_count: int, detected=(),
+    tmp_path,
+    monkeypatch,
+    *,
+    accelerator: str,
+    gpu_count: int,
+    detected=(),
+    rocm_detected=(),
 ):
     automil_dir = tmp_path / "automil"
     automil_dir.mkdir()
@@ -32,6 +38,9 @@ def _orchestrator(
     )
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(daemon_module, "query_gpus", lambda: list(detected))
+    monkeypatch.setattr(
+        daemon_module, "query_rocm_gpus", lambda: list(rocm_detected),
+    )
     return ExperimentOrchestrator(project_root=tmp_path, automil_dir=automil_dir)
 
 
@@ -46,14 +55,47 @@ def test_cpu_only_config_gets_one_logical_execution_slot(tmp_path, monkeypatch):
 
 
 def test_rocm_config_gets_one_slot_per_declared_device(tmp_path, monkeypatch):
+    devices = [
+        daemon_module.GPUInfo(index=i, total_mb=65536, free_mb=64000, utilization=0)
+        for i in range(2)
+    ]
     orch = _orchestrator(
         tmp_path, monkeypatch, accelerator="rocm", gpu_count=2,
+        rocm_detected=devices,
     )
 
     assert orch._cpu_only is False
     assert sorted(orch.gpu_allocations) == [0, 1]
     assert orch._find_best_gpu(needed_gb=1.0) == 0
     assert orch._pre_launch_check(gpu_id=1, needed_gb=1.0) is True
+
+
+def test_rocm_config_without_live_devices_fails_closed(tmp_path, monkeypatch):
+    orch = _orchestrator(
+        tmp_path, monkeypatch, accelerator="rocm", gpu_count=2,
+    )
+
+    assert orch.gpu_allocations == {}
+    assert orch._find_best_gpu(needed_gb=1.0) is None
+
+
+def test_rocm_prelaunch_uses_live_free_vram(tmp_path, monkeypatch):
+    devices = [
+        daemon_module.GPUInfo(index=0, total_mb=65536, free_mb=64000, utilization=0)
+    ]
+    orch = _orchestrator(
+        tmp_path,
+        monkeypatch,
+        accelerator="rocm",
+        gpu_count=1,
+        rocm_detected=devices,
+    )
+    devices[0] = daemon_module.GPUInfo(
+        index=0, total_mb=65536, free_mb=1024, utilization=0,
+    )
+
+    assert orch._find_best_gpu(needed_gb=2.0) is None
+    assert orch._pre_launch_check(gpu_id=0, needed_gb=2.0) is False
 
 
 def test_cpu_slot_respects_local_concurrency_limit(tmp_path, monkeypatch):
@@ -117,8 +159,13 @@ def test_cpu_subprocess_hides_cuda_devices(tmp_path, monkeypatch):
 def test_rocm_subprocess_masks_one_physical_device_and_blocks_spoofing(
     tmp_path, monkeypatch,
 ):
+    devices = [
+        daemon_module.GPUInfo(index=i, total_mb=65536, free_mb=64000, utilization=0)
+        for i in range(2)
+    ]
     orch = _orchestrator(
         tmp_path, monkeypatch, accelerator="rocm", gpu_count=2,
+        rocm_detected=devices,
     )
 
     env = orch._build_subprocess_env(
