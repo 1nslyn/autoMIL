@@ -340,7 +340,11 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 )
                 from automil.registry.errors import ValidationError
                 try:
-                    PurityValidator().check(abs_path)       # 1. AST-only, no import
+                    PurityValidator(
+                        strict_policy=(
+                            candidate_policy.mode == "architecture-preserving"
+                        ),
+                    ).check(abs_path)                       # 1. AST-only, no import
                     InterfaceValidator().check(abs_path)    # 2. static interface proof
                 except ValidationError as e:
                     raise click.ClickException(

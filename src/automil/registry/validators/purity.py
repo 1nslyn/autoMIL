@@ -91,6 +91,9 @@ class PurityValidator:
         are all allowed.
     """
 
+    def __init__(self, *, strict_policy: bool = False) -> None:
+        self.strict_policy = strict_policy
+
     def check(self, module_path: Path) -> None:
         """Validate a variant module for purity. Raises ValidationError on failure."""
         if not module_path.exists():
@@ -114,17 +117,53 @@ class PurityValidator:
                 fix_suggestion="Fix the Python syntax error in the module.",
             ) from e
 
+        strict_policy = self.strict_policy and any(
+            self._registered_kind(node) == "policy"
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        )
         for node in tree.body:
-            self._check_top_level_node(module_path, node)
+            self._check_top_level_node(
+                module_path,
+                node,
+                strict_policy=strict_policy,
+            )
 
-    def _check_top_level_node(self, module_path: Path, node: ast.AST) -> None:
+    @staticmethod
+    def _registered_kind(node: ast.ClassDef) -> str | None:
+        for decorator in node.decorator_list:
+            if not (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Name)
+                and decorator.func.id == "register"
+                and len(decorator.args) == 1
+                and isinstance(decorator.args[0], ast.Call)
+            ):
+                continue
+            for keyword in decorator.args[0].keywords:
+                if (
+                    keyword.arg == "kind"
+                    and isinstance(keyword.value, ast.Constant)
+                    and isinstance(keyword.value.value, str)
+                ):
+                    return keyword.value.value
+        return None
+
+    def _check_top_level_node(
+        self,
+        module_path: Path,
+        node: ast.AST,
+        *,
+        strict_policy: bool,
+    ) -> None:
         """Inspect one top-level statement for purity violations."""
 
-        # --- trusted imports only (imports execute code at module load) ---
+        # Policy modules execute inside the protected training seam, so their
+        # imports are narrowly trusted. Free-mode model/loss variants preserve
+        # the public API's numerical-library imports.
         if isinstance(node, ast.Import):
-            denied = [
-                alias.name
-                for alias in node.names
+            denied = [] if not strict_policy else [
+                alias.name for alias in node.names
                 if alias.name not in _TRUSTED_IMPORTS
             ]
             if denied:
@@ -133,7 +172,7 @@ class PurityValidator:
                 )
             return
         if isinstance(node, ast.ImportFrom):
-            if node.level or node.module not in _TRUSTED_IMPORTS:
+            if strict_policy and (node.level or node.module not in _TRUSTED_IMPORTS):
                 self._definition_error(
                     module_path,
                     node,
@@ -141,10 +180,18 @@ class PurityValidator:
                 )
             return
         if isinstance(node, ast.ClassDef):
-            self._check_class_definition(module_path, node)
+            self._check_class_definition(
+                module_path,
+                node,
+                strict_policy=strict_policy,
+            )
             return
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            self._check_function_header(module_path, node)
+            self._check_function_header(
+                module_path,
+                node,
+                reject_shared_state=strict_policy,
+            )
             return
 
         # --- module-level expressions ---
@@ -194,6 +241,13 @@ class PurityValidator:
                     )
 
             value = getattr(node, "value", None)
+            annotation = getattr(node, "annotation", None)
+            if annotation is not None and any(
+                isinstance(part, ast.Call) for part in ast.walk(annotation)
+            ):
+                self._definition_error(
+                    module_path, annotation, "annotation contains a call",
+                )
             if value is None:
                 return  # bare AnnAssign (`x: int`) is metadata, OK
             if not _is_immutable_literal(value):
@@ -239,11 +293,16 @@ class PurityValidator:
                         "tests/ file."
                     ),
                 )
-            self._definition_error(
-                module_path,
-                node,
-                "top-level conditional blocks are not declarative",
-            )
+            for part in ast.walk(test):
+                if isinstance(part, ast.Call):
+                    self._reject_call(module_path, part)
+            for statement in [*node.body, *node.orelse]:
+                self._check_top_level_node(
+                    module_path,
+                    statement,
+                    strict_policy=strict_policy,
+                )
+            return
 
         # --- anything else (Try, With, While, For, ...) is suspect ---
         raise ValidationError(
@@ -278,6 +337,8 @@ class PurityValidator:
         self,
         module_path: Path,
         node: ast.FunctionDef | ast.AsyncFunctionDef,
+        *,
+        reject_shared_state: bool = False,
     ) -> None:
         safe_decorators = {"staticmethod", "classmethod", "property", "abstractmethod"}
         for decorator in node.decorator_list:
@@ -311,7 +372,7 @@ class PurityValidator:
                     module_path, annotation, "annotation contains a call",
                 )
         for statement in ast.walk(node):
-            if isinstance(statement, (ast.Global, ast.Nonlocal)):
+            if reject_shared_state and isinstance(statement, (ast.Global, ast.Nonlocal)):
                 self._definition_error(
                     module_path,
                     statement,
@@ -344,7 +405,13 @@ class PurityValidator:
                 module_path, spec, "VariantSpec fields must be immutable literals",
             )
 
-    def _check_class_definition(self, module_path: Path, node: ast.ClassDef) -> None:
+    def _check_class_definition(
+        self,
+        module_path: Path,
+        node: ast.ClassDef,
+        *,
+        strict_policy: bool,
+    ) -> None:
         register_decorators = [
             decorator for decorator in node.decorator_list
             if isinstance(decorator, ast.Call)
@@ -373,7 +440,11 @@ class PurityValidator:
                 )
         for statement in node.body:
             if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self._check_function_header(module_path, statement)
+                self._check_function_header(
+                    module_path,
+                    statement,
+                    reject_shared_state=strict_policy,
+                )
                 continue
             if isinstance(statement, ast.Pass):
                 continue
@@ -385,13 +456,30 @@ class PurityValidator:
                 continue
             if isinstance(statement, (ast.Assign, ast.AnnAssign)):
                 value = getattr(statement, "value", None)
+                annotation = getattr(statement, "annotation", None)
+                if annotation is not None and any(
+                    isinstance(part, ast.Call) for part in ast.walk(annotation)
+                ):
+                    self._definition_error(
+                        module_path, annotation, "annotation contains a call",
+                    )
                 if value is None:
                     continue
-                if not _is_immutable_literal(value):
+                if strict_policy and not _is_immutable_literal(value):
                     self._definition_error(
                         module_path,
                         value,
                         "class attributes must be immutable literals",
+                    )
+                if not strict_policy and any(
+                    isinstance(part, (ast.Call, ast.ListComp, ast.DictComp,
+                                      ast.SetComp, ast.GeneratorExp, ast.Lambda))
+                    for part in ast.walk(value)
+                ):
+                    self._definition_error(
+                        module_path,
+                        value,
+                        "class attribute contains executable syntax",
                     )
                 continue
             self._definition_error(
