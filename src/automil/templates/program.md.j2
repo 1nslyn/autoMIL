@@ -136,8 +136,11 @@ On every session start or context reset:
 ## Environment Variables
 
 The orchestrator provides these to your training script:
-- `CUDA_VISIBLE_DEVICES`: physical GPU ID (masked)
-- `AUTOMIL_GPU`: logical device, always `0` (use this or `cuda:0`)
+- `AUTOMIL_ACCELERATOR`: execution substrate (`cuda`, `rocm`, or `cpu`)
+- `CUDA_VISIBLE_DEVICES`: physical CUDA/ROCm device ID; empty on CPU
+- `HIP_VISIBLE_DEVICES` / `ROCR_VISIBLE_DEVICES`: physical ROCm device ID;
+  empty outside ROCm
+- `AUTOMIL_GPU`: logical accelerator device `0`; empty on CPU
 - `AUTOMIL_NODE_ID`: experiment node ID (for logging)
 - `AUTOMIL_DESC`: experiment description
 

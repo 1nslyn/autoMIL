@@ -133,16 +133,20 @@ class GraphWatcher(FileSystemEventHandler):
 
         graph.json is only updated by submit/reconcile, so in-flight
         experiments still show as 'pending' there. The orchestrator
-        rewrites gpu_state.json every poll cycle with the running node
-        IDs per GPU; we merge that in so the viz reflects live state.
+        rewrites gpu_state.json every poll cycle with the running node IDs per
+        typed execution slot; we merge that in so the viz reflects live state.
+        The legacy ``gpus`` fallback keeps older state files readable.
         """
         try:
             state = json.loads(GPU_STATE_FILE.read_text())
         except (json.JSONDecodeError, FileNotFoundError, OSError):
             return
         running_ids: set[str] = set()
-        for gpu in state.get("gpus", {}).values():
-            for nid in gpu.get("running", []) or []:
+        slots = state.get("execution_slots")
+        if not isinstance(slots, dict):
+            slots = state.get("gpus", {})
+        for slot in slots.values():
+            for nid in slot.get("running", []) or []:
                 running_ids.add(nid)
         nodes = data.get("nodes", {})
         for nid in running_ids:

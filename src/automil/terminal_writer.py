@@ -135,7 +135,8 @@ def write_terminal_state(
     results_tsv_writer: Callable,
     spec: dict,
     elapsed_s: float,
-    gpu_id: int | str,
+    gpu_id: int | str | None,
+    accelerator: str = "cuda",
 ) -> None:
     """Write all four terminal artifacts in fixed order (D-09).
 
@@ -156,7 +157,8 @@ def write_terminal_state(
                             This is the daemon's _append_results_tsv, bound as a method.
         spec:               The experiment spec dict (for graph_metadata, description).
         elapsed_s:          Wall-clock elapsed seconds.
-        gpu_id:             GPU ID used by this experiment.
+        gpu_id:             Physical GPU ID, or ``None`` for CPU execution.
+        accelerator:        Execution substrate (``cuda``, ``rocm``, or ``cpu``).
     """
     # Step 1 — Canonicalize status
     result = _canonicalize(result)
@@ -351,6 +353,7 @@ def write_terminal_state(
         "metrics": result.get("metrics", {}),
         "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
         "peak_vram_mb": result.get("peak_vram_mb", 0),
+        "accelerator": accelerator,
         "gpu": gpu_id,
         "completed_at": datetime.now().isoformat(),
         "budget_killed": bool(

@@ -71,7 +71,13 @@ _SYSTEM_ENV_WHITELIST_PREFIX: tuple[str, ...] = (
 )
 # Keys the orchestrator owns; per-spec env CANNOT override them
 # (T-00-09 mitigation — prevents GPU-mask spoofing via spec.env).
-_SPEC_ENV_BLOCKED: frozenset[str] = frozenset({"AUTOMIL_GPU", "CUDA_VISIBLE_DEVICES"})
+_SPEC_ENV_BLOCKED: frozenset[str] = frozenset({
+    "AUTOMIL_ACCELERATOR",
+    "AUTOMIL_GPU",
+    "CUDA_VISIBLE_DEVICES",
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+})
 
 logger = logging.getLogger(__name__)
 
@@ -485,7 +491,17 @@ class ExperimentOrchestrator:
         configured_accelerator = str(
             hardware_cfg.get("accelerator", "")
         ).strip().lower()
-        configured_gpu_count = hardware_cfg.get("gpu_count")
+        try:
+            configured_gpu_count = int(hardware_cfg.get("gpu_count", 0))
+        except (TypeError, ValueError):
+            configured_gpu_count = -1
+        try:
+            configured_min_vram_gb = float(hardware_cfg.get("min_vram_gb", 0.0))
+        except (TypeError, ValueError):
+            configured_min_vram_gb = 0.0
+        self._accelerator = configured_accelerator
+        self._configured_gpu_count = configured_gpu_count
+        self._configured_min_vram_gb = configured_min_vram_gb
         self._cpu_only = (
             configured_accelerator == "cpu" and configured_gpu_count == 0
         )
@@ -530,19 +546,36 @@ class ExperimentOrchestrator:
         # _tick_cells falls back to _kill_experiment (direct os.killpg path).
         self.backend: object | None = None
 
-        # Detect execution slots. CPU-only mode intentionally ignores any host
-        # GPU and uses logical slot 0 solely for the existing local-concurrency
-        # accounting. GPU-targeted configurations fail closed when no GPU is
-        # visible: their jobs stay queued instead of running on CPU by accident.
+        # Detect typed execution slots. ``gpu_allocations`` is the legacy
+        # internal accounting map; its integer keys are scheduler slot IDs, not
+        # hardware provenance. CPU slot 0 therefore never becomes ``gpu: 0`` in
+        # an artifact. ROCm has no nvidia-smi-compatible dynamic query, so its
+        # slots come from the hardware report stamped by ``automil init`` and
+        # are admitted against that report's conservative minimum VRAM.
         if self._cpu_only:
             self.gpu_allocations[0] = []
             logger.info("CPU-only execution configured; using local slot 0")
+        elif configured_accelerator == "rocm":
+            if configured_gpu_count > 0 and configured_min_vram_gb > 0:
+                for device_index in range(configured_gpu_count):
+                    self.gpu_allocations[device_index] = []
+                logger.info(
+                    "ROCm execution configured; using %d declared device slot(s)",
+                    configured_gpu_count,
+                )
+            else:
+                logger.warning(
+                    "ROCm configuration requires positive hardware.gpu_count and "
+                    "hardware.min_vram_gb; queued jobs will remain pending"
+                )
         else:
             for gpu in query_gpus():
                 self.gpu_allocations[gpu.index] = []
+            if self.gpu_allocations and not self._accelerator:
+                self._accelerator = "cuda"
             if not self.gpu_allocations:
                 logger.warning(
-                    "No GPUs detected for a GPU-targeted configuration; "
+                    "No CUDA GPUs detected for a GPU-targeted configuration; "
                     "queued jobs will remain pending"
                 )
 
@@ -665,9 +698,10 @@ class ExperimentOrchestrator:
             self._recover_orphans()
 
     def _save_state(self):
-        """Persist GPU state and counters to disk."""
-        gpus = query_gpus()
+        """Persist typed execution-slot state and legacy CUDA telemetry."""
+        gpus = query_gpus() if self._accelerator == "cuda" else []
         gpu_data = {}
+        execution_slots = {}
         for g in gpus:
             running_on = self.gpu_allocations.get(g.index, [])
             alloc_vram = sum(
@@ -682,11 +716,46 @@ class ExperimentOrchestrator:
                 "running": running_on,
                 "utilization_pct": g.utilization,
             }
+            execution_slots[f"cuda:{g.index}"] = {
+                "accelerator": "cuda",
+                "device_index": g.index,
+                "running": running_on,
+                "capacity": self.max_per_gpu,
+                "schedulable_free_gb": gpu_data[str(g.index)]["schedulable_free_gb"],
+            }
+
+        if self._cpu_only:
+            execution_slots["cpu:0"] = {
+                "accelerator": "cpu",
+                "device_index": None,
+                "running": self.gpu_allocations.get(0, []),
+                "capacity": self.max_per_gpu,
+            }
+        elif self._accelerator == "rocm":
+            for device_index, running_on in sorted(self.gpu_allocations.items()):
+                alloc_vram = sum(
+                    self.running[eid].estimated_vram_gb
+                    for eid in running_on
+                    if eid in self.running
+                )
+                execution_slots[f"rocm:{device_index}"] = {
+                    "accelerator": "rocm",
+                    "device_index": device_index,
+                    "running": running_on,
+                    "capacity": self.max_per_gpu,
+                    "schedulable_free_gb": round(
+                        self._configured_min_vram_gb
+                        - self.safety_margin_gb
+                        - alloc_vram,
+                        1,
+                    ),
+                }
 
         state = {
             "counter": self.counter,
             "last_updated": datetime.now().isoformat(),
             "gpus": gpu_data,
+            "execution_slots": execution_slots,
             "queue_depth": len(list(self.queue_dir.glob("*.json"))),
             "total_running": len(self.running),
             "total_completed": len(list(self.completed_dir.glob("*.json"))),
@@ -731,10 +800,12 @@ class ExperimentOrchestrator:
                     # the process is not. Name the worktree so it can be found.
                     logger.warning(
                         "Orphan %s died mid-launch with no pid recorded: a training "
-                        "process may still be alive and holding GPU %s. Worktree: %s. "
+                        "process may still be alive on %s. Worktree: %s. "
                         "Check for it manually — recovery cannot signal an "
                         "unrecorded process group.",
-                        node_id, _meta.get("gpu"), _meta.get("worktree"),
+                        node_id,
+                        self._execution_label_from_metadata(_meta),
+                        _meta.get("worktree"),
                     )
                 else:
                     self._sigkill_orphan_pg(node_id, spec)
@@ -746,6 +817,8 @@ class ExperimentOrchestrator:
                 (self.completed_dir / f"{node_id}.json").write_text(json.dumps({
                     "id": node_id,
                     "status": "crash",
+                    "accelerator": _meta.get("accelerator"),
+                    "gpu": _meta.get("gpu"),
                     "completed_at": datetime.now().isoformat(),
                 }, indent=2))
                 # M-5: same reasoning as _mark_crashed — the graph must not be
@@ -827,21 +900,36 @@ class ExperimentOrchestrator:
             running_on = self.gpu_allocations.get(0, [])
             return 0 if len(running_on) < self.max_per_gpu else None
 
-        gpus = query_gpus()
         candidates: list[tuple[int, float]] = []
-
-        for g in gpus:
-            running_on = self.gpu_allocations.get(g.index, [])
-            if len(running_on) >= self.max_per_gpu:
-                continue
-            alloc_vram = sum(
-                self.running[eid].estimated_vram_gb
-                for eid in running_on
-                if eid in self.running
-            )
-            schedulable = g.free_gb - self.safety_margin_gb - alloc_vram
-            if schedulable >= needed_gb:
-                candidates.append((g.index, schedulable))
+        if getattr(self, "_accelerator", "") == "rocm":
+            for device_index, running_on in self.gpu_allocations.items():
+                if len(running_on) >= self.max_per_gpu:
+                    continue
+                alloc_vram = sum(
+                    self.running[eid].estimated_vram_gb
+                    for eid in running_on
+                    if eid in self.running
+                )
+                schedulable = (
+                    self._configured_min_vram_gb
+                    - self.safety_margin_gb
+                    - alloc_vram
+                )
+                if schedulable >= needed_gb:
+                    candidates.append((device_index, schedulable))
+        else:
+            for g in query_gpus():
+                running_on = self.gpu_allocations.get(g.index, [])
+                if len(running_on) >= self.max_per_gpu:
+                    continue
+                alloc_vram = sum(
+                    self.running[eid].estimated_vram_gb
+                    for eid in running_on
+                    if eid in self.running
+                )
+                schedulable = g.free_gb - self.safety_margin_gb - alloc_vram
+                if schedulable >= needed_gb:
+                    candidates.append((g.index, schedulable))
 
         if not candidates:
             return None
@@ -870,6 +958,19 @@ class ExperimentOrchestrator:
         """Final VRAM check right before launch."""
         if getattr(self, "_cpu_only", False):
             return gpu_id == 0
+        if getattr(self, "_accelerator", "") == "rocm":
+            running_on = self.gpu_allocations.get(gpu_id)
+            if running_on is None or len(running_on) >= self.max_per_gpu:
+                return False
+            alloc_vram = sum(
+                self.running[eid].estimated_vram_gb
+                for eid in running_on
+                if eid in self.running
+            )
+            return (
+                self._configured_min_vram_gb - alloc_vram
+                >= needed_gb + self.safety_margin_gb
+            )
 
         gpus = query_gpus()
         for g in gpus:
@@ -914,10 +1015,16 @@ class ExperimentOrchestrator:
                 env[key] = os.environ[key]
 
         # 3. Orchestrator-injected (always overrides 1 + 2).
-        env["CUDA_VISIBLE_DEVICES"] = (
-            "" if getattr(self, "_cpu_only", False) else str(gpu_id)
-        )
-        env["AUTOMIL_GPU"] = "0"
+        accelerator = getattr(self, "_accelerator", "cuda") or "cuda"
+        physical_device = "" if accelerator == "cpu" else str(gpu_id)
+        # HIP accepts CUDA_VISIBLE_DEVICES for compatibility, while native ROCm
+        # stacks may read HIP_VISIBLE_DEVICES or ROCR_VISIBLE_DEVICES. Own and
+        # set all three masks so a candidate spec cannot route around isolation.
+        env["CUDA_VISIBLE_DEVICES"] = physical_device
+        env["HIP_VISIBLE_DEVICES"] = physical_device if accelerator == "rocm" else ""
+        env["ROCR_VISIBLE_DEVICES"] = physical_device if accelerator == "rocm" else ""
+        env["AUTOMIL_GPU"] = "" if accelerator == "cpu" else "0"
+        env["AUTOMIL_ACCELERATOR"] = accelerator
         env["AUTOMIL_DESC"] = spec.get("description", "")
         env["AUTOMIL_NODE_ID"] = node_id
         try:
@@ -1225,6 +1332,26 @@ class ExperimentOrchestrator:
         except Exception:  # noqa: BLE001 — a graph failure must not wedge the daemon
             logger.exception("could not mark %s as %s in the graph", node_id, status)
 
+    def _device_provenance(self, slot_id: int) -> dict[str, str | int | None]:
+        """Map an internal scheduler slot to truthful hardware provenance."""
+        accelerator = getattr(self, "_accelerator", "") or "cuda"
+        return {
+            "accelerator": accelerator,
+            "gpu": None if accelerator == "cpu" else slot_id,
+        }
+
+    @staticmethod
+    def _execution_label_from_metadata(metadata: dict) -> str:
+        """Human-readable device label without describing CPU as a GPU."""
+        accelerator = str(metadata.get("accelerator") or "cuda").lower()
+        gpu = metadata.get("gpu")
+        if accelerator == "cpu":
+            return "CPU"
+        return f"{accelerator.upper()} GPU {gpu}"
+
+    def _execution_label(self, slot_id: int) -> str:
+        return self._execution_label_from_metadata(self._device_provenance(slot_id))
+
     def _write_launch_intent(self, spec: dict, gpu_id: int, worktree) -> Path:
         """Record the intent to launch BEFORE spawning the process (M-6).
 
@@ -1245,7 +1372,7 @@ class ExperimentOrchestrator:
         meta.update({
             "launch_phase": "launching",
             "pid": None,
-            "gpu": gpu_id,
+            **self._device_provenance(gpu_id),
             "worktree": str(worktree),
             "intent_at": datetime.now().isoformat(),
         })
@@ -1475,6 +1602,7 @@ class ExperimentOrchestrator:
             recorded_pgid = process.pid
         running_spec_meta["pid"] = process.pid
         running_spec_meta["pgid"] = recorded_pgid
+        running_spec_meta.update(self._device_provenance(gpu_id))
         recorded_starttime = _read_proc_starttime(process.pid)
         if recorded_starttime is not None:
             running_spec_meta["starttime_ticks"] = recorded_starttime
@@ -1482,8 +1610,12 @@ class ExperimentOrchestrator:
         running_spec_path.write_text(json.dumps(running_spec_payload, indent=2))
 
         logger.info(
-            f"Launched {node_id} on GPU {gpu_id} "
-            f"(PID {process.pid}, est. {estimated_vram}GB, timeout {timeout_min}min)"
+            "Launched %s on %s (PID %d, est. %sGB, timeout %smin)",
+            node_id,
+            self._execution_label(gpu_id),
+            process.pid,
+            estimated_vram,
+            timeout_min,
         )
 
     def _running_in_cell(self, cell_id: str) -> list:
@@ -1784,7 +1916,8 @@ class ExperimentOrchestrator:
             results_tsv_writer=self._append_results_tsv,
             spec=spec,
             elapsed_s=elapsed_s,
-            gpu_id=gpu_id,
+            gpu_id=self._device_provenance(gpu_id)["gpu"],
+            accelerator=self._device_provenance(gpu_id)["accelerator"],
         )
 
         # H-2: record a usable result against the cell (reported secondary; the
@@ -1812,8 +1945,12 @@ class ExperimentOrchestrator:
         status_str = result.get("status", "unknown")
         composite = result.get("composite", 0)
         logger.info(
-            f"Completed {node_id}: status={status_str}, "
-            f"composite={composite:.4f}, elapsed={elapsed_s / 60:.1f}min, GPU {gpu_id}"
+            "Completed %s: status=%s, composite=%.4f, elapsed=%.1fmin, %s",
+            node_id,
+            status_str,
+            composite,
+            elapsed_s / 60,
+            self._execution_label(gpu_id),
         )
 
     # --- _handle_completion helpers (each independently testable) ---
@@ -1900,7 +2037,16 @@ class ExperimentOrchestrator:
             results_tsv_writer=self._append_results_tsv,
             spec=spec,
             elapsed_s=elapsed_s,
-            gpu_id=gpu_id,
+            gpu_id=(
+                self._device_provenance(int(gpu_id))["gpu"]
+                if isinstance(gpu_id, int) and gpu_id >= 0
+                else gpu_id
+            ),
+            accelerator=(
+                self._device_provenance(int(gpu_id))["accelerator"]
+                if isinstance(gpu_id, int) and gpu_id >= 0
+                else getattr(self, "_accelerator", "") or "cuda"
+            ),
         )
         logger.info(
             "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
@@ -2453,8 +2599,11 @@ class ExperimentOrchestrator:
         self._recover_orphans()
 
         logger.info(
-            f"Orchestrator started. GPUs: {list(self.gpu_allocations.keys())}, "
-            f"poll={self.poll_interval}s, safety={self.safety_margin_gb}GB"
+            "Orchestrator started. Accelerator: %s, slots: %s, poll=%ss, safety=%sGB",
+            self._accelerator or "cuda",
+            list(self.gpu_allocations.keys()),
+            self.poll_interval,
+            self.safety_margin_gb,
         )
 
         # Signal handlers
@@ -2526,7 +2675,7 @@ class ExperimentOrchestrator:
         else:
             print("Orchestrator: NOT RUNNING")
 
-        # GPU state
+        # Typed execution state (with legacy GPU-only fallback).
         if self.gpu_state_file.exists():
             state = json.loads(self.gpu_state_file.read_text())
             print(f"\nLast updated: {state.get('last_updated', 'unknown')}")
@@ -2534,12 +2683,32 @@ class ExperimentOrchestrator:
             print(f"Running: {state.get('total_running', 0)}")
             print(f"Completed: {state.get('total_completed', 0)}")
             print(f"Counter: {state.get('counter', 0)}")
-            print("\nGPUs:")
-            for idx, gpu in sorted(state.get("gpus", {}).items()):
-                running_ids = gpu.get("running", [])
-                sched = gpu.get("schedulable_free_gb", 0)
-                util = gpu.get("utilization_pct", 0)
-                print(f"  GPU {idx}: {sched:.1f}GB schedulable, {util}% util, running={running_ids}")
+            slots = state.get("execution_slots")
+            if isinstance(slots, dict):
+                print("\nExecution slots:")
+                for slot_name, slot in sorted(slots.items()):
+                    running_ids = slot.get("running", [])
+                    capacity = slot.get("capacity", "?")
+                    sched = slot.get("schedulable_free_gb")
+                    sched_text = (
+                        f", {sched:.1f}GB schedulable"
+                        if isinstance(sched, (int, float))
+                        else ""
+                    )
+                    print(
+                        f"  {slot_name}: running={running_ids}, "
+                        f"capacity={capacity}{sched_text}"
+                    )
+            else:
+                print("\nGPUs:")
+                for idx, gpu in sorted(state.get("gpus", {}).items()):
+                    running_ids = gpu.get("running", [])
+                    sched = gpu.get("schedulable_free_gb", 0)
+                    util = gpu.get("utilization_pct", 0)
+                    print(
+                        f"  GPU {idx}: {sched:.1f}GB schedulable, "
+                        f"{util}% util, running={running_ids}"
+                    )
         else:
             gpus = query_gpus()
             print("\nGPUs (live):")
