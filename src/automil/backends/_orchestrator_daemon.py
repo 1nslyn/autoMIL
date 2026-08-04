@@ -555,6 +555,11 @@ class ExperimentOrchestrator:
         if self._cpu_only:
             self.gpu_allocations[0] = []
             logger.info("CPU-only execution configured; using local slot 0")
+        elif configured_accelerator == "cpu":
+            logger.warning(
+                "CPU execution requires hardware.gpu_count: 0; "
+                "queued jobs will remain pending"
+            )
         elif configured_accelerator == "rocm":
             if configured_gpu_count > 0 and configured_min_vram_gb > 0:
                 for device_index in range(configured_gpu_count):
@@ -568,7 +573,7 @@ class ExperimentOrchestrator:
                     "ROCm configuration requires positive hardware.gpu_count and "
                     "hardware.min_vram_gb; queued jobs will remain pending"
                 )
-        else:
+        elif configured_accelerator in {"", "cuda"}:
             for gpu in query_gpus():
                 self.gpu_allocations[gpu.index] = []
             if self.gpu_allocations and not self._accelerator:
@@ -578,6 +583,11 @@ class ExperimentOrchestrator:
                     "No CUDA GPUs detected for a GPU-targeted configuration; "
                     "queued jobs will remain pending"
                 )
+        else:
+            logger.warning(
+                "Unsupported hardware.accelerator %r; queued jobs will remain pending",
+                configured_accelerator,
+            )
 
         # Load .env from project root so worktree processes inherit env vars
         # (worktrees don't contain .env since it's typically gitignored)
@@ -900,8 +910,12 @@ class ExperimentOrchestrator:
             running_on = self.gpu_allocations.get(0, [])
             return 0 if len(running_on) < self.max_per_gpu else None
 
+        accelerator = getattr(self, "_accelerator", "")
+        if accelerator == "cpu" or accelerator not in {"", "cuda", "rocm"}:
+            return None
+
         candidates: list[tuple[int, float]] = []
-        if getattr(self, "_accelerator", "") == "rocm":
+        if accelerator == "rocm":
             for device_index, running_on in self.gpu_allocations.items():
                 if len(running_on) >= self.max_per_gpu:
                     continue
@@ -958,7 +972,10 @@ class ExperimentOrchestrator:
         """Final VRAM check right before launch."""
         if getattr(self, "_cpu_only", False):
             return gpu_id == 0
-        if getattr(self, "_accelerator", "") == "rocm":
+        accelerator = getattr(self, "_accelerator", "")
+        if accelerator == "cpu" or accelerator not in {"", "cuda", "rocm"}:
+            return False
+        if accelerator == "rocm":
             running_on = self.gpu_allocations.get(gpu_id)
             if running_on is None or len(running_on) >= self.max_per_gpu:
                 return False
