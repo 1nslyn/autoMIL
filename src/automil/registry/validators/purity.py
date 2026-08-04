@@ -1,9 +1,9 @@
 """Static purity validator: rejects top-level I/O, network, mutable globals (REG-03 / D-30).
 
 Pure AST walk — never imports the module. Safe to run on untrusted code because
-no user code is executed. The submit hook (Plan 01-07) runs this BEFORE
-InterfaceValidator (which does import) to prevent privilege escalation via
-malicious modules (T-01-14).
+no user code is executed. The submit hook (Plan 01-07) runs this before the
+also-static InterfaceValidator; neither validator imports candidate modules
+(T-01-14).
 """
 from __future__ import annotations
 
@@ -56,8 +56,12 @@ def _is_immutable_literal(node: ast.AST) -> bool:
     if isinstance(node, ast.Call):
         func = node.func
         # Allow tuple(...) and frozenset(...) — both produce immutable results.
-        if isinstance(func, ast.Name) and func.id in {"tuple", "frozenset"}:
-            return True
+        if (
+            isinstance(func, ast.Name)
+            and func.id in {"tuple", "frozenset"}
+            and not node.keywords
+        ):
+            return all(_is_immutable_literal(arg) for arg in node.args)
         return False
     return False
 
@@ -111,7 +115,11 @@ class PurityValidator:
         # --- always safe ---
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             return
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, ast.ClassDef):
+            self._check_class_definition(module_path, node)
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._check_function_header(module_path, node)
             return
 
         # --- module-level expressions ---
@@ -237,6 +245,143 @@ class PurityValidator:
                 "imports, and immutable constants."
             ),
         )
+
+    def _definition_error(
+        self, module_path: Path, node: ast.AST, reason: str,
+    ) -> None:
+        raise ValidationError(
+            validator_name="purity",
+            path=module_path,
+            line=getattr(node, "lineno", None),
+            column=getattr(node, "col_offset", None),
+            reason=f"unsafe definition-time expression: {reason}",
+            fix_suggestion=(
+                "Keep decorators, bases, annotations, defaults, and class-body "
+                "constants declarative; move executable work into a method body."
+            ),
+        )
+
+    def _check_function_header(
+        self,
+        module_path: Path,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
+        safe_decorators = {"staticmethod", "classmethod", "property", "abstractmethod"}
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Name) or decorator.id not in safe_decorators:
+                self._definition_error(
+                    module_path, decorator, "function decorator is not allowlisted",
+                )
+        defaults = [*node.args.defaults, *node.args.kw_defaults]
+        for default in defaults:
+            if default is not None and not _is_immutable_literal(default):
+                self._definition_error(
+                    module_path, default, "function default is executable or mutable",
+                )
+        annotations = [
+            arg.annotation
+            for arg in [
+                *node.args.posonlyargs, *node.args.args,
+                *node.args.kwonlyargs,
+            ]
+            if arg.annotation is not None
+        ]
+        if node.args.vararg and node.args.vararg.annotation is not None:
+            annotations.append(node.args.vararg.annotation)
+        if node.args.kwarg and node.args.kwarg.annotation is not None:
+            annotations.append(node.args.kwarg.annotation)
+        if node.returns is not None:
+            annotations.append(node.returns)
+        for annotation in annotations:
+            if any(isinstance(part, ast.Call) for part in ast.walk(annotation)):
+                self._definition_error(
+                    module_path, annotation, "annotation contains a call",
+                )
+
+    def _check_register_decorator(
+        self, module_path: Path, decorator: ast.AST,
+    ) -> None:
+        if not (
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Name)
+            and decorator.func.id == "register"
+            and len(decorator.args) == 1
+            and not decorator.keywords
+        ):
+            self._definition_error(
+                module_path, decorator, "class decorator must be register(VariantSpec(...))",
+            )
+        spec = decorator.args[0]
+        if not (
+            isinstance(spec, ast.Call)
+            and isinstance(spec.func, ast.Name)
+            and spec.func.id == "VariantSpec"
+            and not spec.args
+            and all(keyword.arg is not None for keyword in spec.keywords)
+            and all(_is_immutable_literal(keyword.value) for keyword in spec.keywords)
+        ):
+            self._definition_error(
+                module_path, spec, "VariantSpec fields must be immutable literals",
+            )
+
+    def _check_class_definition(self, module_path: Path, node: ast.ClassDef) -> None:
+        register_decorators = [
+            decorator for decorator in node.decorator_list
+            if isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Name)
+            and decorator.func.id == "register"
+        ]
+        if register_decorators and len(node.decorator_list) != 1:
+            self._definition_error(
+                module_path, node, "variant class must have exactly one register decorator",
+            )
+        if register_decorators:
+            self._check_register_decorator(module_path, register_decorators[0])
+        elif node.decorator_list:
+            self._definition_error(
+                module_path, node.decorator_list[0],
+                "helper class decorators are not allowed",
+            )
+        if node.keywords:
+            self._definition_error(
+                module_path, node.keywords[0], "class keywords/metaclasses are not allowed",
+            )
+        for base in node.bases:
+            if not isinstance(base, (ast.Name, ast.Attribute)):
+                self._definition_error(
+                    module_path, base, "class base must be a dotted name",
+                )
+        for statement in node.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._check_function_header(module_path, statement)
+                continue
+            if isinstance(statement, ast.Pass):
+                continue
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                continue
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                value = getattr(statement, "value", None)
+                if value is None:
+                    continue
+                if any(isinstance(part, ast.Call) for part in ast.walk(value)):
+                    self._definition_error(
+                        module_path, value, "class attribute contains a call",
+                    )
+                if any(isinstance(part, (ast.ListComp, ast.DictComp, ast.SetComp,
+                                         ast.GeneratorExp, ast.Lambda))
+                       for part in ast.walk(value)):
+                    self._definition_error(
+                        module_path, value, "class attribute contains executable syntax",
+                    )
+                continue
+            self._definition_error(
+                module_path, statement,
+                f"unsupported class-body construct {type(statement).__name__}",
+            )
 
     def _reject_call(self, module_path: Path, call: ast.Call) -> None:
         """Raise ValidationError for banned call patterns."""

@@ -1,61 +1,35 @@
-"""Static interface validator: ABC subclass + required-method signature check (REG-03 / D-30).
+"""Static interface validator: ABC base + required-method signature check.
 
 Run order in the submit hook (Plan 01-07):
   1. PurityValidator (pure AST, no import — fast, safe).
-  2. InterfaceValidator (imports the module for reflection — only after purity passes).
+  2. InterfaceValidator (AST-only; never imports agent-authored code).
 
-This ordering is the mitigation for T-01-14 (privilege elevation via malicious
-module import).  Plan 01-07 MUST enforce purity-before-interface.
+Both validators are AST-only. This is the T-01-14 mitigation: validation never
+executes decorators, defaults, annotations, class bodies, or imported modules.
 """
 from __future__ import annotations
 
 import ast
-import importlib.util
-import inspect
 import logging
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Optional
 
 from automil.registry.errors import ValidationError
 
 logger = logging.getLogger(__name__)
 
 
-@contextmanager
-def _isolated_registry_state() -> Iterator[None]:
-    """Run reflection imports without reading or mutating live registrations.
+_ABC_NAMES = {
+    "model": "ModelVariant",
+    "loss": "LossVariant",
+    "policy": "PolicyVariant",
+}
 
-    ``@register`` necessarily writes to process-global dictionaries at import
-    time.  Interface validation is a property of one module, however, and may
-    run repeatedly inside a long-lived CLI/test process.  Snapshotting, clearing,
-    and restoring all registry stores makes validation idempotent while keeping
-    the decorator's kind/spec checks active for the module under inspection.
-    Cross-module name collisions remain the scanner/runtime registry's job.
-    """
-    from automil.registry._state import (
-        LOSS_VARIANTS,
-        MODEL_VARIANTS,
-        POLICY_VARIANTS,
-        SPEC_STORE,
-    )
-
-    stores = (MODEL_VARIANTS, LOSS_VARIANTS, POLICY_VARIANTS, SPEC_STORE)
-    snapshots = tuple(dict(store) for store in stores)
-    for store in stores:
-        store.clear()
-    try:
-        yield
-    finally:
-        for store, snapshot in zip(stores, snapshots):
-            store.clear()
-            store.update(snapshot)
-
-
-def _abcs() -> dict[str, type]:
-    """Lazy import to avoid circular at module import time."""
-    from automil.registry.variants import LossVariant, ModelVariant, PolicyVariant
-    return {"model": ModelVariant, "loss": LossVariant, "policy": PolicyVariant}
+_ABC_POSITIONAL = {
+    ("model", "forward"): ("features", "coords"),
+    ("loss", "__call__"): ("logits", "targets"),
+    ("policy", "wrap_optimizer"): ("opt",),
+}
 
 
 def _required_methods(kind: str) -> list[str]:
@@ -89,8 +63,8 @@ def _find_register_calls(tree: ast.Module) -> list[tuple[ast.ClassDef, ast.Call]
 def _extract_kind_from_register_call(call: ast.Call) -> Optional[str]:
     """Extract the kind='...' literal from @register(VariantSpec(kind=...)).
 
-    Returns None if the kind cannot be statically determined (e.g., stored in
-    a variable), in which case the validator falls back to runtime introspection.
+    Returns None if the kind cannot be statically determined. The validator is
+    fail-closed and never falls back to importing the candidate module.
     """
     if not call.args:
         return None
@@ -105,78 +79,33 @@ def _extract_kind_from_register_call(call: ast.Call) -> Optional[str]:
     return None
 
 
-def _import_module_from_path(module_path: Path) -> Any:
-    """Import a Python file as a module using a unique name to avoid sys.modules pollution."""
-    spec = importlib.util.spec_from_file_location(
-        f"_automil_validator_{module_path.stem}_{id(module_path)}", module_path
-    )
-    if spec is None or spec.loader is None:
-        raise ValidationError(
-            validator_name="interface",
-            path=module_path,
-            reason="cannot create module spec — file may not be a valid Python source",
-            fix_suggestion="Verify the file is a valid Python module with a .py extension.",
-        )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
-    return module
+def _trusted_imports(tree: ast.Module) -> dict[str, str]:
+    """Return local names imported directly from the trusted registry API."""
+    trusted: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom) or node.module != "automil.registry":
+            continue
+        for name in node.names:
+            trusted[name.asname or name.name] = name.name
+    return trusted
 
 
-def _signature_compatible(abc_method: Any, variant_method: Any) -> tuple[bool, str]:
-    """Check whether variant_method's signature is compatible with abc_method's.
-
-    Compatibility rules:
-      - Variant must not add NEW positional parameters not present in the ABC
-        (callers that follow the ABC's interface have no way to supply them).
-      - Variant MAY tighten a default (e.g., ABC has `coords=None`, variant
-        has `coords` with no default) — this is valid narrowing.
-      - Variant MAY have fewer parameters (dropping optional ABC params).
-      - Variant MAY add keyword-only (**kwargs) parameters.
-
-    Returns (ok, reason_if_not_ok).
-    """
-    try:
-        abc_sig = inspect.signature(abc_method)
-        var_sig = inspect.signature(variant_method)
-    except (ValueError, TypeError) as e:
-        return False, f"could not inspect signature: {e}"
-
-    abc_params = list(abc_sig.parameters.values())
-    var_params = list(var_sig.parameters.values())
-
-    # Skip `self` for both.
-    if abc_params and abc_params[0].name == "self":
-        abc_params = abc_params[1:]
-    if var_params and var_params[0].name == "self":
-        var_params = var_params[1:]
-
-    # Build name-sets: positional-or-keyword params only (not *args/**kwargs).
-    _positional_kinds = {
-        inspect.Parameter.POSITIONAL_ONLY,
-        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-    }
-    abc_positional_names = {
-        p.name for p in abc_params if p.kind in _positional_kinds
-    }
-    var_positional = [p for p in var_params if p.kind in _positional_kinds]
-    var_positional_names = {p.name for p in var_positional}
-
-    # Variant must NOT introduce positional params unknown to the ABC.
-    new_params = var_positional_names - abc_positional_names
-    # Filter: only truly NEW required ones are a problem (no default, and
-    # callers won't know to pass them).
-    truly_new_required = [
-        p for p in var_positional
-        if p.name in new_params and p.default is inspect.Parameter.empty
-    ]
-    if truly_new_required:
-        names = [p.name for p in truly_new_required]
+def _ast_signature_compatible(
+    kind: str, method: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[bool, str]:
+    """Apply the existing required-positional rule without importing code."""
+    positional = [*method.args.posonlyargs, *method.args.args]
+    if positional and positional[0].arg in {"self", "cls"}:
+        positional = positional[1:]
+    required_count = max(0, len(positional) - len(method.args.defaults))
+    required = {arg.arg for arg in positional[:required_count]}
+    allowed = set(_ABC_POSITIONAL[(kind, method.name)])
+    unknown = sorted(required - allowed)
+    if unknown:
         return False, (
-            f"variant introduces new required positional parameter(s) "
-            f"{names} not present in the ABC; callers following the ABC "
-            f"interface cannot provide them"
+            f"variant introduces new required positional parameter(s) {unknown} "
+            "not present in the ABC"
         )
-
     return True, ""
 
 
@@ -185,11 +114,7 @@ class InterfaceValidator:
 
     Run order within check():
       1. AST scan (cheap):  parse → find @register classes → count them.
-      2. Dynamic import + reflection (heavier): ABC subclass check + method
-         existence + signature compatibility.
-
-    This is NOT a fully static validator (import is needed for reflection), but
-    it is safe because Plan 01-07 runs PurityValidator first.
+      2. Static trusted-base + method signature checks. No candidate import.
     """
 
     def check(self, module_path: Path) -> None:
@@ -252,73 +177,8 @@ class InterfaceValidator:
         class_def, register_call = register_classes[0]
         kind_hint = _extract_kind_from_register_call(register_call)
 
-        # --- Phase 2: Dynamic import + reflection ---
-        try:
-            with _isolated_registry_state():
-                module = _import_module_from_path(module_path)
-        except SyntaxError as e:
-            raise ValidationError(
-                validator_name="interface",
-                path=module_path,
-                line=e.lineno,
-                reason=f"syntax error during import: {e.msg}",
-                fix_suggestion="Fix the Python syntax error.",
-            ) from e
-        except ValidationError:
-            raise
-        except Exception as e:
-            # RegistrationError from @register means the class failed a runtime
-            # check (ABC mismatch, duplicate, bad kind).  Translate to a
-            # ValidationError that names kind + the offending class + LossVariant/etc.
-            from automil.registry.registrar import RegistrationError
-            if isinstance(e, RegistrationError):
-                # Best-effort: include the class name + kind + base classes from AST.
-                raise ValidationError(
-                    validator_name="interface",
-                    path=module_path,
-                    line=class_def.lineno,
-                    reason=(
-                        f"@register raised RegistrationError for class "
-                        f"{class_def.name!r} (kind={kind_hint!r}): {e}. "
-                        f"Check that the class subclasses the right ABC for "
-                        f"kind={kind_hint!r} and that the base class "
-                        f"({', '.join(b.id for b in class_def.bases if isinstance(b, ast.Name))}) "
-                        f"matches."
-                    ),
-                    fix_suggestion=(
-                        f"Set kind= to match the actual base class in the VariantSpec, "
-                        f"or change the class to subclass the correct ABC for "
-                        f"kind={kind_hint!r}."
-                    ),
-                ) from e
-            raise ValidationError(
-                validator_name="interface",
-                path=module_path,
-                reason=f"import failed: {type(e).__name__}: {e}",
-                fix_suggestion="Inspect the import-time error in the module.",
-            ) from e
-
-        cls = getattr(module, class_def.name, None)
-        if cls is None:
-            raise ValidationError(
-                validator_name="interface",
-                path=module_path,
-                line=class_def.lineno,
-                reason=f"class {class_def.name!r} not found in module after import",
-                fix_suggestion="Confirm the class is defined at module top level.",
-            )
-
-        abcs = _abcs()
-
-        # Resolve kind: prefer AST hint, fall back to runtime introspection.
         kind = kind_hint
-        if kind is None:
-            for k, abc in abcs.items():
-                if isinstance(cls, type) and issubclass(cls, abc):
-                    kind = k
-                    break
-
-        if kind not in abcs:
+        if kind not in _ABC_NAMES:
             raise ValidationError(
                 validator_name="interface",
                 path=module_path,
@@ -333,22 +193,25 @@ class InterfaceValidator:
                 ),
             )
 
-        abc_class = abcs[kind]
-
-        # ABC subclass check.
-        if not (isinstance(cls, type) and issubclass(cls, abc_class)):
-            actual_bases = [b.__name__ for b in getattr(cls, "__mro__", [cls])[1:] if b is not object]
+        trusted = _trusted_imports(tree)
+        expected_base = _ABC_NAMES[kind]
+        actual_bases = [
+            base.id for base in class_def.bases if isinstance(base, ast.Name)
+        ]
+        trusted_bases = [trusted.get(name) for name in actual_bases]
+        if expected_base not in trusted_bases:
             raise ValidationError(
                 validator_name="interface",
                 path=module_path,
                 line=class_def.lineno,
                 reason=(
-                    f"class {class_def.name!r} declared kind={kind!r} but is not a "
-                    f"subclass of {abc_class.__name__} (actual bases: "
-                    f"{actual_bases[:3]})"
+                    f"class {class_def.name!r} declared kind={kind!r} but is not "
+                    f"a direct subclass of trusted {expected_base} "
+                    f"(actual bases: {actual_bases[:3]})"
                 ),
                 fix_suggestion=(
-                    f"Change `class {class_def.name}({abc_class.__name__}):` "
+                    f"Import {expected_base} from automil.registry and use "
+                    f"`class {class_def.name}({expected_base}):` "
                     f"or update kind= in the VariantSpec."
                 ),
             )
@@ -356,12 +219,12 @@ class InterfaceValidator:
         # Required-method existence + signature compatibility.
         required = _required_methods(kind)
         for method_name in required:
-            variant_method = getattr(cls, method_name, None)
-            # Check if method is still abstract (not overridden).
-            if (
-                variant_method is None
-                or getattr(variant_method, "__isabstractmethod__", False)
-            ):
+            variant_method = next((
+                node for node in class_def.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == method_name
+            ), None)
+            if variant_method is None:
                 raise ValidationError(
                     validator_name="interface",
                     path=module_path,
@@ -373,13 +236,12 @@ class InterfaceValidator:
                     ),
                     fix_suggestion=(
                         f"Add `def {method_name}(self, ...)` to the class. "
-                        f"See {abc_class.__name__}.{method_name} for the "
-                        f"expected signature. ABC: {abc_class.__name__}"
+                        f"See {expected_base}.{method_name} for the "
+                        f"expected signature. ABC: {expected_base}"
                     ),
                 )
 
-            abc_method = getattr(abc_class, method_name)
-            ok, reason = _signature_compatible(abc_method, variant_method)
+            ok, reason = _ast_signature_compatible(kind, variant_method)
             if not ok:
                 raise ValidationError(
                     validator_name="interface",
@@ -387,11 +249,11 @@ class InterfaceValidator:
                     line=class_def.lineno,
                     reason=(
                         f"method {method_name!r} signature incompatible with "
-                        f"{abc_class.__name__}.{method_name}: {reason}"
+                        f"{expected_base}.{method_name}: {reason}"
                     ),
                     fix_suggestion=(
                         f"Match the ABC's signature: see "
-                        f"{abc_class.__name__}.{method_name} for the expected "
+                        f"{expected_base}.{method_name} for the expected "
                         f"parameter list."
                     ),
                 )
