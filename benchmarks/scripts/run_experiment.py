@@ -296,22 +296,37 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
             "test_bacc": round(test_bacc, 4),
         }
 
-    # H-8 (audit 2026-07-23): count folds that produced a finite primary val
-    # metric. compute_confidence_intervals silently drops NaN folds and, with <2
-    # valid, reports a zero-variance point estimate — so a degenerate 1-fold run
-    # would otherwise masquerade as a complete K-fold "completed" result and get
-    # selected as if robust. Surface the count and quarantine it (status=partial,
-    # which autoMIL keeps out of keep/discard) when the CV is too degenerate.
-    primary_val_key = "c_index" if "c_index" in test else "auc_roc"
+    # A stage is complete only when every fold it declared has a finite
+    # selection composite.  The old global ``>= 2`` threshold let a 2/3-fold
+    # discovery attempt enter keep/UCB even though freeze later rejected it.
+    # Promotion's declared 2/2 subset remains complete; a full run requires 5/5.
     per_fold_val = summary.get("per_fold_val", []) or []
     n_folds_total = summary.get("n_folds", len(per_fold_val))
-    n_valid_folds = sum(
-        1 for fm in per_fold_val
-        if isinstance(fm, dict)
-        and isinstance(fm.get(primary_val_key), (int, float))
-        and math.isfinite(float(fm.get(primary_val_key, float("nan"))))
+    valid_fold_composites = _per_fold_composites(
+        per_fold_val, is_survival="c_index" in test,
     )
-    status = "completed" if n_valid_folds >= 2 else "partial"
+    n_valid_folds = len(valid_fold_composites)
+    selected = summary.get("fold_indices")
+    if selected is None:
+        required_folds = n_folds_total
+        declared_coverage_valid = (
+            type(required_folds) is int
+            and required_folds > 0
+            and len(per_fold_val) == required_folds
+        )
+    else:
+        declared_coverage_valid = (
+            isinstance(selected, list)
+            and len(selected) == len(per_fold_val)
+            and all(type(fold) is int for fold in selected)
+            and len(set(selected)) == len(selected)
+        )
+        required_folds = len(selected) if declared_coverage_valid else -1
+    status = (
+        "completed"
+        if declared_coverage_valid and n_valid_folds == required_folds
+        else "partial"
+    )
 
     # CR-4: measure the noise the Ladder keep-margin is supposed to exceed.
     # `composite_se` is TOP-LEVEL, deliberately: CR-1b recomputes the composite as
@@ -320,9 +335,7 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     # two folds are estimable — 0.0 would read as "measured, noise-free".
     from automil.scoring import cross_fold_se
 
-    composite_se = cross_fold_se(
-        _per_fold_composites(per_fold_val, is_survival="c_index" in test)
-    )
+    composite_se = cross_fold_se(valid_fold_composites)
 
     # ``metrics`` is agent-facing (val only); ``held_out`` (test) + ``summary``
     # are sealed into certify.json by terminal_writer — never seen during search.
