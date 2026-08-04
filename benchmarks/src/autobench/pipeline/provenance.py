@@ -6,9 +6,9 @@ arm's own config dataclass remains the single runtime source of truth (see
 arms onto a lowest-common-denominator field set, and could not represent nnMIL's
 data-adaptive self-configuration).
 
-What this records is the answer to two questions a reviewer will ask and the
-code previously collapsed into one: *where do the arm's scalar defaults come
-from, and what is the relation between the live trainer and upstream?* Matching
+This records two distinct provenance questions: *where do the arm's scalar
+defaults come from, and what is the relation between the live trainer and
+upstream?* Matching
 learning-rate/regularization/epoch literals does **not** make a benchmark-owned
 training loop upstream-faithful.
 
