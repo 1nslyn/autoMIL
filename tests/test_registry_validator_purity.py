@@ -33,6 +33,10 @@ class Clean(ModelVariant):
         return None
 '''
 
+POLICY_MODULE = CLEAN_MODULE.replace("ModelVariant", "PolicyVariant").replace(
+    'kind="model"', 'kind="policy"',
+)
+
 OPEN_AT_MODULE_LEVEL = '''
 """BAD: top-level open()."""
 data = open("/etc/passwd").read()  # line 3
@@ -91,13 +95,6 @@ if __name__ == "__main__":  # line 3
     pass
 '''
 
-UNTRUSTED_IMPORT = '''
-"""Agent-controlled imports execute during registry scanning."""
-import nonexistent_pkg
-CONST = "ok"
-'''
-
-
 def _write_module(tmp_path: Path, body: str, name: str = "x.py") -> Path:
     path = tmp_path / name
     path.write_text(body)
@@ -146,17 +143,43 @@ def test_undecorated_helper_class_is_allowed(tmp_path):
     PurityValidator().check(_write_module(tmp_path, body))
 
 
+def test_free_mode_model_keeps_documented_import_and_class_config_api(tmp_path):
+    from automil.registry.validators.purity import PurityValidator
+
+    body = CLEAN_MODULE.replace(
+        "from automil.registry import",
+        "import torch\nfrom automil.registry import",
+    ).replace(
+        "class Clean(ModelVariant):",
+        'class Clean(ModelVariant):\n    CLAM_ARGS = {"dropout": 0.25}',
+    )
+    PurityValidator().check(_write_module(tmp_path, body))
+
+
+def test_free_mode_policy_keeps_general_variant_import_api(tmp_path):
+    from automil.registry.validators.purity import PurityValidator
+
+    body = POLICY_MODULE.replace(
+        "from automil.registry import",
+        "import torch\nfrom automil.registry import",
+    ).replace(
+        "class Clean(PolicyVariant):",
+        'class Clean(PolicyVariant):\n    OPTIONS = {"momentum": 0.9}',
+    )
+    PurityValidator().check(_write_module(tmp_path, body))
+
+
 @pytest.mark.parametrize("class_state", ["STATE = []", "STATE = {}", "STATE = set()"])
 def test_mutable_class_state_is_rejected(tmp_path, class_state):
     from automil.registry.errors import ValidationError
     from automil.registry.validators.purity import PurityValidator
 
-    body = CLEAN_MODULE.replace(
-        "class Clean(ModelVariant):",
-        f"class Clean(ModelVariant):\n    {class_state}",
+    body = POLICY_MODULE.replace(
+        "class Clean(PolicyVariant):",
+        f"class Clean(PolicyVariant):\n    {class_state}",
     )
     with pytest.raises(ValidationError, match="class attributes must be immutable"):
-        PurityValidator().check(_write_module(tmp_path, body))
+        PurityValidator(strict_policy=True).check(_write_module(tmp_path, body))
 
 
 @pytest.mark.parametrize("scope_statement", ["global COUNT", "nonlocal COUNT"])
@@ -164,12 +187,12 @@ def test_method_scope_mutation_is_rejected(tmp_path, scope_statement):
     from automil.registry.errors import ValidationError
     from automil.registry.validators.purity import PurityValidator
 
-    body = CLEAN_MODULE.replace(
+    body = POLICY_MODULE.replace(
         "        # Function-body I/O is allowed.",
         f"        {scope_statement}\n        # Function-body I/O is allowed.",
     )
     with pytest.raises(ValidationError, match="global or enclosing-scope state"):
-        PurityValidator().check(_write_module(tmp_path, body))
+        PurityValidator(strict_policy=True).check(_write_module(tmp_path, body))
 
 
 @pytest.mark.parametrize("body", [
@@ -189,7 +212,7 @@ def test_definition_time_calls_are_rejected(tmp_path, body):
 
     path = _write_module(tmp_path, body)
     with pytest.raises(ValidationError, match="definition-time"):
-        PurityValidator().check(path)
+        PurityValidator(strict_policy=True).check(path)
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +225,7 @@ def test_open_at_module_level_rejected(tmp_path):
 
     path = _write_module(tmp_path, OPEN_AT_MODULE_LEVEL)
     with pytest.raises(ValidationError) as exc_info:
-        PurityValidator().check(path)
+        PurityValidator(strict_policy=True).check(path)
     err = exc_info.value
     assert err.validator_name == "purity"
     assert "open" in err.reason.lower()
@@ -326,18 +349,28 @@ def test_untrusted_import_is_rejected_without_importing_it(tmp_path):
     from automil.registry.errors import ValidationError
     from automil.registry.validators.purity import PurityValidator
 
-    path = _write_module(tmp_path, UNTRUSTED_IMPORT)
+    path = _write_module(
+        tmp_path,
+        POLICY_MODULE.replace(
+            "from automil.registry import", "import nonexistent_pkg\nfrom automil.registry import",
+        ),
+    )
     with pytest.raises(ValidationError, match="untrusted top-level import"):
-        PurityValidator().check(path)
+        PurityValidator(strict_policy=True).check(path)
 
 
 def test_import_alias_cannot_hide_top_level_side_effect(tmp_path):
     from automil.registry.errors import ValidationError
     from automil.registry.validators.purity import PurityValidator
 
-    path = _write_module(tmp_path, "from os import system\nsystem('echo unsafe')\n")
+    path = _write_module(
+        tmp_path,
+        POLICY_MODULE.replace(
+            "from automil.registry import", "from os import system\nfrom automil.registry import",
+        ),
+    )
     with pytest.raises(ValidationError, match="untrusted top-level import"):
-        PurityValidator().check(path)
+        PurityValidator(strict_policy=True).check(path)
 
 
 @pytest.mark.parametrize(
@@ -353,6 +386,24 @@ def test_all_import_time_execution_is_rejected(tmp_path, body):
     from automil.registry.validators.purity import PurityValidator
 
     with pytest.raises(ValidationError, match="top-level|module attributes"):
+        PurityValidator(strict_policy=True).check(_write_module(tmp_path, body))
+
+
+@pytest.mark.parametrize(
+    "annotation_site",
+    [
+        "LEAK: open('/tmp/leak', 'w') = 1\n",
+        "class Helper:\n    LEAK: open('/tmp/leak', 'w') = 1\n",
+    ],
+)
+def test_annotation_calls_are_rejected(tmp_path, annotation_site):
+    from automil.registry.errors import ValidationError
+    from automil.registry.validators.purity import PurityValidator
+
+    body = POLICY_MODULE.replace(
+        "from automil.registry import", annotation_site + "from automil.registry import",
+    )
+    with pytest.raises(ValidationError, match="annotation contains a call"):
         PurityValidator().check(_write_module(tmp_path, body))
 
 
