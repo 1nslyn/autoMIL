@@ -159,8 +159,9 @@ ARM_PROVENANCE: tuple[ArmProvenance, ...] = (
             "3e-4 + num_epochs 100; survival_porpoise_trainer.py uses 1e-4 + 100. "
             "So the 100-epoch schedule and the per-task lr are nnMIL's design, NOT "
             "a benchmark deviation. Self-configuring (nnU-Net style): batch size, "
-            "warmup_epochs and a conditional weight_decay are derived from data "
-            "statistics, extending upstream's fixed warmup default of 5."
+            "warmup_epochs, and conditional weight_decay reproduce the vendored "
+            "planner's data-dependent rules; survival hidden_dim remains fixed at "
+            "the upstream value of 256."
         ),
     ),
 )
