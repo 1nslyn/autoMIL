@@ -292,6 +292,20 @@ def _mean(folds: list[Mapping[str, Any]]) -> float:
     return math.fsum(float(fold["composite"]) for fold in folds) / len(folds)
 
 
+def _sealed_fold_hashes(
+    archive: Path, expected_folds: tuple[int, ...],
+) -> dict[str, str]:
+    """Hash sealed folds opaquely before validation can select a candidate."""
+    hashes: dict[str, str] = {}
+    for fold in expected_folds:
+        filename = f"fold_{fold}_result.json"
+        path = archive / "certify" / filename
+        if not path.is_file():
+            raise CampaignStageError(f"candidate is missing sealed fold {fold}")
+        hashes[filename] = file_sha256(path)
+    return hashes
+
+
 def _ensure_discovery_baseline_root(
     cell_root: Path,
     state: Mapping[str, Any],
@@ -711,6 +725,9 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                     "identity": identity,
                     "validation_folds": folds,
                     "discovery_mean": _mean(folds),
+                    "sealed_fold_sha256": _sealed_fold_hashes(
+                        archive, STAGE_FOLDS["discovery"],
+                    ),
                 }
                 audit.update({
                     "eligible": True,
@@ -1292,6 +1309,10 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             "promotion_candidate_sha256": promotion_sha,
             "validation_folds": five_folds,
             "validation_mean": _mean(five_folds),
+            "sealed_fold_sha256": {
+                **source["sealed_fold_sha256"],
+                **_sealed_fold_hashes(archive, STAGE_FOLDS["promotion"]),
+            },
         }
         eligible.append(selection_candidate)
         job.update({
@@ -1403,6 +1424,7 @@ def _select_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         "candidate_id": selected["candidate_id"],
         "candidate_sha256": selected["candidate_sha256"],
         "promotion_node_id": selected.get("promotion_node_id"),
+        "sealed_fold_sha256": selected.get("sealed_fold_sha256"),
         "validation_folds": selected["validation_folds"],
         "validation_mean": selected["validation_mean"],
         "baseline_validation_mean": baseline["validation_mean"],
@@ -1500,13 +1522,26 @@ def _searched_winner_sources(
     )
     if not _same_fold_evidence(five_folds, winner["validation_folds"]):
         raise CampaignStageError("winner five-fold validation evidence changed")
-    return {
+    sources = {
         fold: (
             discovery_archive if fold in STAGE_FOLDS["discovery"]
             else promotion_archive
         ) / "certify" / f"fold_{fold}_result.json"
         for fold in CERTIFICATION_FOLDS
     }
+    expected_hashes = winner.get("sealed_fold_sha256")
+    if not isinstance(expected_hashes, dict):
+        raise CampaignStageError("frozen searched winner lacks sealed-fold hashes")
+    for fold, path in sources.items():
+        filename = f"fold_{fold}_result.json"
+        if (
+            not path.is_file()
+            or expected_hashes.get(filename) != file_sha256(path)
+        ):
+            raise CampaignStageError(
+                f"frozen searched winner sealed artifact changed: {filename}"
+            )
+    return sources
 
 
 def _winner_sealed_sources(
