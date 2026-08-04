@@ -116,6 +116,11 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
         "retrain": False,
     }
     assert protocol["fold_trainings_per_cell"] == 60 * 3 + 10 * 2 == 200
+    assert protocol["attempt_timeout"] == {
+        "minutes": 360,
+        "role": "failure-containment-not-search-budget",
+        "scope": "one-multi-fold-attempt",
+    }
     assert all(set(cell["commands"]) == {"baseline", "discovery", "promotion"}
                for cell in manifest["cells"])
 
@@ -188,6 +193,7 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["campaign"]["manifest_sha256"] == file_sha256(manifest_path)
         assert config["cap"]["eval_budget"] == 60
         assert config["training"]["fold_count"] == 3
+        assert config["orchestrator"]["default_timeout_min"] == 360
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]
