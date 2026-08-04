@@ -107,6 +107,8 @@ def run_abmil_experiment(
             _write_fold_result_json(fold, result)
             continue
 
+        fold_policy_runtime = policy_runtime.for_fold()
+
         split_csv = os.path.join(splits_dir, f"splits_{fold}.csv")
         if exp_cfg.is_survival:
             train_samples = load_abmil_survival_split(task_csv, split_csv, h5_dir, "train")
@@ -117,7 +119,7 @@ def run_abmil_experiment(
                 embed_dim=exp_cfg.embed_dim, survival_loss=exp_cfg.survival_loss or "cox",
                 nll_bins=exp_cfg.task.nll_bins, cfg=cfg, device=torch_device,
                 seed=exp_cfg.train.seed + fold, fold_dir=fold_dir,
-                policy_runtime=policy_runtime,
+                policy_runtime=fold_policy_runtime,
             )
         else:
             train_slides = load_abmil_split(task_csv, split_csv, h5_dir, label_dict, "train")
@@ -127,7 +129,7 @@ def run_abmil_experiment(
                 model_type, train_slides, val_slides, test_slides,
                 embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
-                policy_runtime=policy_runtime,
+                policy_runtime=fold_policy_runtime,
             )
 
         result = {

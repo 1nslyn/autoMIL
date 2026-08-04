@@ -84,6 +84,7 @@ def run_titan_experiment(
 
     fold_results: list[dict] = []
     for fold in exp_cfg.selected_folds:
+        fold_policy_runtime = policy_runtime.for_fold()
         split_csv = os.path.join(
             benchmark_dir, "splits", exp_cfg.strategy, exp_cfg.task.name,
             f"splits_{fold}.csv",
@@ -94,7 +95,7 @@ def run_titan_experiment(
             test_ds = build_survival_split_dataset(split_csv, "test", task_df, features_dir)
             result = train_titan_survival_fold(
                 exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
-                policy_runtime=policy_runtime,
+                policy_runtime=fold_policy_runtime,
             )
         else:
             train_ds = build_split_dataset(
@@ -108,7 +109,7 @@ def run_titan_experiment(
             )
             result = train_titan_fold(
                 exp_cfg, train_ds, val_ds, test_ds, fold, results_dir, device=device,
-                policy_runtime=policy_runtime,
+                policy_runtime=fold_policy_runtime,
             )
         fold_results.append(result)
         _write_fold_result_json(fold, result)
