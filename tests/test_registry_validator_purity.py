@@ -91,9 +91,8 @@ if __name__ == "__main__":  # line 3
     pass
 '''
 
-UNIMPORTABLE_PKG = '''
-"""Module that imports a nonexistent package — purity should still pass
-because purity does NOT actually import the module."""
+UNTRUSTED_IMPORT = '''
+"""Agent-controlled imports execute during registry scanning."""
 import nonexistent_pkg
 CONST = "ok"
 '''
@@ -319,16 +318,42 @@ def test_if_main_block_rejected(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# AST-only invariant (NEVER imports the module)
+# AST-only invariant and import allowlist
 # ---------------------------------------------------------------------------
 
-def test_unimportable_package_does_not_crash_purity(tmp_path):
-    """D-30: purity is pure AST — never imports. A module that imports a
-    nonexistent package would crash the interface validator at import time,
-    but purity must succeed (its job is structural, not behavioural)."""
+def test_untrusted_import_is_rejected_without_importing_it(tmp_path):
+    """D-30: the AST validator rejects the import without executing it."""
+    from automil.registry.errors import ValidationError
     from automil.registry.validators.purity import PurityValidator
-    path = _write_module(tmp_path, UNIMPORTABLE_PKG)
-    PurityValidator().check(path)  # no exception
+
+    path = _write_module(tmp_path, UNTRUSTED_IMPORT)
+    with pytest.raises(ValidationError, match="untrusted top-level import"):
+        PurityValidator().check(path)
+
+
+def test_import_alias_cannot_hide_top_level_side_effect(tmp_path):
+    from automil.registry.errors import ValidationError
+    from automil.registry.validators.purity import PurityValidator
+
+    path = _write_module(tmp_path, "from os import system\nsystem('echo unsafe')\n")
+    with pytest.raises(ValidationError, match="untrusted top-level import"):
+        PurityValidator().check(path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "if True:\n    open('/tmp/unsafe', 'w')\n",
+        "VALUE = make_value()\n",
+        "harmless_looking_call()\n",
+    ],
+)
+def test_all_import_time_execution_is_rejected(tmp_path, body):
+    from automil.registry.errors import ValidationError
+    from automil.registry.validators.purity import PurityValidator
+
+    with pytest.raises(ValidationError, match="top-level|module attributes"):
+        PurityValidator().check(_write_module(tmp_path, body))
 
 
 # ---------------------------------------------------------------------------
