@@ -14,6 +14,7 @@ from autobench.campaign import (
     write_manifest,
 )
 from autobench.campaign_stages import certify_campaign, freeze_campaign_selections
+from autobench.campaign_analysis import write_publication_report
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -21,7 +22,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "action", choices=(
             "generate", "check", "materialize", "canary",
-            "freeze-selections", "certify-all",
+            "freeze-selections", "certify-all", "report",
         ),
     )
     parser.add_argument(
@@ -63,11 +64,21 @@ def main(argv: list[str] | None = None) -> None:
             "froze "
             f"{artifact['cell_count']} selections ({artifact['freeze_sha256']})"
         )
-    else:
+    elif args.action == "certify-all":
         index = certify_campaign(output_root, manifest_path)
         print(
             "certified "
             f"{index['cell_count']} cells ({index['certification_sha256']})"
+        )
+    else:
+        report = write_publication_report(
+            runtime_root=output_root,
+            manifest_path=manifest_path,
+            repo_root=repo_root,
+        )
+        print(
+            "reported "
+            f"{report['cell_count']} cells ({report['report_sha256']})"
         )
 
 

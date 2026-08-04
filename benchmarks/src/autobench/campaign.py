@@ -25,6 +25,7 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 
 SCHEMA_VERSION = 3
 CAMPAIGN_ID = "automil-preprint-130-v3"
+ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 DATASETS = (
     "tcga_luad",
     "tcga_lgg",
@@ -283,10 +284,28 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
                 policy_template=policy_rel,
                 policy_template_sha256=policy_hash,
             ))
+    analysis_plan_path = repo_root / ANALYSIS_PLAN_PATH
+    try:
+        analysis_plan = json.loads(analysis_plan_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignManifestError(
+            f"cannot read frozen analysis plan {analysis_plan_path}: {exc}"
+        ) from exc
+    if (
+        not isinstance(analysis_plan, dict)
+        or analysis_plan.get("schema_version") != 1
+        or analysis_plan.get("campaign_id") != CAMPAIGN_ID
+        or analysis_plan.get("status") != "frozen-before-held-out-certification"
+    ):
+        raise CampaignManifestError("frozen analysis plan contract is invalid")
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "campaign_id": CAMPAIGN_ID,
         "protocol": PROTOCOL,
+        "analysis_plan": {
+            "path": ANALYSIS_PLAN_PATH,
+            "sha256": file_sha256(analysis_plan_path),
+        },
         "dataset_sources": sources,
         "policy_sources": policy_sources,
         "cells": cells,
@@ -303,6 +322,14 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         raise CampaignManifestError("unexpected campaign_id")
     if manifest.get("protocol") != PROTOCOL:
         raise CampaignManifestError("campaign protocol differs from the frozen contract")
+    analysis_plan = manifest.get("analysis_plan")
+    if (
+        not isinstance(analysis_plan, dict)
+        or analysis_plan.get("path") != ANALYSIS_PLAN_PATH
+        or not isinstance(analysis_plan.get("sha256"), str)
+        or len(analysis_plan["sha256"]) != 64
+    ):
+        raise CampaignManifestError("campaign analysis-plan lock is invalid")
     cells = manifest.get("cells")
     if not isinstance(cells, list) or len(cells) != 130:
         raise CampaignManifestError(f"campaign must contain exactly 130 cells, got {len(cells or [])}")

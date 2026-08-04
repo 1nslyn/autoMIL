@@ -31,6 +31,9 @@ campaign installed in `.venv`:
 `check` rebuilds the canonical roster and compares it with the byte-locked
 manifest. `canary` materializes and audits all 130 roots in a temporary
 directory, checks all 10 arm/task regimes, and starts zero GPU processes.
+The manifest also locks `analysis_plan.json` before certification. It declares
+the task-specific primary metrics, real four-arm tile ranking estimand, separate
+TITAN analysis, and the dependency-aware no-p-value reporting rule.
 
 The campaign loads dataset paths from `benchmarks/.env`. Populate that file
 before launching training. It is deliberately absent from git worktrees, so
@@ -154,6 +157,18 @@ restart-safe: it verifies and reveals each frozen winner together with its
 native baseline, emits paired fold deltas, and writes a hashed
 `campaign_certification.json` index. The ordinary `status` output reports only
 bundle identity and timestamps, never held-out metric values.
+
+Generate the complete publication artifact only after certification:
+
+```bash
+.venv/bin/python benchmarks/scripts/campaign_manifest.py report
+```
+
+This command requires all 130 baseline/winner bundles, derives 30 four-arm tile
+ranking blocks, reports TITAN separately, and fails without writing a report if
+any hash, fold, metric, or cell is missing or inconsistent. It aggregates
+survival c-index within folds and never pools raw risks from independently
+trained fold models.
 
 ## Recovery and audit trail
 

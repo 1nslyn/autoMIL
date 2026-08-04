@@ -1,4 +1,8 @@
 {
+  "analysis_plan": {
+    "path": "benchmarks/campaigns/preprint_130/analysis_plan.json",
+    "sha256": "bd5061a1b1bf8d73ea4bfb96374cec9fa1aaeabe009ebc00f2dda19f5e375ec9"
+  },
   "campaign_id": "automil-preprint-130-v3",
   "cells": [
     {

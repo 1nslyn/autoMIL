@@ -1,0 +1,67 @@
+{
+  "aggregation": {
+    "cell_metric": "equal-weight arithmetic mean across the five predeclared folds",
+    "classification_primary": "(test_auc + test_bacc) / 2",
+    "survival_primary": "test_c_index",
+    "survival_scale_rule": "aggregate fold-level c-index values; never pool raw risks across independently trained folds"
+  },
+  "campaign_id": "automil-preprint-130-v3",
+  "estimands": {
+    "agentic_lift": {
+      "contrast": "frozen autoMIL winner minus native baseline within the same cell",
+      "report_by": [
+        "task_type",
+        "regime",
+        "dataset",
+        "framework"
+      ],
+      "unit": "one predeclared dataset-task-encoder-framework cell"
+    },
+    "tile_ranking_response": {
+      "arms": [
+        "clam",
+        "nnmil",
+        "abmil",
+        "dtfd"
+      ],
+      "block": [
+        "dataset",
+        "task",
+        "encoder"
+      ],
+      "measures": [
+        "baseline_rank",
+        "automil_rank",
+        "rank_shift",
+        "kendall_tau_b",
+        "top_arm_set_changed"
+      ],
+      "stratify_by": "task_type"
+    },
+    "titan_lift": {
+      "contrast": "frozen TITAN-lineage winner minus native TITAN baseline",
+      "restriction": "reported separately; never ranked against tile-feature arms"
+    }
+  },
+  "inference": {
+    "confirmatory_p_values": false,
+    "folds_are_independent_replicates": false,
+    "multiplicity_adjustment": "not applicable because no null-hypothesis tests are declared",
+    "scope": "descriptive inference over the complete frozen 130-cell census",
+    "single_seed_limitation": true,
+    "warning": "shared patients, cohorts, encoders, tasks, and one seed prohibit treating 130 cells or five folds as independent samples"
+  },
+  "missingness": {
+    "expected_cells": 130,
+    "expected_folds_per_baseline_and_winner": 5,
+    "imputation": "none",
+    "policy": "fail closed; do not emit a publication report from an incomplete or inconsistent campaign"
+  },
+  "ranking": {
+    "direction": "higher is better",
+    "tie_method": "average ranks",
+    "top_arm_definition": "the complete set tied at the maximum primary metric"
+  },
+  "schema_version": 1,
+  "status": "frozen-before-held-out-certification"
+}
