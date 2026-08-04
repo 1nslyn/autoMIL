@@ -7,7 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -513,6 +513,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # Verify its bytes, then prove command, budget, and cell hashes all resolve
     # from the same unique manifest row before stamping them into the queue spec.
     _campaign_spec: dict[str, object] | None = None
+    _campaign_agent_session: dict[str, str] | None = None
     _campaign_cfg = _automil_cfg.get("campaign")
     if _campaign_cfg is not None:
         if not isinstance(_campaign_cfg, dict):
@@ -557,6 +558,34 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 budget_cell_id=_cell.cell_id,
                 base_commit=base_commit,
             )
+            _protocol_sha256 = _campaign_cfg.get("agent_protocol_sha256")
+            if (
+                not isinstance(_protocol_sha256, str)
+                or len(_protocol_sha256) != 64
+                or any(char not in "0123456789abcdef" for char in _protocol_sha256)
+            ):
+                raise ValueError("campaign agent protocol binding is missing")
+            _session_path = adir.parent / "agent_session.json"
+            try:
+                _session = json.loads(_session_path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    "open the campaign agent session before the first submit"
+                ) from exc
+            from automil.launch_binding import validate_launch_binding
+
+            _launch_binding = validate_launch_binding(
+                _session,
+                campaign_id=str(_campaign_cfg["campaign_id"]),
+                cell_id=str(_campaign_cfg["cell_id"]),
+                agent_protocol_sha256=_protocol_sha256,
+                require_open=True,
+            )
+            _campaign_agent_session = {
+                "session_id": _launch_binding["session_id"],
+                "agent_protocol_sha256": _protocol_sha256,
+                "binding_sha256": _launch_binding["binding_sha256"],
+            }
         except ValueError as exc:
             raise click.ClickException(
                 f"campaign config is not bound to its manifest: {exc}"
@@ -594,7 +623,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             "techniques": list(techniques),
             "config_hash": config_hash,
         },
-        "submitted_at": datetime.now().isoformat(),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
     # D-02: only write timeout_min when explicitly supplied; daemon falls back to
     # orchestrator.default_timeout_min (config.yaml) when the key is absent.
@@ -623,6 +652,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     spec.setdefault("metadata", {})["cell_id"] = _cell.cell_id
     if _campaign_spec is not None:
         spec.setdefault("metadata", {})["campaign"] = _campaign_spec
+        spec.setdefault("metadata", {})["agent_session"] = _campaign_agent_session
 
     queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
     queue_file.write_text(json.dumps(spec, indent=2))
