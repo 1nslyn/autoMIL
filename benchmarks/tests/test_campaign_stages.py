@@ -13,6 +13,7 @@ import yaml
 from automil.admissibility import load_candidate_policy
 from automil.cells.state import Cell, CellStatus, read_cell, write_cell
 from autobench.campaign import (
+    AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
     DISCOVERY_ATTEMPTS,
@@ -32,6 +33,7 @@ from autobench.campaign_stages import (
     initialize_stage_state,
     load_stage_state,
     materialize_promotion,
+    register_agent_session,
     register_baseline,
     run_native_baseline,
     select_winner,
@@ -47,6 +49,21 @@ def _folds(indices, base=0.6):
         }
         for index in indices
     ]
+
+
+AGENT_PROTOCOL = {
+    "schema_version": 1,
+    "campaign_id": CAMPAIGN_ID,
+    "purpose": "publication",
+    "provider": "test-provider",
+    "runtime": "test-runtime",
+    "runtime_version": "test-runtime-1",
+    "model": "test-model",
+    "model_version": "test-model-1",
+    "proposal_policy_sha256": "a" * 64,
+    "toolset_sha256": "b" * 64,
+    "max_sessions_per_cell": 1,
+}
 
 
 @pytest.fixture
@@ -86,6 +103,7 @@ def staged_cell(tmp_path):
         "cells": [cell],
     }))
     manifest_hash = file_sha256(manifest_path)
+    (tmp_path / AGENT_PROTOCOL_FILE).write_text(json.dumps(AGENT_PROTOCOL))
     (adir / "campaign_cell.json").write_text(json.dumps(cell))
     (adir / "config.yaml").write_text(yaml.safe_dump({
         "registry": {
@@ -104,6 +122,7 @@ def staged_cell(tmp_path):
             "cell_sha256": cell["cell_sha256"],
             "budget_cell_id": cell["budget_identity"]["cell_id"],
             "stage": "discovery",
+            "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
         },
     }))
     state = initialize_stage_state(
@@ -798,6 +817,29 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
     """Build a full-roster freeze fixture around this isolated unit-test cell."""
     state = load_stage_state(cell_root)
     winner = state["winner"]
+    usage = {
+        "status": "exact",
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cached_input_tokens": 0,
+        "cost_usd": 0.1,
+        "basis": "test fixture",
+    }
+    session = {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "cell_id": state["cell_id"],
+        "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
+        "sessions": [{
+            "session_id": "fixture-session",
+            "started_at": "2026-08-04T00:00:00+00:00",
+            "ended_at": "2026-08-04T01:00:00+00:00",
+            "termination_reason": "budget-complete",
+            "usage": usage,
+        }],
+    }
+    session["attestation_sha256"] = content_sha256(session)
+    (cell_root / "agent_session.json").write_text(json.dumps(session))
     entry = {
         "cell_id": state["cell_id"],
         "cell_sha256": state["cell_sha256"],
@@ -806,6 +848,8 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         "winner_kind": winner["kind"],
         "winner_candidate_id": winner["candidate_id"],
         "winner_candidate_sha256": winner["candidate_sha256"],
+        "agent_session_sha256": session["attestation_sha256"],
+        "agent_usage": usage,
     }
     cells = [entry] + [
         {
@@ -816,6 +860,8 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
             "winner_kind": "baseline",
             "winner_candidate_id": "baseline",
             "winner_candidate_sha256": "d" * 64,
+            "agent_session_sha256": "e" * 64,
+            "agent_usage": usage,
         }
         for index in range(CAMPAIGN_CELL_COUNT - 1)
     ]
@@ -824,6 +870,7 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": state["manifest_sha256"],
         "protocol_sha256": content_sha256(PROTOCOL),
+        "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
         "base_commit": state["base_commit"],
         "cell_count": CAMPAIGN_CELL_COUNT,
         "cells": cells,
@@ -831,6 +878,58 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
     }
     artifact["freeze_sha256"] = content_sha256(artifact)
     (cell_root.parent / SELECTION_FREEZE_FILE).write_text(json.dumps(artifact))
+
+
+def _agent_attestation(cell_id: str) -> dict:
+    return {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "cell_id": cell_id,
+        "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
+        "sessions": [{
+            "session_id": "fixture-session",
+            "started_at": "2026-08-04T00:00:00+00:00",
+            "ended_at": "2026-08-04T01:00:00+00:00",
+            "termination_reason": "budget-complete",
+            "usage": {
+                "status": "exact",
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cached_input_tokens": 0,
+                "cost_usd": 0.1,
+                "basis": "test fixture",
+            },
+        }],
+    }
+
+
+def test_agent_session_is_single_protocol_bound_and_registered_after_selection(
+    staged_cell,
+):
+    cell_root, adir, cell, _, _ = staged_cell
+    with pytest.raises(CampaignStageError, match="after winner freeze"):
+        register_agent_session(cell_root, _agent_attestation(cell["cell_id"]))
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+
+    registered = register_agent_session(
+        cell_root, _agent_attestation(cell["cell_id"]),
+    )
+    assert registered["attestation_sha256"] == content_sha256({
+        key: value for key, value in registered.items()
+        if key != "attestation_sha256"
+    })
+    assert register_agent_session(cell_root, registered) == registered
+    changed = json.loads(json.dumps(registered))
+    changed["sessions"][0]["session_id"] = "second-session"
+    changed.pop("attestation_sha256")
+    with pytest.raises(CampaignStageError, match="immutable"):
+        register_agent_session(cell_root, changed)
 
 
 def test_cell_certification_requires_global_campaign_freeze(staged_cell):

@@ -18,6 +18,7 @@ from autobench.campaign import (
     PROTOCOL,
     CampaignManifestError,
     build_preprint_manifest,
+    content_sha256,
     file_sha256,
     load_manifest,
     materialize_discovery_cells,
@@ -29,6 +30,19 @@ from autobench.campaign import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
 BASE_COMMIT = "d" * 40
+AGENT_PROTOCOL = {
+    "schema_version": 1,
+    "campaign_id": "automil-preprint-130-v3",
+    "purpose": "publication",
+    "provider": "test-provider",
+    "runtime": "test-runtime",
+    "runtime_version": "test-runtime-1",
+    "model": "test-model",
+    "model_version": "test-model-1",
+    "proposal_policy_sha256": "a" * 64,
+    "toolset_sha256": "b" * 64,
+    "max_sessions_per_cell": 1,
+}
 
 
 @pytest.fixture(scope="module")
@@ -161,6 +175,7 @@ def test_materializer_rejects_policy_boundary_drift(tmp_path):
             manifest_path,
             fake_repo / "benchmarks/campaigns/preprint_130/runtime",
             fake_repo,
+            agent_protocol=AGENT_PROTOCOL,
             base_commit=BASE_COMMIT,
         )
 
@@ -191,7 +206,8 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
     write_manifest(build_preprint_manifest(fake_repo), manifest_path)
     output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
     roots = materialize_discovery_cells(
-        manifest_path, output_root, fake_repo, base_commit=BASE_COMMIT,
+        manifest_path, output_root, fake_repo,
+        agent_protocol=AGENT_PROTOCOL, base_commit=BASE_COMMIT,
     )
 
     assert len(roots) == 130
@@ -199,6 +215,7 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
     assert all((root / "config.yaml").exists() for root in roots)
     assert all((root / "campaign_cell.json").exists() for root in roots)
     assert not any((root / "graph.json").exists() for root in roots)
+    assert json.loads((output_root / "agent_protocol.json").read_text()) == AGENT_PROTOCOL
 
     for root in (roots[0], roots[64], roots[-1]):
         config = yaml.safe_load((root / "config.yaml").read_text())
@@ -210,6 +227,9 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["encoders"]["primary"] == cell["budget_identity"]["encoder"]
         assert config["campaign"]["budget_cell_id"] == cell["budget_identity"]["cell_id"]
         assert config["campaign"]["manifest_sha256"] == file_sha256(manifest_path)
+        assert config["campaign"]["agent_protocol_sha256"] == content_sha256(
+            AGENT_PROTOCOL
+        )
         assert config["cap"]["eval_budget"] == 60
         assert config["training"]["fold_count"] == 3
         assert config["orchestrator"]["default_timeout_min"] == 360
@@ -225,7 +245,8 @@ def test_materializer_restart_preserves_progress_files(tmp_path):
     write_manifest(build_preprint_manifest(fake_repo), manifest_path)
     output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
     roots = materialize_discovery_cells(
-        manifest_path, output_root, fake_repo, base_commit=BASE_COMMIT,
+        manifest_path, output_root, fake_repo,
+        agent_protocol=AGENT_PROTOCOL, base_commit=BASE_COMMIT,
     )
     root = roots[0]
     plan = root / "plan.md"
@@ -236,7 +257,8 @@ def test_materializer_restart_preserves_progress_files(tmp_path):
     state_before = state.read_bytes()
 
     restarted = materialize_discovery_cells(
-        manifest_path, output_root, fake_repo, base_commit=BASE_COMMIT,
+        manifest_path, output_root, fake_repo,
+        agent_protocol=AGENT_PROTOCOL, base_commit=BASE_COMMIT,
     )
 
     assert restarted == roots
@@ -246,7 +268,15 @@ def test_materializer_restart_preserves_progress_files(tmp_path):
 
     with pytest.raises(CampaignManifestError, match="different inputs"):
         materialize_discovery_cells(
-            manifest_path, output_root, fake_repo, base_commit="e" * 40,
+            manifest_path, output_root, fake_repo,
+            agent_protocol=AGENT_PROTOCOL, base_commit="e" * 40,
+        )
+
+    with pytest.raises(CampaignManifestError, match="different agent protocol"):
+        materialize_discovery_cells(
+            manifest_path, output_root, fake_repo,
+            agent_protocol={**AGENT_PROTOCOL, "model_version": "test-model-2"},
+            base_commit=BASE_COMMIT,
         )
 
 
@@ -263,7 +293,8 @@ def test_materializer_refuses_half_created_existing_root(tmp_path):
 
     with pytest.raises(CampaignManifestError, match="incomplete or corrupt"):
         materialize_discovery_cells(
-            manifest_path, output_root, fake_repo, base_commit=BASE_COMMIT,
+            manifest_path, output_root, fake_repo,
+            agent_protocol=AGENT_PROTOCOL, base_commit=BASE_COMMIT,
         )
 
     assert (partial / "plan.md").read_text() == "do not overwrite me\n"

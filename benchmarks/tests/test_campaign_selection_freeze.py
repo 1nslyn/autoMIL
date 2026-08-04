@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 import autobench.campaign_stages as campaign_stages
-from autobench.campaign import content_sha256, file_sha256, load_manifest
+from autobench.campaign import (
+    AGENT_PROTOCOL_FILE,
+    CAMPAIGN_ID,
+    content_sha256,
+    file_sha256,
+    load_manifest,
+)
 from autobench.campaign_stages import (
     CAMPAIGN_CELL_COUNT,
     CampaignStageError,
@@ -20,10 +26,30 @@ from autobench.campaign_stages import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
 BASE_COMMIT = "d" * 40
+AGENT_PROTOCOL = {
+    "schema_version": 1,
+    "campaign_id": CAMPAIGN_ID,
+    "purpose": "publication",
+    "provider": "test-provider",
+    "runtime": "test-runtime",
+    "runtime_version": "test-runtime-1",
+    "model": "test-model",
+    "model_version": "test-model-1",
+    "proposal_policy_sha256": "a" * 64,
+    "toolset_sha256": "b" * 64,
+    "max_sessions_per_cell": 1,
+}
 
 
 def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> Path:
     cell_root = runtime_root / cell["cell_id"]
+    adir = cell_root / "automil"
+    adir.mkdir(parents=True)
+    (adir / "config.yaml").write_text(json.dumps({
+        "campaign": {
+            "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
+        },
+    }))
     state = initialize_stage_state(
         cell_root,
         cell=cell,
@@ -50,10 +76,34 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
     (cell_root / "campaign_state.json").write_text(
         json.dumps(state, indent=2, sort_keys=True) + "\n"
     )
+    session = {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "cell_id": cell["cell_id"],
+        "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
+        "sessions": [{
+            "session_id": f"session-{cell['cell_id']}",
+            "started_at": "2026-08-04T00:00:00+00:00",
+            "ended_at": "2026-08-04T01:00:00+00:00",
+            "termination_reason": "budget-complete",
+            "usage": {
+                "status": "unavailable",
+                "input_tokens": None,
+                "output_tokens": None,
+                "cached_input_tokens": None,
+                "cost_usd": None,
+                "basis": "fixture runtime does not expose usage",
+            },
+        }],
+    }
+    session["attestation_sha256"] = content_sha256(session)
+    (cell_root / "agent_session.json").write_text(json.dumps(session))
     return cell_root
 
 
 def _materialize_frozen_roster(runtime_root: Path) -> list[Path]:
+    runtime_root.mkdir(parents=True)
+    (runtime_root / AGENT_PROTOCOL_FILE).write_text(json.dumps(AGENT_PROTOCOL))
     manifest = load_manifest(MANIFEST)
     manifest_hash = file_sha256(MANIFEST)
     return [
@@ -66,14 +116,13 @@ def test_campaign_freeze_fails_closed_until_all_130_winners_exist(tmp_path):
     runtime_root = tmp_path / "runtime"
     roots = _materialize_frozen_roster(runtime_root)
     missing = roots[-1]
-    state = (missing / "campaign_state.json").read_bytes()
-    missing.rename(tmp_path / "missing-cell")
+    backup = tmp_path / "missing-cell"
+    missing.rename(backup)
 
     with pytest.raises(CampaignStageError, match="runtime roster differs"):
         freeze_campaign_selections(runtime_root, MANIFEST)
 
-    missing.mkdir()
-    (missing / "campaign_state.json").write_bytes(state)
+    backup.rename(missing)
     artifact = freeze_campaign_selections(runtime_root, MANIFEST)
     assert artifact["cell_count"] == CAMPAIGN_CELL_COUNT == 130
     assert len(artifact["cells"]) == 130

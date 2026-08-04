@@ -41,7 +41,37 @@ def _folds(task_type: str, primary: float) -> list[dict]:
 
 def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
     manifest = load_manifest(MANIFEST)
-    freeze_hash = "e" * 64
+    usage = {
+        "status": "exact",
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cached_input_tokens": 25,
+        "cost_usd": 0.1,
+        "basis": "test fixture",
+    }
+    freeze_entries = [
+        {
+            "cell_id": cell["cell_id"],
+            "agent_session_sha256": "f" * 64,
+            "agent_usage": usage,
+        }
+        for cell in manifest["cells"]
+    ]
+    freeze = {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": file_sha256(MANIFEST),
+        "protocol_sha256": "c" * 64,
+        "agent_protocol_sha256": "d" * 64,
+        "base_commit": "b" * 40,
+        "cell_count": len(freeze_entries),
+        "cells": freeze_entries,
+        "frozen_at": "2026-08-04T00:00:00+00:00",
+    }
+    freeze["freeze_sha256"] = content_sha256(freeze)
+    (runtime_root / "selection_freeze.json").parent.mkdir(parents=True)
+    (runtime_root / "selection_freeze.json").write_text(json.dumps(freeze))
+    freeze_hash = freeze["freeze_sha256"]
     framework_baseline = {
         "clam": 0.50,
         "nnmil": 0.51,
@@ -93,7 +123,7 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
         "schema_version": 1,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": file_sha256(MANIFEST),
-        "selection_freeze_sha256": freeze_hash,
+        "selection_freeze_sha256": freeze["freeze_sha256"],
         "cell_count": len(entries),
         "cells": entries,
         "certified_at": "2026-08-04T00:00:00+00:00",
@@ -123,6 +153,10 @@ def test_report_contains_complete_lift_and_cross_arm_ranking_estimands(tmp_path)
         "blocks"
     ] == 15
     assert report["summaries"]["titan"]["n"] == 10
+    assert report["summaries"]["agent_resources"]["input_tokens"] == {
+        "reported_cells": 130,
+        "total": 13000.0,
+    }
     assert all(
         block["top_arm_set_changed"]
         for block in report["tile_ranking_blocks"]
