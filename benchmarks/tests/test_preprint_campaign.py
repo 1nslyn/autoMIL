@@ -11,6 +11,7 @@ import yaml
 
 from automil.cells.state import make_cell_id, normalize_mil_model
 from autobench.campaign import (
+    ANALYSIS_PLAN_PATH,
     BASELINE_FOLDS,
     CERTIFICATION_FOLDS,
     DATASETS,
@@ -44,6 +45,18 @@ def test_manifest_has_130_unique_budget_and_run_identities(manifest):
     assert len(cells) == 130
     assert len({cell["cell_id"] for cell in cells}) == 130
     assert len({cell["budget_identity"]["cell_id"] for cell in cells}) == 130
+
+
+def test_manifest_locks_the_predeclared_analysis_plan(manifest):
+    plan = REPO_ROOT / ANALYSIS_PLAN_PATH
+    assert manifest["analysis_plan"] == {
+        "path": ANALYSIS_PLAN_PATH,
+        "sha256": file_sha256(plan),
+    }
+    payload = json.loads(plan.read_text())
+    assert payload["status"] == "frozen-before-held-out-certification"
+    assert payload["inference"]["confirmatory_p_values"] is False
+    assert payload["missingness"]["expected_cells"] == 130
 
 
 def test_manifest_census_matches_the_frozen_paper_roster(manifest):
@@ -153,6 +166,12 @@ def test_materializer_rejects_policy_boundary_drift(tmp_path):
 
 
 def _copy_campaign_sources(fake_repo: Path) -> None:
+    plan_dst = fake_repo / "benchmarks/campaigns/preprint_130/analysis_plan.json"
+    plan_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        REPO_ROOT / "benchmarks/campaigns/preprint_130/analysis_plan.json",
+        plan_dst,
+    )
     for dataset in DATASETS:
         source_group = "cptac" if dataset.startswith("cptac_") else "tcga"
         dataset_src = REPO_ROOT / "benchmarks/datasets" / source_group / f"{dataset}.yaml"
