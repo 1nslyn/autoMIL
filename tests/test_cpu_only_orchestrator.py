@@ -7,7 +7,17 @@ from automil.backends import _orchestrator_daemon as daemon_module
 from automil.orchestrator import ExperimentOrchestrator
 
 
-def _orchestrator(tmp_path, monkeypatch, *, accelerator: str, gpu_count: int):
+class _DetectedGpu:
+    index = 0
+    free_gb = 64.0
+    total_mb = 65536
+    free_mb = 65536
+    utilization = 0
+
+
+def _orchestrator(
+    tmp_path, monkeypatch, *, accelerator: str, gpu_count: int, detected=(),
+):
     automil_dir = tmp_path / "automil"
     automil_dir.mkdir()
     (automil_dir / "config.yaml").write_text(
@@ -21,7 +31,7 @@ def _orchestrator(tmp_path, monkeypatch, *, accelerator: str, gpu_count: int):
         "  min_vram_gb: 64\n"
     )
     (tmp_path / ".git").mkdir()
-    monkeypatch.setattr(daemon_module, "query_gpus", lambda: [])
+    monkeypatch.setattr(daemon_module, "query_gpus", lambda: list(detected))
     return ExperimentOrchestrator(project_root=tmp_path, automil_dir=automil_dir)
 
 
@@ -63,6 +73,26 @@ def test_missing_gpu_does_not_fall_back_for_gpu_config(tmp_path, monkeypatch):
     assert orch._cpu_only is False
     assert orch._find_best_gpu(needed_gb=0.0) is None
     assert orch._pre_launch_check(gpu_id=0, needed_gb=0.0) is False
+
+
+def test_inconsistent_cpu_config_fails_closed(tmp_path, monkeypatch):
+    orch = _orchestrator(
+        tmp_path, monkeypatch, accelerator="cpu", gpu_count=1,
+        detected=(_DetectedGpu(),),
+    )
+
+    assert orch.gpu_allocations == {}
+    assert orch._find_best_gpu(needed_gb=0.0) is None
+
+
+def test_unknown_accelerator_fails_closed(tmp_path, monkeypatch):
+    orch = _orchestrator(
+        tmp_path, monkeypatch, accelerator="mps", gpu_count=1,
+        detected=(_DetectedGpu(),),
+    )
+
+    assert orch.gpu_allocations == {}
+    assert orch._find_best_gpu(needed_gb=0.0) is None
 
 
 def test_cpu_subprocess_hides_cuda_devices(tmp_path, monkeypatch):
