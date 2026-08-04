@@ -1,8 +1,8 @@
-"""H-8 (audit 2026-07-23): a run with <2 valid folds must NOT masquerade as a
-complete K-fold "completed" result. compute_confidence_intervals silently drops
-NaN folds and reports a zero-variance point estimate when <2 survive, so
-summary_to_result_json now records n_valid_folds / n_folds and quarantines the
-result (status=partial → kept out of autoMIL keep/discard) when it is degenerate.
+"""H-8: a run missing any declared fold must not masquerade as completed.
+
+``compute_confidence_intervals`` silently drops NaN folds, so
+``summary_to_result_json`` records support and quarantines incomplete stage
+subsets as ``partial`` before they can enter autoMIL keep/discard.
 """
 from __future__ import annotations
 
@@ -61,11 +61,34 @@ def test_single_valid_fold_quarantined_partial():
     assert r["n_folds"] == 5
 
 
-def test_two_valid_folds_still_completed():
+def test_two_valid_folds_out_of_five_are_partial():
     m = _load_run_experiment()
     r = m.summary_to_result_json(_cls_summary([0.70, 0.72, NAN, NAN, NAN]), 10.0)
-    assert r["status"] == "completed"
+    assert r["status"] == "partial"
     assert r["n_valid_folds"] == 2
+
+
+def test_promotion_is_completed_only_with_both_declared_folds():
+    m = _load_run_experiment()
+    summary = _cls_summary([0.70, 0.72])
+    summary["n_folds"] = 5
+    summary["fold_indices"] = [3, 4]
+    assert m.summary_to_result_json(summary, 10.0)["status"] == "completed"
+
+
+def test_discovery_with_two_of_three_valid_folds_is_partial():
+    m = _load_run_experiment()
+    summary = _cls_summary([0.70, 0.72, NAN])
+    summary["n_folds"] = 5
+    summary["fold_indices"] = [0, 1, 2]
+    assert m.summary_to_result_json(summary, 10.0)["status"] == "partial"
+
+
+def test_classification_fold_requires_both_composite_components():
+    m = _load_run_experiment()
+    summary = _cls_summary([0.70, 0.72])
+    summary["per_fold_val"][1]["balanced_accuracy"] = NAN
+    assert m.summary_to_result_json(summary, 10.0)["status"] == "partial"
 
 
 def test_survival_degenerate_partial():
