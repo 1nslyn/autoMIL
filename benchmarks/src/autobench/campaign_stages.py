@@ -1665,6 +1665,20 @@ def _winner_sealed_sources(
     return _searched_winner_sources(cell_root, state, winner)
 
 
+def _baseline_sealed_sources(
+    cell_root: Path, state: Mapping[str, Any],
+) -> dict[int, Path]:
+    baseline = state.get("baseline")
+    if not isinstance(baseline, dict):
+        raise CampaignStageError("native baseline is not registered")
+    _verify_baseline_unchanged(cell_root, baseline)
+    archive = (cell_root / str(baseline["archive"])).resolve()
+    return {
+        fold: archive / "certify" / f"fold_{fold}_result.json"
+        for fold in CERTIFICATION_FOLDS
+    }
+
+
 def _read_held_out_fold(path: Path, expected_fold: int) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text())
@@ -1695,6 +1709,31 @@ def _read_held_out_fold(path: Path, expected_fold: int) -> dict[str, Any]:
             )
         normalized[str(key)] = float(value)
     return normalized
+
+
+def _read_certification_evidence(
+    sources: Mapping[int, Path],
+) -> tuple[list[dict[str, Any]], dict[str, float], dict[str, str]]:
+    """Read one pre-frozen five-fold sealed evidence set exactly once."""
+    held_out_folds: list[dict[str, Any]] = []
+    source_hashes: dict[str, str] = {}
+    metric_keys: set[str] | None = None
+    for fold in CERTIFICATION_FOLDS:
+        path = sources[fold]
+        metrics = _read_held_out_fold(path, fold)
+        keys = set(metrics)
+        if metric_keys is None:
+            metric_keys = keys
+        elif keys != metric_keys:
+            raise CampaignStageError("held-out metric keys differ across folds")
+        held_out_folds.append({"fold_index": fold, "held_out": metrics})
+        source_hashes[f"fold_{fold}_result.json"] = file_sha256(path)
+    aggregate = {
+        key: math.fsum(fold["held_out"][key] for fold in held_out_folds)
+        / len(held_out_folds)
+        for key in sorted(metric_keys or set())
+    }
+    return held_out_folds, aggregate, source_hashes
 
 
 def certify_winner(cell_root: Path) -> dict[str, Any]:
@@ -1741,42 +1780,68 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
             != winner["candidate_sha256"]
         ):
             raise CampaignStageError("certification bundle is not bound to the winner")
-        recovery_sources = _winner_sealed_sources(cell_root, state, winner)
-        recovery_hashes = {
-            f"fold_{fold}_result.json": file_sha256(recovery_sources[fold])
+        winner_sources = _winner_sealed_sources(cell_root, state, winner)
+        winner_hashes = {
+            f"fold_{fold}_result.json": file_sha256(winner_sources[fold])
             for fold in CERTIFICATION_FOLDS
         }
-        if recovered.get("source_fold_sha256") != recovery_hashes:
+        baseline_sources = _baseline_sealed_sources(cell_root, state)
+        baseline_hashes = {
+            f"fold_{fold}_result.json": file_sha256(baseline_sources[fold])
+            for fold in CERTIFICATION_FOLDS
+        }
+        if recovered.get("source_fold_sha256") != winner_hashes:
             raise CampaignStageError(
                 "certification bundle source hashes differ from the frozen winner"
             )
+        if recovered.get("baseline_source_fold_sha256") != baseline_hashes:
+            raise CampaignStageError(
+                "certification bundle source hashes differ from the native baseline"
+            )
+        if (
+            recovered.get("schema_version") != 2
+            or (recovered.get("baseline") or {}).get("candidate_sha256")
+            != state["baseline"]["candidate_sha256"]
+        ):
+            raise CampaignStageError("certification bundle baseline binding mismatch")
         return _finalize_certification_state(
             cell_root, state, bundle_sha256=recorded,
             certified_at=recovered["certified_at"],
         )
-    sources = _winner_sealed_sources(cell_root, state, winner)
-
-    held_out_folds: list[dict[str, Any]] = []
-    source_hashes: dict[str, str] = {}
-    metric_keys: set[str] | None = None
-    for fold in CERTIFICATION_FOLDS:
-        path = sources[fold]
-        metrics = _read_held_out_fold(path, fold)
-        keys = set(metrics)
-        if metric_keys is None:
-            metric_keys = keys
-        elif keys != metric_keys:
-            raise CampaignStageError("held-out metric keys differ across winner folds")
-        held_out_folds.append({"fold_index": fold, "held_out": metrics})
-        source_hashes[f"fold_{fold}_result.json"] = file_sha256(path)
-    aggregate = {
-        key: math.fsum(fold["held_out"][key] for fold in held_out_folds)
-        / len(held_out_folds)
-        for key in sorted(metric_keys or set())
+    winner_sources = _winner_sealed_sources(cell_root, state, winner)
+    baseline_sources = _baseline_sealed_sources(cell_root, state)
+    held_out_folds, aggregate, source_hashes = _read_certification_evidence(
+        winner_sources
+    )
+    baseline_folds, baseline_aggregate, baseline_source_hashes = (
+        _read_certification_evidence(baseline_sources)
+    )
+    if set(aggregate) != set(baseline_aggregate):
+        raise CampaignStageError(
+            "winner and baseline held-out metric keys differ"
+        )
+    paired_fold_deltas = []
+    for winner_fold, baseline_fold in zip(
+        held_out_folds, baseline_folds, strict=True,
+    ):
+        if winner_fold["fold_index"] != baseline_fold["fold_index"]:
+            raise CampaignStageError("winner and baseline held-out folds are not paired")
+        paired_fold_deltas.append({
+            "fold_index": winner_fold["fold_index"],
+            "held_out_delta": {
+                key: winner_fold["held_out"][key] - baseline_fold["held_out"][key]
+                for key in sorted(aggregate)
+            },
+        })
+    held_out_lift = {
+        key: math.fsum(
+            fold["held_out_delta"][key] for fold in paired_fold_deltas
+        ) / len(paired_fold_deltas)
+        for key in sorted(aggregate)
     }
     certified_at = _utc_now()
     bundle: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "campaign_id": CAMPAIGN_ID,
         "cell_id": state["cell_id"],
         "winner": {
@@ -1787,9 +1852,19 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         },
         "selection_sha256": winner["selection_sha256"],
         "validation_mean": winner["validation_mean"],
+        "baseline": {
+            "candidate_id": "baseline",
+            "candidate_sha256": state["baseline"]["candidate_sha256"],
+            "validation_mean": state["baseline"]["validation_mean"],
+        },
         "held_out_folds": held_out_folds,
         "held_out": aggregate,
         "source_fold_sha256": source_hashes,
+        "baseline_held_out_folds": baseline_folds,
+        "baseline_held_out": baseline_aggregate,
+        "baseline_source_fold_sha256": baseline_source_hashes,
+        "paired_fold_deltas": paired_fold_deltas,
+        "held_out_lift": held_out_lift,
         "retrained": False,
         "certified_at": certified_at,
     }
