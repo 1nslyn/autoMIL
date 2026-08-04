@@ -122,6 +122,12 @@ class PurityValidator:
             for node in tree.body
             if isinstance(node, ast.ClassDef)
         )
+        evaluate_annotations = not any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == "__future__"
+            and any(alias.name == "annotations" for alias in node.names)
+            for node in tree.body
+        )
         shared_names = {
             node.name
             for node in tree.body
@@ -133,6 +139,7 @@ class PurityValidator:
                 node,
                 strict_policy=strict_policy,
                 shared_names=shared_names,
+                evaluate_annotations=evaluate_annotations,
             )
 
     @staticmethod
@@ -162,6 +169,7 @@ class PurityValidator:
         *,
         strict_policy: bool,
         shared_names: set[str],
+        evaluate_annotations: bool,
     ) -> None:
         """Inspect one top-level statement for purity violations."""
 
@@ -192,6 +200,7 @@ class PurityValidator:
                 node,
                 strict_policy=strict_policy,
                 shared_names=shared_names,
+                evaluate_annotations=evaluate_annotations,
             )
             return
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -200,6 +209,7 @@ class PurityValidator:
                 node,
                 reject_shared_state=strict_policy,
                 shared_names=shared_names,
+                evaluate_annotations=evaluate_annotations,
             )
             return
 
@@ -251,7 +261,7 @@ class PurityValidator:
 
             value = getattr(node, "value", None)
             annotation = getattr(node, "annotation", None)
-            if annotation is not None and any(
+            if evaluate_annotations and annotation is not None and any(
                 isinstance(part, ast.Call) for part in ast.walk(annotation)
             ):
                 self._definition_error(
@@ -311,6 +321,7 @@ class PurityValidator:
                     statement,
                     strict_policy=strict_policy,
                     shared_names=shared_names,
+                    evaluate_annotations=evaluate_annotations,
                 )
             return
 
@@ -350,6 +361,7 @@ class PurityValidator:
         *,
         reject_shared_state: bool = False,
         shared_names: set[str] | None = None,
+        evaluate_annotations: bool = True,
     ) -> None:
         safe_decorators = {"staticmethod", "classmethod", "property", "abstractmethod"}
         for decorator in node.decorator_list:
@@ -378,7 +390,9 @@ class PurityValidator:
         if node.returns is not None:
             annotations.append(node.returns)
         for annotation in annotations:
-            if any(isinstance(part, ast.Call) for part in ast.walk(annotation)):
+            if evaluate_annotations and any(
+                isinstance(part, ast.Call) for part in ast.walk(annotation)
+            ):
                 self._definition_error(
                     module_path, annotation, "annotation contains a call",
                 )
@@ -484,6 +498,7 @@ class PurityValidator:
         *,
         strict_policy: bool,
         shared_names: set[str],
+        evaluate_annotations: bool,
     ) -> None:
         register_decorators = [
             decorator for decorator in node.decorator_list
@@ -518,6 +533,7 @@ class PurityValidator:
                     statement,
                     reject_shared_state=strict_policy,
                     shared_names=shared_names,
+                    evaluate_annotations=evaluate_annotations,
                 )
                 continue
             if isinstance(statement, ast.Pass):
@@ -531,7 +547,7 @@ class PurityValidator:
             if isinstance(statement, (ast.Assign, ast.AnnAssign)):
                 value = getattr(statement, "value", None)
                 annotation = getattr(statement, "annotation", None)
-                if annotation is not None and any(
+                if evaluate_annotations and annotation is not None and any(
                     isinstance(part, ast.Call) for part in ast.walk(annotation)
                 ):
                     self._definition_error(
