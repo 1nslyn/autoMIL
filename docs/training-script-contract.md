@@ -19,16 +19,18 @@ A training script must:
    documentation) all lives here. The framework does not inject config values
    as command-line args.
 
-2. **Honor `CUDA_VISIBLE_DEVICES`** for GPU masking. The orchestrator sets
-   this before launching the script. CPU-only consumers may treat it as a
-   no-op but must not crash if the var is set to a non-numeric value.
-   Do NOT override or unset `CUDA_VISIBLE_DEVICES` inside the training script.
+2. **Honor the framework-owned device masks.** Never override or unset
+   `CUDA_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES`, `HIP_VISIBLE_DEVICES`, or
+   `GPU_DEVICE_ORDINAL`. CUDA receives its physical ID in
+   `CUDA_VISIBLE_DEVICES`. On ROCm/Linux, `ROCR_VISIBLE_DEVICES` selects the
+   physical host GPU and the HIP/CUDA compatibility masks expose it as logical
+   device 0. CPU execution receives empty masks.
 
-3. **Honor `AUTOMIL_GPU=N`** as the logical-device index. The framework
-   masks the physical GPU via `CUDA_VISIBLE_DEVICES`; the script sees the
-   masked GPU as device 0 always. Use `torch.device("cuda:0")` (or
-   equivalent), never `torch.device(f"cuda:{os.environ['AUTOMIL_GPU']}")`.
-   CPU-only consumers may ignore this var.
+3. **Branch on `AUTOMIL_ACCELERATOR`.** Its value is `cpu`, `cuda`, or `rocm`.
+   `AUTOMIL_GPU=0` remains a backward-compatible logical slot, including on
+   CPU, and is not evidence that a physical GPU exists. Accelerator consumers
+   use logical device 0 after masking (`torch.device("cuda:0")` works for both
+   PyTorch CUDA and ROCm builds); CPU consumers ignore `AUTOMIL_GPU`.
 
 4. **Exit cleanly on `SIGTERM`** with partial output written to result.json.
    The orchestrator sends SIGTERM at the cap boundary (Phase 4 / D-115);
@@ -52,8 +54,8 @@ A training script must:
 ## Minimal sklearn-iris example
 
 The shipped reference is `examples/sklearn-iris/train.py` (~75 lines). It
-demonstrates contract items 1, 2, 4, 5; items 3 and 6 are no-ops for this
-CPU-only consumer (3) and empty (6). Read it as the executable spec.
+demonstrates contract items 1, 2, 4, 5; item 3 selects CPU and item 6 is empty.
+Read it as the executable spec.
 
 The script follows this structure:
 
@@ -93,8 +95,9 @@ _write_result(status="completed", partial=False)
 
 Key points for pytorch consumers:
 
-- `device = torch.device("cuda:0")` works because `CUDA_VISIBLE_DEVICES` already masks to the
-  assigned GPU; no need to pass `AUTOMIL_GPU` to the device constructor.
+- Branch on `AUTOMIL_ACCELERATOR`; for either CUDA or ROCm,
+  `device = torch.device("cuda:0")` addresses the single masked accelerator.
+  Never infer accelerator presence from `AUTOMIL_GPU`, which is also `0` on CPU.
 - `_state["loss"]` updates at each epoch; SIGTERM during training writes the best-so-far loss.
 - `sys.exit(0)` from the SIGTERM handler signals a graceful flush; the daemon distinguishes
   exit code 0 from crash (non-zero) and from silent process death.
