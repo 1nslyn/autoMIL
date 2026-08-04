@@ -428,8 +428,8 @@ def test_discovery_deduplicates_semantically_identical_hparams(staged_cell):
     policy = load_candidate_policy(adir)
     archive_root = adir / "orchestrator/archive"
     overrides = (
-        '--hparams \'{"lr":0.001,"wd":0.01}\'',
-        '--hparams \'{ "wd": 0.01, "lr": 0.001 }\'',
+        '--hparams \'{"lr":0.001,"wd":0.01}\' --policy-variant cosine',
+        '--policy-variant=cosine --hparams=\'{ "wd": 0.01, "lr": 0.001 }\'',
     )
     for node_id, override in zip(("node_0011", "node_0012"), overrides):
         path = archive_root / node_id / "spec.json"

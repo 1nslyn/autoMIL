@@ -246,12 +246,16 @@ class CandidatePolicy:
             )
         if self.mode == "free":
             return None
+        try:
+            options = self._parse_override_options(override)
+        except ValueError as exc:
+            return self._verdict(
+                CandidateClass.INVALID,
+                False,
+                files,
+                f"cannot parse run-command override: {exc}",
+            )
 
-        options = tuple(
-            token.split("=", 1)[0]
-            for token in tokens
-            if token.startswith("-")
-        )
         if not options:
             return self._verdict(
                 CandidateClass.INVALID,
@@ -278,29 +282,24 @@ class CandidatePolicy:
         # few scalar keys that can erase a defining mechanism (for example,
         # disabling CLAM instance clustering).  Parse the exact command that will
         # be launched and reject those keys before a node consumes GPU time.
-        hparams_values: list[str] = []
-        for index, token in enumerate(tokens):
-            if token == "--hparams":
-                if index + 1 >= len(tokens) or tokens[index + 1].startswith("-"):
-                    return self._verdict(
-                        CandidateClass.INVALID,
-                        False,
-                        files,
-                        "--hparams requires a quoted JSON-object value",
-                    )
-                hparams_values.append(tokens[index + 1])
-            elif token.startswith("--hparams="):
-                hparams_values.append(token.split("=", 1)[1])
-        if len(hparams_values) > 1:
+        hparams_value = options.get("--hparams")
+        if "--hparams" in options and hparams_value is None:
             return self._verdict(
                 CandidateClass.INVALID,
                 False,
                 files,
-                "run-command override contains --hparams more than once",
+                "--hparams requires a quoted JSON-object value",
             )
-        if hparams_values:
+        if "--policy-variant" in options and options["--policy-variant"] is None:
+            return self._verdict(
+                CandidateClass.INVALID,
+                False,
+                files,
+                "--policy-variant requires a value",
+            )
+        if hparams_value is not None:
             try:
-                hparams = json.loads(hparams_values[0])
+                hparams = json.loads(hparams_value)
             except json.JSONDecodeError as exc:
                 return self._verdict(
                     CandidateClass.INVALID,
@@ -341,33 +340,42 @@ class CandidatePolicy:
                 )
         return None
 
-    def _override_hash(self, override: str) -> str:
-        """Hash override semantics, canonicalizing the structured HP channel."""
-        if self.mode == "free":
-            return hashlib.sha256(override.encode()).hexdigest()
+    @staticmethod
+    def _parse_override_options(override: str) -> dict[str, str | None]:
+        """Parse one option-only override into a deterministic semantic map."""
         tokens = shlex.split(override)
-        canonical: list[str] = []
+        if not tokens:
+            raise ValueError("run-command override is empty")
+        parsed: dict[str, str | None] = {}
         index = 0
         while index < len(tokens):
             token = tokens[index]
-            if token == "--hparams":
-                value = json.loads(tokens[index + 1])
-                canonical.extend((
-                    token,
-                    json.dumps(value, sort_keys=True, separators=(",", ":")),
-                ))
-                index += 2
-                continue
-            if token.startswith("--hparams="):
-                value = json.loads(token.split("=", 1)[1])
-                canonical.append(
-                    "--hparams="
-                    + json.dumps(value, sort_keys=True, separators=(",", ":"))
-                )
+            if not token.startswith("-") or token == "-":
+                raise ValueError(f"unnamed positional token {token!r} is not allowed")
+            if "=" in token:
+                option, value = token.split("=", 1)
             else:
-                canonical.append(token)
+                option = token
+                value = None
+                if index + 1 < len(tokens) and not tokens[index + 1].startswith("-"):
+                    value = tokens[index + 1]
+                    index += 1
+            if option in parsed:
+                raise ValueError(f"option {option!r} appears more than once")
+            parsed[option] = value
             index += 1
-        encoded = json.dumps(canonical, separators=(",", ":")).encode()
+        return parsed
+
+    def _override_hash(self, override: str) -> str:
+        """Hash the option/value semantics, independent of CLI spelling/order."""
+        if self.mode == "free":
+            return hashlib.sha256(override.encode()).hexdigest()
+        canonical: dict[str, object] = self._parse_override_options(override)
+        if canonical.get("--hparams") is not None:
+            canonical["--hparams"] = json.loads(str(canonical["--hparams"]))
+        encoded = json.dumps(
+            canonical, sort_keys=True, separators=(",", ":"),
+        ).encode()
         return hashlib.sha256(encoded).hexdigest()
 
     def classify(
