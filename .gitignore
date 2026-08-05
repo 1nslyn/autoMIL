@@ -27,3 +27,7 @@ outputs/
 *.fls
 *.synctex.gz
 *.blg
+
+# User-owned local research artifacts
+/paper/
+/ideaspark_run/
