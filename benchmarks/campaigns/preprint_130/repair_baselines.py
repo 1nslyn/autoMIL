@@ -667,6 +667,9 @@ def migrate_reusable_results(
     manifest_path: Path, phase_root: Path,
 ) -> dict[str, Any]:
     """Safely publish the 70 reusable cells into dataset-root results."""
+    preflight = preflight_migration(manifest_path, phase_root)
+    if preflight["counts"]["invalid"]:
+        raise HistoricalBaselineError("migration preflight contains invalid cells")
     manifest = load_manifest(manifest_path)
     cells = manifest["cells"]
     links = ensure_prepared_links(
@@ -711,6 +714,103 @@ def migrate_reusable_results(
     report["audit_sha256"] = content_sha256(report)
     _write_json_atomic(phase_root / "baseline_repair_migration.json", report)
     return report
+
+
+def preflight_migration(
+    manifest_path: Path, phase_root: Path,
+) -> dict[str, Any]:
+    """Read-only all-cell conflict, inventory, and capacity check before migration."""
+    manifest = load_manifest(manifest_path)
+    datasets = sorted({str(cell["dataset"]) for cell in manifest["cells"]})
+    link_rows: list[dict[str, str]] = []
+    for dataset in datasets:
+        dataset_root = phase_root / dataset
+        legacy = dataset_root / "benchmark_5fold"
+        if not dataset_root.is_dir() or not legacy.is_dir():
+            raise HistoricalBaselineError(
+                f"dataset or legacy benchmark root is missing: {dataset_root}"
+            )
+        if (dataset_root / "results").is_symlink():
+            raise HistoricalBaselineError(
+                f"canonical results is unexpectedly a symlink: {dataset_root / 'results'}"
+            )
+        for component in _PREP_COMPONENTS:
+            source = legacy / component
+            destination = dataset_root / component
+            if not source.is_dir() or source.is_symlink():
+                raise HistoricalBaselineError(f"legacy prep source is invalid: {source}")
+            if not os.path.lexists(destination):
+                status = "will-create"
+            elif destination.is_symlink() and (
+                destination.resolve(strict=True) == source.resolve(strict=True)
+            ):
+                status = "verified"
+            else:
+                raise HistoricalBaselineError(
+                    f"prepared destination conflicts with migration: {destination}"
+                )
+            link_rows.append({
+                "dataset": dataset,
+                "component": component,
+                "status": status,
+            })
+
+    rows: list[dict[str, Any]] = []
+    bytes_to_copy = 0
+    for cell in manifest["cells"]:
+        if cell["framework"] not in HISTORICAL_REUSABLE_FRAMEWORKS:
+            continue
+        source = historical_result_dir(phase_root, cell)
+        validate_historical_baseline(cell, source)
+        source_inventory = _tree_inventory(source)
+        summary = _inventory_summary(source_inventory)
+        destination = canonical_result_dir(phase_root, cell)
+        if not os.path.lexists(destination):
+            status = "will-copy"
+            bytes_to_copy += int(summary["bytes"])
+        elif (
+            destination.is_dir()
+            and not destination.is_symlink()
+            and _tree_inventory(destination) == source_inventory
+        ):
+            status = "verified-existing"
+        else:
+            raise HistoricalBaselineError(
+                f"canonical result conflicts with legacy source: {destination}"
+            )
+        rows.append({
+            "cell_id": cell["cell_id"],
+            "source": str(source.resolve()),
+            "destination": str(destination),
+            "status": status,
+            **summary,
+        })
+    if len(rows) != 70:
+        raise HistoricalBaselineError(f"preflight expected 70 reusable cells, found {len(rows)}")
+    free_bytes = shutil.disk_usage(phase_root).free
+    if bytes_to_copy > free_bytes:
+        raise HistoricalBaselineError(
+            f"migration needs {bytes_to_copy} bytes but filesystem reports "
+            f"only {free_bytes} free"
+        )
+    return {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": file_sha256(manifest_path),
+        "phase_root": str(phase_root.resolve()),
+        "counts": {
+            "reusable": len(rows),
+            "will_copy": sum(row["status"] == "will-copy" for row in rows),
+            "verified_existing": sum(
+                row["status"] == "verified-existing" for row in rows
+            ),
+            "invalid": 0,
+        },
+        "bytes_to_copy": bytes_to_copy,
+        "filesystem_free_bytes": free_bytes,
+        "prepared_links": link_rows,
+        "cells": rows,
+    }
 
 
 def rerun_plan(manifest_path: Path, phase_root: Path) -> dict[str, Any]:
@@ -973,7 +1073,9 @@ def _paths(args: argparse.Namespace) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("audit", "migrate", "write-slurm", "run-cell", "verify"),
+        "action", choices=(
+            "audit", "preflight", "migrate", "write-slurm", "run-cell", "verify",
+        ),
     )
     parser.add_argument(
         "--manifest", default=str(Path(__file__).with_name("manifest.json")),
@@ -990,6 +1092,8 @@ def main(argv: list[str] | None = None) -> None:
         manifest, phase_root = _paths(args)
         if args.action == "audit":
             result = audit_historical_baselines(manifest, phase_root)
+        elif args.action == "preflight":
+            result = preflight_migration(manifest, phase_root)
         elif args.action == "migrate":
             result = migrate_reusable_results(manifest, phase_root)
         elif args.action == "write-slurm":
