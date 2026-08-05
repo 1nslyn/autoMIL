@@ -157,7 +157,7 @@ PROTOCOL = {
 _CANARY_PROPOSAL_POLICY = "canary proposal policy"
 _CANARY_TOOLSET = "canary toolset"
 CANARY_AGENT_PROTOCOL = {
-    "schema_version": 1,
+    "schema_version": 2,
     "campaign_id": CAMPAIGN_ID,
     "purpose": "canary",
     "provider": "canary",
@@ -165,6 +165,9 @@ CANARY_AGENT_PROTOCOL = {
     "runtime_version": "canary-1",
     "model": "canary",
     "model_version": "canary-1",
+    "effort": "high",
+    "network_access": "enabled",
+    "fallback_model": None,
     "proposal_policy_content": _CANARY_PROPOSAL_POLICY,
     "proposal_policy_sha256": hashlib.sha256(
         _CANARY_PROPOSAL_POLICY.encode()
@@ -190,14 +193,15 @@ def validate_agent_protocol(
     required_hashes = ("proposal_policy_sha256", "toolset_sha256")
     expected_keys = {
         "schema_version", "campaign_id", "purpose", *required_strings,
-        *required_contents, *required_hashes, "max_sessions_per_cell",
+        *required_contents, *required_hashes, "effort", "network_access",
+        "fallback_model", "max_sessions_per_cell",
     }
     if not isinstance(raw, Mapping) or set(raw) != expected_keys:
         raise CampaignManifestError("agent protocol field set is not exact")
     purpose = raw.get("purpose")
     if purpose not in ({"publication", "canary"} if allow_canary else {"publication"}):
         raise CampaignManifestError("agent protocol purpose is not allowed here")
-    if raw.get("schema_version") != 1 or raw.get("campaign_id") != CAMPAIGN_ID:
+    if raw.get("schema_version") != 2 or raw.get("campaign_id") != CAMPAIGN_ID:
         raise CampaignManifestError("agent protocol identity is invalid")
     for key in required_strings:
         value = raw.get(key)
@@ -230,6 +234,12 @@ def validate_agent_protocol(
             raise CampaignManifestError(
                 f"agent protocol {stem} content/hash binding mismatch"
             )
+    if raw.get("effort") != "high":
+        raise CampaignManifestError("preprint protocol requires high agent effort")
+    if raw.get("network_access") != "enabled":
+        raise CampaignManifestError("preprint protocol requires external network access")
+    if raw.get("fallback_model") is not None:
+        raise CampaignManifestError("preprint protocol forbids model fallback")
     if raw.get("max_sessions_per_cell") != 1:
         raise CampaignManifestError("preprint protocol requires one agent session per cell")
     return json.loads(json.dumps(raw))

@@ -35,7 +35,7 @@ from autobench.campaign_stages import CampaignStageError, freeze_campaign_select
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
 AGENT_PROTOCOL = {
-    "schema_version": 1,
+    "schema_version": 2,
     "campaign_id": CAMPAIGN_ID,
     "purpose": "publication",
     "provider": "test-provider",
@@ -43,6 +43,9 @@ AGENT_PROTOCOL = {
     "runtime_version": "test-runtime-1",
     "model": "test-model",
     "model_version": "test-model-1",
+    "effort": "high",
+    "network_access": "enabled",
+    "fallback_model": None,
     "proposal_policy_content": "test proposal policy",
     "proposal_policy_sha256": hashlib.sha256(
         b"test proposal policy"
@@ -277,6 +280,31 @@ def test_materializer_rejects_unresolvable_agent_policy_hashes(tmp_path):
             fake_repo / "benchmarks/campaigns/preprint_130/runtime",
             fake_repo,
             agent_protocol=bad_protocol,
+        )
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"effort": "medium"}, "requires high agent effort"),
+        ({"network_access": "disabled"}, "requires external network access"),
+        ({"fallback_model": "test-model-2"}, "forbids model fallback"),
+    ],
+)
+def test_materializer_rejects_drift_in_frozen_agent_axes(
+    tmp_path, override, message,
+):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+
+    with pytest.raises(CampaignManifestError, match=message):
+        materialize_discovery_cells(
+            manifest_path,
+            fake_repo / "benchmarks/campaigns/preprint_130/runtime",
+            fake_repo,
+            agent_protocol={**AGENT_PROTOCOL, **override},
         )
 
 

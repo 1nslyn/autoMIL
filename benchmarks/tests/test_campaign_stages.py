@@ -66,7 +66,7 @@ def _folds(indices, base=0.6):
 
 
 AGENT_PROTOCOL = {
-    "schema_version": 1,
+    "schema_version": 2,
     "campaign_id": CAMPAIGN_ID,
     "purpose": "publication",
     "provider": "test-provider",
@@ -74,6 +74,9 @@ AGENT_PROTOCOL = {
     "runtime_version": "test-runtime-1",
     "model": "test-model",
     "model_version": "test-model-1",
+    "effort": "high",
+    "network_access": "enabled",
+    "fallback_model": None,
     "proposal_policy_content": "test proposal policy",
     "proposal_policy_sha256": hashlib.sha256(
         b"test proposal policy"
