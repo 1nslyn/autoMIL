@@ -168,6 +168,12 @@ Jobs are **idempotent** (finished experiments are skipped) and **auto-resubmit**
 on the 24 h wall, so re-running any command is safe. Add a fold count as a 2nd
 arg for a comparison run (e.g. `submit_benchmark.sh $DS 10`).
 
+For import into the 130-cell campaign, a skipped/finished directory alone is
+not sufficient. Baseline registration requires the same declared
+`dataset + task + encoder + arm + seed + protocol_version` and exactly five
+validation plus sealed fold artifacts (`0`–`4`). Git commit is not part of that
+reuse check.
+
 > ⚠ **TITAN features are not extracted for _any_ roster cohort yet** (checked
 > 2026-07-20 — no `conch_v15` @ 20×/512 px exists under any dataset's
 > `trident_output/`, including LUAD and LGG). Step **(b)** is therefore required

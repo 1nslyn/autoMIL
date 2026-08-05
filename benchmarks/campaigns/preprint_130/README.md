@@ -1,7 +1,7 @@
 # Preprint 130-cell campaign operations
 
 This directory contains the immutable manifest and the operator entry points for
-the full `automil-preprint-130-v3` campaign. The controller enforces the frozen
+the full `automil-preprint-130-v4` campaign. The controller enforces the frozen
 protocol independently for every cell:
 
 - native five-fold baseline on folds `0,1,2,3,4`;
@@ -56,9 +56,19 @@ starts; it is not an optimization result.
 
 This creates one restart-safe project under
 `benchmarks/campaigns/preprint_130/runtime/<cell-id>/` for every manifest row.
-All roots are pinned to the same full git commit. Re-running materialization is
-an integrity check: it preserves progressed state, plans, learnings, and policy
-files, and fails closed if any immutable input differs.
+Every cell is identified only by `dataset + task + encoder + arm + seed +
+protocol_version`. Git commits are operational worktree metadata, not campaign
+identity and not a baseline-reuse condition. Re-running materialization
+preserves progressed state, plans, learnings, and policy files, and checks the
+declared campaign inputs.
+
+`PROTOCOL_VERSION` is bumped manually only when the pinned arm definition,
+split/seed policy, or training protocol changes. Documentation, CI, Git history,
+and other execution-irrelevant repository changes do not bump it.
+
+Campaign schema v4 is a prelaunch reset: no v3 runtime was materialized, so no
+runtime-state migration is defined. Historical result archives must be
+explicitly re-attested under the six-field identity before reuse.
 
 Choose one materialized root for the commands below:
 
@@ -71,8 +81,8 @@ CAMPAIGN_CELL_ROOT="benchmarks/campaigns/preprint_130/runtime/<cell-id>"
 ## 3. Establish the native incumbent
 
 The baseline is outside the 60 agentic attempts. The safe operator runs the
-manifest-locked five-fold command in a temporary worktree at the campaign's
-frozen base commit, keeps validation evidence public, stores held-out folds in
+manifest-locked five-fold command in a temporary worktree, keeps validation
+evidence public, stores held-out folds in
 the sealed archive, and registers the discovery root:
 
 ```bash
@@ -84,9 +94,10 @@ Use `baseline-command` to inspect the exact command without running it. If an
 equivalent baseline was executed portably elsewhere, import its validation-only
 `result.json` plus `certify/fold_<0..4>_result.json` files with
 `register-baseline --baseline-archive <path>` instead. The archive must also
-carry the deterministic `baseline_attestation.json` emitted by `run-baseline`;
-it binds the artifacts to this campaign, cell, base commit, and exact native
-command. A shape-compatible result from another cell is rejected.
+carry the deterministic `baseline_attestation.json` emitted by `run-baseline`.
+The archive is reusable when its six-field declared identity matches and its
+public validation plus sealed evidence covers exactly folds `0,1,2,3,4`.
+Git commit, diff, and command provenance do not enter this decision.
 
 ## 4. Run discovery
 
@@ -115,8 +126,8 @@ project and have it follow the autoMIL
 experiment loop. The enforced policy permits source-level train-only policy
 implementations under that cell's `automil/variants/_policies/` directory; it
 does not reduce the campaign to a fixed hyperparameter menu. Submit and launch
-both revalidate the cell identity, frozen base commit, command, budget, file
-manifest, and architecture-preserving boundary.
+both revalidate the declared cell identity, protocol version, command, budget,
+file manifest, and architecture-preserving boundary.
 
 Monitor without exposing held-out values:
 
@@ -189,7 +200,7 @@ selections into one campaign artifact:
 ```
 
 Before `selection_freeze.json` exists and contains the exact 130-cell roster,
-one locked protocol, 130 immutable session attestations, and the complete
+one `protocol_version`, 130 immutable session attestations, and the complete
 failure-inclusive search-process evidence, every per-cell
 certification entry point fails closed. `certify-all` is
 restart-safe: it verifies and reveals each frozen winner together with its
@@ -224,7 +235,8 @@ write is lock-serialized, atomic, revisioned, and content-hashed. Discovery and
 promotion artifacts remain in their respective `automil/orchestrator/archive/`
 directories; the native baseline is imported into `baseline/archive/`; the
 certified winner bundle is recorded by the stage ledger. Re-running a completed
-transition is either idempotent or fails closed on identity drift.
+transition is either idempotent or fails closed on declared-identity or artifact
+integrity drift.
 
 Operate all 130 roots with an external scheduler if desired, but invoke these
 same per-cell commands and preserve the one-GPU-per-training-process contract.
