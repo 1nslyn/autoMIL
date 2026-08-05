@@ -298,6 +298,30 @@ def test_dataset_selection_rejects_names_outside_manifest():
         baselines._selected_datasets(manifest, ("not_a_dataset",))
 
 
+def test_canonical_audit_limits_counts_to_requested_dataset(tmp_path, monkeypatch):
+    selected = _cell(framework="clam")
+    excluded = {**selected, "cell_id": "cell-excluded", "dataset": "cptac_gbm"}
+    monkeypatch.setattr(
+        baselines, "load_manifest", lambda _: {"cells": [selected, excluded]},
+    )
+    destination = baselines.canonical_result_dir(tmp_path, selected)
+    destination.mkdir(parents=True)
+    (destination / "summary.json").write_text("{}")
+    monkeypatch.setattr(
+        baselines,
+        "validate_current_baseline",
+        lambda cell, path: {"source": str(path)},
+    )
+
+    report = baselines.audit_canonical_results(
+        MANIFEST, tmp_path, datasets=("tcga_lgg",),
+    )
+
+    assert report["datasets"] == ["tcga_lgg"]
+    assert report["counts"] == {"complete": 1, "pending": 0}
+    assert [row["cell_id"] for row in report["cells"]] == [selected["cell_id"]]
+
+
 def test_atomic_json_is_project_group_readable(tmp_path):
     target = tmp_path / "audit.json"
     baselines._write_json_atomic(target, {"ok": True})

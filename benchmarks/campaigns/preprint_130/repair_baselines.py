@@ -1163,12 +1163,16 @@ def run_rerun_cell(
 
 
 def audit_canonical_results(
-    manifest_path: Path, phase_root: Path,
+    manifest_path: Path, phase_root: Path, *,
+    datasets: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Validate exact manifest coverage in canonical dataset-root storage."""
     manifest = load_manifest(manifest_path)
+    selected = _selected_datasets(manifest, datasets)
     rows: list[dict[str, Any]] = []
     for cell in manifest["cells"]:
+        if str(cell["dataset"]) not in selected:
+            continue
         destination = canonical_result_dir(phase_root, cell)
         try:
             validated = validate_current_baseline(cell, destination)
@@ -1204,6 +1208,7 @@ def audit_canonical_results(
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": file_sha256(manifest_path),
         "phase_root": str(phase_root.resolve()),
+        "datasets": list(selected),
         "counts": counts,
         "cells": rows,
     }
@@ -1272,7 +1277,9 @@ def main(argv: list[str] | None = None) -> None:
                 Path(args.ops_root).resolve(), args.index, datasets=datasets,
             )
         else:
-            result = audit_canonical_results(manifest, phase_root)
+            result = audit_canonical_results(
+                manifest, phase_root, datasets=datasets,
+            )
     except HistoricalBaselineError as exc:
         parser.exit(2, f"baseline-repair error: {exc}\n")
     print(json.dumps(result, indent=2, sort_keys=True))
