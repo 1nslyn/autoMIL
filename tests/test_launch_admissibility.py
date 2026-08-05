@@ -161,6 +161,10 @@ def test_campaign_cell_binding_drift_fails_before_worktree(tmp_path):
     (adir / "graph.json").write_text('{"nodes": {}, "meta": {"next_id": 1}}')
     cell = {
         "cell_id": "cell-1",
+        "identity": {
+            "dataset": "dataset", "task": "task", "encoder": "encoder",
+            "arm": "arm", "seed": 42, "protocol_version": "preprint-v1",
+        },
         "budget_identity": {"cell_id": "budget-1"},
         "commands": {"discovery": "python train.py"},
     }
@@ -169,6 +173,7 @@ def test_campaign_cell_binding_drift_fails_before_worktree(tmp_path):
     ).encode()
     cell["cell_sha256"] = hashlib.sha256(canonical).hexdigest()
     manifest_payload = json.dumps({
+        "schema_version": 4,
         "campaign_id": "campaign-v1", "cells": [cell],
     })
     manifest = tmp_path / "campaign" / "manifest.json"
@@ -187,6 +192,7 @@ def test_campaign_cell_binding_drift_fails_before_worktree(tmp_path):
             "cell_sha256": "0" * 64,
             "budget_cell_id": "budget-1",
             "stage": "discovery",
+            "protocol_version": "preprint-v1",
         },
     }
 

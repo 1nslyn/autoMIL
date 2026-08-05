@@ -21,6 +21,7 @@ from autobench.campaign import (
     CERTIFICATION_FOLDS,
     DISCOVERY_ATTEMPTS,
     PROTOCOL,
+    PROTOCOL_VERSION,
     STAGE_FOLDS,
     content_sha256,
     file_sha256,
@@ -93,7 +94,17 @@ def staged_cell(tmp_path):
         "dataset": "dataset",
         "task": "task",
         "encoder": "encoder",
+        "framework": "arm",
+        "seed": 42,
         "model": "model",
+        "identity": {
+            "dataset": "dataset",
+            "task": "task",
+            "encoder": "encoder",
+            "arm": "arm",
+            "seed": 42,
+            "protocol_version": PROTOCOL_VERSION,
+        },
         "commands": {
             "baseline": (
                 "python benchmarks/scripts/run_experiment.py --folds 0,1,2,3,4"
@@ -123,6 +134,7 @@ def staged_cell(tmp_path):
         for index in range(CAMPAIGN_CELL_COUNT - 1)
     ]
     manifest_path.write_text(json.dumps({
+        "schema_version": 4,
         "campaign_id": CAMPAIGN_ID,
         "cells": manifest_cells,
     }))
@@ -150,12 +162,12 @@ def staged_cell(tmp_path):
             "cell_sha256": cell["cell_sha256"],
             "budget_cell_id": cell["budget_identity"]["cell_id"],
             "stage": "discovery",
+            "protocol_version": PROTOCOL_VERSION,
             "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
         },
     }))
     state = initialize_stage_state(
         cell_root, cell=cell, manifest_sha256=manifest_hash,
-        base_commit="d" * 40,
     )
     return cell_root, adir, cell, state, tmp_path
 
@@ -189,13 +201,9 @@ def _baseline(
     state = load_stage_state(target)
     cell = json.loads((target / "automil/campaign_cell.json").read_text())
     attestation = {
-        "schema_version": 1,
-        "campaign_id": CAMPAIGN_ID,
-        "manifest_sha256": state["manifest_sha256"],
+        "schema_version": 2,
         "cell_id": state["cell_id"],
-        "cell_sha256": state["cell_sha256"],
-        "base_commit": state["base_commit"],
-        "baseline_command": cell["commands"]["baseline"],
+        "identity": cell["identity"],
         "result_sha256": file_sha256(archive / "result.json"),
         "sealed_fold_sha256": {
             f"fold_{fold}_result.json": file_sha256(
@@ -319,20 +327,37 @@ def test_initial_state_is_restart_idempotent_and_integrity_checked(staged_cell):
     cell_root, _, cell, original, _ = staged_cell
     restarted = initialize_stage_state(
         cell_root, cell=cell, manifest_sha256=original["manifest_sha256"],
-        base_commit="d" * 40,
     )
     assert restarted == original
-    with pytest.raises(CampaignStageError, match="different campaign inputs"):
-        initialize_stage_state(
-            cell_root, cell=cell,
-            manifest_sha256=original["manifest_sha256"],
-            base_commit="e" * 40,
-        )
+    assert original["protocol_version"] == PROTOCOL_VERSION
+    assert "base_commit" not in original
     raw = json.loads((cell_root / "campaign_state.json").read_text())
     raw["phase"] = "winner-frozen"
     (cell_root / "campaign_state.json").write_text(json.dumps(raw))
     with pytest.raises(CampaignStageError, match="integrity hash"):
         load_stage_state(cell_root)
+
+
+def test_candidate_identity_ignores_operational_git_commit():
+    verdict = {
+        "candidate_class": "config-only",
+        "policy_hash": "p" * 64,
+        "variant_selection_hash": None,
+        "override_hash": "o" * 64,
+    }
+    common = {
+        "overlay_manifest": {},
+        "deletions": [],
+    }
+    first, first_payload = campaign_stages._candidate_identity(
+        {**common, "base_commit": "a" * 40}, verdict,
+    )
+    second, second_payload = campaign_stages._candidate_identity(
+        {**common, "base_commit": "b" * 40}, verdict,
+    )
+    assert first == second
+    assert first_payload == second_payload
+    assert "base_commit" not in first_payload
 
 
 def test_baseline_registration_hashes_but_does_not_parse_sealed_test(staged_cell):
@@ -430,7 +455,7 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
     monkeypatch.setattr("autobench.campaign_stages.subprocess.run", fake_run)
     state = run_native_baseline(cell_root, repo_root=repo_root, gpu_id=3)
 
-    assert observed["base_commit"] == "d" * 40
+    assert observed["base_commit"] == "HEAD"
     assert observed["gpu"] == ("3", "0")
     assert "--folds" in observed["command"]
     assert "0,1,2,3,4" in observed["command"]
@@ -439,15 +464,60 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
     assert (adir / "graph.json").is_file()
 
 
+def test_native_baseline_cached_registration_revalidates_local_artifacts(
+    staged_cell,
+):
+    cell_root, _, _, _, repo_root = staged_cell
+    state = register_baseline(cell_root, _baseline(cell_root))
+    archive = cell_root / state["baseline"]["archive"]
+    (archive / "certify/fold_5_result.json").write_text(json.dumps({
+        "fold_index": 5,
+        "held_out": {},
+    }))
+
+    with pytest.raises(CampaignStageError, match="sealed fold set changed"):
+        run_native_baseline(cell_root, repo_root=repo_root)
+
+
+def test_native_baseline_cached_registration_is_idempotent_after_freeze(
+    staged_cell,
+):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    registered = register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    frozen = freeze_discovery(cell_root)
+
+    assert frozen["phase"] == "selection-ready"
+    assert run_native_baseline(cell_root, repo_root=repo_root) == frozen
+    assert frozen["baseline"]["candidate_sha256"] == (
+        registered["baseline"]["candidate_sha256"]
+    )
+
+
 def test_external_baseline_is_atomically_imported_and_portable(staged_cell, tmp_path):
     cell_root, adir, cell, _, _ = staged_cell
     external_root = tmp_path / "external-cell"
-    external = _baseline(external_root, attest_for=cell_root)
+    external_adir = external_root / "automil"
+    external_adir.mkdir(parents=True)
+    external_cell = json.loads(json.dumps(cell))
+    external_cell.pop("cell_sha256")
+    external_cell["commands"]["baseline"] += " --external-provenance"
+    external_cell["cell_sha256"] = content_sha256(external_cell)
+    (external_adir / "campaign_cell.json").write_text(json.dumps(external_cell))
+    initialize_stage_state(
+        external_root, cell=external_cell, manifest_sha256="f" * 64,
+    )
+    external = _baseline(external_root)
     state = register_baseline(cell_root, external)
     imported = cell_root / state["baseline"]["archive"]
     assert imported == cell_root / "baseline/archive"
     assert (imported / "result.json").is_file()
     assert len(list((imported / "certify").glob("fold_*_result.json"))) == 5
+    attestation = json.loads((imported / BASELINE_ATTESTATION_FILE).read_text())
+    assert "campaign_id" not in attestation
 
     # The registered incumbent no longer depends on the external result tree.
     shutil.rmtree(external_root)
@@ -460,24 +530,54 @@ def test_external_baseline_is_atomically_imported_and_portable(staged_cell, tmp_
     assert selected["winner"]["kind"] == "baseline"
 
 
-def test_external_baseline_rejects_a_foreign_attestation(staged_cell, tmp_path):
+@pytest.mark.parametrize("axis", [
+    "dataset", "task", "encoder", "arm", "seed", "protocol_version",
+])
+def test_external_baseline_rejects_a_foreign_identity(staged_cell, tmp_path, axis):
     cell_root, _, _, _, _ = staged_cell
-    external = _baseline(tmp_path / "external", attest_for=cell_root)
+    external = _baseline(tmp_path / f"external-{axis}", attest_for=cell_root)
     path = external / BASELINE_ATTESTATION_FILE
     attestation = json.loads(path.read_text())
-    attestation["base_commit"] = "e" * 40
+    current = attestation["identity"][axis]
+    attestation["identity"][axis] = (
+        current + 1 if isinstance(current, int) else f"foreign-{current}"
+    )
     attestation.pop("attestation_sha256")
     attestation["attestation_sha256"] = content_sha256(attestation)
     path.write_text(json.dumps(attestation))
 
-    with pytest.raises(CampaignStageError, match="not bound to this cell/base/command"):
+    with pytest.raises(CampaignStageError, match="not bound to this cell/protocol"):
         register_baseline(cell_root, external)
     assert not (cell_root / "baseline").exists()
 
     # A failed registration must not poison the cell for a corrected archive.
-    external = _baseline(tmp_path / "corrected", attest_for=cell_root)
+    external = _baseline(tmp_path / f"corrected-{axis}", attest_for=cell_root)
     state = register_baseline(cell_root, external)
     assert state["baseline"]["candidate_id"] == "baseline"
+
+
+def test_baseline_rejects_an_unexpected_sixth_sealed_fold(staged_cell):
+    cell_root, _, _, _, _ = staged_cell
+    archive = _baseline(cell_root)
+    extra = archive / "certify/fold_5_result.json"
+    extra.write_text(json.dumps({"fold_index": 5, "held_out": {}}))
+    with pytest.raises(CampaignStageError, match="sealed folds must be exactly"):
+        register_baseline(cell_root, archive)
+
+
+def test_baseline_registration_rejects_mutated_campaign_cell(staged_cell):
+    cell_root, adir, _, _, _ = staged_cell
+    archive = _baseline(cell_root)
+    cell_path = adir / "campaign_cell.json"
+    cell = json.loads(cell_path.read_text())
+    cell["identity"]["encoder"] = "mutated-encoder"
+    cell["encoder"] = "mutated-encoder"
+    cell.pop("cell_sha256")
+    cell["cell_sha256"] = content_sha256(cell)
+    cell_path.write_text(json.dumps(cell))
+
+    with pytest.raises(CampaignStageError, match="differs from stage state"):
+        register_baseline(cell_root, archive)
 
 
 def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
@@ -786,7 +886,7 @@ def test_promotion_freeze_marks_missing_terminal_artifacts_ineligible(staged_cel
     assert len(frozen["promotion"]["jobs"][0]["promotion_spec_sha256"]) == 64
     assert frozen["promotion"]["jobs"][0]["submitted_at"]
     assert frozen["promotion"]["jobs"][1]["status"] == "ineligible"
-    assert "missing sealed fold 3" in frozen["promotion"]["jobs"][1]["reason"]
+    assert "sealed folds must be exactly" in frozen["promotion"]["jobs"][1]["reason"]
     select_winner(cell_root)
     _write_global_selection_freeze(cell_root)
     artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
@@ -1092,9 +1192,8 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         "schema_version": SELECTION_FREEZE_SCHEMA_VERSION,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": state["manifest_sha256"],
-        "protocol_sha256": content_sha256(PROTOCOL),
+        "protocol_version": PROTOCOL_VERSION,
         "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
-        "base_commit": state["base_commit"],
         "roster_sha256": content_sha256(roster),
         "cell_count": CAMPAIGN_CELL_COUNT,
         "cells": cells,

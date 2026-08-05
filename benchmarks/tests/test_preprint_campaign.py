@@ -16,8 +16,10 @@ from autobench.campaign import (
     BASELINE_FOLDS,
     CANARY_AGENT_PROTOCOL,
     CERTIFICATION_FOLDS,
+    CAMPAIGN_ID,
     DATASETS,
     PROTOCOL,
+    PROTOCOL_VERSION,
     CampaignManifestError,
     build_preprint_manifest,
     content_sha256,
@@ -32,10 +34,9 @@ from autobench.campaign_stages import CampaignStageError, freeze_campaign_select
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
-BASE_COMMIT = "d" * 40
 AGENT_PROTOCOL = {
     "schema_version": 1,
-    "campaign_id": "automil-preprint-130-v3",
+    "campaign_id": CAMPAIGN_ID,
     "purpose": "publication",
     "provider": "test-provider",
     "runtime": "test-runtime",
@@ -66,6 +67,13 @@ def test_manifest_has_130_unique_budget_and_run_identities(manifest):
     assert len(cells) == 130
     assert len({cell["cell_id"] for cell in cells}) == 130
     assert len({cell["budget_identity"]["cell_id"] for cell in cells}) == 130
+    identities = [cell["identity"] for cell in cells]
+    assert all(set(identity) == {
+        "dataset", "task", "encoder", "arm", "seed", "protocol_version",
+    } for identity in identities)
+    assert all(identity["protocol_version"] == PROTOCOL_VERSION
+               for identity in identities)
+    assert len({tuple(identity.values()) for identity in identities}) == 130
 
 
 def test_manifest_locks_the_predeclared_analysis_plan(manifest):
@@ -190,7 +198,6 @@ def test_materializer_rejects_policy_boundary_drift(tmp_path):
             fake_repo / "benchmarks/campaigns/preprint_130/runtime",
             fake_repo,
             agent_protocol=AGENT_PROTOCOL,
-            base_commit=BASE_COMMIT,
         )
 
 
@@ -221,7 +228,7 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
     output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
     roots = materialize_discovery_cells(
         manifest_path, output_root, fake_repo,
-        agent_protocol=AGENT_PROTOCOL, base_commit=BASE_COMMIT,
+        agent_protocol=AGENT_PROTOCOL,
     )
 
     assert len(roots) == 130
@@ -244,6 +251,8 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["campaign"]["agent_protocol_sha256"] == content_sha256(
             AGENT_PROTOCOL
         )
+        assert config["campaign"]["protocol_version"] == PROTOCOL_VERSION
+        assert "base_commit" not in config["campaign"]
         assert config["cap"]["eval_budget"] == 60
         assert config["training"]["fold_count"] == 3
         assert config["orchestrator"]["default_timeout_min"] == 360
@@ -268,7 +277,6 @@ def test_materializer_rejects_unresolvable_agent_policy_hashes(tmp_path):
             fake_repo / "benchmarks/campaigns/preprint_130/runtime",
             fake_repo,
             agent_protocol=bad_protocol,
-            base_commit=BASE_COMMIT,
         )
 
 
@@ -283,7 +291,6 @@ def test_canary_agent_protocol_cannot_enter_publication_freeze(tmp_path):
         output_root,
         fake_repo,
         agent_protocol=CANARY_AGENT_PROTOCOL,
-        base_commit=BASE_COMMIT,
         allow_canary_protocol=True,
     )
 
@@ -299,7 +306,7 @@ def test_materializer_restart_preserves_progress_files(tmp_path):
     output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
     roots = materialize_discovery_cells(
         manifest_path, output_root, fake_repo,
-        agent_protocol=AGENT_PROTOCOL, base_commit=BASE_COMMIT,
+        agent_protocol=AGENT_PROTOCOL,
     )
     root = roots[0]
     plan = root / "plan.md"
@@ -311,7 +318,7 @@ def test_materializer_restart_preserves_progress_files(tmp_path):
 
     restarted = materialize_discovery_cells(
         manifest_path, output_root, fake_repo,
-        agent_protocol=AGENT_PROTOCOL, base_commit=BASE_COMMIT,
+        agent_protocol=AGENT_PROTOCOL,
     )
 
     assert restarted == roots
@@ -319,17 +326,10 @@ def test_materializer_restart_preserves_progress_files(tmp_path):
     assert learnings.read_text() == "earned knowledge must survive\n"
     assert state.read_bytes() == state_before
 
-    with pytest.raises(CampaignManifestError, match="different inputs"):
-        materialize_discovery_cells(
-            manifest_path, output_root, fake_repo,
-            agent_protocol=AGENT_PROTOCOL, base_commit="e" * 40,
-        )
-
     with pytest.raises(CampaignManifestError, match="different agent protocol"):
         materialize_discovery_cells(
             manifest_path, output_root, fake_repo,
             agent_protocol={**AGENT_PROTOCOL, "model_version": "test-model-2"},
-            base_commit=BASE_COMMIT,
         )
 
 
@@ -347,7 +347,7 @@ def test_materializer_refuses_half_created_existing_root(tmp_path):
     with pytest.raises(CampaignManifestError, match="incomplete or corrupt"):
         materialize_discovery_cells(
             manifest_path, output_root, fake_repo,
-            agent_protocol=AGENT_PROTOCOL, base_commit=BASE_COMMIT,
+            agent_protocol=AGENT_PROTOCOL,
         )
 
     assert (partial / "plan.md").read_text() == "do not overwrite me\n"
@@ -360,9 +360,7 @@ def test_full_campaign_canary_covers_every_arm_task_regime_without_gpu(tmp_path)
     manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
     write_manifest(build_preprint_manifest(fake_repo), manifest_path)
 
-    report = run_materialization_canary(
-        manifest_path, repo_root=fake_repo, base_commit=BASE_COMMIT,
-    )
+    report = run_materialization_canary(manifest_path, repo_root=fake_repo)
     assert report["cells"] == 130
     assert len(report["regimes"]) == 10
     assert report["gpu_processes_started"] == 0

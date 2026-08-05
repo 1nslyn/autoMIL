@@ -16,6 +16,7 @@ from autobench.campaign import (
     load_manifest,
 )
 from autobench.campaign_stages import (
+    BASELINE_ATTESTATION_FILE,
     CAMPAIGN_CELL_COUNT,
     CampaignStageError,
     certify_campaign,
@@ -27,7 +28,6 @@ from autobench.campaign_stages import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
-BASE_COMMIT = "d" * 40
 AGENT_PROTOCOL = {
     "schema_version": 1,
     "campaign_id": CAMPAIGN_ID,
@@ -57,11 +57,11 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
             "manifest": "manifest.json",
         },
     }))
+    (adir / "campaign_cell.json").write_text(json.dumps(cell))
     state = initialize_stage_state(
         cell_root,
         cell=cell,
         manifest_sha256=manifest_hash,
-        base_commit=BASE_COMMIT,
     )
     candidate_sha256 = content_sha256({"cell_id": cell["cell_id"]})
     baseline_archive = cell_root / "baseline/archive"
@@ -76,6 +76,19 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
             "held_out": {"test_auc": 0.5, "test_bacc": 0.5},
         }))
         sealed_fold_sha256[fold_path.name] = file_sha256(fold_path)
+    baseline_attestation = {
+        "schema_version": 2,
+        "cell_id": cell["cell_id"],
+        "identity": cell["identity"],
+        "result_sha256": file_sha256(baseline_result),
+        "sealed_fold_sha256": sealed_fold_sha256,
+    }
+    baseline_attestation["attestation_sha256"] = content_sha256(
+        baseline_attestation
+    )
+    (baseline_archive / BASELINE_ATTESTATION_FILE).write_text(
+        json.dumps(baseline_attestation)
+    )
     session_binding = content_sha256({
         "campaign_id": CAMPAIGN_ID,
         "cell_id": cell["cell_id"],
@@ -90,6 +103,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         "archive": "baseline/archive",
         "result_sha256": file_sha256(baseline_result),
         "sealed_fold_sha256": sealed_fold_sha256,
+        "attestation_sha256": baseline_attestation["attestation_sha256"],
         "validation_mean": 0.5,
         "validation_folds": [
             {"fold_index": fold, "composite": 0.5, "metrics": {}}

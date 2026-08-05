@@ -11,7 +11,7 @@ import pytest
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
-    PROTOCOL,
+    PROTOCOL_VERSION,
     content_sha256,
     file_sha256,
     load_manifest,
@@ -27,6 +27,7 @@ from autobench.campaign_analysis import (
 )
 from autobench.campaign_stages import (
     CampaignStageError,
+    SELECTION_FREEZE_SCHEMA_VERSION,
     certify_campaign,
     initialize_stage_state,
     validate_certification_bundle_artifact,
@@ -229,7 +230,6 @@ def _eligible_process(cell_id: str = "fixture-cell") -> dict:
     jobs = []
     for rank, row in enumerate(attempts[:2], 1):
         promotion_identity = {
-            "base_commit": "a" * 40,
             "overlay_manifest": {},
             "deletions": [],
             "candidate_class": row["candidate_class"],
@@ -288,7 +288,6 @@ def _write_certified_state(
         runtime_root / cell["cell_id"],
         cell=cell,
         manifest_sha256=file_sha256(MANIFEST),
-        base_commit="b" * 40,
     )
     process = freeze_entry["process_evidence"]
     metric_key = (
@@ -498,12 +497,11 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
             },
         }))
     freeze = {
-        "schema_version": 3,
+        "schema_version": SELECTION_FREEZE_SCHEMA_VERSION,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": file_sha256(MANIFEST),
-        "protocol_sha256": content_sha256(PROTOCOL),
+        "protocol_version": PROTOCOL_VERSION,
         "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
-        "base_commit": "b" * 40,
         "roster_sha256": content_sha256(dict(sorted(
             (row["cell_id"], row["cell_sha256"]) for row in freeze_entries
         ))),

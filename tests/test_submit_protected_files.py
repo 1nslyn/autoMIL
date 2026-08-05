@@ -46,6 +46,10 @@ def _setup_project(tmp_path: Path, protected: list[str]) -> tuple[Path, Path]:
 def _campaign_record() -> tuple[dict, dict]:
     cell = {
         "cell_id": "cohort__arm__task",
+        "identity": {
+            "dataset": "cohort", "task": "task", "encoder": "encoder",
+            "arm": "arm", "seed": 42, "protocol_version": "preprint-v1",
+        },
         "budget_identity": {"cell_id": "budget-123"},
         "commands": {"discovery": "python train.py --folds 0,1,2"},
     }
@@ -54,6 +58,7 @@ def _campaign_record() -> tuple[dict, dict]:
     ).encode()
     cell["cell_sha256"] = hashlib.sha256(canonical).hexdigest()
     manifest = {
+        "schema_version": 4,
         "campaign_id": "campaign-v1",
         "cells": [cell],
     }
@@ -65,6 +70,7 @@ def _campaign_record() -> tuple[dict, dict]:
         "cell_sha256": cell["cell_sha256"],
         "budget_cell_id": "budget-123",
         "stage": "discovery",
+        "protocol_version": "preprint-v1",
     }
     return manifest, campaign
 
@@ -84,20 +90,114 @@ def test_campaign_binding_requires_one_manifest_source_of_truth(tmp_path):
     assert bound == campaign
 
 
-def test_campaign_binding_rejects_base_commit_drift(tmp_path):
+def test_campaign_binding_preserves_legacy_manifest_compatibility(tmp_path):
     from automil.admissibility import validate_campaign_binding
 
     manifest, campaign = _campaign_record()
-    campaign["base_commit"] = "a" * 40
+    manifest["schema_version"] = 3
+    manifest["cells"][0].pop("identity")
+    cell = manifest["cells"][0]
+    unhashed = {key: value for key, value in cell.items() if key != "cell_sha256"}
+    canonical = json.dumps(
+        unhashed, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()
+    cell["cell_sha256"] = hashlib.sha256(canonical).hexdigest()
+    campaign["cell_sha256"] = cell["cell_sha256"]
+    campaign.pop("protocol_version")
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match="base commit"):
+
+    bound = validate_campaign_binding(
+        path,
+        campaign,
+        base_run_command="python train.py --folds 0,1,2",
+        budget_cell_id="budget-123",
+    )
+
+    assert bound == campaign
+
+
+def test_v4_campaign_cannot_omit_protocol_version(tmp_path):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    campaign.pop("protocol_version")
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="protocol_version"):
         validate_campaign_binding(
             path,
             campaign,
             base_run_command="python train.py --folds 0,1,2",
             budget_cell_id="budget-123",
-            base_commit="b" * 40,
+        )
+
+
+def test_v4_campaign_cannot_downgrade_by_omitting_identity_and_protocol(tmp_path):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    manifest["cells"][0].pop("identity")
+    cell = manifest["cells"][0]
+    unhashed = {key: value for key, value in cell.items() if key != "cell_sha256"}
+    canonical = json.dumps(
+        unhashed, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()
+    cell["cell_sha256"] = hashlib.sha256(canonical).hexdigest()
+    campaign["cell_sha256"] = cell["cell_sha256"]
+    campaign.pop("protocol_version")
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="protocol_version"):
+        validate_campaign_binding(
+            path,
+            campaign,
+            base_run_command="python train.py --folds 0,1,2",
+            budget_cell_id="budget-123",
+        )
+
+
+def test_campaign_cannot_downgrade_by_omitting_schema_and_identity(tmp_path):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    manifest.pop("schema_version")
+    manifest["cells"][0].pop("identity")
+    cell = manifest["cells"][0]
+    unhashed = {key: value for key, value in cell.items() if key != "cell_sha256"}
+    canonical = json.dumps(
+        unhashed, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()
+    cell["cell_sha256"] = hashlib.sha256(canonical).hexdigest()
+    campaign["cell_sha256"] = cell["cell_sha256"]
+    campaign.pop("protocol_version")
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="schema_version"):
+        validate_campaign_binding(
+            path,
+            campaign,
+            base_run_command="python train.py --folds 0,1,2",
+            budget_cell_id="budget-123",
+        )
+
+
+def test_campaign_binding_rejects_protocol_version_drift(tmp_path):
+    from automil.admissibility import validate_campaign_binding
+
+    manifest, campaign = _campaign_record()
+    campaign["protocol_version"] = "preprint-v2"
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="protocol_version"):
+        validate_campaign_binding(
+            path,
+            campaign,
+            base_run_command="python train.py --folds 0,1,2",
+            budget_cell_id="budget-123",
         )
 
 

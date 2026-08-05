@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from autobench.campaign import CAMPAIGN_ID, PROTOCOL, content_sha256
+from autobench.campaign import (
+    CAMPAIGN_ID, PROTOCOL, PROTOCOL_VERSION, content_sha256,
+)
 from autobench.campaign_stages import initialize_stage_state
 
 
@@ -25,7 +27,6 @@ def _state(tmp_path: Path):
     cell = {"cell_id": "cell", "cell_sha256": "a" * 64}
     return root, initialize_stage_state(
         root, cell=cell, manifest_sha256="b" * 64,
-        base_commit="d" * 40,
     )
 
 
@@ -65,6 +66,8 @@ def test_status_schema_tracks_the_frozen_protocol(tmp_path):
     _, state = _state(tmp_path)
     rendered = module.public_status(state)
     assert rendered["campaign_id"] == CAMPAIGN_ID
+    assert rendered["protocol_version"] == PROTOCOL_VERSION
+    assert "base_commit" not in rendered
     assert rendered["discovery"]["attempt_budget"] == PROTOCOL["discovery_attempts"]
     assert rendered["promotion"]["jobs"] == 0
 
