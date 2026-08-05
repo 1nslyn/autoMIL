@@ -576,6 +576,46 @@ def _inventory_summary(inventory: Mapping[str, Mapping[str, Any]]) -> dict[str, 
     }
 
 
+def _set_group_and_mode(path: Path, *, group_id: int, mode: int) -> None:
+    try:
+        os.chown(path, -1, group_id, follow_symlinks=False)
+        os.chmod(path, mode, follow_symlinks=False)
+    except OSError as exc:
+        raise HistoricalBaselineError(
+            f"cannot normalize published permissions for {path}: {exc}"
+        ) from exc
+
+
+def _normalize_result_tree(root: Path, *, group_id: int) -> None:
+    """Keep canonical results owner-writable and project-group readable only."""
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise HistoricalBaselineError(f"published result contains a symlink: {path}")
+        _set_group_and_mode(
+            path, group_id=group_id, mode=0o2750 if path.is_dir() else 0o640,
+        )
+    _set_group_and_mode(root, group_id=group_id, mode=0o2750)
+
+
+def _normalize_result_parents(
+    dataset_root: Path, destination: Path, *, group_id: int,
+) -> None:
+    results_root = dataset_root / "results"
+    current = destination.parent
+    parents: list[Path] = []
+    while current != dataset_root:
+        parents.append(current)
+        if current == results_root:
+            break
+        current = current.parent
+    if not parents or parents[-1] != results_root:
+        raise HistoricalBaselineError(
+            f"result destination escapes dataset results root: {destination}"
+        )
+    for path in reversed(parents):
+        _set_group_and_mode(path, group_id=group_id, mode=0o2750)
+
+
 def ensure_prepared_links(
     phase_root: Path, datasets: list[str] | tuple[str, ...], *, create: bool,
 ) -> list[dict[str, str]]:
@@ -643,10 +683,13 @@ def ensure_prepared_links(
     return rows
 
 
-def _copy_result_tree_atomic(source: Path, destination: Path) -> dict[str, Any]:
+def _copy_result_tree_atomic(
+    source: Path, destination: Path, *, group_id: int | None = None,
+) -> dict[str, Any]:
     """Copy, hash-verify, then atomically publish one immutable result tree."""
     before = _tree_inventory(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    resolved_group = destination.parent.stat().st_gid if group_id is None else group_id
     if os.path.lexists(destination):
         if destination.is_symlink() or not destination.is_dir():
             raise HistoricalBaselineError(f"result destination is not a real directory: {destination}")
@@ -655,6 +698,7 @@ def _copy_result_tree_atomic(source: Path, destination: Path) -> dict[str, Any]:
             raise HistoricalBaselineError(
                 f"refusing to overwrite non-identical result destination: {destination}"
             )
+        _normalize_result_tree(destination, group_id=resolved_group)
         return {"disposition": "already-present", **_inventory_summary(current)}
 
     staging = destination.parent / (
@@ -668,6 +712,7 @@ def _copy_result_tree_atomic(source: Path, destination: Path) -> dict[str, Any]:
             raise HistoricalBaselineError(f"legacy source changed while copying: {source}")
         if copied != before:
             raise HistoricalBaselineError(f"staged copy differs from legacy source: {source}")
+        _normalize_result_tree(staging, group_id=resolved_group)
         os.replace(staging, destination)
     finally:
         if os.path.lexists(staging):
@@ -702,7 +747,12 @@ def migrate_reusable_results(
         source = historical_result_dir(phase_root, cell)
         validated = validate_historical_baseline(cell, source)
         destination = canonical_result_dir(phase_root, cell)
-        copy = _copy_result_tree_atomic(source, destination)
+        dataset_root = phase_root / str(cell["dataset"])
+        group_id = dataset_root.stat().st_gid
+        copy = _copy_result_tree_atomic(source, destination, group_id=group_id)
+        _normalize_result_parents(
+            dataset_root, destination, group_id=group_id,
+        )
         validate_current_baseline(cell, destination)
         rows.append({
             "cell_id": cell["cell_id"],
@@ -962,6 +1012,8 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
     )
     try:
+        os.fchown(fd, -1, path.parent.stat().st_gid)
+        os.fchmod(fd, 0o640)
         with os.fdopen(fd, "w") as stream:
             stream.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         os.replace(temporary, path)
@@ -1090,6 +1142,12 @@ def run_rerun_cell(
             )
         destination = canonical_result_dir(phase_root, cell)
         validated = validate_current_baseline(cell, destination)
+        dataset_root = phase_root / str(cell["dataset"])
+        group_id = dataset_root.stat().st_gid
+        _normalize_result_tree(destination, group_id=group_id)
+        _normalize_result_parents(
+            dataset_root, destination, group_id=group_id,
+        )
         inventory = _tree_inventory(destination)
         report = {
             "schema_version": 1,

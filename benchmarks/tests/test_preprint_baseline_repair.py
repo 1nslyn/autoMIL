@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import stat
 import sys
 from pathlib import Path
 
@@ -235,6 +236,8 @@ def test_atomic_copy_hash_verifies_and_is_idempotent(tmp_path):
     assert second["disposition"] == "already-present"
     assert first["tree_sha256"] == second["tree_sha256"]
     assert baselines._tree_inventory(source) == baselines._tree_inventory(destination)
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o2750
+    assert stat.S_IMODE((destination / "summary.json").stat().st_mode) == 0o640
 
 
 def test_prepared_links_are_relative_verified_and_do_not_link_results(tmp_path):
@@ -293,3 +296,10 @@ def test_dataset_selection_rejects_names_outside_manifest():
         baselines.HistoricalBaselineError, match="outside the manifest",
     ):
         baselines._selected_datasets(manifest, ("not_a_dataset",))
+
+
+def test_atomic_json_is_project_group_readable(tmp_path):
+    target = tmp_path / "audit.json"
+    baselines._write_json_atomic(target, {"ok": True})
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+    assert target.stat().st_gid == tmp_path.stat().st_gid
