@@ -46,6 +46,7 @@ from autobench.campaign import (
     DISCOVERY_ATTEMPTS,
     PROMOTION_CANDIDATES,
     PROTOCOL,
+    PROTOCOL_VERSION,
     STAGE_FOLDS,
     classify_attempt_outcome,
     content_sha256,
@@ -55,14 +56,14 @@ from autobench.campaign import (
     validate_agent_protocol,
 )
 
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 STATE_FILE = "campaign_state.json"
 BASELINE_ATTESTATION_FILE = "baseline_attestation.json"
 SELECTION_FREEZE_FILE = "selection_freeze.json"
 CAMPAIGN_CERTIFICATION_FILE = "campaign_certification.json"
 AGENT_SESSION_FILE = "agent_session.json"
 CAMPAIGN_CELL_COUNT = len(DATASETS) * 26
-SELECTION_FREEZE_SCHEMA_VERSION = 3
+SELECTION_FREEZE_SCHEMA_VERSION = 4
 
 
 class CampaignStageError(ValueError):
@@ -139,7 +140,7 @@ def load_stage_state(cell_root: Path) -> dict[str, Any]:
         raise CampaignStageError("unsupported campaign stage-state schema")
     if state.get("campaign_id") != CAMPAIGN_ID:
         raise CampaignStageError("stage state belongs to a different campaign")
-    if state.get("protocol_sha256") != content_sha256(PROTOCOL):
+    if state.get("protocol_version") != PROTOCOL_VERSION:
         raise CampaignStageError("stage state protocol differs from the frozen contract")
     if state.get("state_sha256") != _state_digest(state):
         raise CampaignStageError("campaign stage-state integrity hash mismatch")
@@ -151,13 +152,11 @@ def initialize_stage_state(
     *,
     cell: Mapping[str, Any],
     manifest_sha256: str,
-    base_commit: str,
 ) -> dict[str, Any]:
     """Create the immutable discovery ledger, or verify an identical restart."""
     with _stage_lock(cell_root):
         return _initialize_stage_state_unlocked(
             cell_root, cell=cell, manifest_sha256=manifest_sha256,
-            base_commit=base_commit,
         )
 
 
@@ -166,17 +165,17 @@ def _initialize_stage_state_unlocked(
     *,
     cell: Mapping[str, Any],
     manifest_sha256: str,
-    base_commit: str,
 ) -> dict[str, Any]:
     path = cell_root / STATE_FILE
     if path.exists():
         state = load_stage_state(cell_root)
         expected = (
-            cell["cell_id"], cell["cell_sha256"], manifest_sha256, base_commit,
+            cell["cell_id"], cell["cell_sha256"], manifest_sha256,
+            PROTOCOL_VERSION,
         )
         actual = (
             state.get("cell_id"), state.get("cell_sha256"),
-            state.get("manifest_sha256"), state.get("base_commit"),
+            state.get("manifest_sha256"), state.get("protocol_version"),
         )
         if actual != expected:
             raise CampaignStageError(
@@ -189,10 +188,9 @@ def _initialize_stage_state_unlocked(
         "schema_version": STATE_SCHEMA_VERSION,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": manifest_sha256,
-        "base_commit": base_commit,
         "cell_id": cell["cell_id"],
         "cell_sha256": cell["cell_sha256"],
-        "protocol_sha256": content_sha256(PROTOCOL),
+        "protocol_version": PROTOCOL_VERSION,
         "phase": "discovery",
         "revision": 0,
         "created_at": now,
@@ -295,16 +293,35 @@ def _expected_baseline_attestation(
         )
     except (OSError, json.JSONDecodeError) as exc:
         raise CampaignStageError(f"cannot read baseline campaign cell: {exc}") from exc
-    if cell.get("cell_id") != state["cell_id"]:
+    recorded_cell_sha256 = cell.get("cell_sha256")
+    unhashed_cell = {
+        key: value for key, value in cell.items() if key != "cell_sha256"
+    }
+    if (
+        cell.get("cell_id") != state["cell_id"]
+        or recorded_cell_sha256 != state["cell_sha256"]
+        or recorded_cell_sha256 != content_sha256(unhashed_cell)
+    ):
         raise CampaignStageError("baseline campaign cell differs from stage state")
+    identity = cell.get("identity")
+    expected_identity = {
+        "dataset": cell.get("dataset"),
+        "task": cell.get("task"),
+        "encoder": cell.get("encoder"),
+        "arm": cell.get("framework"),
+        "seed": cell.get("seed"),
+        "protocol_version": state["protocol_version"],
+    }
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != set(expected_identity)
+        or identity != expected_identity
+    ):
+        raise CampaignStageError("baseline campaign identity is invalid")
     payload: dict[str, Any] = {
-        "schema_version": 1,
-        "campaign_id": CAMPAIGN_ID,
-        "manifest_sha256": state["manifest_sha256"],
+        "schema_version": 2,
         "cell_id": state["cell_id"],
-        "cell_sha256": state["cell_sha256"],
-        "base_commit": state["base_commit"],
-        "baseline_command": cell["commands"]["baseline"],
+        "identity": identity,
         "result_sha256": identity_payload["result_sha256"],
         "sealed_fold_sha256": identity_payload["sealed_fold_sha256"],
     }
@@ -424,10 +441,23 @@ def _sealed_fold_hashes(
     archive: Path, expected_folds: tuple[int, ...],
 ) -> dict[str, str]:
     """Hash sealed folds opaquely before validation can select a candidate."""
+    certify_dir = archive / "certify"
+    expected_names = {
+        f"fold_{fold}_result.json" for fold in expected_folds
+    }
+    observed_names = {
+        path.name for path in certify_dir.glob("fold_*_result.json")
+        if path.is_file()
+    }
+    if observed_names != expected_names:
+        raise CampaignStageError(
+            "sealed folds must be exactly "
+            f"{sorted(expected_names)}, got {sorted(observed_names)}"
+        )
     hashes: dict[str, str] = {}
     for fold in expected_folds:
         filename = f"fold_{fold}_result.json"
-        path = archive / "certify" / filename
+        path = certify_dir / filename
         if not path.is_file():
             raise CampaignStageError(f"candidate is missing sealed fold {fold}")
         hashes[filename] = file_sha256(path)
@@ -565,12 +595,7 @@ def _register_baseline_unlocked(
         raise CampaignStageError(f"cannot read baseline result.json: {exc}") from exc
     baseline_resources = _process_resource_summary([result])
     folds = _validation_folds(result, CERTIFICATION_FOLDS)
-    sealed_hashes: dict[str, str] = {}
-    for fold_index in CERTIFICATION_FOLDS:
-        sealed = baseline_archive / "certify" / f"fold_{fold_index}_result.json"
-        if not sealed.is_file():
-            raise CampaignStageError(f"baseline is missing sealed fold {fold_index}")
-        sealed_hashes[f"fold_{fold_index}_result.json"] = file_sha256(sealed)
+    sealed_hashes = _sealed_fold_hashes(baseline_archive, CERTIFICATION_FOLDS)
     identity_payload = {
         "result_sha256": file_sha256(result_path),
         "sealed_fold_sha256": sealed_hashes,
@@ -586,7 +611,7 @@ def _register_baseline_unlocked(
         raise CampaignStageError(f"cannot read baseline attestation: {exc}") from exc
     if attestation != expected_attestation:
         raise CampaignStageError(
-            "baseline attestation is not bound to this cell/base/command/artifact set"
+            "baseline attestation is not bound to this cell/protocol/artifact set"
         )
     import_hashes = {
         "result.json": identity_payload["result_sha256"],
@@ -638,7 +663,9 @@ def run_native_baseline(
 ) -> dict[str, Any]:
     """Run and register the frozen five-fold baseline outside agentic budget.
 
-    Training executes in a detached worktree at the materialized base commit.
+    Training executes in a detached worktree at the repository's current HEAD.
+    That commit is execution metadata only and is not part of campaign identity
+    or baseline reuse.
     Its public result is validation-only; full and per-fold held-out artifacts
     are born under ``baseline-execution/archive/certify`` and are parsed only
     after validation selection freezes a winner.
@@ -662,7 +689,10 @@ def run_native_baseline(
         try:
             state = load_stage_state(cell_root)
             if state.get("baseline") is not None:
-                _ensure_discovery_baseline_root(cell_root, state, state["baseline"])
+                baseline = state["baseline"]
+                if not isinstance(baseline, dict):
+                    raise CampaignStageError("registered baseline state is invalid")
+                _verify_baseline_unchanged(cell_root, state, baseline)
                 return state
             if state["phase"] != "discovery":
                 raise CampaignStageError("native baseline must run before discovery freeze")
@@ -699,7 +729,7 @@ def run_native_baseline(
                 subprocess.run(
                     [
                         "git", "worktree", "add", "--detach", str(worktree),
-                        state["base_commit"],
+                        "HEAD",
                     ],
                     cwd=repo_root,
                     check=True,
@@ -771,7 +801,6 @@ def _candidate_identity(
     spec: Mapping[str, Any], verdict: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     payload = {
-        "base_commit": spec.get("base_commit"),
         "overlay_manifest": spec.get("overlay_manifest") or {},
         "deletions": spec.get("deletions") or [],
         "candidate_class": verdict.get("candidate_class"),
@@ -935,10 +964,6 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
             continue
         if (spec.get("metadata") or {}).get("cap_refused"):
             continue
-        if spec.get("base_commit") != state["base_commit"]:
-            raise CampaignStageError(
-                f"discovery spec {archive.name} differs from the frozen base commit"
-            )
         launched += 1
         submitted_at = spec.get("submitted_at")
         try:
@@ -1269,7 +1294,6 @@ def _materialize_promotion_unlocked(
             campaign_binding,
             base_run_command=target_command,
             budget_cell_id=cell["budget_identity"]["cell_id"],
-            base_commit=state["base_commit"],
         )
 
         jobs: list[dict[str, Any]] = []
@@ -1288,10 +1312,6 @@ def _materialize_promotion_unlocked(
                         f"source spec changed after discovery freeze: {source_node}"
                     )
                 source_spec = json.loads(source_spec_path.read_text())
-                if source_spec.get("base_commit") != state["base_commit"]:
-                    raise CampaignStageError(
-                        f"source candidate base commit drifted: {source_node}"
-                    )
                 source_verdict = revalidate_candidate_spec(
                     load_candidate_policy(source_adir), source_spec, source_archive,
                 ).to_dict()
@@ -1345,7 +1365,7 @@ def _materialize_promotion_unlocked(
                 if override is not None:
                     config_parts.append(f"OVERRIDE:{override}")
                 config_hash = hashlib.sha256(
-                    (str(source_spec["base_commit"]) + "\n" + "\n".join(config_parts)).encode()
+                    "\n".join(config_parts).encode()
                 ).hexdigest()[:16]
                 target_spec: dict[str, Any] = {
                     "id": target_node,
@@ -1567,8 +1587,6 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
             ) from exc
         job["promotion_spec_sha256"] = file_sha256(spec_path)
         job["submitted_at"] = spec.get("submitted_at")
-        if spec.get("base_commit") != state["base_commit"]:
-            raise CampaignStageError(f"promotion base commit drifted for {node_id}")
         link = (spec.get("metadata") or {}).get("promotion") or {}
         if (
             link.get("source_node_id") != source_node
@@ -1662,7 +1680,11 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
     return _commit_state(cell_root, state)
 
 
-def _verify_baseline_unchanged(cell_root: Path, baseline: Mapping[str, Any]) -> None:
+def _verify_baseline_unchanged(
+    cell_root: Path,
+    state: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+) -> None:
     archive = (cell_root / str(baseline["archive"])).resolve()
     result = archive / "result.json"
     if not result.is_file() or file_sha256(result) != baseline["result_sha256"]:
@@ -1673,6 +1695,35 @@ def _verify_baseline_unchanged(cell_root: Path, baseline: Mapping[str, Any]) -> 
             raise CampaignStageError(
                 f"registered baseline sealed artifact changed: {filename}"
             )
+    observed = {
+        path.name for path in (archive / "certify").glob("fold_*_result.json")
+        if path.is_file()
+    }
+    if observed != set(baseline["sealed_fold_sha256"]):
+        raise CampaignStageError("registered baseline sealed fold set changed")
+    attestation_path = archive / BASELINE_ATTESTATION_FILE
+    try:
+        attestation = json.loads(attestation_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError("registered baseline attestation changed") from exc
+    recorded = attestation.get("attestation_sha256")
+    payload = {
+        key: value for key, value in attestation.items()
+        if key != "attestation_sha256"
+    }
+    if (
+        recorded != baseline.get("attestation_sha256")
+        or recorded != content_sha256(payload)
+    ):
+        raise CampaignStageError("registered baseline attestation changed")
+    expected = _expected_baseline_attestation(cell_root, state, {
+        "result_sha256": baseline["result_sha256"],
+        "sealed_fold_sha256": baseline["sealed_fold_sha256"],
+    })
+    if attestation != expected:
+        raise CampaignStageError(
+            "registered baseline attestation is not bound to the current cell"
+        )
 
 
 def select_winner(cell_root: Path) -> dict[str, Any]:
@@ -1692,7 +1743,7 @@ def _select_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     baseline = state.get("baseline")
     if not isinstance(baseline, dict):
         raise CampaignStageError("native baseline is not registered")
-    _verify_baseline_unchanged(cell_root, baseline)
+    _verify_baseline_unchanged(cell_root, state, baseline)
 
     pool: list[dict[str, Any]] = [{
         "kind": "baseline",
@@ -1804,8 +1855,6 @@ def _searched_winner_sources(
     if file_sha256(discovery_spec_path) != source["source_spec_sha256"]:
         raise CampaignStageError("winner discovery spec changed after selection")
     discovery_spec = json.loads(discovery_spec_path.read_text())
-    if discovery_spec.get("base_commit") != state["base_commit"]:
-        raise CampaignStageError("winner discovery base commit changed")
     discovery_verdict = revalidate_candidate_spec(
         load_candidate_policy(discovery_adir), discovery_spec, discovery_archive,
     ).to_dict()
@@ -1825,8 +1874,6 @@ def _searched_winner_sources(
         / winner["promotion_node_id"]
     )
     promotion_spec = json.loads((promotion_archive / "spec.json").read_text())
-    if promotion_spec.get("base_commit") != state["base_commit"]:
-        raise CampaignStageError("winner promotion base commit changed")
     promotion_verdict = revalidate_candidate_spec(
         load_candidate_policy(promotion_adir), promotion_spec, promotion_archive,
     ).to_dict()
@@ -1871,7 +1918,7 @@ def _winner_sealed_sources(
         baseline = state.get("baseline")
         if not isinstance(baseline, dict):
             raise CampaignStageError("native baseline is not registered")
-        _verify_baseline_unchanged(cell_root, baseline)
+        _verify_baseline_unchanged(cell_root, state, baseline)
         archive = (cell_root / baseline["archive"]).resolve()
         return {
             fold: archive / "certify" / f"fold_{fold}_result.json"
@@ -1886,7 +1933,7 @@ def _baseline_sealed_sources(
     baseline = state.get("baseline")
     if not isinstance(baseline, dict):
         raise CampaignStageError("native baseline is not registered")
-    _verify_baseline_unchanged(cell_root, baseline)
+    _verify_baseline_unchanged(cell_root, state, baseline)
     archive = (cell_root / str(baseline["archive"])).resolve()
     return {
         fold: archive / "certify" / f"fold_{fold}_result.json"
@@ -2972,7 +3019,7 @@ def validate_process_evidence_artifact(
             or not _is_sha256(job.get("promotion_candidate_sha256"))
             or not isinstance(identity, dict)
             or set(identity) != {
-                "base_commit", "overlay_manifest", "deletions",
+                "overlay_manifest", "deletions",
                 "candidate_class", "policy_hash", "variant_selection_hash",
                 "override_hash",
             }
@@ -3144,7 +3191,7 @@ def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
     roster = _roster_payload(cells)
     expected_fields = {
         "schema_version", "campaign_id", "manifest_sha256",
-        "protocol_sha256", "agent_protocol_sha256", "base_commit",
+        "protocol_version", "agent_protocol_sha256",
         "roster_sha256", "cell_count", "cells", "frozen_at",
         "freeze_sha256",
     }
@@ -3258,16 +3305,11 @@ def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
         set(artifact) != expected_fields
         or artifact.get("schema_version") != SELECTION_FREEZE_SCHEMA_VERSION
         or artifact.get("campaign_id") != CAMPAIGN_ID
-        or artifact.get("protocol_sha256") != content_sha256(PROTOCOL)
+        or artifact.get("protocol_version") != PROTOCOL_VERSION
         or not all(_is_sha256(artifact.get(key)) for key in (
-            "manifest_sha256", "protocol_sha256", "agent_protocol_sha256",
+            "manifest_sha256", "agent_protocol_sha256",
             "roster_sha256", "freeze_sha256",
         ))
-        or not isinstance(artifact.get("base_commit"), str)
-        or len(artifact["base_commit"]) not in {40, 64}
-        or any(
-            char not in "0123456789abcdef" for char in artifact["base_commit"]
-        )
         or frozen_at is None
         or frozen_at.tzinfo is None
         or artifact.get("cell_count") != CAMPAIGN_CELL_COUNT
@@ -3744,7 +3786,8 @@ def validate_certified_runtime_binding(
         or state.get("cell_sha256") != freeze_entry.get("cell_sha256")
         or state.get("manifest_sha256")
         != selection_freeze.get("manifest_sha256")
-        or state.get("base_commit") != selection_freeze.get("base_commit")
+        or state.get("protocol_version")
+        != selection_freeze.get("protocol_version")
         or certification.get("bundle") != "certification/certify.json"
         or certification.get("bundle_sha256") != bundle.get("bundle_sha256")
         or certification.get("certified_at") != bundle.get("certified_at")
@@ -3789,7 +3832,7 @@ def _verify_selection_freeze_for_cell(
     _, agent_protocol_sha256 = _locked_agent_protocol(cell_root.parent)
     if (
         artifact.get("manifest_sha256") != state.get("manifest_sha256")
-        or artifact.get("base_commit") != state.get("base_commit")
+        or artifact.get("protocol_version") != state.get("protocol_version")
         or artifact.get("agent_protocol_sha256") != agent_protocol_sha256
     ):
         raise CampaignStageError("campaign selection freeze binding mismatch")
@@ -3908,7 +3951,8 @@ def freeze_campaign_selections(
                 if (
                     state.get("cell_sha256") != cell["cell_sha256"]
                     or entry.get("state_sha256") != state.get("state_sha256")
-                    or artifact.get("base_commit") != state.get("base_commit")
+                    or artifact.get("protocol_version")
+                    != state.get("protocol_version")
                     or entry.get("selection_sha256")
                     != winner.get("selection_sha256")
                     or entry.get("winner_kind") != winner.get("kind")
@@ -3960,7 +4004,6 @@ def freeze_campaign_selections(
                 f"(missing={missing[:3]}, unexpected={unexpected[:3]})"
             )
         entries: list[dict[str, Any]] = []
-        base_commits: set[str] = set()
         for cell_id in sorted(expected):
             cell = expected[cell_id]
             state = load_stage_state(runtime_root / cell_id)
@@ -3978,7 +4021,8 @@ def freeze_campaign_selections(
                 or state.get("cell_sha256") != cell["cell_sha256"]
             ):
                 raise CampaignStageError(f"{cell_id}: campaign binding drift")
-            base_commits.add(str(state.get("base_commit", "")))
+            if state.get("protocol_version") != PROTOCOL_VERSION:
+                raise CampaignStageError(f"{cell_id}: protocol version drift")
             session = _agent_session_for_freeze(
                 runtime_root / cell_id, state, agent_protocol_sha256,
             )
@@ -4016,8 +4060,6 @@ def freeze_campaign_selections(
                 "process_sha256": content_sha256(process_evidence),
                 "process_evidence": process_evidence,
             })
-        if len(base_commits) != 1 or "" in base_commits:
-            raise CampaignStageError("campaign cells do not share one base commit")
         session_ids = [entry["agent_session_id"] for entry in entries]
         if len(set(session_ids)) != CAMPAIGN_CELL_COUNT:
             raise CampaignStageError("campaign cells do not use distinct agent sessions")
@@ -4025,9 +4067,8 @@ def freeze_campaign_selections(
             "schema_version": SELECTION_FREEZE_SCHEMA_VERSION,
             "campaign_id": CAMPAIGN_ID,
             "manifest_sha256": manifest_sha256,
-            "protocol_sha256": content_sha256(PROTOCOL),
+            "protocol_version": PROTOCOL_VERSION,
             "agent_protocol_sha256": agent_protocol_sha256,
-            "base_commit": next(iter(base_commits)),
             "roster_sha256": roster_sha256,
             "cell_count": len(entries),
             "cells": entries,

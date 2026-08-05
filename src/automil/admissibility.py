@@ -536,7 +536,6 @@ def validate_campaign_binding(
     *,
     base_run_command: str | None,
     budget_cell_id: str,
-    base_commit: str | None = None,
 ) -> dict[str, object]:
     """Prove command, budget, and cell metadata share one manifest record.
 
@@ -556,14 +555,6 @@ def validate_campaign_binding(
         raise AdmissibilityError(
             f"campaign binding is missing non-empty string field(s) {missing}"
         )
-    locked_base = campaign.get("base_commit")
-    if locked_base is not None:
-        if not isinstance(locked_base, str) or not locked_base:
-            raise AdmissibilityError("campaign base_commit must be a non-empty string")
-        if base_commit != locked_base:
-            raise AdmissibilityError(
-                "candidate base commit differs from the materialized campaign base"
-            )
     try:
         manifest = json.loads(manifest_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -583,6 +574,36 @@ def validate_campaign_binding(
             f"(found {len(matches)})"
         )
     cell = dict(matches[0])
+    identity = cell.get("identity")
+    declared_protocol = campaign.get("protocol_version")
+    manifest_schema = manifest.get("schema_version")
+    if (
+        not isinstance(manifest_schema, int)
+        or isinstance(manifest_schema, bool)
+        or manifest_schema < 1
+    ):
+        raise AdmissibilityError(
+            "campaign manifest schema_version must be a positive integer"
+        )
+    is_v4_or_later = manifest_schema >= 4
+    identity_keys = {
+        "dataset", "task", "encoder", "arm", "seed", "protocol_version",
+    }
+    if not is_v4_or_later and identity is None and declared_protocol is None:
+        # Legacy/third-party campaigns predate the optional protocol binding.
+        # Preserve their generic envelope without weakening v4 manifests: once
+        # either side declares identity metadata, both sides must agree.
+        pass
+    elif (
+        not isinstance(identity, dict)
+        or (is_v4_or_later and set(identity) != identity_keys)
+        or not isinstance(declared_protocol, str)
+        or not declared_protocol
+        or identity.get("protocol_version") != declared_protocol
+    ):
+        raise AdmissibilityError(
+            "campaign protocol_version differs from the manifest cell identity"
+        )
     recorded_cell_hash = cell.pop("cell_sha256", None)
     canonical = json.dumps(
         cell, sort_keys=True, separators=(",", ":"), ensure_ascii=False,

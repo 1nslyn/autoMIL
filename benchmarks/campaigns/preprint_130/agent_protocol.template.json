@@ -1,5 +1,5 @@
 {
-  "campaign_id": "automil-preprint-130-v3",
+  "campaign_id": "automil-preprint-130-v4",
   "max_sessions_per_cell": 1,
   "model": "REPLACE_WITH_MODEL_NAME",
   "model_version": "REPLACE_WITH_IMMUTABLE_MODEL_VERSION",

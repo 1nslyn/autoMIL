@@ -1584,10 +1584,6 @@ class ExperimentOrchestrator:
                     _campaign,
                     base_run_command=self.run_command,
                     budget_cell_id=str((spec.get("metadata") or {}).get("cell_id", "")),
-                    base_commit=(
-                        str(spec["base_commit"])
-                        if spec.get("base_commit") is not None else None
-                    ),
                 )
         except Exception as exc:  # fail closed at the last pre-launch seam
             logger.error(

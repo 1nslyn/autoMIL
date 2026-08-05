@@ -15,7 +15,7 @@ from autobench.campaign import (
     ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
-    PROTOCOL,
+    PROTOCOL_VERSION,
     TILE_ARMS,
     content_sha256,
     file_sha256,
@@ -580,7 +580,7 @@ def build_publication_report(
         })
         or freeze.get("campaign_id") != CAMPAIGN_ID
         or freeze.get("manifest_sha256") != manifest_sha256
-        or freeze.get("protocol_sha256") != content_sha256(PROTOCOL)
+        or freeze.get("protocol_version") != PROTOCOL_VERSION
         or freeze.get("agent_protocol_sha256") != agent_protocol_sha256
         or freeze.get("cell_count") != CAMPAIGN_CELL_COUNT
     ):
@@ -610,7 +610,6 @@ def build_publication_report(
         row.get("agent_session_binding_sha256") if isinstance(row, dict) else None
         for row in raw_freeze_entries
     ]
-    base_commit = freeze.get("base_commit")
     if (
         len(freeze_entries) != CAMPAIGN_CELL_COUNT
         or set(freeze_entries) != set(manifest_cells)
@@ -626,9 +625,6 @@ def build_publication_report(
             or any(char not in "0123456789abcdef" for char in binding)
             for binding in session_bindings
         )
-        or not isinstance(base_commit, str)
-        or len(base_commit) not in {40, 64}
-        or any(char not in "0123456789abcdef" for char in base_commit)
     ):
         raise CampaignAnalysisError("campaign selection freeze roster is incomplete")
 
@@ -726,8 +722,7 @@ def build_publication_report(
         "certification_sha256": recorded_index_hash,
         "selection_freeze_sha256": index["selection_freeze_sha256"],
         "selection_roster_sha256": freeze["roster_sha256"],
-        "base_commit": freeze["base_commit"],
-        "protocol_sha256": freeze["protocol_sha256"],
+        "protocol_version": freeze["protocol_version"],
         "agent_protocol_sha256": freeze["agent_protocol_sha256"],
         "cell_count": len(cells),
         "cells": cells,

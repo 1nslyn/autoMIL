@@ -14,7 +14,6 @@ import json
 import os
 import shlex
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -23,8 +22,9 @@ import yaml
 
 from automil.cells.state import make_cell_id, normalize_mil_model
 
-SCHEMA_VERSION = 3
-CAMPAIGN_ID = "automil-preprint-130-v3"
+SCHEMA_VERSION = 4
+CAMPAIGN_ID = "automil-preprint-130-v4"
+PROTOCOL_VERSION = "preprint-v1"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
 DATASETS = (
@@ -117,6 +117,7 @@ MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
     + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])
 )
 PROTOCOL = {
+    "protocol_version": PROTOCOL_VERSION,
     "seed": 42,
     "split_folds": 5,
     "discovery_attempts": DISCOVERY_ATTEMPTS,
@@ -234,26 +235,6 @@ def validate_agent_protocol(
     return json.loads(json.dumps(raw))
 
 
-def resolve_campaign_base_commit(repo_root: Path) -> str:
-    """Return the full git commit that every run in one materialization uses."""
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise CampaignManifestError(
-            f"cannot resolve campaign base commit under {repo_root}"
-        ) from exc
-    commit = completed.stdout.strip().lower()
-    if len(commit) not in {40, 64} or any(char not in "0123456789abcdef" for char in commit):
-        raise CampaignManifestError(f"git returned an invalid base commit {commit!r}")
-    return commit
-
-
 def _canonical_bytes(value: object) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
@@ -317,14 +298,22 @@ def _cell_record(
     policy_template: str,
     policy_template_sha256: str,
 ) -> dict[str, Any]:
-    suffix = f"__{survival_loss}" if survival_loss else ""
+    identity = {
+        "dataset": dataset,
+        "task": task,
+        "encoder": encoder,
+        "arm": framework,
+        "seed": PROTOCOL["seed"],
+        "protocol_version": PROTOCOL_VERSION,
+    }
     experiment_id = (
-        f"{dataset}__{framework}__standard__{task}__{encoder}__{model}"
-        f"__s{PROTOCOL['seed']}{suffix}"
+        f"{dataset}__{task}__{encoder}__{framework}"
+        f"__s{PROTOCOL['seed']}__{PROTOCOL_VERSION}"
     )
     normalized_model = normalize_mil_model(model)
     cell = {
         "cell_id": experiment_id,
+        "identity": identity,
         "dataset": dataset,
         "task": task,
         "task_type": task_type,
@@ -491,6 +480,26 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         if recorded_hash != content_sha256(cell):
             raise CampaignManifestError(f"cell hash mismatch for {cell.get('cell_id')}")
         cell_id = str(cell["cell_id"])
+        identity = cell.get("identity")
+        expected_identity = {
+            "dataset": cell.get("dataset"),
+            "task": cell.get("task"),
+            "encoder": cell.get("encoder"),
+            "arm": cell.get("framework"),
+            "seed": PROTOCOL["seed"],
+            "protocol_version": PROTOCOL_VERSION,
+        }
+        expected_cell_id = (
+            f"{expected_identity['dataset']}__{expected_identity['task']}"
+            f"__{expected_identity['encoder']}__{expected_identity['arm']}"
+            f"__s{expected_identity['seed']}__{PROTOCOL_VERSION}"
+        )
+        if identity != expected_identity or cell_id != expected_cell_id:
+            raise CampaignManifestError(
+                f"declared cell identity mismatch for {cell_id}"
+            )
+        if cell.get("seed") != PROTOCOL["seed"]:
+            raise CampaignManifestError(f"cell seed differs from identity for {cell_id}")
         budget_id = str((cell.get("budget_identity") or {})["cell_id"])
         if cell_id in ids or budget_id in budgets:
             raise CampaignManifestError(f"duplicate cell or budget identity: {cell_id}")
@@ -571,7 +580,6 @@ def materialize_discovery_cells(
     repo_root: Path,
     *,
     agent_protocol: Mapping[str, Any],
-    base_commit: str | None = None,
     allow_canary_protocol: bool = False,
 ) -> list[Path]:
     """Create 130 isolated discovery roots from the immutable manifest.
@@ -588,13 +596,6 @@ def materialize_discovery_cells(
     agent_protocol_sha256 = content_sha256(locked_agent_protocol)
     repo_root = repo_root.resolve()
     output_root = output_root.resolve()
-    base_commit = base_commit or resolve_campaign_base_commit(repo_root)
-    if (
-        len(base_commit) not in {40, 64}
-        or any(char not in "0123456789abcdef" for char in base_commit.lower())
-    ):
-        raise CampaignManifestError("campaign base_commit must be a full git hash")
-    base_commit = base_commit.lower()
     try:
         output_root.relative_to(repo_root)
     except ValueError as exc:
@@ -683,7 +684,7 @@ def materialize_discovery_cells(
             "cell_sha256": cell["cell_sha256"],
             "budget_cell_id": cell["budget_identity"]["cell_id"],
             "stage": "discovery",
-            "base_commit": base_commit,
+            "protocol_version": PROTOCOL_VERSION,
             "agent_protocol_sha256": agent_protocol_sha256,
         }
 
@@ -702,11 +703,12 @@ def materialize_discovery_cells(
                     f"existing discovery root is incomplete or corrupt: {cell_root}"
                 ) from exc
             expected_state = (
-                cell["cell_id"], cell["cell_sha256"], manifest_hash, base_commit,
+                cell["cell_id"], cell["cell_sha256"], manifest_hash,
+                PROTOCOL_VERSION,
             )
             actual_state = (
                 state.get("cell_id"), state.get("cell_sha256"),
-                state.get("manifest_sha256"), state.get("base_commit"),
+                state.get("manifest_sha256"), state.get("protocol_version"),
             )
             if existing_cell != cell or existing_config != config or actual_state != expected_state:
                 raise CampaignManifestError(
@@ -747,7 +749,6 @@ def materialize_discovery_cells(
                 staging_root,
                 cell=cell,
                 manifest_sha256=manifest_hash,
-                base_commit=base_commit,
             )
             os.replace(staging_root, cell_root)
         finally:
@@ -790,7 +791,6 @@ def audit_materialized_campaign(
     agent_protocol_sha256 = content_sha256(agent_protocol)
     by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
     seen: set[str] = set()
-    base_commits: set[str] = set()
     regimes: dict[tuple[str, str], str] = {}
     manifest_hash = file_sha256(manifest_path)
     for adir in roots:
@@ -813,13 +813,11 @@ def audit_materialized_campaign(
             campaign,
             base_run_command=(config.get("run") or {}).get("command"),
             budget_cell_id=cell["budget_identity"]["cell_id"],
-            base_commit=str(campaign.get("base_commit", "")),
         )
         if campaign.get("stage") != "discovery":
             raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
         if campaign.get("agent_protocol_sha256") != agent_protocol_sha256:
             raise CampaignManifestError(f"{cell_id}: agent protocol binding drift")
-        base_commits.add(str(campaign.get("base_commit", "")))
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
         if (config.get("training") or {}).get("fold_count") != len(
@@ -845,7 +843,7 @@ def audit_materialized_campaign(
             state["phase"] != "discovery"
             or state["cell_id"] != cell_id
             or state["manifest_sha256"] != manifest_hash
-            or state["base_commit"] != campaign.get("base_commit")
+            or state["protocol_version"] != campaign.get("protocol_version")
         ):
             raise CampaignManifestError(f"{cell_id}: stage ledger drift")
         for command_name, expected_folds in {
@@ -874,16 +872,12 @@ def audit_materialized_campaign(
         raise CampaignManifestError(
             f"arm/task canary coverage mismatch: {sorted(set(regimes))}"
         )
-    if len(base_commits) != 1 or "" in base_commits:
-        raise CampaignManifestError(
-            f"materialized cells do not share one base commit: {sorted(base_commits)}"
-        )
     return {
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": manifest_hash,
         "agent_protocol_sha256": agent_protocol_sha256,
         "cells": len(seen),
-        "base_commit": next(iter(base_commits)),
+        "protocol_version": PROTOCOL_VERSION,
         "regimes": {
             f"{framework}/{task_type}": regimes[(framework, task_type)]
             for framework, task_type in sorted(regimes)
@@ -893,7 +887,7 @@ def audit_materialized_campaign(
 
 
 def run_materialization_canary(
-    manifest_path: Path, *, repo_root: Path, base_commit: str | None = None,
+    manifest_path: Path, *, repo_root: Path,
 ) -> dict[str, Any]:
     """Materialize, audit, and automatically remove one full dry-run campaign."""
     parent = manifest_path.resolve().parent
@@ -901,7 +895,6 @@ def run_materialization_canary(
         roots = materialize_discovery_cells(
             manifest_path, Path(raw) / "runtime", repo_root,
             agent_protocol=CANARY_AGENT_PROTOCOL,
-            base_commit=base_commit,
             allow_canary_protocol=True,
         )
         return audit_materialized_campaign(
