@@ -44,6 +44,21 @@ class HistoricalBaselineError(ValueError):
     """A historical result cannot be proven reusable for the current cell."""
 
 
+def _selected_datasets(
+    manifest: Mapping[str, Any], datasets: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    available = {str(cell["dataset"]) for cell in manifest["cells"]}
+    selected = tuple(sorted(set(datasets or available)))
+    unknown = set(selected) - available
+    if unknown:
+        raise HistoricalBaselineError(
+            f"dataset selection is outside the manifest: {sorted(unknown)}"
+        )
+    if not selected:
+        raise HistoricalBaselineError("dataset selection must not be empty")
+    return selected
+
+
 def historical_result_dir(legacy_root: Path, cell: Mapping[str, Any]) -> Path:
     """Resolve one manifest cell to its canonical historical result directory."""
     path = (
@@ -664,14 +679,19 @@ def _copy_result_tree_atomic(source: Path, destination: Path) -> dict[str, Any]:
 
 
 def migrate_reusable_results(
-    manifest_path: Path, phase_root: Path,
+    manifest_path: Path, phase_root: Path, *, datasets: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
-    """Safely publish the 70 reusable cells into dataset-root results."""
-    preflight = preflight_migration(manifest_path, phase_root)
+    """Safely publish selected reusable cells into dataset-root results."""
+    preflight = preflight_migration(
+        manifest_path, phase_root, datasets=datasets,
+    )
     if preflight["counts"]["invalid"]:
         raise HistoricalBaselineError("migration preflight contains invalid cells")
     manifest = load_manifest(manifest_path)
-    cells = manifest["cells"]
+    selected = _selected_datasets(manifest, datasets)
+    cells = [
+        cell for cell in manifest["cells"] if str(cell["dataset"]) in selected
+    ]
     links = ensure_prepared_links(
         phase_root, [str(cell["dataset"]) for cell in cells], create=True,
     )
@@ -686,20 +706,25 @@ def migrate_reusable_results(
         validate_current_baseline(cell, destination)
         rows.append({
             "cell_id": cell["cell_id"],
+            "dataset": cell["dataset"],
             "framework": cell["framework"],
             "source": validated["source"],
             "destination": str(destination.resolve()),
             **copy,
         })
-    if len(rows) != 70:
+    expected_reusable = sum(
+        cell["framework"] in HISTORICAL_REUSABLE_FRAMEWORKS for cell in cells
+    )
+    if len(rows) != expected_reusable:
         raise HistoricalBaselineError(
-            f"expected exactly 70 reusable cells, found {len(rows)}"
+            f"expected exactly {expected_reusable} reusable cells, found {len(rows)}"
         )
     report = {
         "schema_version": 1,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": file_sha256(manifest_path),
         "phase_root": str(phase_root.resolve()),
+        "datasets": list(selected),
         "legacy_policy": "read-only",
         "prepared_links": links,
         "counts": {
@@ -712,18 +737,44 @@ def migrate_reusable_results(
         "cells": rows,
     }
     report["audit_sha256"] = content_sha256(report)
-    _write_json_atomic(phase_root / "baseline_repair_migration.json", report)
+    for dataset in selected:
+        dataset_report = {
+            **{key: value for key, value in report.items()
+               if key not in {"cells", "prepared_links", "counts", "audit_sha256"}},
+            "datasets": [dataset],
+            "prepared_links": [
+                row for row in links if row["dataset"] == dataset
+            ],
+            "cells": [
+                row for row in rows if row["dataset"] == dataset
+            ],
+        }
+        dataset_report["counts"] = {
+            "reusable": len(dataset_report["cells"]),
+            "copied": sum(
+                row["disposition"] == "copied" for row in dataset_report["cells"]
+            ),
+            "already_present": sum(
+                row["disposition"] == "already-present"
+                for row in dataset_report["cells"]
+            ),
+        }
+        dataset_report["audit_sha256"] = content_sha256(dataset_report)
+        _write_json_atomic(
+            phase_root / dataset / "baseline_repair_migration.json",
+            dataset_report,
+        )
     return report
 
 
 def preflight_migration(
-    manifest_path: Path, phase_root: Path,
+    manifest_path: Path, phase_root: Path, *, datasets: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Read-only all-cell conflict, inventory, and capacity check before migration."""
     manifest = load_manifest(manifest_path)
-    datasets = sorted({str(cell["dataset"]) for cell in manifest["cells"]})
+    selected = _selected_datasets(manifest, datasets)
     link_rows: list[dict[str, str]] = []
-    for dataset in datasets:
+    for dataset in selected:
         dataset_root = phase_root / dataset
         legacy = dataset_root / "benchmark_5fold"
         if not dataset_root.is_dir() or not legacy.is_dir():
@@ -734,6 +785,8 @@ def preflight_migration(
             raise HistoricalBaselineError(
                 f"canonical results is unexpectedly a symlink: {dataset_root / 'results'}"
             )
+        results_root = dataset_root / "results"
+        needs_dataset_root_write = not results_root.exists()
         for component in _PREP_COMPONENTS:
             source = legacy / component
             destination = dataset_root / component
@@ -741,6 +794,7 @@ def preflight_migration(
                 raise HistoricalBaselineError(f"legacy prep source is invalid: {source}")
             if not os.path.lexists(destination):
                 status = "will-create"
+                needs_dataset_root_write = True
             elif destination.is_symlink() and (
                 destination.resolve(strict=True) == source.resolve(strict=True)
             ):
@@ -754,10 +808,24 @@ def preflight_migration(
                 "component": component,
                 "status": status,
             })
+        if needs_dataset_root_write and not os.access(
+            dataset_root, os.W_OK | os.X_OK,
+        ):
+            raise HistoricalBaselineError(
+                f"dataset root is not writable for canonical publication: {dataset_root}"
+            )
+        if results_root.is_dir() and not os.access(
+            results_root, os.W_OK | os.X_OK,
+        ):
+            raise HistoricalBaselineError(
+                f"canonical results root is not writable: {results_root}"
+            )
 
     rows: list[dict[str, Any]] = []
     bytes_to_copy = 0
     for cell in manifest["cells"]:
+        if str(cell["dataset"]) not in selected:
+            continue
         if cell["framework"] not in HISTORICAL_REUSABLE_FRAMEWORKS:
             continue
         source = historical_result_dir(phase_root, cell)
@@ -785,8 +853,14 @@ def preflight_migration(
             "status": status,
             **summary,
         })
-    if len(rows) != 70:
-        raise HistoricalBaselineError(f"preflight expected 70 reusable cells, found {len(rows)}")
+    expected_reusable = sum(
+        cell["framework"] in HISTORICAL_REUSABLE_FRAMEWORKS
+        for cell in manifest["cells"] if str(cell["dataset"]) in selected
+    )
+    if len(rows) != expected_reusable:
+        raise HistoricalBaselineError(
+            f"preflight expected {expected_reusable} reusable cells, found {len(rows)}"
+        )
     free_bytes = shutil.disk_usage(phase_root).free
     if bytes_to_copy > free_bytes:
         raise HistoricalBaselineError(
@@ -798,6 +872,7 @@ def preflight_migration(
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": file_sha256(manifest_path),
         "phase_root": str(phase_root.resolve()),
+        "datasets": list(selected),
         "counts": {
             "reusable": len(rows),
             "will_copy": sum(row["status"] == "will-copy" for row in rows),
@@ -813,11 +888,16 @@ def preflight_migration(
     }
 
 
-def rerun_plan(manifest_path: Path, phase_root: Path) -> dict[str, Any]:
+def rerun_plan(
+    manifest_path: Path, phase_root: Path, *, datasets: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     """Build the stable 60-cell corrected CLAM/ABMIL array plan."""
     manifest = load_manifest(manifest_path)
+    selected = _selected_datasets(manifest, datasets)
     rows: list[dict[str, Any]] = []
     for cell in manifest["cells"]:
+        if str(cell["dataset"]) not in selected:
+            continue
         if cell["framework"] not in HISTORICAL_STALE_FRAMEWORKS:
             continue
         tokens = shlex.split(str(cell["commands"]["baseline"]))
@@ -845,8 +925,14 @@ def rerun_plan(manifest_path: Path, phase_root: Path) -> dict[str, Any]:
             "destination": str(canonical_result_dir(phase_root, cell)),
             "command": command,
         })
-    if len(rows) != 60:
-        raise HistoricalBaselineError(f"expected 60 reruns, found {len(rows)}")
+    expected_count = sum(
+        cell["framework"] in HISTORICAL_STALE_FRAMEWORKS
+        for cell in manifest["cells"] if str(cell["dataset"]) in selected
+    )
+    if len(rows) != expected_count:
+        raise HistoricalBaselineError(
+            f"expected {expected_count} reruns, found {len(rows)}"
+        )
     regimes = {(row["framework"], row["task_type"]) for row in rows}
     expected = {(arm, task) for arm in _RERUN_FRAMEWORKS
                 for task in ("classification", "survival")}
@@ -863,6 +949,7 @@ def rerun_plan(manifest_path: Path, phase_root: Path) -> dict[str, Any]:
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": file_sha256(manifest_path),
         "phase_root": str(phase_root.resolve()),
+        "datasets": list(selected),
         "count": len(rows),
         "canary_indices": canaries,
         "cells": rows,
@@ -886,9 +973,10 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
 
 def write_slurm_runner(
     manifest_path: Path, phase_root: Path, repo_root: Path, ops_root: Path,
+    *, datasets: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Write the temporary array plan and one-cell SLURM entrypoint."""
-    plan = rerun_plan(manifest_path, phase_root)
+    plan = rerun_plan(manifest_path, phase_root, datasets=datasets)
     ops_root.mkdir(parents=True, exist_ok=True)
     logs = ops_root / "logs"
     logs.mkdir(exist_ok=True)
@@ -896,14 +984,17 @@ def write_slurm_runner(
     _write_json_atomic(plan_path, plan)
     runner_path = ops_root / "rerun_baselines.sbatch"
     script_path = repo_root / "benchmarks/campaigns/preprint_130/repair_baselines.py"
-    command = " ".join(shlex.quote(part) for part in [
+    command_parts = [
         "python", str(script_path), "run-cell",
         "--manifest", str(manifest_path),
         "--phase-root", str(phase_root),
         "--repo-root", str(repo_root),
         "--ops-root", str(ops_root),
-        "--index", "${SLURM_ARRAY_TASK_ID}",
-    ])
+    ]
+    if datasets:
+        command_parts.extend(["--datasets", ",".join(sorted(set(datasets)))])
+    command_parts.extend(["--index", "${SLURM_ARRAY_TASK_ID}"])
+    command = " ".join(shlex.quote(part) for part in command_parts)
     command = command.replace("'${SLURM_ARRAY_TASK_ID}'", '"${SLURM_ARRAY_TASK_ID}"')
     body = f"""#!/bin/bash
 #SBATCH --job-name=baseline_fix
@@ -949,14 +1040,16 @@ set +a
 
 def run_rerun_cell(
     manifest_path: Path, phase_root: Path, repo_root: Path, ops_root: Path,
-    index: int,
+    index: int, *, datasets: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Execute exactly one stable rerun-plan entry and validate its result."""
     import fcntl
 
-    plan = rerun_plan(manifest_path, phase_root)
+    plan = rerun_plan(manifest_path, phase_root, datasets=datasets)
     if index < 0 or index >= len(plan["cells"]):
-        raise HistoricalBaselineError(f"array index outside [0, 60): {index}")
+        raise HistoricalBaselineError(
+            f"array index outside [0, {len(plan['cells'])}): {index}"
+        )
     row = plan["cells"][index]
     manifest = load_manifest(manifest_path)
     cell = next(cell for cell in manifest["cells"] if cell["cell_id"] == row["cell_id"])
@@ -1081,6 +1174,10 @@ def main(argv: list[str] | None = None) -> None:
         "--manifest", default=str(Path(__file__).with_name("manifest.json")),
     )
     parser.add_argument("--phase-root", required=True)
+    parser.add_argument(
+        "--datasets",
+        help="Optional comma-separated manifest dataset subset for recoverable batches.",
+    )
     parser.add_argument("--repo-root", default=str(Path(__file__).parents[3]))
     parser.add_argument(
         "--ops-root",
@@ -1090,23 +1187,31 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     try:
         manifest, phase_root = _paths(args)
+        datasets = (
+            tuple(part.strip() for part in args.datasets.split(",") if part.strip())
+            if args.datasets else None
+        )
         if args.action == "audit":
             result = audit_historical_baselines(manifest, phase_root)
         elif args.action == "preflight":
-            result = preflight_migration(manifest, phase_root)
+            result = preflight_migration(
+                manifest, phase_root, datasets=datasets,
+            )
         elif args.action == "migrate":
-            result = migrate_reusable_results(manifest, phase_root)
+            result = migrate_reusable_results(
+                manifest, phase_root, datasets=datasets,
+            )
         elif args.action == "write-slurm":
             result = write_slurm_runner(
                 manifest, phase_root, Path(args.repo_root).resolve(),
-                Path(args.ops_root).resolve(),
+                Path(args.ops_root).resolve(), datasets=datasets,
             )
         elif args.action == "run-cell":
             if args.index is None:
                 raise HistoricalBaselineError("run-cell requires --index")
             result = run_rerun_cell(
                 manifest, phase_root, Path(args.repo_root).resolve(),
-                Path(args.ops_root).resolve(), args.index,
+                Path(args.ops_root).resolve(), args.index, datasets=datasets,
             )
         else:
             result = audit_canonical_results(manifest, phase_root)

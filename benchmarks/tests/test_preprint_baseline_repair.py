@@ -268,3 +268,28 @@ def test_rerun_plan_is_exact_60_cells_and_four_canary_regimes(tmp_path):
     assert all("--benchmark-dir" in row["command"] for row in plan["cells"])
     assert all("--skip-prep" in row["command"] for row in plan["cells"])
     assert all("benchmark_5fold" not in row["destination"] for row in plan["cells"])
+
+
+def test_recoverable_dataset_subset_has_stable_plan_and_slurm_binding(tmp_path):
+    datasets = ("cptac_gbm", "tcga_hnsc", "tcga_luad")
+    plan = baselines.rerun_plan(MANIFEST, tmp_path, datasets=datasets)
+
+    assert plan["count"] == 36
+    assert plan["datasets"] == sorted(datasets)
+    assert len(plan["canary_indices"]) == 4
+    assert {row["dataset"] for row in plan["cells"]} == set(datasets)
+
+    output = baselines.write_slurm_runner(
+        MANIFEST, tmp_path, REPO_ROOT, tmp_path / "ops", datasets=datasets,
+    )
+    runner = Path(output["runner"]).read_text()
+    assert "--datasets cptac_gbm,tcga_hnsc,tcga_luad" in runner
+    assert '"${SLURM_ARRAY_TASK_ID}"' in runner
+
+
+def test_dataset_selection_rejects_names_outside_manifest():
+    manifest = load_manifest(MANIFEST)
+    with pytest.raises(
+        baselines.HistoricalBaselineError, match="outside the manifest",
+    ):
+        baselines._selected_datasets(manifest, ("not_a_dataset",))
