@@ -581,6 +581,24 @@ def register_baseline(cell_root: Path, baseline_archive: Path) -> dict[str, Any]
         return _register_baseline_unlocked(cell_root, baseline_archive)
 
 
+def attest_and_register_baseline(
+    cell_root: Path, baseline_archive: Path,
+) -> dict[str, Any]:
+    """Attest a locally converted archive and register it under one lock.
+
+    Historical results may be reusable even when they predate the campaign's
+    portable attestation format.  Conversion code must first reconstruct the
+    current validation-only/public and sealed-fold artifact contract; this
+    entry point then binds those exact bytes to the current six-field cell
+    identity before importing them.  It deliberately does not relax any of
+    :func:`register_baseline`'s validation.
+    """
+    with _stage_lock(cell_root):
+        state = load_stage_state(cell_root)
+        _write_baseline_attestation(cell_root, state, baseline_archive)
+        return _register_baseline_unlocked(cell_root, baseline_archive)
+
+
 def _register_baseline_unlocked(
     cell_root: Path, baseline_archive: Path,
 ) -> dict[str, Any]:

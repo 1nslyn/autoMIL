@@ -45,6 +45,7 @@ from autobench.campaign_stages import (
     materialize_promotion,
     open_agent_session,
     register_baseline,
+    attest_and_register_baseline,
     run_native_baseline,
     select_winner,
     validate_selection_freeze_artifact,
@@ -531,6 +532,18 @@ def test_external_baseline_is_atomically_imported_and_portable(staged_cell, tmp_
     freeze_discovery(cell_root)
     selected = select_winner(cell_root)
     assert selected["winner"]["kind"] == "baseline"
+
+
+def test_locally_converted_baseline_is_attested_and_registered(staged_cell):
+    cell_root, _, _, _, _ = staged_cell
+    archive = _baseline(cell_root)
+    (archive / BASELINE_ATTESTATION_FILE).unlink()
+
+    state = attest_and_register_baseline(cell_root, archive)
+
+    imported = cell_root / state["baseline"]["archive"]
+    assert imported == cell_root / "baseline/archive"
+    assert (imported / BASELINE_ATTESTATION_FILE).is_file()
 
 
 @pytest.mark.parametrize("axis", [
