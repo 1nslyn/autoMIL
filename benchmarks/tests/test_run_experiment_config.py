@@ -169,3 +169,20 @@ class TestStageFoldSubset:
     def test_parser_rejects_invalid_subset(self, run_experiment_mod, raw):
         with pytest.raises(SystemExit):
             run_experiment_mod._parse_folds(raw, 5)
+
+
+class TestPreparedBenchmarkRoot:
+    def test_explicit_root_and_skip_prep_are_opt_in(self, run_experiment_mod):
+        args = _parse(
+            run_experiment_mod,
+            _REQUIRED_ARGS + [
+                "--benchmark-dir", "/shared/phase2/cptac_gbm", "--skip-prep",
+            ],
+        )
+        assert args.benchmark_dir == "/shared/phase2/cptac_gbm"
+        assert args.skip_prep is True
+
+    def test_default_keeps_dataset_config_and_runs_prep(self, run_experiment_mod):
+        args = _parse(run_experiment_mod, _REQUIRED_ARGS)
+        assert args.benchmark_dir is None
+        assert args.skip_prep is False
