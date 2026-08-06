@@ -73,8 +73,7 @@ v1 coverage across CLN / REG / BCK / TRJ / MRT / CAP / GTE / CLI / STP / DEC).
 Final acceptance: D-208 11-clause aggregator green in CI; sub-gate B
 sklearn-iris end-to-end green via real orchestrator subprocess; sub-gates A
 (CCRCC reproduction) and C (heterogeneous consumers) workstation-deferred
-behind `@pytest.mark.requires_ccrcc_data`. Full audit at
-[`.planning/milestones/v1.0-MILESTONE-AUDIT.md`](.planning/milestones/v1.0-MILESTONE-AUDIT.md).
+behind `@pytest.mark.requires_ccrcc_data`.
 
 ### BREAKING migrations summarised
 
@@ -297,8 +296,9 @@ held-out manifest and paired statistical test.
   enforces that held-out cells are invisible to the search agent.
 
 **Deferred:** calibration pilot K-determination requires Leo workstation
-with CCRCC `node_0176` + 3-5 fresh cells; scaffold at
-`.planning/phase-05-calibration.md`.
+with CCRCC `node_0176` + 3-5 fresh cells. The framework-side scaffold is
+committed at `90011e8`; run `automil promote --calibrate <candidate_id>`
+and read the delta matrix from `archive/<candidate_id>/gate_evaluation.jsonl`.
 
 ### Phase 4. 6h per-cell hard cap + cell concept (2026-05-05)
 
@@ -462,9 +462,8 @@ existing tests.
 
 ---
 
-For phase-by-phase plans, success criteria, and acceptance-gate definitions,
-see [`.planning/milestones/v1.0-ROADMAP.md`](.planning/milestones/v1.0-ROADMAP.md).
-For the 69 v1 REQ-IDs and traceability, see
-[`.planning/milestones/v1.0-REQUIREMENTS.md`](.planning/milestones/v1.0-REQUIREMENTS.md).
-For the cross-phase integration audit, see
-[`.planning/milestones/v1.0-MILESTONE-AUDIT.md`](.planning/milestones/v1.0-MILESTONE-AUDIT.md).
+The v1.0/v1.1 milestone documents (phase-by-phase roadmap, the 69 v1 REQ-IDs
+and their traceability, and the cross-phase integration audit) lived under
+`.planning/` and were removed from the working tree on 2026-08-06. They remain
+recoverable from git history: `git show 7de69a8:.planning/milestones/v1.0-ROADMAP.md`
+and siblings.

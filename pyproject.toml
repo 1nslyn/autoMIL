@@ -81,7 +81,7 @@ packages = ["src/automil"]
 
 # Constrain the sdist to just the package + metadata. Without this, hatchling's
 # default VCS sweep bundles the whole monorepo (benchmarks/lib third-party code,
-# .planning/, paper/ drafts) into the tarball — bloat + a licensing hazard.
+# paper/ drafts) into the tarball — bloat + a licensing hazard.
 [tool.hatch.build.targets.sdist]
 only-include = ["src/automil", "README.md", "LICENSE", "CITATION.cff"]
 

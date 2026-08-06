@@ -246,27 +246,25 @@ def test_d208_clause_10_changelog_8_0_0():
 
 
 # ---------------------------------------------------------------------------
-# Clause 11: ROADMAP + STATE + REQUIREMENTS reflect Phase 8 + v1.0 complete
-# Iter-2 / F-09 fix: anchor on CHANGELOG.md content (Task 2 produces it) +
-# REQUIREMENTS.md DEC-XX rows (Task 4 produces them). NOT ROADMAP/STATE which
-# are circular self-references for this plan.
+# Clause 11: CHANGELOG reflects Phase 8 + v1.0 complete
+# Iter-2 / F-09 fix: anchor on CHANGELOG.md content (Task 2 produces it),
+# NOT ROADMAP/STATE which are circular self-references for this plan.
 # ---------------------------------------------------------------------------
 
 def test_d208_clause_11_state_roadmap_complete():
     """D-208 #11: cross-doc consistency at milestone (F-09 fix; non-circular).
 
-    Anchors:
-      - CHANGELOG.md head section heading is `## 8.0.0` AND contains
-        F-06 migration note text (env.required + AUTOBENCH_OVARIAN_ROOT
-        explicit example, since CHANGELOG is the recovery surface).
-      - REQUIREMENTS.md traceability table has DEC-01..DEC-07 marked
-        Complete (NOT Pending).
+    Anchor: CHANGELOG.md's `## 8.0.0` section contains the F-06 migration
+    note text (env.required + AUTOBENCH_OVARIAN_ROOT explicit example,
+    since CHANGELOG is the recovery surface).
 
-    These are deterministic content checks. The previous clause-11 logic
+    This is a deterministic content check. The previous clause-11 logic
     asserted ROADMAP/STATE were updated (which 08-10 itself does), creating
-    circular validation. F-09 anchors on CHANGELOG (Task 2) +
-    REQUIREMENTS.md (Task 4), both of which are independently auditable
-    artifacts of this plan with deterministic post-conditions.
+    circular validation.
+
+    The companion REQUIREMENTS.md DEC-01..DEC-07 row check was dropped on
+    2026-08-06 when the `.planning/` milestone documents were removed from
+    the repo; CHANGELOG is now the sole surviving v1.0 close record.
     """
     # 1. CHANGELOG head section anchor.
     changelog_path = _REPO_ROOT / "CHANGELOG.md"
@@ -300,35 +298,3 @@ def test_d208_clause_11_state_roadmap_complete():
     )
     assert "env.required" in milestone_text or "env:\n  required:" in milestone_text
     assert "passthrough" in milestone_text
-
-    # 2. REQUIREMENTS.md DEC-XX rows transitioned Pending -> Complete.
-    # After milestone close, REQUIREMENTS.md is archived to milestones/v1.0-REQUIREMENTS.md
-    # per the standard /gsd-complete-milestone workflow. The archive takes precedence
-    # when it exists (post-v1.0-close state); fall back to live path when absent.
-    archive_path = _REPO_ROOT / ".planning" / "milestones" / "v1.0-REQUIREMENTS.md"
-    live_path = _REPO_ROOT / ".planning" / "REQUIREMENTS.md"
-    # v1.0 acceptance gate must validate the v1.0 record.
-    # Archive takes precedence when it exists (post-v1.0-close state).
-    if archive_path.exists():
-        req_path = archive_path
-    elif live_path.exists():
-        req_path = live_path
-    else:
-        req_path = live_path  # triggers assert below
-    assert req_path.exists(), (
-        "Neither .planning/milestones/v1.0-REQUIREMENTS.md nor .planning/REQUIREMENTS.md found"
-    )
-    req_text = req_path.read_text()
-
-    for dec_id in ("DEC-01", "DEC-02", "DEC-03", "DEC-04",
-                   "DEC-05", "DEC-06", "DEC-07"):
-        pending_row = f"| {dec_id} | Phase 8 | Pending |"
-        complete_row = f"| {dec_id} | Phase 8 | Complete |"
-        assert pending_row not in req_text, (
-            f"{dec_id} still marked Pending in REQUIREMENTS.md; Task 4 must "
-            f"transition it to Complete at milestone close."
-        )
-        assert complete_row in req_text, (
-            f"{dec_id} not marked Complete in REQUIREMENTS.md; expected the "
-            f"row '{complete_row}' (Task 4 / F-09 / F-10 fix)."
-        )

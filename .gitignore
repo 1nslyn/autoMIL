@@ -31,3 +31,7 @@ outputs/
 # User-owned local research artifacts
 /paper/
 /ideaspark_run/
+
+# GSD was removed on 2026-08-06. Keep its planning tree from silently
+# reappearing at the repo root if a gsd-* command is ever run here again.
+/.planning/

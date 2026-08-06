@@ -412,9 +412,9 @@ def build_registries(ds: DatasetConfig) -> Registries:
 # hook-point left empty by default — per-model VRAM mitigations
 # (e.g., batch_size=4 for transformer-family heads) go here. Empty dict
 # means "no model-specific overrides"; the planner-emitted batch_size
-# stands. Restoration of the Phase-pre-Level-D values for
-# vision_transformer / rrt / trans_mil / ilra_mil is documented in
-# .planning/decisions/N4-overrides-removed.md (placeholder; see audit).
+# stands. The pre-Level-D values for vision_transformer / rrt / trans_mil /
+# ilra_mil were removed deliberately, not lost; restore them here if a
+# transformer-family head starts OOMing again.
 
 NNMIL_RUNTIME_DEFAULTS: dict[str, int] = {
     # Default 8 DataLoader subprocess workers; env-overridable via

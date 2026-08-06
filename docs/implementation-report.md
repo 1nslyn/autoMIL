@@ -249,7 +249,10 @@ live alongside the modules they cover (`tests/cli/`, `tests/backends/`,
 | results.tsv generalization (4-key autobench shape retained) | 8 | Generalize when third consumer surfaces |
 | viz dashboard generic-metric rendering | 8 | Post-v1 |
 
-Full audit at [`.planning/milestones/v1.0-MILESTONE-AUDIT.md`](../.planning/milestones/v1.0-MILESTONE-AUDIT.md).
+The full cross-phase integration audit lived at
+`.planning/milestones/v1.0-MILESTONE-AUDIT.md`, removed from the working tree
+on 2026-08-06; recover it with
+`git show 7de69a8:.planning/milestones/v1.0-MILESTONE-AUDIT.md`.
 
 ## Pitfall-Driven Anti-Acceptance
 
@@ -293,6 +296,8 @@ fixture-wired; framework purity grep gate green.
 - [Training-Script Contract](training-script-contract.md), the seam between framework and consumer
 - [Agent Compatibility](agent-compatibility.md), per-runtime setup, overlay merge model
 - [CHANGELOG](../CHANGELOG.md), v1.0 milestone release notes
-- [`.planning/milestones/v1.0-MILESTONE-AUDIT.md`](../.planning/milestones/v1.0-MILESTONE-AUDIT.md), exhaustive cross-phase integration audit
-- [`.planning/milestones/v1.0-ROADMAP.md`](../.planning/milestones/v1.0-ROADMAP.md), phase-by-phase plan with success criteria
-- [`.planning/milestones/v1.0-REQUIREMENTS.md`](../.planning/milestones/v1.0-REQUIREMENTS.md), 69 v1 REQ-IDs across 10 categories
+
+The milestone audit, roadmap, and REQUIREMENTS traceability that this report
+cross-referenced lived under `.planning/` and were removed on 2026-08-06.
+Recover any of them from git history, e.g.
+`git show 7de69a8:.planning/milestones/v1.0-REQUIREMENTS.md`.

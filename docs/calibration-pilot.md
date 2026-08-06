@@ -1,4 +1,8 @@
-# Phase 5 Calibration — K Threshold Empirical Choice
+# Generalization-Gate Calibration — K Threshold Empirical Choice
+
+> Relocated from `.planning/phase-05-calibration.md` on 2026-08-06 when the
+> planning tree was removed. This is still the live operator recipe for the
+> deferred calibration pilot.
 
 **Status:** SCAFFOLD — operator-fillable. Replace `_tbd_` placeholders when running pilot.
 **Date:** _to-be-filled_
@@ -58,10 +62,10 @@ If the recommended K differs from the framework default currently in
 `src/automil/templates/config.yaml.j2`, update the `gate.K` default:
 ```yaml
 gate:
-  K: <chosen K>    # locked by Phase 5 calibration; see .planning/phase-05-calibration.md
+  K: <chosen K>    # locked by the calibration pilot; see docs/calibration-pilot.md
 ```
 
-Commit with message: `gate: lock K=<N> from Phase 5 calibration pilot`
+Commit with message: `gate: lock K=<N> from the calibration pilot`
 
 ---
 
@@ -70,7 +74,7 @@ Commit with message: `gate: lock K=<N> from Phase 5 calibration pilot`
 - [ ] Leo reviewed the per-cell delta matrix
 - [ ] Recommended K is recorded in `src/automil/templates/config.yaml.j2` `gate.K` default
   (update only if the empirical recommendation differs from `max(2, len(held_out_cells) // 3)`)
-- [ ] Phase 5 marked "calibrated" in STATE.md / ROADMAP.md
+- [ ] Calibration recorded in `CHANGELOG.md` under the next release
 
 ---
 
@@ -112,5 +116,5 @@ Commit with message: `gate: lock K=<N> from Phase 5 calibration pilot`
 7. **Lock K** (if different from framework default). Edit
    `src/automil/templates/config.yaml.j2` `gate.K` default and commit.
 
-8. **Sign off.** Check the boxes above; commit this document; update STATE.md.
+8. **Sign off.** Check the boxes above and commit this document.
    Acceptance: zero `_tbd_` markers remain; all sign-off boxes are checked.

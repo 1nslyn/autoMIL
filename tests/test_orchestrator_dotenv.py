@@ -1,7 +1,6 @@
 """Coverage for orchestrator._load_dotenv quoted values, export prefix, comments (CLN-03).
 
-Six corner cases the legacy `partition('=')` parser silently mishandled
-(see .planning/codebase/CONCERNS.md §"Naive `.env` parser in orchestrator"):
+Six corner cases the legacy `partition('=')` parser silently mishandled:
 
 1. Double- and single-quoted values keep embedded spaces and have quotes stripped.
 2. `export KEY=value` produces key `KEY`, not `export KEY`.

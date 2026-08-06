@@ -204,18 +204,10 @@ Key modules: `autobench.config` (dataset YAML loading), `autobench.pipeline.*`
 - **No Laziness**: Find root causes. No temporary fixes, Senior developer standards.
 - **Minimat Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
 
-## GSD Planning Artifacts
+## Planning
 
-This project is managed via GSD (`get-shit-done`). Live planning lives under `.planning/`:
-
-- `.planning/PROJECT.md` — project context, validated/active requirements, key decisions
-- `.planning/REQUIREMENTS.md` — 69 v1 REQ-IDs grouped by category (CLN/REG/BCK/TRJ/MRT/CAP/GTE/CLI/STP/DEC), with phase traceability
-- `.planning/ROADMAP.md` — 9-phase refactor plan (Phase 0 cleanup → Phase 8 acceptance), dependencies, success criteria, anti-acceptance discipline notes
-- `.planning/STATE.md` — current phase + project memory pointer
-- `.planning/codebase/` — 7-doc codebase map (STACK / ARCHITECTURE / STRUCTURE / CONVENTIONS / TESTING / INTEGRATIONS / CONCERNS)
-- `.planning/research/` — 5-doc research synthesis (STACK / FEATURES / ARCHITECTURE / PITFALLS / SUMMARY) — read SUMMARY.md first
-- `.planning/config.json` — GSD workflow config (yolo / fine / parallel / quality model profile)
-
-**Current phase:** check `STATE.md`. Drive phase-by-phase via `/gsd-discuss-phase <N>` → `/gsd-plan-phase <N>` → `/gsd-execute-phase <N>` → `/gsd-verify-work`.
-
-When working in this project, treat the planning docs as authoritative for *what* and the codebase map as the reference for *where*. Standing directives above (address-as-Leo, plan-first, subagents, self-improvement loop, verification-before-done, task management, core principles) override anything GSD agents suggest.
+Planning lives in `tasks/todo.md` (current plan + review) and `tasks/lessons.md`
+(accumulated corrections). There is no separate planning framework: this file,
+the codebase, `CHANGELOG.md`, and git history are the record. The v1.0/v1.1
+milestone documents that used to live under `.planning/` were removed on
+2026-08-06 and are recoverable from git history at commit `7de69a8`.

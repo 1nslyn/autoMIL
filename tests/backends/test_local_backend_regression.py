@@ -1,6 +1,6 @@
 """Phase 2 review regression tests.
 
-Covers two findings from `02-REVIEW.md` (gsd-code-reviewer):
+Covers two findings from the Phase 2 code review:
 
 - **CR-01**: ``LocalBackend.submit`` previously hardcoded
   ``"overlay_dir": f"archive/{spec.node_id}"`` in the daemon queue spec,

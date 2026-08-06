@@ -2,7 +2,7 @@
 
 This test verifies that `automil promote --calibrate` works end-to-end on
 a synthetic graph. The ACTUAL pilot (Leo running node_0176 against fresh
-cells) is a checkpoint task documented in .planning/phase-05-calibration.md.
+cells) is a checkpoint task documented in docs/calibration-pilot.md.
 
 Coverage:
   Test 1 (test_calibrate_pilot_synthetic_graph_smoke):
@@ -14,7 +14,7 @@ Coverage:
         - output mentions "calibrate" or "dry-run"
 
   Test 2 (test_calibration_doc_scaffold_exists):
-        .planning/phase-05-calibration.md scaffold exists and references
+        docs/calibration-pilot.md scaffold exists and references
         "node_0176", "Recommended K", and the delta/wins column headers.
 
 BCK-04 clean; framework purity D-148.
@@ -281,34 +281,34 @@ def test_calibrate_pilot_synthetic_graph_smoke(project_with_candidate, monkeypat
 # ---------------------------------------------------------------------------
 
 def test_calibration_doc_scaffold_exists():
-    """Calibration scaffold doc at .planning/phase-05-calibration.md must exist and
+    """Calibration scaffold doc at docs/calibration-pilot.md must exist and
     reference node_0176, Recommended K, and the delta/wins column headers.
 
     This test guards regression: if the scaffold is accidentally deleted or
     restructured, the pilot recipe is lost.
     """
     # Resolve from repo root (tests run from repo root by pyproject.toml config)
-    scaffold = Path(".planning/phase-05-calibration.md")
+    scaffold = Path("docs/calibration-pilot.md")
     assert scaffold.exists(), (
-        "Calibration scaffold doc missing — Phase 5 plan 12 Task 1 must "
-        "create it (Leo fills in real per-cell numbers when running pilot). "
+        "Calibration scaffold doc missing — it carries the operator recipe "
+        "for the deferred pilot (Leo fills in real per-cell numbers). "
         f"Expected path: {scaffold.resolve()}"
     )
     text = scaffold.read_text()
     assert "node_0176" in text, (
         "Scaffold must reference the known-good change (node_0176); "
-        "check .planning/phase-05-calibration.md"
+        "check docs/calibration-pilot.md"
     )
     assert "Recommended K" in text, (
         "Scaffold must include a 'Recommended K' section for Leo to fill; "
-        "check .planning/phase-05-calibration.md"
+        "check docs/calibration-pilot.md"
     )
     text_lower = text.lower()
     assert "delta" in text_lower, (
         "Scaffold must define a delta-matrix table (column 'delta'); "
-        "check .planning/phase-05-calibration.md"
+        "check docs/calibration-pilot.md"
     )
     assert "wins" in text_lower, (
         "Scaffold must define a delta-matrix table (column 'wins'); "
-        "check .planning/phase-05-calibration.md"
+        "check docs/calibration-pilot.md"
     )
