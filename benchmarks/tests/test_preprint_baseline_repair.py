@@ -290,6 +290,78 @@ def test_recoverable_dataset_subset_has_stable_plan_and_slurm_binding(tmp_path):
     assert '"${SLURM_ARRAY_TASK_ID}"' in runner
 
 
+def _set_manifest_dataset_roots(monkeypatch, tmp_path):
+    for dataset in ("cptac_gbm", "cptac_pdac", "tcga_hnsc", "tcga_lgg", "tcga_luad"):
+        monkeypatch.setenv(f"AUTOBENCH_{dataset.upper()}_ROOT", str(tmp_path / dataset))
+
+
+def test_orchestrated_grid_is_exactly_the_frozen_60_cells(tmp_path, monkeypatch):
+    _set_manifest_dataset_roots(monkeypatch, tmp_path)
+
+    audit = baselines.audit_orchestrated_grid(MANIFEST)
+
+    assert audit["count"] == 60
+    assert audit["frameworks"] == ["clam", "abmil"]
+    assert len(audit["cells_per_dataset"]) == 5
+    assert all(row == {
+        "dataset": row["dataset"], "count": 12, "status": "exact",
+    } for row in audit["cells_per_dataset"])
+
+
+def test_multigpu_runner_is_one_four_gpu_job_with_runtime_telemetry(
+    tmp_path, monkeypatch,
+):
+    _set_manifest_dataset_roots(monkeypatch, tmp_path)
+    phase_root = tmp_path / "phase2"
+    phase_root.mkdir()
+
+    output = baselines.write_multigpu_slurm_runner(
+        MANIFEST, phase_root, REPO_ROOT, tmp_path / "ops",
+    )
+    runner = Path(output["runner"]).read_text()
+
+    assert output["count"] == 60
+    assert output["gpu_count"] == 4
+    assert "#SBATCH --gpus-per-node=h100:4" in runner
+    assert "#SBATCH --array" not in runner
+    assert runner.count("benchmarks/scripts/run_benchmark.py") == 5
+    assert runner.count("--gpus 0 1 2 3") == 5
+    assert runner.count("finalize-reruns") == 1
+    assert runner.count("_audit.json") >= 6
+    assert "utilization.gpu" in runner
+    assert "canonical audit:" in runner
+    assert "benchmark_5fold/results" not in runner
+
+
+def test_finalize_rerun_result_normalizes_and_writes_completion_marker(
+    tmp_path, monkeypatch,
+):
+    cell = _cell(framework="clam")
+    dataset_root = tmp_path / cell["dataset"]
+    dataset_root.mkdir()
+    destination = baselines.canonical_result_dir(tmp_path, cell)
+    destination.mkdir(parents=True)
+    (destination / "summary.json").write_text("{}")
+    completion_dir = tmp_path / "ops" / "completed"
+    completion_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        baselines, "validate_current_baseline",
+        lambda selected, path: {
+            "source": str(path), "source_sha256": {"summary.json": "a" * 64},
+        },
+    )
+
+    report = baselines._finalize_rerun_result(
+        cell, tmp_path, completion_dir, array_index=7,
+    )
+
+    marker = completion_dir / f"{cell['cell_id']}.json"
+    assert marker.is_file()
+    assert json.loads(marker.read_text())["audit_sha256"] == report["audit_sha256"]
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o2750
+    assert stat.S_IMODE((destination / "summary.json").stat().st_mode) == 0o640
+
+
 def test_dataset_selection_rejects_names_outside_manifest():
     manifest = load_manifest(MANIFEST)
     with pytest.raises(
