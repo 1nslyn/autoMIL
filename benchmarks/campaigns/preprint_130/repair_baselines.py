@@ -1006,6 +1006,90 @@ def rerun_plan(
     }
 
 
+def audit_orchestrated_grid(
+    manifest_path: Path, *, datasets: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Prove the multi-GPU grid is exactly the frozen CLAM/ABMIL rerun set.
+
+    ``run_benchmark.py`` builds a dataset-level grid, whereas the repair plan is
+    expressed as one command per publication cell.  This comparison prevents a
+    future dataset-YAML roster change from silently adding, removing, or
+    relabelling work when the consolidated runner uses the faster grid path.
+    """
+    from autobench.config import load_dataset_config
+    from autobench.pipeline.config import (
+        BenchmarkConfig,
+        Framework,
+        build_registries,
+        generate_all_experiments,
+    )
+
+    manifest = load_manifest(manifest_path)
+    selected = _selected_datasets(manifest, datasets)
+    rows: list[dict[str, Any]] = []
+    for dataset in selected:
+        ds = load_dataset_config(dataset)
+        cfg = BenchmarkConfig.from_dataset_config(
+            ds,
+            frameworks=[Framework.CLAM, Framework.ABMIL],
+            n_folds=len(_FOLDS),
+        )
+        actual = {
+            (
+                exp.task.name,
+                exp.encoder_key,
+                exp.framework.value,
+                exp.model.model_type,
+                exp.train.seed,
+                exp.survival_loss,
+            )
+            for exp in generate_all_experiments(cfg, build_registries(ds))
+        }
+        expected = {
+            (
+                str(cell["task"]),
+                str(cell["encoder"]),
+                str(cell["framework"]),
+                str(cell["model"]),
+                int(cell["seed"]),
+                "nllsurv" if cell.get("task_type") == "survival" else None,
+            )
+            for cell in manifest["cells"]
+            if str(cell["dataset"]) == dataset
+            and str(cell["framework"]) in HISTORICAL_STALE_FRAMEWORKS
+        }
+        if actual != expected:
+            raise HistoricalBaselineError(
+                f"orchestrated grid differs from frozen rerun cells for {dataset}: "
+                f"unexpected={sorted(actual - expected, key=repr)!r}, "
+                f"missing={sorted(expected - actual, key=repr)!r}"
+            )
+        rows.append({
+            "dataset": dataset,
+            "count": len(actual),
+            "status": "exact",
+        })
+    count = sum(row["count"] for row in rows)
+    expected_count = sum(
+        str(cell["dataset"]) in selected
+        and str(cell["framework"]) in HISTORICAL_STALE_FRAMEWORKS
+        for cell in manifest["cells"]
+    )
+    if count != expected_count:
+        raise HistoricalBaselineError(
+            f"orchestrated grid expected {expected_count} cells, found {count}"
+        )
+    return {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": file_sha256(manifest_path),
+        "datasets": list(selected),
+        "count": count,
+        "frameworks": list(_RERUN_FRAMEWORKS),
+        "cells_per_dataset": rows,
+    }
+
+
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(
@@ -1090,6 +1174,162 @@ set +a
     }
 
 
+def write_multigpu_slurm_runner(
+    manifest_path: Path,
+    phase_root: Path,
+    repo_root: Path,
+    ops_root: Path,
+    *,
+    datasets: tuple[str, ...] | None = None,
+    gpu_count: int = 4,
+) -> dict[str, Any]:
+    """Write one temporary multi-GPU job for the exact stale-arm roster."""
+    if gpu_count < 2:
+        raise HistoricalBaselineError("consolidated runner requires at least 2 GPUs")
+    plan = rerun_plan(manifest_path, phase_root, datasets=datasets)
+    grid = audit_orchestrated_grid(manifest_path, datasets=datasets)
+    if plan["count"] != grid["count"]:
+        raise HistoricalBaselineError(
+            f"per-cell plan has {plan['count']} cells but grid has {grid['count']}"
+        )
+
+    ops_root.mkdir(parents=True, exist_ok=True)
+    logs = ops_root / "logs"
+    logs.mkdir(exist_ok=True)
+    plan_path = ops_root / "rerun_plan.json"
+    grid_path = ops_root / "orchestrated_grid.json"
+    _write_json_atomic(plan_path, plan)
+    _write_json_atomic(grid_path, grid)
+
+    runner_path = ops_root / "rerun_baselines_multigpu.sbatch"
+    script_path = repo_root / "benchmarks/campaigns/preprint_130/repair_baselines.py"
+    benchmark_script = repo_root / "benchmarks/scripts/run_benchmark.py"
+    selected = tuple(grid["datasets"])
+    dataset_lines: list[str] = []
+    gpu_args = " ".join(str(index) for index in range(gpu_count))
+    for dataset in selected:
+        dataset_root = phase_root / dataset
+        train = " ".join(shlex.quote(part) for part in (
+            "python", str(benchmark_script),
+            "--dataset", dataset,
+            "--benchmark_dir", str(dataset_root),
+            "--frameworks", "clam", "abmil",
+            "--gpus", *[str(index) for index in range(gpu_count)],
+            "--n_folds", str(len(_FOLDS)),
+            "--no_wandb",
+        ))
+        dataset_verify = " ".join(shlex.quote(part) for part in (
+            "python", str(script_path), "verify",
+            "--manifest", str(manifest_path),
+            "--phase-root", str(phase_root),
+            "--datasets", dataset,
+        ))
+        dataset_expected = sum(
+            str(cell["dataset"]) == dataset
+            for cell in load_manifest(manifest_path)["cells"]
+        )
+        dataset_audit = ops_root / f"{dataset}_audit.json"
+        dataset_lines.extend((
+            f'echo "===== {dataset}: 12-cell CLAM/ABMIL grid on GPUs {gpu_args} ====="',
+            train,
+            f"{dataset_verify} > {shlex.quote(str(dataset_audit))}",
+            (
+                "python -c 'import json,sys; p=json.load(open(sys.argv[1])); "
+                "expected=int(sys.argv[2]); assert p[\"counts\"] == "
+                "{\"complete\": expected, \"pending\": 0}, p[\"counts\"]' "
+                f"{shlex.quote(str(dataset_audit))} {dataset_expected}"
+            ),
+        ))
+
+    selected_arg = ",".join(selected)
+    grid_check = " ".join(shlex.quote(part) for part in (
+        "python", str(script_path), "grid-check",
+        "--manifest", str(manifest_path),
+        "--phase-root", str(phase_root),
+        "--datasets", selected_arg,
+    ))
+    verify = " ".join(shlex.quote(part) for part in (
+        "python", str(script_path), "verify",
+        "--manifest", str(manifest_path),
+        "--phase-root", str(phase_root),
+        "--datasets", selected_arg,
+    ))
+    finalize = " ".join(shlex.quote(part) for part in (
+        "python", str(script_path), "finalize-reruns",
+        "--manifest", str(manifest_path),
+        "--phase-root", str(phase_root),
+        "--repo-root", str(repo_root),
+        "--ops-root", str(ops_root),
+        "--datasets", selected_arg,
+    ))
+    expected_total = sum(
+        str(cell["dataset"]) in selected
+        for cell in load_manifest(manifest_path)["cells"]
+    )
+    audit_path = ops_root / "final_audit.json"
+    telemetry_path = logs / "gpu_utilization_${SLURM_JOB_ID}.csv"
+    body = f"""#!/bin/bash
+#SBATCH --job-name=baseline_fix_mgpu
+#SBATCH --account=rrg-jma
+#SBATCH --time=1-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=48
+#SBATCH --gpus-per-node=h100:{gpu_count}
+#SBATCH --mem=0
+#SBATCH --output={logs}/%j.out
+#SBATCH --error={logs}/%j.err
+#SBATCH --mail-type=END,FAIL
+
+set -euo pipefail
+umask 0027
+module load cuda/12.2 2>/dev/null || true
+cd {shlex.quote(str(repo_root))}
+source .venv/bin/activate
+set -a
+source benchmarks/.env
+set +a
+
+python -c 'import sys, torch; n=torch.cuda.device_count(); print(f"visible GPUs: {{n}}"); sys.exit(0 if n == {gpu_count} else 2)'
+{grid_check}
+
+telemetry={telemetry_path}
+nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.total --format=csv,noheader,nounits -l 15 > "$telemetry" &
+monitor_pid=$!
+cleanup_monitor() {{
+    kill "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
+}}
+trap cleanup_monitor EXIT
+
+{os.linesep.join(dataset_lines)}
+
+{finalize}
+{verify} > {shlex.quote(str(audit_path))}
+python -c 'import json,sys; p=json.load(open(sys.argv[1])); expected=int(sys.argv[2]); assert p["counts"] == {{"complete": expected, "pending": 0}}, p["counts"]; print(f"canonical audit: {{expected}}/{{expected}}")' {shlex.quote(str(audit_path))} {expected_total}
+"""
+    fd, temporary = tempfile.mkstemp(
+        dir=str(ops_root), prefix=".rerun-baselines-multigpu-", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(body)
+        os.chmod(temporary, 0o750)
+        os.replace(temporary, runner_path)
+    except BaseException:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+        raise
+    return {
+        "plan": str(plan_path),
+        "grid_audit": str(grid_path),
+        "runner": str(runner_path),
+        "count": plan["count"],
+        "datasets": list(selected),
+        "gpu_count": gpu_count,
+    }
+
+
 def run_rerun_cell(
     manifest_path: Path, phase_root: Path, repo_root: Path, ops_root: Path,
     index: int, *, datasets: tuple[str, ...] | None = None,
@@ -1140,26 +1380,75 @@ def run_rerun_cell(
                 f"baseline rerun failed for {cell['cell_id']} with exit "
                 f"{completed.returncode}; partial results were preserved"
             )
-        destination = canonical_result_dir(phase_root, cell)
-        validated = validate_current_baseline(cell, destination)
-        dataset_root = phase_root / str(cell["dataset"])
-        group_id = dataset_root.stat().st_gid
-        _normalize_result_tree(destination, group_id=group_id)
-        _normalize_result_parents(
-            dataset_root, destination, group_id=group_id,
+        return _finalize_rerun_result(
+            cell, phase_root, completion_dir, array_index=index,
         )
-        inventory = _tree_inventory(destination)
-        report = {
-            "schema_version": 1,
-            "cell_id": cell["cell_id"],
-            "array_index": index,
-            "destination": str(destination.resolve()),
-            "result_sha256": validated["source_sha256"],
-            **_inventory_summary(inventory),
-        }
-        report["audit_sha256"] = content_sha256(report)
-        _write_json_atomic(completion_dir / f"{cell['cell_id']}.json", report)
-        return report
+
+
+def _finalize_rerun_result(
+    cell: Mapping[str, Any],
+    phase_root: Path,
+    completion_dir: Path,
+    *,
+    array_index: int,
+) -> dict[str, Any]:
+    """Validate, normalize, and attest one completed stale-arm result."""
+    destination = canonical_result_dir(phase_root, cell)
+    validated = validate_current_baseline(cell, destination)
+    dataset_root = phase_root / str(cell["dataset"])
+    group_id = dataset_root.stat().st_gid
+    _normalize_result_tree(destination, group_id=group_id)
+    _normalize_result_parents(dataset_root, destination, group_id=group_id)
+    inventory = _tree_inventory(destination)
+    report = {
+        "schema_version": 1,
+        "cell_id": cell["cell_id"],
+        "array_index": array_index,
+        "destination": str(destination.resolve()),
+        "result_sha256": validated["source_sha256"],
+        **_inventory_summary(inventory),
+    }
+    report["audit_sha256"] = content_sha256(report)
+    _write_json_atomic(completion_dir / f"{cell['cell_id']}.json", report)
+    return report
+
+
+def finalize_rerun_results(
+    manifest_path: Path,
+    phase_root: Path,
+    ops_root: Path,
+    *,
+    datasets: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Finalize every orchestrated stale-arm result in a selected grid."""
+    plan = rerun_plan(manifest_path, phase_root, datasets=datasets)
+    manifest = load_manifest(manifest_path)
+    cells_by_id = {str(cell["cell_id"]): cell for cell in manifest["cells"]}
+    ensure_prepared_links(phase_root, plan["datasets"], create=False)
+    completion_dir = ops_root / "completed"
+    completion_dir.mkdir(parents=True, exist_ok=True)
+    reports = [
+        _finalize_rerun_result(
+            cells_by_id[str(row["cell_id"])],
+            phase_root,
+            completion_dir,
+            array_index=int(row["array_index"]),
+        )
+        for row in plan["cells"]
+    ]
+    if len(reports) != plan["count"]:
+        raise HistoricalBaselineError(
+            f"finalized {len(reports)} results for a {plan['count']}-cell plan"
+        )
+    return {
+        "schema_version": 1,
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": file_sha256(manifest_path),
+        "phase_root": str(phase_root.resolve()),
+        "datasets": plan["datasets"],
+        "count": len(reports),
+        "cells": reports,
+    }
 
 
 def audit_canonical_results(
@@ -1230,7 +1519,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action", choices=(
-            "audit", "preflight", "migrate", "write-slurm", "run-cell", "verify",
+            "audit", "preflight", "migrate", "write-slurm",
+            "write-multigpu-slurm", "grid-check", "run-cell",
+            "finalize-reruns", "verify",
         ),
     )
     parser.add_argument(
@@ -1269,12 +1560,24 @@ def main(argv: list[str] | None = None) -> None:
                 manifest, phase_root, Path(args.repo_root).resolve(),
                 Path(args.ops_root).resolve(), datasets=datasets,
             )
+        elif args.action == "write-multigpu-slurm":
+            result = write_multigpu_slurm_runner(
+                manifest, phase_root, Path(args.repo_root).resolve(),
+                Path(args.ops_root).resolve(), datasets=datasets,
+            )
+        elif args.action == "grid-check":
+            result = audit_orchestrated_grid(manifest, datasets=datasets)
         elif args.action == "run-cell":
             if args.index is None:
                 raise HistoricalBaselineError("run-cell requires --index")
             result = run_rerun_cell(
                 manifest, phase_root, Path(args.repo_root).resolve(),
                 Path(args.ops_root).resolve(), args.index, datasets=datasets,
+            )
+        elif args.action == "finalize-reruns":
+            result = finalize_rerun_results(
+                manifest, phase_root, Path(args.ops_root).resolve(),
+                datasets=datasets,
             )
         else:
             result = audit_canonical_results(
