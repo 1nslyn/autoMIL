@@ -14,7 +14,7 @@ from automil.backends.errors import (
 def test_backend_not_installed_error_carries_extra_name():
     exc = BackendNotInstalledError("slurm", "slurm")
     assert exc.extra_name == "slurm"
-    assert "pip install -e '.[slurm]'" in str(exc)
+    assert "uv sync --extra slurm" in str(exc)
     assert isinstance(exc, BackendError)
 
 
