@@ -6,7 +6,11 @@ This project uses autoMIL — an autonomous experiment framework for ML.
 
 - Read `automil/program.md` for the experiment goals.
 - Read `automil/learnings.md` before submitting (avoid repeating dead-ends).
-- Submit experiments via `automil submit`. Never run training scripts directly.
+- Prefer `uv run ...` for commands whenever uv is available in the consumer
+  project. Use the consumer project's declared environment runner only when uv
+  is unavailable or the project explicitly requires it.
+- Submit experiments via `uv run automil submit`. Never run training scripts
+  directly.
 
 ## Constraints
 
@@ -16,4 +20,5 @@ This project uses autoMIL — an autonomous experiment framework for ML.
 ## Runtime
 
 - Set `AUTOMIL_RUNTIME` to declare your runtime (e.g. `export AUTOMIL_RUNTIME=claude-code`).
-- Use `automil show-skill --runtime <name>` to view the runtime-specific setup guide.
+- Use `uv run automil show-skill --runtime <name>` to view the runtime-specific
+  setup guide.

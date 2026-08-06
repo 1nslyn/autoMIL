@@ -141,7 +141,7 @@ def _validate_ray_backend(config: dict, issues: list[str], warnings: list[str]) 
     except ImportError:
         issues.append(
             "backend.name is 'ray' but the [ray] extra is not installed. "
-            "Run: pip install -e '.[ray]'"
+            "Run: uv sync --extra ray"
         )
         return
 

@@ -10,7 +10,7 @@ while [ "$DIR" != "/" ]; do
         echo ""
         echo "Resume instructions:"
         echo "  1. Read config.yaml, graph.json, learnings.md, program.md"
-        echo "  2. Run: automil reconcile"
+        echo "  2. Run: uv run automil reconcile"
         echo "  3. Continue the experiment loop"
         exit 1
     fi

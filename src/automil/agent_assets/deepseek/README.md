@@ -6,13 +6,13 @@ DeepSeek is a **model**, not a runtime. It does not have its own agent runtime f
 
 DeepSeek models are routed through one of the following agent runtimes:
 
-- **opencode** — use `automil init --runtime opencode` (recommended; opencode supports
+- **opencode** — use `uv run automil init --runtime opencode` (recommended; opencode supports
   DeepSeek models via its model selection configuration)
-- **Codex** — use `automil init --runtime codex` (CLI fallback; no native hook support
+- **Codex** — use `uv run automil init --runtime codex` (CLI fallback; no native hook support
   in Phase 3)
 
 When using DeepSeek via opencode, the opencode TypeScript plugin installed by
-`automil init --runtime opencode` handles trajectory capture automatically.
+`uv run automil init --runtime opencode` handles trajectory capture automatically.
 Set `AUTOMIL_RUNTIME=deepseek-via-opencode` to tag trajectories correctly.
 
 ## Why there is no deepseek/ runtime overlay

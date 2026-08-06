@@ -10,17 +10,17 @@ in Phase 4 or after Codex stabilises.
 
 Since Codex does not have a stable hook API, use the CLI fallback directly:
 
-1. After each tool call, invoke `automil trajectory record` with the event JSON:
+1. After each tool call, invoke `uv run automil trajectory record` with the event JSON:
 
 ```bash
 export AUTOMIL_NODE_ID="node_0001"
 export AUTOMIL_RUNTIME="codex"
-automil trajectory record '{"gen_ai.provider.name":"codex","gen_ai.event.name":"tool_call","gen_ai.event.timestamp":"2026-05-03T00:00:00Z","gen_ai.tool.name":"bash"}'
+uv run automil trajectory record '{"gen_ai.provider.name":"codex","gen_ai.event.name":"tool_call","gen_ai.event.timestamp":"2026-05-03T00:00:00Z","gen_ai.tool.name":"bash"}'
 ```
 
 2. Add this invocation to your Codex agent's task instructions (`AGENTS.md` or
    `.codex/instructions.md`): "After each tool use, record the event with
-   `automil trajectory record`."
+   `uv run automil trajectory record`."
 
 ## DeepSeek via Codex
 

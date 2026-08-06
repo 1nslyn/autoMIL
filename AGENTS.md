@@ -4,7 +4,7 @@
 
 autoMIL is an autonomous experiment framework that automates the **research iteration** rather than the hyperparameter: a coding agent reads an existing ML codebase, proposes and implements **source-level** changes (architecture + training recipe), runs each as an isolated reproducible experiment in a git worktree, and accumulates knowledge across a persistent experiment tree that informs later proposals. This is a different level of automation from grid/menu AutoML (Optuna-style pipeline search), which searches configurations within a fixed pipeline. It overlays onto existing ML project repos; discovered variants are reproducible, attributable to their parents, and portable across machines and LLM runtimes. The origin domain is Multiple Instance Learning in computational pathology, but the framework is generic.
 
-**Package:** `src/automil/` installed as `automil` via `pip install -e .`
+**Package:** `src/automil/` installed as `automil` through the uv workspace
 **CLI entry point:** `automil` (defined in `pyproject.toml` as `automil.cli:main`)
 
 ## Architecture
@@ -30,9 +30,16 @@ autoMIL overlays an `automil/` subdirectory onto an existing git repo. It does N
 
 ## Commands
 
+**Environment command convention:** Prefer `uv` everywhere: local commands,
+documentation examples, operator runbooks, automation, and cluster invocations.
+Use `uv run ...` by default. Direct `.venv/bin/...` invocation is an exception
+only when `uv` is unavailable or there is a documented need to bypass environment
+management; for a pre-provisioned environment, prefer
+`uv run --frozen --no-sync ...` when applicable.
+
 ```bash
 # Install
-pip install -e .
+uv sync --all-packages
 
 # Run all tests
 uv run pytest tests/ -v
@@ -43,7 +50,7 @@ uv run pytest tests/test_graph.py -v
 # Run a specific test
 uv run pytest tests/test_integration.py::TestEndToEnd::test_init_submit_flow -v
 
-# CLI usage (prefix with `uv run` if not installed globally)
+# CLI usage
 uv run automil init                    # overlay automil/ onto current repo
 uv run automil submit --node <id> --desc "..." --files train.py
 uv run automil rank

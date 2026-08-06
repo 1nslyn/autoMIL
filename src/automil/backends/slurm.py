@@ -1,6 +1,6 @@
 """SLURMBackend on submitit>=1.5.3 (BCK-05 / D-152..D-160, D-179).
 
-Opt-in via ``pip install -e '.[slurm]'``. Implements the Phase 2 Backend ABC
+Opt-in via ``uv sync --extra slurm``. Implements the Phase 2 Backend ABC
 (D-51..D-58) by dispatching jobs to a SLURM cluster through submitit's
 AutoExecutor. The framework-mandated ``--signal=B:TERM@30`` SLURM directive
 couples the Phase 4 D-115 cap contract into SLURM's native signal delivery.
@@ -151,7 +151,7 @@ class SLURMBackend(Backend):
     All five Backend ABC methods are implemented; ``_persist_running`` is a
     private helper for atomic JSON writes to ``running/slurm/<node_id>.json``.
 
-    Requires the ``[slurm]`` extra (``pip install -e '.[slurm]'``). Attempting
+    Requires the ``[slurm]`` extra (``uv sync --extra slurm``). Attempting
     to instantiate without submitit installed raises ``BackendNotInstalledError``.
     """
 

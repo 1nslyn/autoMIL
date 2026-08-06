@@ -15,7 +15,7 @@ while [ "$DIR" != "/" ]; do
         echo ""
         echo "Resume instructions:"
         echo "  1. Read config.yaml, graph.json, learnings.md, program.md"
-        echo "  2. Run: automil reconcile"
+        echo "  2. Run: uv run automil reconcile (or the consumer project's declared runner)"
         echo "  3. Continue the experiment loop"
         exit 1
     fi
@@ -33,8 +33,10 @@ done
 # `gen_ai.*` envelope with `event.name = stop_hook` so the recorder accepts
 # it and the original payload is preserved under `gen_ai.event.payload`.
 if [[ -n "${AUTOMIL_NODE_ID:-}" && -n "${AUTOMIL_RUNTIME:-}" && -n "$HOOK_EVENT" ]]; then
-    # python -c is the only stdlib-portable way to embed a JSON payload as a
-    # value inside a JSON envelope without quoting issues.
+    # This shipped hook must run in consumer repos that may not use uv, so its
+    # direct python3 call is a documented exception. python -c is the only
+    # stdlib-portable way to embed a JSON payload as a value inside a JSON
+    # envelope without quoting issues.
     ENVELOPE=$(AUTOMIL_HOOK_PAYLOAD="$HOOK_EVENT" \
                AUTOMIL_RUNTIME="$AUTOMIL_RUNTIME" \
                python3 -c '
@@ -54,6 +56,9 @@ print(json.dumps({
 ' 2>/dev/null)
 
     if [[ -n "$ENVELOPE" ]]; then
+        # Runtime hooks must also work in non-uv consumer repos. The globally
+        # installed console script is the documented exception to uv-first
+        # source-repository commands.
         automil trajectory record "$ENVELOPE" \
             2>>"${AUTOMIL_DIR:-/tmp}/trajectory.err.log" || true
     fi

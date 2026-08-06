@@ -28,6 +28,8 @@ export default function() {
                     : JSON.stringify(output.output),
             }
 
+            // Runtime plugins also target non-uv consumer repos, so the globally
+            // installed console script is the documented uv-first exception.
             // automil trajectory record exits 0 for both success and soft-fail (D-94)
             await $`automil trajectory record ${JSON.stringify(event)}`.quiet().nothrow()
         }

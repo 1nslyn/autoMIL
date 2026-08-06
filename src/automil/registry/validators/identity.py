@@ -164,7 +164,7 @@ class IdentityValidator:
                 validator_name="identity",
                 path=archive_dir,
                 reason="torch not installed; identity validator requires torch at runtime",
-                fix_suggestion="`pip install torch` or `pip install -e .[torch]`.",
+                fix_suggestion="`uv add torch` or `uv sync --extra ml` from the autoMIL source workspace.",
             ) from e
 
         # Instantiate both classes. Pass ``args`` if provided; else no-arg constructor.

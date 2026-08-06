@@ -45,7 +45,7 @@ Before doing anything, ask the operator:
 
 ```bash
 cd <project_root>
-automil init
+uv run automil init
 ```
 
 `automil init` invokes `LocalBackend.healthcheck()` between the existing `--update`
@@ -214,7 +214,7 @@ Per D-195 the skill runs both stages. Both must pass before printing
 ### Stage 1: automil check
 
 ```bash
-automil check
+uv run automil check
 ```
 
 If exit code is non-zero, surface the specific failures and abort. Common
@@ -224,7 +224,7 @@ each issue and rerun the gate.
 ### Stage 2: 1-minute dry-run experiment
 
 ```bash
-automil submit --node node_setup_validation --desc "setup-validation" --files <minimal-edit-set> --max-time 60 --mil-model <model_name>
+uv run automil submit --node node_setup_validation --desc "setup-validation" --files <minimal-edit-set> --max-time 60 --mil-model <model_name>
 ```
 
 `--mil-model` is required: it keys the budget cell (D-12). Pass any short
@@ -242,14 +242,14 @@ aggregate counts (`Executed: N  Proposed: M  Best: X` and `Queue / Completed`),
 so a per-node grep can never match.
 
 ```bash
-automil orchestrator start &
+uv run automil orchestrator start &
 result="automil/orchestrator/archive/node_setup_validation/result.json"  # adjust if automil/ is not at the repo root
 for i in $(seq 1 45); do          # 45 x 2s = 90s polling budget (D-195)
     [ -f "$result" ] && break
     sleep 2
 done
 status=$(python3 -c "import json; print(json.load(open('$result')).get('status','timeout'))" 2>/dev/null || echo timeout)
-automil orchestrator stop
+uv run automil orchestrator stop
 ```
 
 If `status` is `completed`, the gate passes. On `crash` or `timeout`,

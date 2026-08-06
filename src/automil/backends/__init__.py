@@ -79,7 +79,7 @@ from automil.backends.local import LocalBackend  # noqa: F401  # re-export for p
 # mock_slurm NOT auto-imported here — tests import it explicitly (D-69)
 
 # Opt-in distributed backends (Phase 6 / D-153): guarded imports so
-# `pip install -e .` (no extras) never fails. When the extra is missing the
+# `uv sync` (no extras) never fails. When the extra is missing the
 # backend is simply unavailable at runtime; callers attempting to dispatch
 # through an unavailable backend get BackendNotInstalledError (raised by the
 # config-resolution path, not by import).

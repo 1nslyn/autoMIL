@@ -16,6 +16,6 @@ When operating under Codex CLI:
 - Use `bash` tool for the `automil` invocations called out in the shared
   Setup-Done Gate section.
 - Codex's working directory model expects you to `cd` into the project root
-  before running `automil init`.
+  before running `uv run automil init`.
 - Codex does not parse YAML frontmatter; the shared SKILL.md's frontmatter is
   intentionally absent from the rendered output for this runtime.

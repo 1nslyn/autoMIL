@@ -1,6 +1,6 @@
 """RayBackend on ray>=2.55.1 raw @ray.remote (BCK-06 / D-161..D-167, D-179).
 
-Opt-in via ``pip install -e '.[ray]'``. Implements the Phase 2 Backend ABC by
+Opt-in via ``uv sync --extra ray``. Implements the Phase 2 Backend ABC by
 dispatching jobs to a Ray cluster via raw ``@ray.remote`` functions (NOT Ray
 Tune -- D-187 explicit non-goal). Hybrid init (D-161): try RAY_ADDRESS, fall
 back to local cluster if allow_local_fallback=True.

@@ -19,7 +19,7 @@ class BackendNotInstalledError(BackendError):
         self.extra_name = extra_name
         super().__init__(
             f"Backend {backend_name!r} requires the [{extra_name}] extra. "
-            f"Install it with: pip install -e '.[{extra_name}]'"
+            f"Install it with: uv sync --extra {extra_name}"
         )
 
 

@@ -241,8 +241,8 @@ gate:
 
 # --- Backend configuration (Phase 6 / D-152..D-188) ---
 # Select the job execution backend. Default "local" works on any machine.
-# "slurm" requires: pip install -e '.[slurm]' + valid directives below.
-# "ray"   requires: pip install -e '.[ray]'   + RAY_ADDRESS env var or local cluster.
+# "slurm" requires: uv sync --extra slurm + valid directives below.
+# "ray"   requires: uv sync --extra ray   + RAY_ADDRESS env var or local cluster.
 backend:
   name: "local"            # "local" | "slurm" | "ray"
 
