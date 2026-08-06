@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -288,6 +289,9 @@ def test_recoverable_dataset_subset_has_stable_plan_and_slurm_binding(tmp_path):
     runner = Path(output["runner"]).read_text()
     assert "--datasets cptac_gbm,tcga_hnsc,tcga_luad" in runner
     assert '"${SLURM_ARRAY_TASK_ID}"' in runner
+    assert "uv run --frozen --no-sync --package autobench python" in runner
+    assert "source .venv/bin/activate" not in runner
+    subprocess.run(["bash", "-n", output["runner"]], check=True)
 
 
 def _set_manifest_dataset_roots(monkeypatch, tmp_path):
@@ -331,6 +335,9 @@ def test_multigpu_runner_is_one_four_gpu_job_with_runtime_telemetry(
     assert "utilization.gpu" in runner
     assert "canonical audit:" in runner
     assert "benchmark_5fold/results" not in runner
+    assert "uv run --frozen --no-sync --package autobench python" in runner
+    assert "source .venv/bin/activate" not in runner
+    subprocess.run(["bash", "-n", output["runner"]], check=True)
 
 
 def test_finalize_rerun_result_normalizes_and_writes_completion_marker(
