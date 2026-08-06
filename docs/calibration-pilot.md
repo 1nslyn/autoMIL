@@ -17,8 +17,8 @@ Wait for completion (estimated ~6h per cell; saturate GPUs by submitting all 5
 simultaneously). Gather the matrix via:
 
 ```bash
-automil nominate <candidate_id>
-automil promote <candidate_id> --calibrate
+uv run automil nominate <candidate_id>
+uv run automil promote <candidate_id> --calibrate
 cat automil/archive/<candidate_id>/gate_evaluation.jsonl
 ```
 
@@ -90,7 +90,7 @@ Commit with message: `gate: lock K=<N> from the calibration pilot`
 
 3. **Register the manifest.** For node_0176's parent, declare all 5 fresh cells as held-out:
    ```bash
-   automil gate register-manifest <node_0176_parent_id> \
+   uv run automil gate register-manifest <node_0176_parent_id> \
        --K 3 \
        --p-threshold 0.05 \
        --bootstrap-reps 1000 \
@@ -103,8 +103,8 @@ Commit with message: `gate: lock K=<N> from the calibration pilot`
 
 5. **Run --calibrate.** When all 5 cells are complete:
    ```bash
-   automil nominate <candidate_id>
-   automil promote <candidate_id> --calibrate
+   uv run automil nominate <candidate_id>
+   uv run automil promote <candidate_id> --calibrate
    cat automil/archive/<candidate_id>/gate_evaluation.jsonl
    ```
 

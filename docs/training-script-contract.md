@@ -65,7 +65,7 @@ The script follows this structure:
 - compute accuracy and F1
 - write `result.json` with `{"composite": accuracy, "metrics": {...}, "status": "completed"}`
 
-To run it end-to-end: `automil submit --node iris_001 --files examples/sklearn-iris/train.py`.
+To run it end-to-end: `uv run automil submit --node iris_001 --files examples/sklearn-iris/train.py`.
 
 ## Minimal pytorch skeleton
 

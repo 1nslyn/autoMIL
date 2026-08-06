@@ -17,8 +17,8 @@ with this example; it serves as a v1.0 multi-class reference layout.
 ```bash
 cd examples/clwd
 # Edit automil/config.yaml: set data paths, env.required, scoring.formula
-automil check
-automil orchestrator start
+uv run automil check
+uv run automil orchestrator start
 
 # In another tmux session
 claude --dangerously-skip-permissions

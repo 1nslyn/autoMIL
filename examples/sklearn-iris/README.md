@@ -16,9 +16,9 @@ training pipeline into autoMIL via the documented contract
 ## How to run (local development)
 
 ```
-pip install -e '.[examples-iris]'   # OR: pip install scikit-learn pyyaml
+uv sync --extra examples-iris
 cd examples/sklearn-iris
-python train.py                     # writes result.json to CWD
+uv run python train.py              # writes result.json to CWD
 cat result.json
 ```
 
@@ -28,10 +28,10 @@ Expected: `composite` between 0.93 and 0.98 with `random_state=42`.
 
 ```
 cd examples/sklearn-iris
-automil init                        # already initialised; this is idempotent
-automil submit --node iris_001 --desc "baseline" --files train.py --max-time 60 --mil-model sklearn_iris
-automil orchestrator start
-automil status
+uv run automil init                 # already initialised; this is idempotent
+uv run automil submit --node iris_001 --desc "baseline" --files train.py --max-time 60 --mil-model sklearn_iris
+uv run automil orchestrator start
+uv run automil status
 ```
 
 The acceptance gate (`tests/acceptance/test_final_phase8_acceptance.py`)

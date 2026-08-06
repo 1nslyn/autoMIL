@@ -35,7 +35,7 @@ Correctness guarantees
 
 Usage
 -----
-    python refresh_goldmark_uuids.py <dataset_dir>
+    uv run --package autobench python benchmarks/scripts/manifests/refresh_goldmark_uuids.py <dataset_dir>
 
 Where ``<dataset_dir>`` contains both ``normalized_manifest.csv`` (from
 GOLDMARK) and ``gdc_manifest.txt`` (from the GDC portal).

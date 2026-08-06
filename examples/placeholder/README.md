@@ -17,8 +17,8 @@ cd /path/to/your/project
 #   cap.budget_seconds + cap.safety_buffer_seconds
 #   baseline.composite
 
-automil check                       # validates protected files, env.required, backend
-automil orchestrator start
+uv run automil check                # validates protected files, env.required, backend
+uv run automil orchestrator start
 ```
 
 Ensure your training script honors the

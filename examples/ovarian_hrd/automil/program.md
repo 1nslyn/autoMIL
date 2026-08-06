@@ -207,7 +207,7 @@ Run on a dedicated branch (e.g. `autoMIL/hrd-mar10`).
 
 **Prerequisites**: Ensure the orchestrator daemon is running:
 ```bash
-automil orchestrator start
+uv run automil orchestrator start
 ```
 
 **LOOP FOREVER:**

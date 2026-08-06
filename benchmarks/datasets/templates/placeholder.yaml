@@ -3,7 +3,7 @@
 # To add a new dataset:
 # 1. Copy this file and rename it (e.g., tcga_brca.yaml)
 # 2. Fill in all fields below
-# 3. Run: python benchmarks/scripts/run_benchmark.py --dataset your_dataset --prep_only
+# 3. Run: uv run --package autobench python benchmarks/scripts/run_benchmark.py --dataset your_dataset --prep_only
 
 name: placeholder
 description: "Third dataset — TBD"

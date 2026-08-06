@@ -6,6 +6,10 @@ to invoke `automil` commands. Beyond that, autoMIL ships first-class
 runtime overlays for **Claude Code**, **Codex**, **OpenCode**, and
 **DeepSeek** (routed via opencode or codex).
 
+The bare `automil` examples in this guide assume the CLI was installed with
+`uv tool install`. When working from the autoMIL source repository, use
+`uv run automil ...` instead.
+
 The asset layout is `_shared/` (canonical SKILL/AGENTS content) plus
 per-runtime directories that carry only diffs/overrides. `automil init`
 merges them at install time; `automil show-skill --runtime <r>` renders
@@ -123,7 +127,7 @@ Any compatible agent must be able to:
 
 If your runtime isn't in the table above:
 
-1. Install autoMIL: `pip install -e .` (or `uv tool install`).
+1. Install autoMIL with `uv tool install -e .` from a local clone.
 2. Run `automil init --no-healthcheck` (or with healthcheck if you have a GPU).
 3. Skip per-runtime asset installation; instead, point the agent at
    `automil/program.md` (instructions for the loop) and

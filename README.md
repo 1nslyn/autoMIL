@@ -114,9 +114,11 @@ cd autoMIL
 uv tool install -e .
 ```
 
-> **Note:** If you haven't installed `automil` globally via `uv tool install`,
-> prefix all commands with `uv run` (e.g., `uv run automil init`).
-> This applies when developing within the autoMIL repo itself.
+> **Environment convention:** Development in this repository always uses
+> `uv run` (for example, `uv run automil init`). The bare `automil` commands
+> below assume the recommended global installation was created by
+> `uv tool install`; they are not an instruction to bypass uv-managed
+> environments.
 
 ### 2. Initialize in your project
 

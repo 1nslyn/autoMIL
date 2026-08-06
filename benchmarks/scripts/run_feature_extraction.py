@@ -7,9 +7,9 @@ a dataset configuration YAML.
 
 Examples
 --------
-uv run python benchmarks/scripts/run_feature_extraction.py --dataset ovarian --gpu 0
-uv run python benchmarks/scripts/run_feature_extraction.py --dataset clwd --all_gpus
-uv run python benchmarks/scripts/run_feature_extraction.py --dataset ovarian --models conch_v15 uni_v2
+uv run --package autobench python benchmarks/scripts/run_feature_extraction.py --dataset ovarian --gpu 0
+uv run --package autobench python benchmarks/scripts/run_feature_extraction.py --dataset clwd --all_gpus
+uv run --package autobench python benchmarks/scripts/run_feature_extraction.py --dataset ovarian --models conch_v15 uni_v2
 """
 
 import argparse

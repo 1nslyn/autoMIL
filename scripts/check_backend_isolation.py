@@ -34,7 +34,7 @@ ALLOWLIST rationale:
                                            process-control category as the daemon itself.
 
 Usage:
-    python scripts/check_backend_isolation.py [src_root]
+    uv run python scripts/check_backend_isolation.py [src_root]
 
     src_root defaults to ``src/automil`` (relative to cwd).
 

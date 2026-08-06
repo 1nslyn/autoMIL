@@ -69,7 +69,7 @@ consolidation apply to this project.
 
 **Prerequisites**: Ensure the orchestrator daemon is running:
 ```bash
-automil orchestrator start
+uv run automil orchestrator start
 ```
 
 **NEVER STOP**: Once the loop begins, do NOT pause to ask if you should continue.

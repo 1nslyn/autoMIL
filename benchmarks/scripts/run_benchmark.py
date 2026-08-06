@@ -4,22 +4,22 @@
 Examples
 --------
 # Full benchmark with ovarian dataset
-uv run python benchmarks/scripts/run_benchmark.py --dataset ovarian --gpu 0
+uv run --package autobench python benchmarks/scripts/run_benchmark.py --dataset ovarian --gpu 0
 
 # Multi-GPU (auto-detect)
-uv run python benchmarks/scripts/run_benchmark.py --dataset ovarian --all_gpus
+uv run --package autobench python benchmarks/scripts/run_benchmark.py --dataset ovarian --all_gpus
 
 # CLWD dataset
-uv run python benchmarks/scripts/run_benchmark.py --dataset clwd --gpu 0
+uv run --package autobench python benchmarks/scripts/run_benchmark.py --dataset clwd --gpu 0
 
 # Subset
-uv run python benchmarks/scripts/run_benchmark.py --dataset ovarian --encoders conch_v15 --models clam_sb --tasks brca
+uv run --package autobench python benchmarks/scripts/run_benchmark.py --dataset ovarian --encoders conch_v15 --models clam_sb --tasks brca
 
 # Data prep only
-uv run python benchmarks/scripts/run_benchmark.py --dataset ovarian --prep_only
+uv run --package autobench python benchmarks/scripts/run_benchmark.py --dataset ovarian --prep_only
 
 # nnMIL with specific strategies
-uv run python benchmarks/scripts/run_benchmark.py --dataset ovarian --frameworks nnmil --strategies standard --all_gpus
+uv run --package autobench python benchmarks/scripts/run_benchmark.py --dataset ovarian --frameworks nnmil --strategies standard --all_gpus
 """
 
 from __future__ import annotations

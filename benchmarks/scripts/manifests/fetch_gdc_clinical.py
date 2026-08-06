@@ -8,12 +8,12 @@ layout a GDC clinical export uses, so `add_os_to_manifest.py` consumes the resul
 unchanged.
 
 Usage:
-    python benchmarks/scripts/manifests/fetch_gdc_clinical.py \\
+    uv run --package autobench python benchmarks/scripts/manifests/fetch_gdc_clinical.py \\
         --manifest /path/to/normalized_manifest.csv \\
         --case-col case_id \\
         --output /path/to/clinical.tsv
 
-    python benchmarks/scripts/manifests/add_os_to_manifest.py \\
+    uv run --package autobench python benchmarks/scripts/manifests/add_os_to_manifest.py \\
         --manifest /path/to/normalized_manifest.csv \\
         --clinical /path/to/clinical.tsv --case-col case_id
 

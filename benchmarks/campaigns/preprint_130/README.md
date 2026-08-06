@@ -20,12 +20,12 @@ stable node ID.
 
 ## 1. Preflight
 
-Run these commands from the repository root with the environment used for the
-campaign installed in `.venv`:
+Run these commands from the repository root with the campaign workspace synced
+through `uv`:
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_manifest.py check
-.venv/bin/python benchmarks/scripts/campaign_manifest.py canary
+uv run python benchmarks/scripts/campaign_manifest.py check
+uv run python benchmarks/scripts/campaign_manifest.py canary
 ```
 
 `check` rebuilds the canonical roster and compares it with the byte-locked
@@ -50,7 +50,7 @@ file therefore archives the resolvable coding-agent policy before any search
 starts; it is not an optimization result.
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_manifest.py materialize \
+uv run python benchmarks/scripts/campaign_manifest.py materialize \
   --agent-protocol /path/to/agent_protocol.json
 ```
 
@@ -74,7 +74,7 @@ Choose one materialized root for the commands below:
 
 ```bash
 CAMPAIGN_CELL_ROOT="benchmarks/campaigns/preprint_130/runtime/<cell-id>"
-.venv/bin/python benchmarks/scripts/campaign_stage.py status \
+uv run python benchmarks/scripts/campaign_stage.py status \
   --cell-root "$CAMPAIGN_CELL_ROOT"
 ```
 
@@ -86,7 +86,7 @@ evidence public, stores held-out folds in
 the sealed archive, and registers the discovery root:
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_stage.py run-baseline \
+uv run python benchmarks/scripts/campaign_stage.py run-baseline \
   --cell-root "$CAMPAIGN_CELL_ROOT" --gpu 0
 ```
 
@@ -109,7 +109,7 @@ consumed. After those pristine-state checks, the controller records its own
 at or after that controller timestamp.
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_stage.py open-agent-session \
+uv run python benchmarks/scripts/campaign_stage.py open-agent-session \
   --cell-root "$CAMPAIGN_CELL_ROOT" \
   --agent-session /path/to/agent_session_start.json
 ```
@@ -117,8 +117,8 @@ at or after that controller timestamp.
 Start the scheduler for the selected cell:
 
 ```bash
-.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" check
-.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" orchestrator start
+uv run automil --project "$CAMPAIGN_CELL_ROOT" check
+uv run automil --project "$CAMPAIGN_CELL_ROOT" orchestrator start
 ```
 
 Run one fresh coding-agent session with no cross-cell memory against this
@@ -132,9 +132,9 @@ file manifest, and architecture-preserving boundary.
 Monitor without exposing held-out values:
 
 ```bash
-.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" status
-.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT" rank
-.venv/bin/python benchmarks/scripts/campaign_stage.py status \
+uv run automil --project "$CAMPAIGN_CELL_ROOT" status
+uv run automil --project "$CAMPAIGN_CELL_ROOT" rank
+uv run python benchmarks/scripts/campaign_stage.py status \
   --cell-root "$CAMPAIGN_CELL_ROOT"
 ```
 
@@ -143,7 +143,7 @@ freeze the complete unique candidates and select up to 10 by the locked
 validation ordering:
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_stage.py freeze-discovery \
+uv run python benchmarks/scripts/campaign_stage.py freeze-discovery \
   --cell-root "$CAMPAIGN_CELL_ROOT"
 ```
 
@@ -153,18 +153,18 @@ Materialize exact copies of the frozen candidate overlays. No agent proposes or
 edits candidates during promotion:
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_stage.py materialize-promotion \
+uv run python benchmarks/scripts/campaign_stage.py materialize-promotion \
   --cell-root "$CAMPAIGN_CELL_ROOT"
-.venv/bin/automil --project "$CAMPAIGN_CELL_ROOT/promotion" orchestrator start
+uv run automil --project "$CAMPAIGN_CELL_ROOT/promotion" orchestrator start
 ```
 
 After every queued promotion job is terminal, freeze eligibility and select the
 five-fold validation winner:
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_stage.py freeze-promotion \
+uv run python benchmarks/scripts/campaign_stage.py freeze-promotion \
   --cell-root "$CAMPAIGN_CELL_ROOT"
-.venv/bin/python benchmarks/scripts/campaign_stage.py select-winner \
+uv run python benchmarks/scripts/campaign_stage.py select-winner \
   --cell-root "$CAMPAIGN_CELL_ROOT"
 ```
 
@@ -179,7 +179,7 @@ must be null and carry a reason. Finalization verifies that all 60 proposal
 timestamps fall inside this session interval.
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_stage.py finalize-agent-session \
+uv run python benchmarks/scripts/campaign_stage.py finalize-agent-session \
   --cell-root "$CAMPAIGN_CELL_ROOT" \
   --agent-session /path/to/agent_session_end.json
 ```
@@ -195,8 +195,8 @@ After all 130 cells report `winner-frozen`, atomically bind their validation
 selections into one campaign artifact:
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_manifest.py freeze-selections
-.venv/bin/python benchmarks/scripts/campaign_manifest.py certify-all
+uv run python benchmarks/scripts/campaign_manifest.py freeze-selections
+uv run python benchmarks/scripts/campaign_manifest.py certify-all
 ```
 
 Before `selection_freeze.json` exists and contains the exact 130-cell roster,
@@ -219,7 +219,7 @@ sealed-fold hashes, process census, or finalized session attestation.
 Generate the complete publication artifact only after certification:
 
 ```bash
-.venv/bin/python benchmarks/scripts/campaign_manifest.py report
+uv run python benchmarks/scripts/campaign_manifest.py report
 ```
 
 This command requires all 130 baseline/winner bundles, derives 30 four-arm tile

@@ -8,7 +8,7 @@ from pathlib import Path
 # a git worktree pick up the worktree's lib/ and scripts/ instead of the
 # editable-installed main repo copies. Without this override, overlays that
 # modify files under benchmarks/lib/ or benchmarks/src/autobench/ are silently
-# ignored because `pip install -e .` pins imports to the main-repo source.
+# ignored because the uv workspace pins imports to the main-repo source.
 _override = os.environ.get("AUTOBENCH_ROOT")
 if _override:
     BENCHMARKS_ROOT = Path(_override).resolve()

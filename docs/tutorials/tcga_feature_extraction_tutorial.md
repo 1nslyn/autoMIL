@@ -138,7 +138,7 @@ The full GDC manifest includes ALL files (genomic, clinical, imaging, e.g., 36,2
 ```bash
 cd ~/scratch/autoMIL
 
-python3 -c "
+uv run python -c "
 import csv, sys
 
 dataset_dir = 'datasets/{DATASET}'
@@ -539,7 +539,7 @@ A helper script handles this end-to-end:
 
 ```bash
 cd ~/scratch/autoMIL
-python benchmarks/scripts/manifests/refresh_goldmark_uuids.py datasets/{DATASET}
+uv run --package autobench python benchmarks/scripts/manifests/refresh_goldmark_uuids.py datasets/{DATASET}
 ```
 
 It expects `datasets/{DATASET}/` to contain:
@@ -565,7 +565,7 @@ When you suspect or confirm UUID rewrites, swap the following:
 
 1. **Replace the inline Python in Step 3b** with a single command:
    ```bash
-   python benchmarks/scripts/manifests/refresh_goldmark_uuids.py datasets/{DATASET}
+   uv run --package autobench python benchmarks/scripts/manifests/refresh_goldmark_uuids.py datasets/{DATASET}
    ```
    (You no longer need to write the matching logic by hand.)
 

@@ -75,7 +75,7 @@ Run the unmodified training script to confirm it produces valid results.
 Use `automil submit` to record this as the baseline experiment:
 
 ```bash
-automil submit --node node_0001 --desc "baseline" --files <training_script>
+uv run automil submit --node node_0001 --desc "baseline" --files <training_script>
 ```
 
 ### 6. Validate setup

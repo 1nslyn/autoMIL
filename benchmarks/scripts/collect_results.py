@@ -12,7 +12,7 @@ cohort's ``benchmark_dir`` that should be pooled) and writes:
 
 Examples
 --------
-python benchmarks/scripts/collect_results.py \
+uv run --package autobench python benchmarks/scripts/collect_results.py \
     --roots /data/tcga-luad/benchmark /data/cptac-gbm/benchmark \
     --out reports/results.csv \
     --per-fold-out reports/per_fold.csv

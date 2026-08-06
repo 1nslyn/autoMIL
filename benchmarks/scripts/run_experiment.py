@@ -7,27 +7,27 @@ to the current working directory.
 Examples
 --------
 # CLAM experiment
-python benchmarks/scripts/run_experiment.py \
+uv run --package autobench python benchmarks/scripts/run_experiment.py \
     --dataset ccrcc --task high_grade --encoder uni_v2 \
     --model clam_mb --framework clam
 
 # nnMIL experiment
-python benchmarks/scripts/run_experiment.py \
+uv run --package autobench python benchmarks/scripts/run_experiment.py \
     --dataset ccrcc --task pbrm1 --encoder uni_v2 \
     --model ab_mil --framework nnmil
 
 # ABMIL experiment (reuses nnMIL's H5-bag prep)
-python benchmarks/scripts/run_experiment.py \
+uv run --package autobench python benchmarks/scripts/run_experiment.py \
     --dataset ccrcc --task pbrm1 --encoder uni_v2 \
     --model abmil --framework abmil
 
 # DTFD-MIL experiment (reuses nnMIL's H5-bag prep)
-python benchmarks/scripts/run_experiment.py \
+uv run --package autobench python benchmarks/scripts/run_experiment.py \
     --dataset ccrcc --task pbrm1 --encoder uni_v2 \
     --model dtfd_mil --framework dtfd
 
 # TITAN experiment (frozen slide embedding -- --encoder must be "titan")
-python benchmarks/scripts/run_experiment.py \
+uv run --package autobench python benchmarks/scripts/run_experiment.py \
     --dataset ccrcc --task pbrm1 --encoder titan \
     --model titan --framework titan
 """

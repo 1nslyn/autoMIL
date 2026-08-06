@@ -31,16 +31,17 @@ cd autoMIL
 uv tool install -e .
 ```
 
-> **Note:** If `automil` is not installed globally, prefix every command with
-> `uv run` (e.g. `uv run automil init`). The repo's CLAUDE.md and the in-repo
-> `_shared/` skill use the `uv run` form throughout.
+> **Environment convention:** Development in the autoMIL source repository
+> always uses `uv run`. The bare `automil` commands below assume the recommended
+> global installation was created by `uv tool install`; they are not an
+> instruction to bypass uv-managed environments.
 
 ### Optional extras
 
 ```bash
-pip install -e '.[slurm]'         # SLURMBackend (submitit AutoExecutor)
-pip install -e '.[ray]'           # RayBackend (raw @ray.remote)
-pip install -e '.[examples-iris]' # scikit-learn + pyyaml for the sklearn-iris example
+uv sync --extra slurm         # SLURMBackend (submitit AutoExecutor)
+uv sync --extra ray           # RayBackend (raw @ray.remote)
+uv sync --extra examples-iris # scikit-learn + pyyaml for the sklearn-iris example
 ```
 
 ## Adding autoMIL to Your Project
@@ -167,8 +168,8 @@ A few notes on each:
   - **`wall_clock`** is the legacy continuous clock (counts GPU + idle time
     since cell creation). Use it to reproduce pre-activity-gated behavior.
 - **`backend.name`**, `local` works on any machine. `slurm` requires
-  `pip install -e '.[slurm]'` and valid SLURM directives (`backend.slurm.directives.partition`,
-  `account`, `cpus_per_task`, `mem_gb`). `ray` requires `pip install -e '.[ray]'`
+  `uv sync --extra slurm` and valid SLURM directives (`backend.slurm.directives.partition`,
+  `account`, `cpus_per_task`, `mem_gb`). `ray` requires `uv sync --extra ray`
   and a `RAY_ADDRESS` (or local fallback if `backend.ray.allow_local_fallback: true`).
 
 For the full annotated template, see

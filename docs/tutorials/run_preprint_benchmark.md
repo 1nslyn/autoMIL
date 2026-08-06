@@ -53,7 +53,7 @@ ssh <you>@fir.alliancecan.ca
 
 cd ~/scratch/autoMIL          # your repo checkout
 git checkout main && git pull --ff-only   # get the latest configs + launchers
-source .venv/bin/activate
+uv sync --all-packages
 
 # Make sure YOUR dataset root is in benchmarks/.env (already there if you
 # extracted the dataset). Replace XXXX with your code, e.g. HNSC:
@@ -124,21 +124,21 @@ mixing them.
 ROOT=/project/rrg-jma/shared/Pathology/TCGA/TCGA-XXXX   # the dataset root
 
 # TCGA cohort with a GDC clinical.tsv on disk (e.g. HNSC) — grade + OS
-python benchmarks/scripts/manifests/add_grade_to_manifest.py \
+uv run --package autobench python benchmarks/scripts/manifests/add_grade_to_manifest.py \
     --manifest $ROOT/normalized_manifest.csv --clinical $ROOT/clinical.tsv --case-col sample_names
-python benchmarks/scripts/manifests/add_os_to_manifest.py \
+uv run --package autobench python benchmarks/scripts/manifests/add_os_to_manifest.py \
     --manifest $ROOT/normalized_manifest.csv --clinical $ROOT/clinical.tsv --case-col sample_names
 
 # CPTAC cohort from Patho-Bench — classification labels only (OS comes from GDC below).
 # If you DO want a Patho-Bench survival task for some other cohort, add it to --tasks:
 # its OS_event/OS_days ride in the task config's extra_cols and are preserved.
-python benchmarks/scripts/manifests/prepare_cptac_manifest.py \
+uv run --package autobench python benchmarks/scripts/manifests/prepare_cptac_manifest.py \
     --source cptac_pda --tasks Immune_class SMAD4_mutation --saveto $ROOT
 
 # Both CPTAC cohorts (GBM + PDAC) — pull OS from the GDC API, then join
-python benchmarks/scripts/manifests/fetch_gdc_clinical.py \
+uv run --package autobench python benchmarks/scripts/manifests/fetch_gdc_clinical.py \
     --manifest $ROOT/normalized_manifest.csv --case-col case_id --output $ROOT/clinical.tsv
-python benchmarks/scripts/manifests/add_os_to_manifest.py \
+uv run --package autobench python benchmarks/scripts/manifests/add_os_to_manifest.py \
     --manifest $ROOT/normalized_manifest.csv --clinical $ROOT/clinical.tsv --case-col case_id
 ```
 

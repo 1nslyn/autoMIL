@@ -28,9 +28,9 @@ To run a similar campaign on this example with the v1.0 framework:
 
 ```bash
 cd examples/ovarian_hrd
-automil init --runtime claude       # or your runtime; uses the existing config.yaml
-automil check                       # verifies env.required, registry, backend
-automil orchestrator start
+uv run automil init --runtime claude # or your runtime; uses the existing config.yaml
+uv run automil check                 # verifies env.required, registry, backend
+uv run automil orchestrator start
 
 # In another tmux session
 claude --dangerously-skip-permissions

@@ -17,7 +17,7 @@ the first **non-null** value per case — taking merely the first row undercount
 (51/247/100 instead of 54/260/100 on HNSC).
 
 Usage:
-    python benchmarks/scripts/manifests/add_grade_to_manifest.py \\
+    uv run --package autobench python benchmarks/scripts/manifests/add_grade_to_manifest.py \\
         --manifest /path/to/normalized_manifest.csv \\
         --clinical /path/to/clinical.tsv \\
         --case-col sample_names
