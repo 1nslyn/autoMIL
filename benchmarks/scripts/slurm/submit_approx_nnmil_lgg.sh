@@ -59,15 +59,16 @@ echo "================================================"
 # ==================== ENVIRONMENT ====================
 module load cuda/12.2 2>/dev/null || true
 cd "$PROJECT_DIR" || { echo "ERROR: Project directory not found"; exit 1; }
-source .venv/bin/activate
+command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required on the compute node"; exit 1; }
+UV_RUN=(uv run --frozen --no-sync --package autobench)
 set -a; source benchmarks/.env; set +a
-echo "Python: $(which python)"
+echo "Python: $("${UV_RUN[@]}" python -c 'import sys; print(sys.executable)')"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv 2>/dev/null || true
 
 # ==================== DATA PREP ====================
 echo ""
 echo "================ Phase 1: Data Preparation ================"
-python benchmarks/scripts/run_benchmark.py \
+"${UV_RUN[@]}" python benchmarks/scripts/run_benchmark.py \
     --dataset "$DATASET" \
     --benchmark_dir "$BENCHMARK_DIR" \
     --prep_only \
@@ -82,7 +83,7 @@ fi
 # ==================== BENCHMARK (SINGLE GPU) ====================
 echo ""
 echo "================ Phase 2: Benchmark (nnMIL, single GPU) ================"
-CMD=(python benchmarks/scripts/run_benchmark.py
+CMD=("${UV_RUN[@]}" python benchmarks/scripts/run_benchmark.py
     --dataset "$DATASET"
     --benchmark_dir "$BENCHMARK_DIR"
     --gpu 0

@@ -37,27 +37,28 @@ echo "================================================"
 module load cuda/12.2 2>/dev/null || true
 cd "$PROJECT_DIR" || { echo "ERROR: project dir not found: $PROJECT_DIR"; exit 1; }
 mkdir -p logs
-source .venv/bin/activate
+command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required on the compute node"; exit 1; }
+UV_RUN=(uv run --frozen --no-sync --package autobench)
 set -a; source benchmarks/.env; set +a
 
 # Resolve WSI dir + trident output dir from the dataset config.
-WSI_DIR=$(python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').wsi_dir)") \
+WSI_DIR=$("${UV_RUN[@]}" python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').wsi_dir)") \
     || { echo "ERROR: cannot load dataset config '${DATASET}' (check name + AUTOBENCH_*_ROOT in benchmarks/.env)"; exit 1; }
-JOB_DIR=$(python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').output_dir)")
+JOB_DIR=$("${UV_RUN[@]}" python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').output_dir)")
 [ -n "$WSI_DIR" ] && [ -n "$JOB_DIR" ] || { echo "ERROR: could not resolve wsi_dir/output_dir for ${DATASET}"; exit 1; }
 echo "WSI dir:  $WSI_DIR"
 echo "Job dir:  $JOB_DIR"
 nvidia-smi --query-gpu=name,memory.total --format=csv 2>/dev/null || true
 
 # HuggingFace login — TITAN is gated (conch_v15 already cached).
-python -c "import os
+"${UV_RUN[@]}" python -c "import os
 from huggingface_hub import login
 t=os.environ.get('HF_TOKEN')
 login(token=t, add_to_git_credential=False) if t else print('WARN: no HF_TOKEN')" 2>&1 | tail -2
 
 echo ""
 echo "===== Pass 1: seg (skip existing) + coords@512 + conch_v15 tiles@512 ====="
-python "$TRIDENT" --task all \
+"${UV_RUN[@]}" python "$TRIDENT" --task all \
     --wsi_dir "$WSI_DIR" --job_dir "$JOB_DIR" \
     --patch_encoder conch_v15 --mag 20 --patch_size 512 \
     --gpu 0 --skip_errors
@@ -66,7 +67,7 @@ if [ $P1 -ne 0 ]; then echo "ERROR: Pass 1 (conch_v15 tiles) failed with exit $P
 
 echo ""
 echo "===== Pass 2: TITAN slide features (reads conch_v15 tiles) ====="
-python "$TRIDENT" --task feat --slide_encoder titan \
+"${UV_RUN[@]}" python "$TRIDENT" --task feat --slide_encoder titan \
     --wsi_dir "$WSI_DIR" --job_dir "$JOB_DIR" \
     --mag 20 --patch_size 512 \
     --gpu 0 --skip_errors

@@ -64,13 +64,14 @@ echo "================================================"
 module load cuda/12.2
 
 cd "$PROJECT_DIR" || { echo "ERROR: Project directory not found: $PROJECT_DIR"; exit 1; }
-source .venv/bin/activate
+command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required on the compute node"; exit 1; }
+UV_RUN=(uv run --frozen --no-sync --package autobench)
 
 set -a
 source benchmarks/.env
 set +a
 
-echo "Python:      $(which python)"
+echo "Python:      $("${UV_RUN[@]}" python -c 'import sys; print(sys.executable)')"
 echo "CUDA:        $(nvcc --version 2>/dev/null | grep release || echo 'N/A')"
 
 # ==================== GPU INFO ====================
@@ -81,7 +82,7 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv
 # ==================== VALIDATION ====================
 echo ""
 echo "Validating dataset config..."
-python -c "
+"${UV_RUN[@]}" python -c "
 from autobench.config import load_dataset_config
 from autobench.pipeline.config import build_registries, generate_all_experiments, BenchmarkConfig, Framework
 ds = load_dataset_config('${DATASET}')
@@ -105,7 +106,7 @@ echo "================================================"
 PREP_ARGS=( --dataset "$DATASET" --tasks $TASKS --prep_only )
 [ -n "$ENCODERS" ] && PREP_ARGS+=(--encoders $ENCODERS)
 
-python benchmarks/scripts/run_benchmark.py "${PREP_ARGS[@]}"
+"${UV_RUN[@]}" python benchmarks/scripts/run_benchmark.py "${PREP_ARGS[@]}"
 PREP_EXIT=$?
 if [ $PREP_EXIT -ne 0 ]; then
     echo "ERROR: Data preparation failed (exit $PREP_EXIT)"
@@ -124,10 +125,10 @@ BENCH_ARGS=( --dataset "$DATASET" --tasks $TASKS --frameworks $FRAMEWORKS --all_
 [ -n "$NNMIL_MODELS" ] && BENCH_ARGS+=(--nnmil_models $NNMIL_MODELS)
 [ -n "$SEED" ]         && BENCH_ARGS+=(--seed "$SEED")
 
-echo "Command: python benchmarks/scripts/run_benchmark.py ${BENCH_ARGS[*]}"
+echo "Command: ${UV_RUN[*]} python benchmarks/scripts/run_benchmark.py ${BENCH_ARGS[*]}"
 echo ""
 
-python benchmarks/scripts/run_benchmark.py "${BENCH_ARGS[@]}"
+"${UV_RUN[@]}" python benchmarks/scripts/run_benchmark.py "${BENCH_ARGS[@]}"
 EXIT_CODE=$?
 
 # ==================== AUTO-CONTINUATION ====================

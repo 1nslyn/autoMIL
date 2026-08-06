@@ -38,6 +38,9 @@ HISTORICAL_STALE_FRAMEWORKS = frozenset({"clam", "abmil"})
 _FOLDS = tuple(range(5))
 _PREP_COMPONENTS = ("dataset_csv", "splits", "features", "nnmil", "titan")
 _RERUN_FRAMEWORKS = ("clam", "abmil")
+_UV_PYTHON = (
+    "uv", "run", "--frozen", "--no-sync", "--package", "autobench", "python",
+)
 
 
 class HistoricalBaselineError(ValueError):
@@ -1121,7 +1124,7 @@ def write_slurm_runner(
     runner_path = ops_root / "rerun_baselines.sbatch"
     script_path = repo_root / "benchmarks/campaigns/preprint_130/repair_baselines.py"
     command_parts = [
-        "python", str(script_path), "run-cell",
+        *_UV_PYTHON, str(script_path), "run-cell",
         "--manifest", str(manifest_path),
         "--phase-root", str(phase_root),
         "--repo-root", str(repo_root),
@@ -1148,7 +1151,7 @@ def write_slurm_runner(
 set -euo pipefail
 module load cuda/12.2 2>/dev/null || true
 cd {shlex.quote(str(repo_root))}
-source .venv/bin/activate
+command -v uv >/dev/null 2>&1 || {{ echo "ERROR: uv is required on the compute node"; exit 1; }}
 set -a
 source benchmarks/.env
 set +a
@@ -1210,7 +1213,7 @@ def write_multigpu_slurm_runner(
     for dataset in selected:
         dataset_root = phase_root / dataset
         train = " ".join(shlex.quote(part) for part in (
-            "python", str(benchmark_script),
+            *_UV_PYTHON, str(benchmark_script),
             "--dataset", dataset,
             "--benchmark_dir", str(dataset_root),
             "--frameworks", "clam", "abmil",
@@ -1219,7 +1222,7 @@ def write_multigpu_slurm_runner(
             "--no_wandb",
         ))
         dataset_verify = " ".join(shlex.quote(part) for part in (
-            "python", str(script_path), "verify",
+            *_UV_PYTHON, str(script_path), "verify",
             "--manifest", str(manifest_path),
             "--phase-root", str(phase_root),
             "--datasets", dataset,
@@ -1234,7 +1237,7 @@ def write_multigpu_slurm_runner(
             train,
             f"{dataset_verify} > {shlex.quote(str(dataset_audit))}",
             (
-                "python -c 'import json,sys; p=json.load(open(sys.argv[1])); "
+                f"{shlex.join(_UV_PYTHON)} -c 'import json,sys; p=json.load(open(sys.argv[1])); "
                 "expected=int(sys.argv[2]); assert p[\"counts\"] == "
                 "{\"complete\": expected, \"pending\": 0}, p[\"counts\"]' "
                 f"{shlex.quote(str(dataset_audit))} {dataset_expected}"
@@ -1243,19 +1246,19 @@ def write_multigpu_slurm_runner(
 
     selected_arg = ",".join(selected)
     grid_check = " ".join(shlex.quote(part) for part in (
-        "python", str(script_path), "grid-check",
+        *_UV_PYTHON, str(script_path), "grid-check",
         "--manifest", str(manifest_path),
         "--phase-root", str(phase_root),
         "--datasets", selected_arg,
     ))
     verify = " ".join(shlex.quote(part) for part in (
-        "python", str(script_path), "verify",
+        *_UV_PYTHON, str(script_path), "verify",
         "--manifest", str(manifest_path),
         "--phase-root", str(phase_root),
         "--datasets", selected_arg,
     ))
     finalize = " ".join(shlex.quote(part) for part in (
-        "python", str(script_path), "finalize-reruns",
+        *_UV_PYTHON, str(script_path), "finalize-reruns",
         "--manifest", str(manifest_path),
         "--phase-root", str(phase_root),
         "--repo-root", str(repo_root),
@@ -1285,12 +1288,12 @@ set -euo pipefail
 umask 0027
 module load cuda/12.2 2>/dev/null || true
 cd {shlex.quote(str(repo_root))}
-source .venv/bin/activate
+command -v uv >/dev/null 2>&1 || {{ echo "ERROR: uv is required on the compute node"; exit 1; }}
 set -a
 source benchmarks/.env
 set +a
 
-python -c 'import sys, torch; n=torch.cuda.device_count(); print(f"visible GPUs: {{n}}"); sys.exit(0 if n == {gpu_count} else 2)'
+{shlex.join(_UV_PYTHON)} -c 'import sys, torch; n=torch.cuda.device_count(); print(f"visible GPUs: {{n}}"); sys.exit(0 if n == {gpu_count} else 2)'
 {grid_check}
 
 telemetry={telemetry_path}
@@ -1306,7 +1309,7 @@ trap cleanup_monitor EXIT
 
 {finalize}
 {verify} > {shlex.quote(str(audit_path))}
-python -c 'import json,sys; p=json.load(open(sys.argv[1])); expected=int(sys.argv[2]); assert p["counts"] == {{"complete": expected, "pending": 0}}, p["counts"]; print(f"canonical audit: {{expected}}/{{expected}}")' {shlex.quote(str(audit_path))} {expected_total}
+{shlex.join(_UV_PYTHON)} -c 'import json,sys; p=json.load(open(sys.argv[1])); expected=int(sys.argv[2]); assert p["counts"] == {{"complete": expected, "pending": 0}}, p["counts"]; print(f"canonical audit: {{expected}}/{{expected}}")' {shlex.quote(str(audit_path))} {expected_total}
 """
     fd, temporary = tempfile.mkstemp(
         dir=str(ops_root), prefix=".rerun-baselines-multigpu-", suffix=".tmp",

@@ -49,14 +49,15 @@ echo "================================================"
 module load cuda/12.2
 
 cd "$PROJECT_DIR" || { echo "ERROR: Project directory not found"; exit 1; }
-source .venv/bin/activate
+command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required on the compute node"; exit 1; }
+UV_RUN=(uv run --frozen --no-sync --package autobench)
 
 # Load env vars from .env (HF_TOKEN, WANDB_API_KEY, dataset roots)
 set -a
 source benchmarks/.env
 set +a
 
-echo "Python:    $(which python)"
+echo "Python:    $("${UV_RUN[@]}" python -c 'import sys; print(sys.executable)')"
 echo "CUDA:      $(nvcc --version 2>/dev/null | grep release || echo 'N/A')"
 
 # ==================== GPU INFO ====================
@@ -67,7 +68,7 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv
 # ==================== CUDA CHECK ====================
 echo ""
 echo "PyTorch CUDA check..."
-python -c "
+"${UV_RUN[@]}" python -c "
 import torch
 print(f'  PyTorch {torch.__version__}')
 print(f'  CUDA available: {torch.cuda.is_available()}')
@@ -85,7 +86,7 @@ echo ""
 echo "Starting feature extraction..."
 echo "================================================"
 
-python benchmarks/scripts/run_feature_extraction.py \
+"${UV_RUN[@]}" python benchmarks/scripts/run_feature_extraction.py \
     --dataset "$DATASET" \
     --gpu 0 \
     "${@:2}"

@@ -36,12 +36,13 @@ echo "=== ${DATASET} TITAN arm — ${N_FOLDS}-fold | Job ${SLURM_JOB_ID:-N/A} | 
 module load cuda/12.2 2>/dev/null || true
 cd "$PROJECT_DIR" || { echo "ERROR: project dir not found: $PROJECT_DIR"; exit 1; }
 mkdir -p logs
-source .venv/bin/activate
+command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required on the compute node"; exit 1; }
+UV_RUN=(uv run --frozen --no-sync --package autobench)
 set -a; source benchmarks/.env; set +a
 
-DATA_ROOT=$(python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').data_root)") \
+DATA_ROOT=$("${UV_RUN[@]}" python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').data_root)") \
     || { echo "ERROR: cannot load dataset config '${DATASET}' (check name + AUTOBENCH_*_ROOT in benchmarks/.env)"; exit 1; }
-FEATURES_BASE=$(python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').features_base_dir)")
+FEATURES_BASE=$("${UV_RUN[@]}" python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').features_base_dir)")
 PATHOLOGY_ROOT="$(dirname "$(dirname "$DATA_ROOT")")"
 BENCHMARK_DIR="$PATHOLOGY_ROOT/autoMIL/phase2/${DATASET}/benchmark_${N_FOLDS}fold"
 TITAN_DIR="$FEATURES_BASE/features_titan"
@@ -49,7 +50,7 @@ TITAN_DIR="$FEATURES_BASE/features_titan"
 echo "Benchmark dir: $BENCHMARK_DIR | TITAN features: $(ls "$TITAN_DIR"/*.h5 2>/dev/null | wc -l | tr -d ' ')"
 nvidia-smi --query-gpu=name,memory.total --format=csv 2>/dev/null || true
 
-python benchmarks/scripts/run_benchmark.py --dataset "$DATASET" --benchmark_dir "$BENCHMARK_DIR" \
+"${UV_RUN[@]}" python benchmarks/scripts/run_benchmark.py --dataset "$DATASET" --benchmark_dir "$BENCHMARK_DIR" \
     --frameworks titan --n_folds "$N_FOLDS" --gpu 0 --no_wandb
 EXIT=$?
 

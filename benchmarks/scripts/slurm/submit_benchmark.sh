@@ -59,11 +59,12 @@ echo "================================================"
 module load cuda/12.2 2>/dev/null || true
 cd "$PROJECT_DIR" || { echo "ERROR: project dir not found: $PROJECT_DIR"; exit 1; }
 mkdir -p logs
-source .venv/bin/activate
+command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required on the compute node"; exit 1; }
+UV_RUN=(uv run --frozen --no-sync --package autobench)
 set -a; source benchmarks/.env; set +a
 
 # Resolve the dataset's data_root (env vars now sourced) -> phase-2 benchmark dir.
-DATA_ROOT=$(python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').data_root)") \
+DATA_ROOT=$("${UV_RUN[@]}" python -c "from autobench.config import load_dataset_config as L; print(L('${DATASET}').data_root)") \
     || { echo "ERROR: cannot load dataset config '${DATASET}' (check the name + its AUTOBENCH_*_ROOT in benchmarks/.env)"; exit 1; }
 [ -n "$DATA_ROOT" ] || { echo "ERROR: empty data_root for ${DATASET}"; exit 1; }
 PATHOLOGY_ROOT="$(dirname "$(dirname "$DATA_ROOT")")"
@@ -75,7 +76,7 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv 2>/dev/null || true
 
 # --- validate config + show the grid the 4 frameworks will generate ---
 echo "===== validate config ====="
-python - <<PYEOF || { echo "ERROR: config validation failed"; exit 1; }
+"${UV_RUN[@]}" python - <<PYEOF || { echo "ERROR: config validation failed"; exit 1; }
 from autobench.config import load_dataset_config
 from autobench.pipeline.config import build_registries, generate_all_experiments, BenchmarkConfig, Framework
 _MAP={"clam":Framework.CLAM,"nnmil":Framework.NNMIL,"dtfd":Framework.DTFD,"titan":Framework.TITAN,"abmil":Framework.ABMIL}
@@ -91,12 +92,12 @@ PYEOF
 
 # --- prep: n-fold splits + tile H5->PT (uses the config's encoders + tasks) ---
 echo "===== prep (${N_FOLDS}-fold splits) ====="
-python benchmarks/scripts/run_benchmark.py --dataset "$DATASET" --benchmark_dir "$BENCHMARK_DIR" \
+"${UV_RUN[@]}" python benchmarks/scripts/run_benchmark.py --dataset "$DATASET" --benchmark_dir "$BENCHMARK_DIR" \
     --prep_only --n_folds "$N_FOLDS" || { echo "ERROR: prep failed"; exit 1; }
 
 # --- train (4x H100) — background + wait so the USR1 trap can fire ---
 echo "===== train (4x H100) ====="
-python benchmarks/scripts/run_benchmark.py --dataset "$DATASET" --benchmark_dir "$BENCHMARK_DIR" \
+"${UV_RUN[@]}" python benchmarks/scripts/run_benchmark.py --dataset "$DATASET" --benchmark_dir "$BENCHMARK_DIR" \
     --all_gpus --frameworks $FRAMEWORKS --n_folds "$N_FOLDS" --no_wandb &
 TRAIN_PID=$!
 while true; do
