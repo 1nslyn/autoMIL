@@ -270,7 +270,9 @@ class TestReconciliation:
         completion = {
             "id": pid, "status": "completed",
             "composite": 0.832,
-            "metrics": {"test_auc": 0.867, "test_bacc": 0.797},
+            # Contract shape: `metrics` is validation-only (B6 ingest guard
+            # crashes a completion carrying held-out-named keys).
+            "metrics": {"val_auc": 0.867, "val_bacc": 0.797},
             "elapsed_seconds": 4170, "peak_vram_mb": 500, "gpu": 1,
             "graph_metadata": {"parent_id": self.root},
         }

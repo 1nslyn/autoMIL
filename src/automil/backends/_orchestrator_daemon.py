@@ -2510,6 +2510,11 @@ class ExperimentOrchestrator:
         if "graph_metadata" in spec:
             result["graph_metadata"] = spec["graph_metadata"]
 
+        # B6 symmetry guard: this payload is locally constructed and carries no
+        # sealed keys today; the strip keeps that an invariant rather than an
+        # accident if the dict ever grows (this path bypasses write_terminal_state).
+        result = {k: v for k, v in result.items() if k not in ("held_out", "summary")}
+
         (archive / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         spec_clean = {k: v for k, v in spec.items() if k not in ("_file",)}
         (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2) + "\n")

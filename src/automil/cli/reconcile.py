@@ -82,7 +82,27 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                 except (ValueError, OSError) as exc:
                     click.echo(f"  skip {nid}: malformed archive result.json ({exc})")
                     continue
-                gnode["composite"] = payload.get("composite", gnode.get("composite", 0.0))
+                # B6 (claims-alignment): same ingest sanitation as the terminal
+                # writer — key-guard, then prefer the val-recomputed composite
+                # and fold-derived SE over the reported values.
+                from automil.scoring import ingest_signal as _ingest_signal
+                from automil.graph import node_composite_se as _node_se
+                _leaking, _comp_rec, _se_rec = _ingest_signal(
+                    payload, (g.meta.get("scoring") or {}).get("formula")
+                )
+                if _leaking:
+                    click.echo(
+                        f"  skip {nid}: val-firewall violation — held-out-named "
+                        f"metrics key(s): {', '.join(_leaking)}"
+                    )
+                    continue
+                if _comp_rec is not None and payload.get("status") == "completed":
+                    gnode["composite"] = _comp_rec
+                else:
+                    gnode["composite"] = payload.get("composite", gnode.get("composite", 0.0))
+                _se_final = _se_rec if _se_rec is not None else _node_se(payload)
+                if _se_final is not None:
+                    gnode["composite_se"] = _se_final
 
                 # CR-03 fix: result.json status enum (completed/budget_killed/crash/
                 # partial/cancelled) must NOT be written directly into gnode["status"].

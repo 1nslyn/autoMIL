@@ -213,6 +213,26 @@ def write_terminal_state(
     sealed = {k: result[k] for k in ("held_out", "summary") if k in result}
     result = {k: v for k, v in result.items() if k not in ("held_out", "summary")}
 
+    # Step 2c — B1 (claims-alignment): the SE that gates the Ladder keep-margin
+    # must not be trusted verbatim off agent-editable training output. Recompute
+    # it from the result's own val-only per-fold evidence when present; the
+    # recomputed value replaces the reported one here so every downstream
+    # artifact (graph node, completed/, archive result.json) round-trips it.
+    from automil.scoring import recompute_composite_se as _recompute_se
+
+    _se_recomputed = _recompute_se(result)
+    if _se_recomputed is not None:
+        _se_reported = result.get("composite_se")
+        if isinstance(_se_reported, (int, float)) and not isinstance(_se_reported, bool) \
+                and abs(float(_se_reported) - _se_recomputed) > 1e-6:
+            logger.warning(
+                "terminal_writer: reported composite_se %.6f for %s disagrees with "
+                "the value recomputed from validation_folds (%.6f); using the "
+                "recomputed value (CR-4 noise floor must not be self-reported).",
+                float(_se_reported), node_id, _se_recomputed,
+            )
+        result = {**result, "composite_se": _se_recomputed}
+
     raw_status = result.get("status", "crash")
 
     # Step 2b — CR-1b (audit 2026-07-23): derive the selection signal from the

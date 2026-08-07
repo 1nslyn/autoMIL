@@ -975,12 +975,45 @@ class ExperimentGraph:
                 if node and node["type"] == "executed":
                     continue
 
+                # B6 (claims-alignment): reconcile ingest runs the same
+                # sanitation as the terminal writer — key-guard first (a
+                # held-out-named metrics key means crash-not-ingest; averaging
+                # it would put test into selection), then the val-recomputed
+                # composite and fold-derived SE, preferring both over the
+                # reported values.
+                from automil.scoring import ingest_signal as _ingest_signal
+                _leaking, _comp_rec, _se_rec = _ingest_signal(
+                    completion, (self.meta.get("scoring") or {}).get("formula")
+                )
+                if _leaking:
+                    logger.error(
+                        "reconcile: val-firewall violation for %s — held-out-named "
+                        "metrics key(s) %s; ingesting as crash.",
+                        node_id, ", ".join(_leaking),
+                    )
+                    completion = {
+                        **completion, "status": "crash", "composite": 0.0,
+                        "metrics": {},
+                        "error": (
+                            "val-firewall violation: held-out-named key(s) in "
+                            f"`metrics`: {', '.join(_leaking)}"
+                        ),
+                    }
+
+                # Initialized for every status (a crash-only completion used to
+                # leave composite_se unbound); the completed branch upgrades
+                # both to the recomputed values.
+                composite = completion.get("composite", 0.0)
+                composite_se = node_composite_se(completion)   # CR-4 legacy fallback
+
                 orch_status = completion.get("status", "")
                 if orch_status in ("oom", "crash", "timeout"):
                     graph_status = orch_status
                 elif orch_status == "completed":
-                    composite = completion.get("composite", 0.0)
-                    composite_se = node_composite_se(completion)   # CR-4
+                    if _comp_rec is not None:
+                        composite = _comp_rec
+                    if _se_rec is not None:
+                        composite_se = _se_rec
                     comp_metrics = completion.get("metrics", {})
                     gm = completion.get("graph_metadata", {})
                     if not gm:
@@ -1008,12 +1041,14 @@ class ExperimentGraph:
 
                 comp_metrics = completion.get("metrics", {})
                 metrics = dict(comp_metrics)  # D-200: spread consumer metrics
-                metrics["composite"] = completion.get("composite", 0.0)
+                # B6: store the same composite the keep/discard decision used
+                # (val-recomputed when available), never a diverging reported one.
+                metrics["composite"] = composite
                 metrics["vram_gb"] = completion.get("peak_vram_mb", 0) / 1024
                 metrics["elapsed_min"] = completion.get("elapsed_seconds", 0) / 60
                 metrics["gpu"] = completion.get("gpu", -1)
                 metrics["status"] = graph_status
-                metrics["global_delta"] = completion.get("composite", 0) - self.meta.get("best_composite", 0)
+                metrics["global_delta"] = composite - self.meta.get("best_composite", 0)
                 metrics["composite_se"] = composite_se   # CR-4: lifted by add_executed
 
                 config_hash = completion.get("config_hash")
@@ -1108,9 +1143,35 @@ class ExperimentGraph:
                         spec_file = node_dir / "spec.json"
                         spec = json.loads(spec_file.read_text()) if spec_file.exists() else {}
                         gm = spec.get("graph_metadata", {})
+                        # B6: same ingest sanitation as the terminal writer.
+                        from automil.scoring import ingest_signal as _ingest_signal
+                        _leaking, _comp_rec, _se_rec = _ingest_signal(
+                            result, (self.meta.get("scoring") or {}).get("formula")
+                        )
+                        if _leaking:
+                            logger.error(
+                                "reconcile(archive): val-firewall violation for %s — "
+                                "held-out-named metrics key(s) %s; ingesting as crash.",
+                                node_id_r, ", ".join(_leaking),
+                            )
+                            result = {
+                                **result, "status": "crash", "composite": 0.0,
+                                "metrics": {},
+                                "error": (
+                                    "val-firewall violation: held-out-named key(s) "
+                                    f"in `metrics`: {', '.join(_leaking)}"
+                                ),
+                            }
                         r_metrics = result.get("metrics", {})
-                        composite = result.get("composite", 0.0)
-                        composite_se = node_composite_se(result)   # CR-4
+                        composite = (
+                            _comp_rec
+                            if _comp_rec is not None and result.get("status") == "completed"
+                            else result.get("composite", 0.0)
+                        )
+                        composite_se = (
+                            _se_rec if _se_rec is not None
+                            else node_composite_se(result)   # CR-4 legacy fallback
+                        )
                         num = int(node_id_r.split("_")[1])
                         if num >= self.meta["next_id"]:
                             self.meta["next_id"] = num + 1

@@ -125,3 +125,59 @@ def cross_fold_se(fold_values: Iterable[object] | None) -> float | None:
     mean = sum(values) / n
     variance = sum((x - mean) ** 2 for x in values) / (n - 1)
     return math.sqrt(variance) / math.sqrt(n)
+
+
+def recompute_composite_se(result: Mapping[str, object] | None) -> float | None:
+    """Derive the cross-fold SE from the result's own validation-fold evidence.
+
+    B1 (claims-alignment): ``composite_se`` gates the Ladder keep-margin
+    (``max(δ, k·SE)``), yet it was read verbatim off ``result.json`` — the same
+    agent-editable payload the composite machinery refuses to trust. When the
+    result carries ``validation_folds`` (the val-only per-fold projection every
+    benchmark runner emits), recompute the SE from those composites; the caller
+    prefers this value and keeps the reported one only as the legacy fallback.
+
+    Returns ``None`` when fewer than two folds carry a finite composite —
+    same contract as :func:`cross_fold_se`.
+    """
+    if not isinstance(result, Mapping):
+        return None
+    folds = result.get("validation_folds")
+    if not isinstance(folds, list):
+        return None
+    return cross_fold_se(
+        fold.get("composite") for fold in folds if isinstance(fold, Mapping)
+    )
+
+
+def ingest_signal(
+    result: Mapping[str, object] | None,
+    formula: str | None,
+) -> tuple[tuple[str, ...], float | None, float | None]:
+    """One sanitation contract for every mouth that turns a result payload into
+    graph state (the terminal writer and the reconcile scans — B6).
+
+    Returns ``(leaking_keys, composite_recomputed, se_recomputed)``:
+
+    - ``leaking_keys``: held-out-named keys found inside ``metrics``. Non-empty
+      means the payload violates the val-firewall and the caller must ingest it
+      as a crash (composite 0.0, metrics dropped) — recomputing over it would
+      *average test into selection*, worse than trusting the reported scalar.
+    - ``composite_recomputed``: the val-derived composite, or ``None`` to keep
+      the reported value (opt-out formula, no usable metrics, or an unknown
+      reducer name — the caller logs that case).
+    - ``se_recomputed``: the val-fold-derived SE, or ``None`` to keep the
+      reported value.
+    """
+    from automil.firewall import held_out_metric_keys
+
+    if not isinstance(result, Mapping):
+        return (), None, None
+    leaking = held_out_metric_keys(result.get("metrics"))
+    if leaking:
+        return leaking, None, None
+    try:
+        recomputed = recompute_composite(result.get("metrics") or {}, formula)
+    except ValueError:
+        recomputed = None
+    return (), recomputed, recompute_composite_se(result)
