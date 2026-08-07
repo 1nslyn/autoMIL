@@ -90,7 +90,7 @@ docs/claims discipline or deferred decision.
 | A4 | P0 | C2, C5 | **Capacity/architecture knobs are tunable under `architecture-preserving`**: `model_size` (clam), `M`,`L` (abmil), `mDim`,`numLayer_Res` (dtfd), `hidden_dim` (nnmil) change widths/depth, but `identity_locked_hparams` lists only CLAM's two loss switches (`config.yaml:84`). `audit_materialized_campaign` (`campaign.py:841-850`) never verifies `allowed_override_options`/`identity_locked_hparams`, so drift passes the 130-root audit. Proposal §5 forbids adding/removing layers and changing widths — reviewer Attack 4 is currently valid. | Config-only: extend `identity_locked_hparams` per roster template; regenerate the manifest; make the audit verify both fields. No new code paths. |
 | A5 | P0 | C5 | **`spec.env` can retarget the seal**: `_SPEC_ENV_BLOCKED` (`_orchestrator_daemon.py:75-82`) omits `AUTOMIL_RESULTS_DIR` (born-sealing target, `:1169-1171`) and `AUTOMIL_DIR_REL` (policy resolution root, `policy_dispatch.py:120`). A hand-dropped queue spec (queue specs are unvalidated, `:991-1005`) un-seals a node or repoints policy resolution. | Add the two keys (plus `AUTOMIL_NODE_ID`) to the frozenset; one test. |
 | A6 | P0 | C5, C2 | **`metrics` keys are unconstrained at ingest** — the firewall strips exactly `held_out`/`summary` (`terminal_writer.py:187-188`); a result carrying `metrics: {"test_auc": …}` would flow test into `graph.json`, `results.tsv`, SSE, *and into the recomputed composite* (`scoring.py:59-77` means over all metric keys), i.e. test driving selection with the firewall's blessing. Campaign's `_validation_folds` (`campaign_stages.py:361-394`) catches it only at freeze, after search already consumed it. | Fail closed at the existing schema-validation choke point in `write_terminal_state`: a metrics key matching the firewall's held-out markers → node crashes with a val-firewall pointer (same path as schema failure). No new layer — one more check where checks already live. |
-| A7 | P0→decision | C2 | **The seam is narrower than the paper's declared protocol** (§2): no loss-shaping seam anywhere, though the proposal's allowed list names label smoothing/focal/class-balanced — the proven ingredients of both anchors. C2's effect size is capped by this. | Add **one** seam in the established pattern: `wrap_criterion_for(criterion, role)` on `PolicyVariant` (identity default) + `PolicyRuntime` guard + one call per trainer where the bag-level criterion is built. Role-scoped so defining losses (CLAM instance branch, DTFD tier structure) stay closed. Alternatively: narrow the paper's methods text to the implemented surface and accept smaller expected lifts. Recommendation: add the seam — it aligns code with the *already-declared* protocol rather than widening it. |
+| A7 | P0→decision | C2 | **The seam is narrower than the paper's declared protocol** (§2): no loss-shaping seam anywhere, though the proposal's allowed list names label smoothing/focal/class-balanced — the proven ingredients of both anchors. C2's effect size is capped by this. | **Ship-fast constraint (owner decision, 2026-08-07): no protocol-surface growth at the preprint stage.** Default action: narrow the paper's methods text to the implemented surface (docs-only, zero risk) and record the `wrap_criterion_for` seam in the journal ledger (§7). The one candidate exception, pending design review: `label_smoothing` as a *declared scalar* through the existing `--hparams` channel (a `CrossEntropyLoss` kwarg — no new seam, no new code path) — adopt only if its blast radius is confirmed trivial; otherwise it too goes to §7. |
 | B1 | P1 | C2 | **The Ladder margin's noise floor is self-reported.** `composite_se` is read verbatim off `result.json` (`terminal_writer.py:283`); `scoring.cross_fold_se` is never called in `src/automil/`; `cells/reconcile.aggregate_folds` has fold composites in hand (`cells/reconcile.py:52-95`) and computes no SE, so budget-killed/partial nodes silently drop to the bare δ. The same machinery that refuses to trust the reported `composite` (CR-1b) trusts the reported SE that *gates* it. | Recompute SE at ingest from `result["validation_folds"]` (agent-visible, val-only, already emitted — `evaluate.py:213`); prefer recomputed, log disagreement — the exact CR-1b pattern. Same helper in `aggregate_folds`. |
 | B2 | P1 | C5 | **`scoring.formula` fails open on a typo and the template teaches the failure.** `config.yaml.j2:148-155` says "documentation-only … NOT evaluate[d]" with examples (`"accuracy"`, `"(val_auc + val_bacc) / 2"`) that `scoring.py:59-66` rejects as reducer names; `terminal_writer.py:229-232` catches the ValueError and **trusts the reported composite** — CR-1b silently disabled by following the template's own comment. | Rewrite the template comment (reducer semantics: `mean`/`max`/`min`/`trust_reported`); validate the reducer name at graph seeding and in `automil check` so the state is unrepresentable; fix the `scoring.py:56-58` docstring that claims fail-loud. |
 | B3 | P1 | C5 | **Remote-backend logs bypass H-1 redaction.** `_handle_completion` redacts at `:2004`, *then* `_drain_remote_backend_log` (`:2309-2353`) writes `run.log` with no redaction; submitit stdout/stderr are symlinked raw (`:432-463`). On SLURM/Ray the log redaction is a no-op. (Local backend: the live-window gap is mitigated consumer-side by the `AUTOMIL_CERTIFY` print gate, `core_utils.py:211-217`.) | Redact after the drain write; replace raw symlinks with a redacted copy at completion. |
@@ -124,9 +124,12 @@ every fix lands inside an existing choke point, seam pattern, or config field.
 5. **A5** — extend `_SPEC_ENV_BLOCKED` + test.
 6. **A6** — held-out-marker check on `metrics` keys at the terminal-writer
    schema step, fail-closed + test.
-7. **A7** — `wrap_criterion_for` seam (ABC default-identity → `PolicyRuntime`
-   guard → one construction-site call per trainer, role-scoped) + tests; update
-   `search_space.py` docs and the canonical skill's reachable-family list.
+7. **A7** — per the ship-fast constraint: align the paper's methods text with
+   the implemented surface; update `search_space.py` docs and the canonical
+   skill's reachable-family list to say exactly what is reachable. The
+   `label_smoothing` declared-scalar variant ships only if design review
+   confirms a trivial blast radius; the `wrap_criterion_for` seam moves to the
+   journal ledger (§7).
 8. **B1–B6** — as specified in the table, each with a test.
 9. **C-b/C-c/C-d/C-e** — docstring/docs/template truth fixes riding the same
    branch.
@@ -157,10 +160,15 @@ fight the mode):
   (the census already captures the val trajectory per attempt).
 
 So: **yes, conditionally** — the condition being the P0 list, which is exactly
-what §4 ships. Without A7 the honest expectation for C2 is "small but real
-lifts concentrated in arms with wide scalar spaces (dtfd, nnmil), possible
-nulls on titan/abmil"; with A7 the proven loss-shaping family
-(both anchors' largest single ingredient) comes into reach on every arm.
+what §4 ships. Under the ship-fast constraint (no protocol-surface growth at
+the preprint stage), the honest expectation for C2 is "small but real lifts
+concentrated in arms with wide scalar spaces (dtfd, nnmil), possible nulls on
+titan/abmil" — and that outcome is *pre-registered as publishable*: the
+analysis plan is descriptive and sign-based, and the proposal's §8 pivot
+("recipe bias is modest under architecture-preserving constraints among
+defaults-tuned arms") is a legitimate audit finding, not a failure. The
+loss-shaping families that would raise the ceiling are journal-stage items
+(§7); the preprint's job is to publish the claim honestly, not to maximize it.
 
 ## 6. Architecture-level patterns (beyond the itemized findings)
 
@@ -189,7 +197,26 @@ nulls on titan/abmil"; with A7 the proven loss-shaping family
    plan with explicit missingness handling; D-139 held-out isolation in `rank`;
    the `AUTOMIL_CERTIFY` print gate inside the vendored trainer.
 
-## 7. Paper-side checklist (no code; carry into the manuscript)
+## 7. Journal-stage ledger (deferred by the ship-fast constraint)
+
+Owner constraint (2026-08-07): the preprint adds **no experiments and no
+protocol surface**; anything that would is recorded here for the journal phase
+instead of being half-done now. Each entry names what it would buy and why it
+waits.
+
+| Item | What it buys | Why it waits |
+|---|---|---|
+| `wrap_criterion_for` policy seam (loss shaping: smoothing/focal/class-balanced) | The anchors' largest single ingredient on every arm → larger expected C2 lifts | Touches every protected trainer pre-launch; protocol-surface growth; re-verification burden on the one-shot campaign |
+| Sampler / batch-construction seam | Second proposal-allowed family (WeightedRandomSampler beyond CLAM's bool) | Same class of risk; per-arm dataloader construction differs |
+| Closure-passing `step` so SAM-class optimizers become reachable | The CCRCC anchor's SAM ingredient | Requires trainer-loop restructuring (second forward pass); heaviest of the seam items |
+| Matched-budget Optuna / random-mutation / human-recipe arms | Empirical rebuttal of "just Optuna with Claude" (RQ2, proposal §6.2 methods 2–4) | Multiplies campaign compute; RQ2 is explicitly not pre-registered for the preprint |
+| Agent-memory on/off + literature-retrieval on/off ablations | RQ2 ablation row | Additional sessions per cell |
+| Regression task axis (CPTAC-PDAC continuous infiltration score, if recoverable) | Third task family; PLAN.md §4's own open check | New task type end-to-end |
+| Encoder dynamic-range restoration (ResNet50 / CTransPath legacy arm) | Resurrects the encoder-axis question PRELAUNCH O1 killed | New extractions + cells |
+| Extended-search ablation (5× budget on ~5 cells, proposal §6.3.5) | Saturation evidence for the 60-attempt budget choice | More attempts per cell by construction |
+| Recipe-family / transfer analysis (RQ3 beyond the gate), recipe planner (proposal §11) | The nnU-Net-style upside | Needs the campaign's traces as input; journal by design |
+
+## 8. Paper-side checklist (no code; carry into the manuscript)
 
 - Scope C2/C3 as lift-over-default + rank response; no AutoML-superiority
   language anywhere (C-a).
