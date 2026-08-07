@@ -71,11 +71,16 @@ All file paths in `files.editable`, `uv run automil submit --files`, and `run.co
 are relative to the **git repo root**, not to where automil/ lives. The
 orchestrator creates worktrees from the git root, so overlay paths must match.
 
-## The loop is Research → Diagnose → Plan → Execute (not a hyperparameter sweep)
+## The loop is Research → Diagnose → Plan → Execute
 
-Do **not** hill-climb on hyperparameters. Each batch runs six phases. The point
-is to propose **real architectural change** grounded in a named failure mode and
-recent literature — `automil portfolio` gates the loop on this.
+Read `registry.mode` before proposing. In `free` mode, the loop explores
+architecture and recipe and keeps the structural portfolio gate. In
+`architecture-preserving` mode, the published model is fixed: explore declared
+scalars plus executable train-only optimizer/update, scheduler, and stopping
+policies, never architecture, data/sampling, or ensemble proposals.
+Never propose a scalar named in `registry.identity_locked_hparams`; those keys
+can erase the arm's defining mechanism and are rejected at submit and launch.
+`automil portfolio` enforces the configured mode.
 
 First, every session/restart: read `automil/config.yaml`, `automil/graph.json`,
 `automil/learnings.md`, `automil/plan.md`, and the training + `files.editable`
@@ -101,19 +106,33 @@ source; then `uv run automil reconcile`.
    mechanism*. Queue each with
    `uv run automil propose --parent <id> --kind <k> --desc "..."`
    (kinds: `architecture` · `regularization` · `hp` · `data` · `ensemble`).
-   **Aim ≥50% structural** (architecture/ensemble). Then run
-   `uv run automil portfolio` — if it reports BELOW TARGET, propose more
-   architectural experiments before executing. Architecture changes (attention
-   mechanism, pooling, extra layers, custom models inline in the training
-   script) are **preferred over pure hyperparameter tuning**; actively look for
-   deficiencies in the model, don't just tune around them.
+   Then run `uv run automil portfolio`. In `free` mode, aim ≥50% structural
+   (architecture/ensemble) and rebalance if it reports BELOW TARGET. In
+   `architecture-preserving` mode, use only `regularization` or `hp`;
+   `architecture`, `data`, and `ensemble` are forbidden. A batch may be
+   HP-only if that is what the diagnosis supports, but actively consider the
+   broader executable train-only recipe surface instead of enumerating knobs.
 
 4. **EXECUTE.** `uv run automil rank`, then implement and submit — **prefer the
    variant-registry path**:
-   a. Variant of a registered parent (model / loss / policy): add a module under
-      `automil/variants/<parent>/<name>.py`, select it in `config.yaml`, and
-      `uv run automil submit`. No working-tree cleanup — the variant is committed.
-   b. Free-mode edit: edit project files, then
+   a. In architecture-preserving mode, add a registered `PolicyVariant` at
+      `automil/variants/_policies/<name>.py`, then submit it explicitly with
+      `--files automil/variants/_policies/<name>.py --override
+      "--policy-variant <name>"`. The protected consumer loop supplies only
+      optimizer/scheduler/stopping seams; model, defining loss, measurement,
+      and held-out outputs are unavailable through this interface. What the
+      seams genuinely support: single-point optimizer wrappers (Lookahead,
+      gradient clipping, per-group LR, custom LR schedules inside a wrapped
+      `step()`) and stopping policies driven by the supplied validation
+      metrics. They do NOT support SAM-class two-pass optimizers (no closure
+      re-evaluates the loss), loss shaping, sampling changes, or ensembling —
+      don't spend attempts discovering that. Keep module scope declarative:
+      only import `automil.registry`, `__future__`, `typing`,
+      or `collections.abc` at top level; import numerical libraries inside the
+      policy methods that use them.
+   b. In free mode, model/loss/policy variants may use their registered kind
+      directory and normal selection lifecycle.
+   c. Free-mode edit: edit project files, then
       `uv run automil submit --node <id> --desc "..." --mil-model <model> --files <changed files>`,
       then **selectively** restore ONLY those files:
       `git restore --source=HEAD -- <each-file>`. Never bulk-restore
@@ -126,6 +145,13 @@ source; then `uv run automil reconcile`.
    Check `orchestrator/gpu_state.json` → `schedulable_free_gb` / `running`; if
    workers < cap while the queue is non-empty and free VRAM is large, the loop is
    running serially — submit more specs until the cap binds.
+
+   **Attempts are the budget.** When the cell declares `cap.eval_budget`,
+   every **launched** attempt is charged — crashes, timeouts, and budget-kills
+   included; only submit-time refusals are free. Check remaining attempts with
+   `uv run automil cell status` before each batch, and never spend one on a
+   duplicate, an unverified guess, or a submission you have not sanity-checked
+   locally (imports, config validity). A wasted attempt cannot be recovered.
 
 5. **WAIT** on Monitor completion events (do **not** poll). The activity-gated
    budget bills only the time you are *acting*, not the hours experiments run —
@@ -156,9 +182,12 @@ The val→test gap is the honest cost of search; reporting the certified number
 
 - NEVER STOP while `.automil_active` exists
 - Every batch: DIAGNOSE a failure mode and rewrite `automil/plan.md` BEFORE proposing
-- Always pass `--kind` to `automil propose`; keep the pending mix ≥50% structural
-  (`automil portfolio` must not report BELOW TARGET before you execute)
-- Prefer real architectural change over hyperparameter tuning
+- Always pass `--kind` to `automil propose` and run `automil portfolio`
+  before execution. Free mode requires its structural quota; architecture-
+  preserving mode forbids architecture/ensemble and has no structural quota.
+- In architecture-preserving mode, edit only `files.editable`; never attempt
+  to bypass admissibility with explicit `--files`, raw identity overrides, or
+  a model/loss variant.
 - NEVER read or optimize against test: `metrics`/`composite` are validation-only and test is sealed (val-firewall). Reveal held-out test once at the very end with `uv run automil certify`, never inside the loop
 - Use `uv run automil submit` for every experiment (not manual runs)
 - Use `uv run automil rank` to pick experiments (not random)
