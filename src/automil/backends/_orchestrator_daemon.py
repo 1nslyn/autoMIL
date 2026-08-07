@@ -72,9 +72,21 @@ _SYSTEM_ENV_WHITELIST_PREFIX: tuple[str, ...] = (
 )
 # Keys the orchestrator owns; per-spec env CANNOT override them
 # (T-00-09 mitigation — prevents GPU-mask spoofing via spec.env).
+# A5 (claims-alignment): the val-firewall keys are as orchestrator-owned as the
+# GPU masks — a spec.env could otherwise retarget the born-sealing directory
+# (AUTOMIL_RESULTS_DIR), repoint policy resolution (AUTOMIL_DIR_REL), corrupt
+# partial/complete discrimination (AUTOMIL_FOLD_COUNT), or flip the consumer
+# test-print gates (AUTOMIL_CERTIFY) so test metrics stream into the
+# agent-visible run.log during search. Enumerated, not prefix-wide:
+# AUTOMIL_VARIANT_* is legitimate spec env (cli/lifecycle/apply.py).
 _SPEC_ENV_BLOCKED: frozenset[str] = frozenset({
     "AUTOMIL_ACCELERATOR",
+    "AUTOMIL_CERTIFY",
+    "AUTOMIL_DIR_REL",
+    "AUTOMIL_FOLD_COUNT",
     "AUTOMIL_GPU",
+    "AUTOMIL_NODE_ID",
+    "AUTOMIL_RESULTS_DIR",
     "CUDA_VISIBLE_DEVICES",
     "GPU_DEVICE_ORDINAL",
     "HIP_VISIBLE_DEVICES",
@@ -1180,6 +1192,12 @@ class ExperimentOrchestrator:
         except Exception:
             _fold_count = 5
         env["AUTOMIL_FOLD_COUNT"] = str(_fold_count)
+
+        # A5: the AUTOMIL_ whitelist prefix forwards the operator's ambient
+        # environment, so a leftover shell `export AUTOMIL_CERTIFY=1` (from a
+        # past certification run) would flip the consumer test-print gates in
+        # every search child. The daemon never sets it during search — drop it.
+        env.pop("AUTOMIL_CERTIFY", None)
 
         # 4. Per-spec env (last-write-wins, except blocked keys).
         for k, v in spec.get("env", {}).items():

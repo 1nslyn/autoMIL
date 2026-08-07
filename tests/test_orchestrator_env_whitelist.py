@@ -178,6 +178,36 @@ def test_spec_env_cannot_override_blocked_keys(orch):
     assert env["CUDA_VISIBLE_DEVICES"] == "2"
 
 
+def test_spec_env_cannot_retarget_the_seal(orch):
+    """A5 (claims-alignment): the val-firewall keys are orchestrator-owned.
+
+    A hand-dropped queue spec could otherwise retarget born-sealing
+    (AUTOMIL_RESULTS_DIR), repoint policy resolution (AUTOMIL_DIR_REL),
+    corrupt partial/complete discrimination (AUTOMIL_FOLD_COUNT), or flip the
+    consumer test-print gates (AUTOMIL_CERTIFY) during search.
+    """
+    env = _call_build(orch, spec={"description": "x", "env": {
+        "AUTOMIL_RESULTS_DIR": "/tmp/exfiltrated",
+        "AUTOMIL_DIR_REL": "elsewhere/automil",
+        "AUTOMIL_NODE_ID": "node_9999",
+        "AUTOMIL_CERTIFY": "1",
+        "AUTOMIL_FOLD_COUNT": "1",
+    }})
+    assert env["AUTOMIL_RESULTS_DIR"].endswith("archive_test/certify")
+    assert env["AUTOMIL_DIR_REL"] == "automil"
+    assert env["AUTOMIL_NODE_ID"] == "node_0001"
+    assert "AUTOMIL_CERTIFY" not in env
+    assert env["AUTOMIL_FOLD_COUNT"] == "5"
+
+
+def test_ambient_certify_is_stripped(orch, monkeypatch):
+    """A5: a leftover shell `export AUTOMIL_CERTIFY=1` (from a certification
+    run) must not ride the AUTOMIL_ whitelist prefix into search children."""
+    monkeypatch.setenv("AUTOMIL_CERTIFY", "1")
+    env = _call_build(orch)
+    assert "AUTOMIL_CERTIFY" not in env
+
+
 def test_config_without_env_section(tmp_path, monkeypatch):
     """If config.yaml has no env: section, orchestrator constructs cleanly with empty passthrough."""
     automil_dir = tmp_path / "automil"
