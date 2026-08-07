@@ -92,12 +92,16 @@ docs/claims discipline or deferred decision.
 | A6 | P0 | C5, C2 | **`metrics` keys are unconstrained at ingest** — the firewall strips exactly `held_out`/`summary` (`terminal_writer.py:187-188`); a result carrying `metrics: {"test_auc": …}` would flow test into `graph.json`, `results.tsv`, SSE, *and into the recomputed composite* (`scoring.py:59-77` means over all metric keys, names never inspected), i.e. test driving selection with the firewall's blessing. Campaign's `_validation_folds` (`campaign_stages.py:361-394`) catches it only at freeze, after search already consumed it. | Fail closed at the existing schema-validation choke point in `write_terminal_state`: a held-out-named metrics key → node crashes with a val-firewall pointer (same path as schema failure). Key predicate lives in `firewall.py` (`is_held_out_metric_key`) and **aligns with the freeze-time predicate** (`"test" in key.lower()` + `held` markers, `campaign_stages.py:391`) so the two enforcement layers cannot disagree; overcatching a hypothetical legit key fails loud with a rename-me message, never silently. Verified no in-repo consumer collides (iris: `accuracy`/`f1`; autobench: `val_*`). Fixture at `test_tick_cells.py:309` updates with the guard's positive test. |
 | A7 | P0→resolved | C2 | **The seam is narrower than the paper's declared protocol** (§2): no loss-shaping seam anywhere, though the proposal's allowed list names label smoothing/focal/class-balanced — the proven ingredients of both anchors. C2's effect size is capped by this. **Adversarial review refuted the seam design on the merits**: CLAM constructs one `loss_fn` shared by train *and* validation (`core_utils.py:117-123`, val use at `:363,:423` where val_loss drives early stopping), so a construction-site wrap is not train-only; DTFD builds a single `reduction="none"` criterion for both tiers (`dtfd/train.py:187`); 65/130 cells are survival where the criterion is the grid axis and must stay closed. | **Resolved under the ship-fast constraint (no protocol-surface growth at the preprint stage): docs-only.** Narrow the paper's methods text to the implemented surface; `wrap_criterion_for` goes to the journal ledger (§7). The `label_smoothing` declared-scalar alternative was reviewed as *small but not trivial* (two mandatory fail-loud guards: `bag_loss=svm` incompatibility; survival-task rejection — plus the CLAM smoothed-val_loss semantics caveat), which by the pre-stated adoption rule sends it to §7 as well. |
 | A8 | P0 | C2, C5 | **nnMIL's declared-tunable `dropout` is a silent no-op on the campaign's model** (found during adversarial verification of A4): `classification_trainer.py:74-79` passes `dropout=self.config['dropout']` to the factory, but `model_factory.py:23-25` hardcodes `SimpleMIL(..., dropout=True)` — the tuned value is discarded and `nn.Dropout(0.25)` runs regardless. Same H-3 class as A1: on 30 nnmil cells an agent tuning `dropout` burns attempts on baseline-identical runs with provenance claiming otherwise. | Wire the configured value through the vendored factory if `SimpleMIL` accepts a rate; otherwise move `dropout` to `search_space.locked` for nnmil with the upstream-fidelity reason. Truth either way; decided by reading the vendored model at implementation time. |
+| A9 | P0 | C1, C2, C5 | **Launch billing and the freeze census disagree; one pre-spawn failure permanently deadlocks the cell.** `freeze_discovery` requires *both* `consumed_evals == 60` (`campaign_stages.py:960-966`) *and* exactly 60 archived non-`cap_refused` specs (`:973-985`, `:1074-1078`). But `_launch` archives `spec.json` at the top (`_orchestrator_daemon.py:1514-1519`) and bills only after `Popen` succeeds (`:1704`, policy at `:1359-1371`); every pre-spawn failure (admissibility `:1594`, missing base_commit `:1613`, **worktree failure** `:1624`, Popen `:1681`, orphan-recovery `:875-946`) archives without billing → archived > billed forever, the two freeze conditions become jointly unsatisfiable, and the cap is monotone with no in-protocol repair. Promotion is worse (jobs materialized exactly once, `:1489-1499`). Contradicts the README ("crashes … consume discovery attempts") and `cap.py`'s own documented bill-at-launch policy — the daemon implements a third policy. Across ~7,800 launches one transient git-lock failure is expected, and one is enough. | Move `_record_cell_launch` to immediately after the archive-spec write (cap-refusal check stays first): "archived non-`cap_refused` campaign spec ⇔ billed attempt" becomes a construction invariant; pre-spawn crashes become charged attempts in pre-registered census classes; restores the documented policy. One test: a worktree-failure attempt is billed and freeze-countable. |
+| A10 | P0 | C1, C2 | **The 6h `agent_active` time cap contradicts the 60-attempt eval budget.** Materialization carries the template's `cap.budget: 6h` into every cell; normal skill-mandated per-attempt activity (research, plan rewrite, submit, reconcile, learnings) bills ~3–10 min × 60 attempts ≈ 3–10h against a 5.5h effective wall — whether a cell completes its pre-registered 60 attempts **depends on untracked agent verbosity**, `REFUSING_NEW` is one-way (`cap.py:110-118`), and `TERMINATING` kills in-flight billed work. The frozen analysis plan makes 60 attempts the unit and fails closed below it — so the two predeclared budgets are mutually unsatisfiable in expectation. | Declare a `cell_time_containment` value in the campaign `PROTOCOL` dict (hash-locked) and have materialization set `cap.budget` from it for discovery + promotion configs, with `audit_materialized_campaign` checking it — the time axis becomes the pure safety wall the paper already describes, the eval axis the only binding budget. Lands in the A4 manifest-regen batch. |
 | B1 | P1 | C2 | **The Ladder margin's noise floor is self-reported.** `composite_se` is read verbatim off `result.json` (`terminal_writer.py:283`); `scoring.cross_fold_se` is never called in `src/automil/`; `cells/reconcile.aggregate_folds` has fold composites in hand (`cells/reconcile.py:52-95`) and computes no SE, so budget-killed/partial nodes silently drop to the bare δ. The same machinery that refuses to trust the reported `composite` (CR-1b) trusts the reported SE that *gates* it. | Recompute SE at ingest from `result["validation_folds"]` (agent-visible, val-only, already emitted — `evaluate.py:213`); prefer recomputed, log disagreement — the exact CR-1b pattern. Same helper in `aggregate_folds`. |
 | B2 | P1 | C5 | **`scoring.formula` fails open on a typo and the template teaches the failure.** `config.yaml.j2:148-155` says "documentation-only … NOT evaluate[d]" with examples (`"accuracy"`, `"(val_auc + val_bacc) / 2"`) that `scoring.py:59-66` rejects as reducer names; `terminal_writer.py:229-232` catches the ValueError and **trusts the reported composite** — CR-1b silently disabled by following the template's own comment. | Rewrite the template comment (reducer semantics: `mean`/`max`/`min`/`trust_reported`); validate the reducer name at graph seeding — **the raise must sit outside the blanket `except Exception` at `graph.py:258-260`** — and in `automil check`; fix the `scoring.py:56-58` docstring. (Reassurance from review: the materialized campaign configs never set `scoring.formula`, so the campaign runs CR-1b on the `mean` default and reproduces both declared composites exactly — this fix protects operators, not the campaign.) |
 | B3 | P1 | C5 | **Remote-backend logs bypass H-1 redaction — root cause is call ordering.** `_handle_completion` collects (`:1994`) → redacts (`:2004`) → … → drains the remote log **last** (`:2048`, `_drain_remote_backend_log` `:2309-2353`), so on SLURM/Ray the redaction runs on a file that doesn't exist yet; submitit stdout/stderr are additionally symlinked raw (`:432-463`). (Local backend: the live-window gap is mitigated consumer-side by the `AUTOMIL_CERTIFY` print gate, `core_utils.py:211-217`.) | **Move the drain call before collection** — one moved line puts the drained log under the existing redaction *and* repairs remote OOM/timeout classification + error tails (`:2280-2303` currently reads a nonexistent file). Replace raw symlinks with a redacted copy at completion. |
 | B4 | P1 | C2 | **`propose` admits `kind=None` in preserving mode; `portfolio` then hard-fails on "unspecified"** with a message that never names the offender (`propose.py:96-104` vs `:215-226`). Costs agent-active budget on a loop the skill mandates every batch. | Require `--kind` at the write when mode is architecture-preserving; error text lists the two allowed kinds. |
 | B5 | P1 | RQ3 path | **Nominating a node evicts it from `best_node` and from `certify`'s default target** — `recompute_best` and `_sorted_keep_nodes` walk `status=="keep"` only (`graph.py:824-826`, `certify.py:44-48`); `candidate`/`registered` (better-validated states) silently vanish from "best". | Treat `{keep, candidate, registered}` as the keep-class in both walks. |
 | B6 | P1 | C5 | **Reconcile paths trust the reported scalar** (`graph.py:982`, `:1112`, `cli/reconcile.py:85`) and `_mark_crashed` bypasses `write_terminal_state` entirely (`:2469-2492`) — so externally-written `completed/*.json` enters the graph without CR-1b or sealing. Publication numbers are safe (certification re-reads sealed folds), but the search-time graph is spoofable. **Review finding: the recompute must travel with A6's key-guard as one unit** — recomputing over stale `metrics` containing `test_*` keys would *average test into the composite*, worse than trusting reported. | Extract terminal-writer Step 2b (key-guard + `recompute_composite` + B1's SE recompute) into one shared ingest helper called from all four mouths (terminal writer + three reconcile paths). `_mark_crashed` gets the one-line sealed-key strip as a symmetry guard (vacuous today; keep it that way). Deduplicating an existing choke point, not a new layer. |
+| B7 | P1 | C1, C2, C4 | **Baseline-before-search ordering is runbook-only.** `open_agent_session` requires pristine discovery state but **not a registered baseline** (`campaign_stages.py:2209-2262`); the initial phase is already `discovery` (`:194`). Attempts can burn with no incumbent, and a reconcile-created `graph.json` bricks baseline registration forever (`:544-547` "graph already has nodes but no registered baseline root"). TITAN is the live tripwire: `conch_v15` features are unextracted for all five cohorts, `titan/prepare.py:56-95` fails fast → 20 slide cells could each burn 60 charged crashes; the baseline run is the only fail-closed data preflight and nothing forces it first. | One line at the existing pristine-state choke point: `open_agent_session` additionally requires a registered baseline. Enforces README §3→§4, makes the baseline the guaranteed data preflight (TITAN included), closes the reconcile-bricking path. |
+| B8 | P1 | C2, C3 | **Historical-baseline reuse is a hand-declared equivalence with no mechanical check.** `repair_baselines.py:36-37` hardcodes nnmil/dtfd/titan as reusable vs clam/abmil stale; the config/source fingerprint check exists only for the rerun pair (`:339-350`), and the reuse contract deliberately excludes code provenance — so code drift on a "reusable" arm (e.g. the L-2 determinism unification, which changed DTFD/ABMIL/TITAN reproducibility semantics per its own docstring) enters C2's paired contrast undetected. | Make the decision mechanical: extend the existing fingerprint gate (arm-config defaults + trainer-source digest vs the frozen tree) to the reusable frameworks; what fails the gate gets rerun by the runner that already automates reruns. No new experiments beyond what the gate itself demands. |
 | C-a | P2 | RQ2 | **No Optuna/random/human-recipe arm exists** anywhere in the campaign. The paper must not claim superiority over menu AutoML (proposal Attack 1 has no empirical rebuttal); scope C2/C3 to lift-over-default and rank response. | Claims discipline now; a matched-budget Optuna arm on a cell subset is the Phase-2 answer. |
 | C-b | P2 | C2 | **`PolicyVariant.step(loss, opt)` is documented and never called by any consumer**, and true SAM is unreachable regardless (needs a closure). The ABC docstring promises "SAM-style two-step" support the consumer loop cannot deliver. | Fix the docstring + canonical skill to the honest reachable set (§2); closure/step wiring is a Phase-2 decision, not a pre-campaign patch. |
 | C-c | P2 | C5 | **The skill/AGENTS text never mentions the eval budget** — the campaign's actual unit of effort (60 attempts). Agents discover it by refusal. AGENTS.md also still claims "6h cap framework-enforced" while the template says consumer-supplied. | Canonical-skill paragraph: check remaining attempts (`automil cell status`), treat attempts as the budget; align AGENTS.md cap language. Propagates via A3's sync. |
@@ -105,6 +109,10 @@ docs/claims discipline or deferred decision.
 | C-e | P2 | hygiene | Dead/misleading knobs: `gate.auto_nominate` read+validated, acted on by nothing (`gate/config.py:41,99-106`); `gate/promote.py:15` docstring still says "Pareto"; exploration/novelty weights have no config seeding path. | Remove the dead knob from the template + config load; fix the docstring; leave weights (documented internal default). |
 | C-f | P2 | positioning | **Fresh-session-per-cell protocol disables cross-session knowledge accumulation** — a README/paper selling point ("agents don't repeat mistakes") that the campaign deliberately turns off for independence. | Paper text: within-cell learning only for the campaign; cross-session learning is a framework feature demonstrated by the anchors, not by the 130-cell result. |
 | C-g | P2 | C5 | **The firewall's threat model is anti-accident, not anti-adversary**: the seal is a naming convention in a tree the agent can shell into (`certify/` readable; no OS boundary). Publication numbers are protected by the certification chain (sealed-fold hashes bound at freeze, fail-closed report), not by secrecy. | State the threat model in the paper; keep the audit-trail framing (trajectories + archived policy code make violations detectable). |
+| C-i | P2 | C5 | **One-session-per-cell is attestation, not enforcement**: specs bind to the on-disk `agent_session.json` digest (`submit.py:569-589`), so a replacement runtime session after a mid-cell death silently inherits the binding and all 60 proposals attest to session #1; `agent_resources` then misattributes the work. No documented dead-session recovery exists. | Paper text: the attestation binds the *proposal stream*, operator-attested. Runbook: explicit dead-session procedure (disclose resumption in `termination_reason`). Optional cheap evidence: record the live runtime session identifier per submit into spec metadata. |
+| C-j | P2 | C1, C5 | **Freeze aborts permanently on ordinary clock skew**: `_freeze_discovery_unlocked` raises if any archived `submitted_at` precedes the controller's `bound_at` (`campaign_stages.py:986-1003`); submit host ≠ controller host + NTP-level seconds of skew around the first submit → a frozen-in artifact that can never pass freeze. | A small declared tolerance in the `PROTOCOL` dict (recorded in the audit row), classify-don't-abort within it; beyond it still fails closed. |
+| C-k | P2 | C1, C4 | **A data-determined NaN validation fold makes the *baseline* permanently unregistrable**: an undefined per-fold c-index (single event censored past all others in a ~10-patient val fold) → `status: "partial"` (`run_experiment.py:317-343`) → `register_baseline` refuses (`campaign_stages.py:365-368`) and reruns reproduce it — every cell of that (dataset, task) is dead with no protocol answer. Low probability post-stratification; 13-cell blast radius. | Pre-launch, CPU-only: compute the five per-fold val c-index definabilities from the existing split CSVs + labels once per (dataset, task). Operator-runbook preflight; no training, no new experiments. |
+| C-l | P2 | C2, C3 | **Concurrent baseline prep across encoder-cells of one (dataset, task) can race non-atomic task-CSV/split creation** (`prepare.py:258-271` documents the hazard and prescribes prep-once; `splits.py:246-248` plain `to_csv`) — the loser can silently freeze *different fold definitions*, invisible damage to exactly the cross-cell comparability pool. The campaign README never requires the prep step PRELAUNCH_REVIEW already prescribed. | Runbook: mandatory one-time `--prep_only` per dataset before any concurrent baseline launch (already the documented convention). The `flock` around `prepare_all` goes to the journal ledger. |
 | C-h | P2 | feasibility | **Compute arithmetic**: 130 cells × (60×3-fold discovery + ≤10×2-fold promotion) ≤ 200 fold-trainings/cell ≈ 26,000 fold-trainings ≈ 1,300–2,200 GPU-h (at the measured 3–5 min/fold-training) → ~2–3 weeks on 4×H100, plus ≤6h agent-active × 130 sessions. The plan's own "pilot 12–18 cells" option remains the fallback; nothing in the machinery prevents certifying a predeclared subset — but the current manifest fails closed at 130, so a scope cut means a regenerated manifest, not an exception path. | Decide scale before launch; if cut, cut by regenerating the manifest (keeps fail-closed semantics). |
 
 ## 4. Fix plan (what ships with this audit)
@@ -125,31 +133,43 @@ Commit sequence (review-approved; tree green at every step):
    wording; A7 reachable-family text; C-b `step()`/ABC docstring honesty.
 5. **A3** — sync `.claude` copy from canonical + drift test over both copies ×
    both skills (carries step 4's content).
-6. **A4 (atomic)** — five campaign template lock-list edits + off-manifest
-   template consistency (ccrcc/ovarian_hrd/placeholder) +
-   `EXPECTED_IDENTITY_LOCKED_HPARAMS` constant + `audit_materialized_campaign`
-   extension + name-collision/alias assertions + **regenerated
-   `manifest.json` + `.sha256` in the same commit** (`search_space.py`
-   untouched except a cross-reference comment).
-7. **A5** — widen `_SPEC_ENV_BLOCKED` (5 keys) + ambient `AUTOMIL_CERTIFY`
+6. **A9** — bill-at-archive invariant: move `_record_cell_launch` to follow
+   the archive-spec write in `_launch`; docstring update; billing test for a
+   pre-spawn failure.
+7. **A4 + A10 (atomic)** — five campaign template lock-list edits +
+   off-manifest template consistency (ccrcc/ovarian_hrd/placeholder) +
+   `EXPECTED_IDENTITY_LOCKED_HPARAMS` constant + `PROTOCOL`
+   time-containment value applied at materialization (discovery + promotion)
+   + `audit_materialized_campaign` extension (locks, override options, cap) +
+   name-collision/alias assertions + **regenerated `manifest.json` +
+   `.sha256` in the same commit** (`search_space.py` untouched except a
+   cross-reference comment).
+8. **A5** — widen `_SPEC_ENV_BLOCKED` (5 keys) + ambient `AUTOMIL_CERTIFY`
    pop + whitelist tests.
-8. **A6** — `firewall.is_held_out_metric_key` + terminal-writer fail-closed
+9. **A6** — `firewall.is_held_out_metric_key` + terminal-writer fail-closed
    check + `test_tick_cells.py:309` fixture + guard tests.
-9. **B1 + B6 (one unit)** — shared ingest helper (key-guard + composite
-   recompute + SE recompute) at the terminal writer and the three reconcile
-   mouths; `aggregate_folds` SE; `_mark_crashed` strip; reconcile fixture
-   updates.
-10. **B2** — template comment + seeding validation (outside the blanket
+10. **B1 + B6 (one unit)** — shared ingest helper (key-guard + composite
+    recompute + SE recompute) at the terminal writer and the three reconcile
+    mouths; `aggregate_folds` SE; `_mark_crashed` strip; reconcile fixture
+    updates.
+11. **B2** — template comment + seeding validation (outside the blanket
     except) + `automil check` + `scoring.py` docstring.
-11. **B3** — drain-call reorder + submitit copy-redact +
+12. **B3** — drain-call reorder + submitit copy-redact +
     `test_log_unification` updates.
-12. **B4, B5** — propose/portfolio + `KEEP_CLASS` constant + test updates.
-13. **C-d, C-e** — dead-asset deletions (checking
+13. **B4, B5** — propose/portfolio + `KEEP_CLASS` constant + test updates.
+14. **B7** — `open_agent_session` requires a registered baseline + test.
+15. **C-j** — declared `submitted_at` tolerance in `PROTOCOL`, classify
+    within it + test. (Rides the same manifest regen as step 7 if sequenced
+    before it; otherwise regenerate once more — the regen is deterministic.)
+16. **B8** — extend the baseline-reuse fingerprint gate to the reusable
+    frameworks in `repair_baselines.py`.
+17. **C-d, C-e** — dead-asset deletions (checking
     `tests/skills/test_phase7_acceptance.py` references first) + docstring/
     template hygiene.
 
-Doc-only items (A7 methods alignment, C-a, C-f, C-g, C-h) live in this file
-and the paper's methods checklist; no code.
+Doc-only items (A7 methods alignment, C-a, C-f, C-g, C-h, C-i, C-k, C-l)
+live in this file, the campaign runbook, and the paper's methods checklist;
+no code.
 
 ## 5. Verdict on the second claim
 
@@ -209,9 +229,23 @@ loss-shaping families that would raise the ceiling are journal-stage items
    subprocess boundary with a single ingest choke point; launch-time
    re-validation from live config (not recorded verdicts); the campaign's
    hash-locked, fail-closed certification chain; parent-SE keep-margins;
-   eval-count as the portable effort unit; a no-p-values descriptive analysis
+   eval-count as the portable effort unit — *once A9/A10 make it well-defined
+   at its edges* (bill-at-launch was mis-implemented, and the time cap could
+   render the eval budget uncompletable); a no-p-values descriptive analysis
    plan with explicit missingness handling; D-139 held-out isolation in `rank`;
-   the `AUTOMIL_CERTIFY` print gate inside the vendored trainer.
+   the `AUTOMIL_CERTIFY` print gate inside the vendored trainer. One decorative
+   key to note: the materialized configs' `metrics.composite_formula` is
+   informational — CR-1b seeds from `scoring.formula` and runs the `mean`
+   reducer, which reproduces both declared campaign composites exactly.
+6. **Verified clean under adversarial sweep** (recorded so they are not
+   re-litigated): fold definitions are protocol-identical across 5/3/2-fold
+   invocations (pinned `--n_folds 5 --seed 42`, per-fold reseed); per-node
+   overlay snapshots make `_policies` overwrites harmless to earlier
+   candidates; promotion copies are hash-verified byte-exact; the top-10
+   ordering is deterministic and independently recomputed at freeze;
+   `resubmit` is refused in preserving mode; cap-refused specs are unbilled
+   and census-excluded; exact winner ties prefer the native baseline; the
+   `status` surfaces print validation-only values.
 
 ## 7. Journal-stage ledger (deferred by the ship-fast constraint)
 
@@ -232,6 +266,8 @@ waits.
 | Encoder dynamic-range restoration (ResNet50 / CTransPath legacy arm) | Resurrects the encoder-axis question PRELAUNCH O1 killed | New extractions + cells |
 | Extended-search ablation (5× budget on ~5 cells, proposal §6.3.5) | Saturation evidence for the 60-attempt budget choice | More attempts per cell by construction |
 | Recipe-family / transfer analysis (RQ3 beyond the gate), recipe planner (proposal §11) | The nnU-Net-style upside | Needs the campaign's traces as input; journal by design |
+| `flock` around shared-`benchmark_dir` prep (`prepare_all`) | Kills the concurrent-prep race class permanently (C-l) | Touches the protected prep path; the runbook prep-once rule covers the preprint |
+| Live runtime-session evidence per submit (C-i mechanical half) | Detectable session resumption in the census | Attestation + runbook disclosure suffice for the preprint threat model |
 
 ## 8. Paper-side checklist (no code; carry into the manuscript)
 
