@@ -89,6 +89,7 @@ def project(tmp_path, monkeypatch):
     cfg["project"] = {**(cfg.get("project") or {}), "name": "tcga_luad"}
     cfg["encoders"] = {**(cfg.get("encoders") or {}), "primary": "uni_v2"}
     cfg["task"] = {**(cfg.get("task") or {}), "name": "kras"}
+    cfg.setdefault("cap", {})["mode"] = "wall_clock"
     (adir / "config.yaml").write_text(yaml.safe_dump(cfg))
 
     for rel in _SUBSTRATE + _IDENTITY_SURFACE:

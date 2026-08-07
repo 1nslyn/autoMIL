@@ -55,6 +55,11 @@ def _bootstrap_project(repo: Path, train_py_content: str) -> Path:
         f"stdout={init_proc.stdout}\nstderr={init_proc.stderr}"
     )
 
+    config_path = repo / "automil" / "config.yaml"
+    config_path.write_text(
+        config_path.read_text().replace("mode: agent_active", "mode: wall_clock")
+    )
+
     # Overwrite train.py with the per-test content.
     (repo / "train.py").write_text(train_py_content)
 

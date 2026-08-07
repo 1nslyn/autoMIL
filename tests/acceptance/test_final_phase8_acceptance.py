@@ -166,6 +166,12 @@ def test_subgate_b_sklearn_iris_end_to_end(tmp_path: Path):
     assert out.returncode == 0, (
         f"automil init failed:\n{out.stdout}\n{out.stderr}"
     )
+    config_path = project / "automil" / "config.yaml"
+    config_path.write_text(
+        config_path.read_text().replace(
+            "mode: agent_active", "mode: wall_clock",
+        )
+    )
 
     # Step 3: commit scaffolded files so submit has a clean base_commit.
     _run(["git", "add", "-A"], cwd=project)

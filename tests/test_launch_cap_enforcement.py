@@ -310,8 +310,8 @@ def test_spec_without_cell_id_still_launches_but_is_reported(tmp_path, caplog):
     )
 
 
-def test_spec_referencing_an_unknown_cell_launches_with_a_warning(tmp_path, caplog):
-    """A dangling cell_id must not silently disable the cap either."""
+def test_spec_referencing_an_unknown_cell_is_refused(tmp_path, caplog):
+    """A declared but unresolved cell fails closed before process launch."""
     orch = _make_orch(tmp_path)
     (orch.automil_dir / "cells").mkdir(parents=True, exist_ok=True)
     _seed_graph(orch)
@@ -323,7 +323,8 @@ def test_spec_referencing_an_unknown_cell_launches_with_a_warning(tmp_path, capl
                    side_effect=_FakePopen):
             orch._launch(spec, gpu_id=0)
 
-    assert len(_FakePopen.calls) == 1
+    assert len(_FakePopen.calls) == 0
+    assert not (orch.queue_dir / f"{NODE_ID}.json").exists()
     assert any("doesnotexist0001"[:8] in r.getMessage() for r in caplog.records), (
         f"expected a warning naming the unknown cell; got "
         f"{[r.getMessage() for r in caplog.records]}"

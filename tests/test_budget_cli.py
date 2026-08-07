@@ -35,13 +35,6 @@ class TestApplyCapUpdates:
         assert "budget: 2h" in out
         assert "mode: agent_active" in out  # untouched sibling preserved
 
-    def test_drops_legacy_twin_and_inserts_new(self):
-        text = "cap:\n  budget_seconds: 21600\n  safety_buffer_seconds: 1800\n"
-        out = _apply_cap_updates(text, {"budget": "2h"}, frozenset({"budget_seconds"}))
-        assert "budget: 2h" in out
-        assert "budget_seconds" not in out
-        assert "safety_buffer_seconds: 1800" in out  # untouched legacy sibling kept
-
     def test_preserves_surrounding_comments_and_blocks(self):
         text = (
             "# top comment\n"
@@ -67,9 +60,8 @@ class TestApplyCapUpdates:
         assert "name: x" in out
 
     def test_result_is_parseable_yaml(self):
-        text = "cap:\n  budget_seconds: 21600\n  safety_buffer_seconds: 1800\n"
-        out = _apply_cap_updates(text, {"budget": "2h", "mode": "wall_clock"},
-                                 frozenset({"budget_seconds"}))
+        text = "cap:\n  budget: 6h\n  safety_buffer: 30m\n"
+        out = _apply_cap_updates(text, {"budget": "2h", "mode": "wall_clock"})
         cfg = yaml.safe_load(out)
         assert cfg["cap"]["budget"] == "2h"
         assert cfg["cap"]["mode"] == "wall_clock"
@@ -95,13 +87,13 @@ class TestBudgetCLI:
 
         cfg_path = tmp_path / "automil" / "config.yaml"
         before = cfg_path.read_text()
-        assert "autoMIL-paper" in before  # template comment present
+        assert "framework fallback" in before  # template comment present
 
         result = cli_runner.invoke(main, ["budget", "set", "2h"], catch_exceptions=False)
         assert result.exit_code == 0, result.output
 
         after = cfg_path.read_text()
-        assert "autoMIL-paper" in after, "template comments must survive budget set"
+        assert "framework fallback" in after, "template comments must survive budget set"
         cap = resolve_cap_config(yaml.safe_load(after))
         assert cap.budget_seconds == 7200
 

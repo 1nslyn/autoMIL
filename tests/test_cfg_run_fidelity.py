@@ -53,6 +53,10 @@ def _setup_project(tmp_path: Path, runner: CliRunner, monkeypatch) -> Path:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(main, ["init"])
     assert result.exit_code == 0, f"init failed: {result.output}"
+    config_path = tmp_path / "automil" / "config.yaml"
+    config_path.write_text(
+        config_path.read_text().replace("mode: agent_active", "mode: wall_clock")
+    )
     # Provide a dummy snapshotable file so submit has something to capture
     (tmp_path / "train.py").write_text("# dummy\n")
     subprocess.run(["git", "add", "train.py"], cwd=tmp_path, capture_output=True, check=True)

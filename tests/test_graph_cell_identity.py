@@ -39,6 +39,13 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(["git", "commit", "-m", "initial"], cwd=path, capture_output=True, check=True)
 
 
+def _use_wall_clock(tmp_path: Path) -> None:
+    config_path = tmp_path / "automil" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text()) or {}
+    config.setdefault("cap", {})["mode"] = "wall_clock"
+    config_path.write_text(yaml.safe_dump(config))
+
+
 # ---------------------------------------------------------------------------
 # Accessors
 # ---------------------------------------------------------------------------
@@ -135,6 +142,7 @@ def test_submit_stamps_cell_id_on_a_pre_existing_proposal(cli_runner, tmp_path, 
     _init_git_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
     cli_runner.invoke(main, ["init"])
+    _use_wall_clock(tmp_path)
 
     proposed = cli_runner.invoke(
         main, ["propose", "--parent", "root", "--desc", "a proposal",
@@ -159,6 +167,7 @@ def test_submit_stamps_cell_id_on_a_node_it_registers_itself(cli_runner, tmp_pat
     _init_git_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
     cli_runner.invoke(main, ["init"])
+    _use_wall_clock(tmp_path)
     # A prior propose is what creates graph.json; the second submit below then
     # exercises submit's own add_proposed branch.
     cli_runner.invoke(main, ["propose", "--parent", "root", "--desc", "seed"],

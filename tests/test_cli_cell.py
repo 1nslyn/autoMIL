@@ -43,6 +43,7 @@ def _make_cell(
     budget_seconds: int = 21600,
     safety_buffer_seconds: int = 1800,
     status: CellStatus = CellStatus.ACTIVE,
+    mode: str = "wall_clock",
 ) -> Cell:
     return Cell(
         cell_id=cell_id,
@@ -53,6 +54,7 @@ def _make_cell(
         budget_seconds=budget_seconds,
         safety_buffer_seconds=safety_buffer_seconds,
         status=status,
+        mode=mode,
     )
 
 

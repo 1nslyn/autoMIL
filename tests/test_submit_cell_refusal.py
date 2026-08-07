@@ -61,6 +61,7 @@ def _setup_project(tmp_path: Path, monkeypatch) -> tuple[CliRunner, Path]:
     # M-14: task participates in cell identity — pin it so the ids stay
     # deterministic (otherwise the init template's task name leaks in).
     cfg["task"] = {**(cfg.get("task") or {}), "name": "test_task"}
+    cfg.setdefault("cap", {})["mode"] = "wall_clock"
     config_path.write_text(yaml.safe_dump(cfg))
 
     return runner, adir
@@ -166,6 +167,7 @@ class TestSubmitCellLayer:
             budget_seconds=21600,
             safety_buffer_seconds=1800,
             status=CellStatus.REFUSING_NEW,
+            mode="wall_clock",
         )
         cells_dir = _cells_dir(adir)
         cells_dir.mkdir(parents=True, exist_ok=True)

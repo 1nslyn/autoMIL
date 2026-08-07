@@ -37,6 +37,14 @@ def _init_git_repo(path: Path):
     )
 
 
+def _use_wall_clock(path: Path) -> None:
+    """Keep unrelated submit tests independent of runtime-hook delivery."""
+    config_path = path / "automil" / "config.yaml"
+    config_path.write_text(
+        config_path.read_text().replace("mode: agent_active", "mode: wall_clock")
+    )
+
+
 class TestInit:
     def test_creates_automil_subdir(self, cli_runner, tmp_path, monkeypatch):
         """automil init creates an automil/ subdirectory in an existing repo."""
@@ -126,32 +134,60 @@ class TestInit:
         )
 
     def test_registers_activity_hooks(self, cli_runner, tmp_path, monkeypatch):
-        """init installs on_tool.sh and registers the activity hooks (P2.1)."""
+        """init registers the exact Claude active-time observer contract."""
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
 
         hook = tmp_path / ".claude" / "hooks" / "on_tool.sh"
-        assert hook.exists(), "on_tool.sh should be installed"
+        assert not hook.exists(), "the lossy timestamp hook must not be installed"
 
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         hooks = settings.get("hooks", {})
-        assert "PostToolUse" in hooks
-        post = hooks["PostToolUse"][0]
-        assert "on_tool.sh" in str(post)
-        assert post.get("matcher") == "*"
-        assert post["hooks"][0].get("async") is True
-        # UserPromptSubmit + SessionStart also wired
-        assert any("on_tool.sh" in str(e) for e in hooks.get("UserPromptSubmit", []))
-        assert any("on_tool.sh" in str(e) for e in hooks.get("SessionStart", []))
+        command = {"type": "command", "command": "uv run automil activity ingest"}
+        assert hooks["SessionStart"] == [{"matcher": "startup", "hooks": [command]}]
+        assert hooks["SessionEnd"] == [{"hooks": [command]}]
+        assert settings["env"]["OTEL_METRICS_EXPORTER"] == "prometheus"
+        assert "UserPromptSubmit" not in hooks
+        assert "async" not in str(hooks)
         # Existing Stop hook preserved
         assert any("on_stop.sh" in str(e) for e in hooks.get("Stop", []))
 
-        # Idempotent: --update must not duplicate entries.
-        cli_runner.invoke(main, ["init", "--update"])
+        # Simulate a project initialized by the obsolete timestamp adapter.
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("#!/bin/sh\n")
+        hooks["UserPromptSubmit"] = [{
+            "hooks": [{
+                "type": "command",
+                "command": f"bash {hook}",
+                "async": True,
+            }]
+        }]
+        hooks.setdefault("PostToolUse", []).append({
+            "matcher": "*",
+            "hooks": [
+                {"type": "command", "command": f"bash {hook}", "async": True},
+                {"type": "command", "command": "third-party-hook"},
+            ],
+        })
+        settings_path = tmp_path / ".claude" / "settings.json"
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+
+        result = cli_runner.invoke(main, ["init", "--update", "--no-healthcheck"])
+        assert result.exit_code == 0, result.output
         settings2 = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert "on_tool.sh" not in json.dumps(settings2)
+        assert "UserPromptSubmit" not in settings2["hooks"]
+        assert not hook.exists()
         assert len(settings2["hooks"]["PostToolUse"]) == 1
+        assert any("third-party-hook" in str(e) for e in settings2["hooks"]["PostToolUse"])
         assert len(settings2["hooks"]["Stop"]) == 1
+
+        # A second update is byte-idempotent.
+        once = settings_path.read_bytes()
+        result = cli_runner.invoke(main, ["init", "--update", "--no-healthcheck"])
+        assert result.exit_code == 0, result.output
+        assert settings_path.read_bytes() == once
 
 
 class TestCheck:
@@ -199,6 +235,7 @@ class TestSubmit:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         # Create a file to submit
         (tmp_path / "model.py").write_text("print('modified')\n")
@@ -229,6 +266,7 @@ class TestSubmit:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         config_path = tmp_path / "automil" / "config.yaml"
         config_text = config_path.read_text().replace("editable: []", 'editable: ["models/"]')
@@ -255,6 +293,7 @@ class TestSubmit:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         config_path = tmp_path / "automil" / "config.yaml"
         config_text = config_path.read_text().replace("readonly: []", 'readonly: ["data/*.py"]')
@@ -308,6 +347,7 @@ class TestSubmit:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         from automil.graph import ExperimentGraph
         graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
@@ -334,6 +374,7 @@ class TestSubmit:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         from automil.graph import ExperimentGraph
         graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
@@ -514,6 +555,7 @@ class TestSubmitPathValidation:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         # Create a real model file that should be captured
         (tmp_path / "model.py").write_text("print('model changed')\n")
@@ -593,7 +635,11 @@ def test_submit_existing_pending_marks_running(cli_runner, tmp_path, monkeypatch
     adir = tmp_path / "automil"
     adir.mkdir(exist_ok=True)
     (adir / "config.yaml").write_text(
+        "project:\n  name: test\n"
+        "task:\n  name: test\n"
+        "encoders:\n  primary: enc\n"
         "run:\n  script: train.py\n  mil_model: clam_sb\n"
+        "cap:\n  mode: wall_clock\n"
     )
     (adir / "orchestrator" / "queue").mkdir(parents=True, exist_ok=True)
 
