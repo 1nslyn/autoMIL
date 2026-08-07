@@ -120,8 +120,14 @@ source; then `uv run automil reconcile`.
       `--files automil/variants/_policies/<name>.py --override
       "--policy-variant <name>"`. The protected consumer loop supplies only
       optimizer/scheduler/stopping seams; model, defining loss, measurement,
-      and held-out outputs are unavailable through this interface. Keep module
-      scope declarative: only import `automil.registry`, `__future__`, `typing`,
+      and held-out outputs are unavailable through this interface. What the
+      seams genuinely support: single-point optimizer wrappers (Lookahead,
+      gradient clipping, per-group LR, custom LR schedules inside a wrapped
+      `step()`) and stopping policies driven by the supplied validation
+      metrics. They do NOT support SAM-class two-pass optimizers (no closure
+      re-evaluates the loss), loss shaping, sampling changes, or ensembling —
+      don't spend attempts discovering that. Keep module scope declarative:
+      only import `automil.registry`, `__future__`, `typing`,
       or `collections.abc` at top level; import numerical libraries inside the
       policy methods that use them.
    b. In free mode, model/loss/policy variants may use their registered kind
@@ -139,6 +145,13 @@ source; then `uv run automil reconcile`.
    Check `orchestrator/gpu_state.json` → `schedulable_free_gb` / `running`; if
    workers < cap while the queue is non-empty and free VRAM is large, the loop is
    running serially — submit more specs until the cap binds.
+
+   **Attempts are the budget.** When the cell declares `cap.eval_budget`,
+   every **launched** attempt is charged — crashes, timeouts, and budget-kills
+   included; only submit-time refusals are free. Check remaining attempts with
+   `uv run automil cell status` before each batch, and never spend one on a
+   duplicate, an unverified guess, or a submission you have not sanity-checked
+   locally (imports, config validity). A wasted attempt cannot be recovered.
 
 5. **WAIT** on Monitor completion events (do **not** poll). The activity-gated
    budget bills only the time you are *acting*, not the hours experiments run —
