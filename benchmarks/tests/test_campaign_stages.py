@@ -15,6 +15,7 @@ import yaml
 import autobench.campaign_stages as campaign_stages
 from automil.admissibility import load_candidate_policy
 from automil.cells.activity import (
+    ACTIVITY_SAMPLES_FILENAME,
     ingest_prometheus_metrics,
     read_activity_report,
     record_hook_event,
@@ -43,7 +44,7 @@ from autobench.campaign_stages import (
     _winner_sealed_sources,
     certify_winner,
     finalize_agent_session,
-    freeze_discovery,
+    freeze_discovery as _freeze_discovery,
     freeze_promotion,
     initialize_stage_state,
     load_stage_state,
@@ -816,6 +817,25 @@ def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell
     assert len(list((promotion / "orchestrator" / "queue").glob("*.json"))) == 10
 
 
+def test_promotion_requires_closed_discovery_activity_before_mutation(staged_cell):
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    frozen = freeze_discovery(cell_root, end_session=False)
+
+    with pytest.raises(
+        CampaignStageError,
+        match="SessionEnd and a durable final Claude active-time sample",
+    ):
+        materialize_promotion(cell_root, repo_root=repo_root)
+
+    assert load_stage_state(cell_root) == frozen
+    assert not (cell_root / "promotion").exists()
+
+
 def _finish_promotion(
     cell_root: Path, *, completed: int, promotion_base: float = 0.7,
     promotion_bases: list[float] | None = None,
@@ -989,6 +1009,78 @@ def test_zero_complete_discovery_freezes_baseline_with_zero_lift(staged_cell):
     assert state["winner"]["candidate_id"] == "baseline"
     assert state["winner"]["lift_over_baseline"] == pytest.approx(0.0)
     assert select_winner(cell_root) == state
+
+
+def test_zero_candidate_selection_requires_closed_discovery_activity(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    frozen = freeze_discovery(cell_root, end_session=False)
+
+    with pytest.raises(
+        CampaignStageError,
+        match="SessionEnd and a durable final Claude active-time sample",
+    ):
+        select_winner(cell_root)
+
+    assert load_stage_state(cell_root) == frozen
+    assert frozen["winner"] is None
+
+
+def test_selection_rechecks_exclusive_discovery_activity(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    record_hook_event(
+        adir,
+        cell["budget_identity"]["cell_id"],
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "unexpected-session",
+            "source": "startup",
+        },
+    )
+    final_observed_at = datetime.now(timezone.utc).timestamp()
+    ingest_prometheus_metrics(
+        adir,
+        "claude_code_active_time_total"
+        '{session_id="unexpected-session",type="cli"} 1.0\n',
+        observed_at=final_observed_at,
+    )
+    record_hook_event(
+        adir,
+        cell["budget_identity"]["cell_id"],
+        {"hook_event_name": "SessionEnd", "session_id": "unexpected-session"},
+        observed_at=final_observed_at,
+        final_sample_observed_at=final_observed_at,
+    )
+
+    with pytest.raises(CampaignStageError, match="not exclusive"):
+        select_winner(cell_root)
+
+
+def test_selection_requires_the_durable_final_activity_sample(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    (adir / ACTIVITY_SAMPLES_FILENAME).unlink()
+
+    with pytest.raises(
+        CampaignStageError,
+        match="SessionEnd and a durable final Claude active-time sample",
+    ):
+        select_winner(cell_root)
 
 
 def test_fivefold_validation_mean_can_select_searched_candidate(staged_cell):
@@ -1266,10 +1358,9 @@ def _agent_session_end(cell_root: Path) -> dict:
 def _record_session_start(
     adir: Path, session_id: str = "fixture-session",
 ) -> None:
-    config = yaml.safe_load((adir / "config.yaml").read_text())
     record_hook_event(
         adir,
-        config["campaign"]["budget_cell_id"],
+        None,
         {
             "hook_event_name": "SessionStart",
             "session_id": session_id,
@@ -1291,11 +1382,30 @@ def _record_session_end(
     report = read_activity_report(adir, cell_id)
     if report.complete:
         return
+    observed_at = datetime.now(timezone.utc).timestamp()
+    ingest_prometheus_metrics(
+        adir,
+        "claude_code_active_time_total"
+        f'{{session_id="{session_id}",type="cli"}} 1.0\n',
+        observed_at=observed_at,
+    )
     record_hook_event(
         adir,
         cell_id,
         {"hook_event_name": "SessionEnd", "session_id": session_id},
+        observed_at=observed_at,
+        final_sample_observed_at=observed_at,
     )
+
+
+def freeze_discovery(
+    cell_root: Path, *, end_session: bool = True,
+) -> dict:
+    """Freeze discovery, then model the real SessionEnd hook for success paths."""
+    state = _freeze_discovery(cell_root)
+    if end_session:
+        _record_session_end(cell_root / "automil")
+    return state
 
 
 def test_agent_session_is_prebound_to_every_proposal_then_finalized(
@@ -1323,7 +1433,12 @@ def test_agent_session_is_prebound_to_every_proposal_then_finalized(
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
     )
     freeze_discovery(cell_root)
+    activity = read_activity_report(adir, cell["budget_identity"]["cell_id"])
+    assert activity.complete is True
+    session_path = cell_root / "agent_session.json"
+    assert json.loads(session_path.read_text())["status"] == "open"
     select_winner(cell_root)
+    assert json.loads(session_path.read_text())["status"] == "open"
 
     registered = finalize_agent_session(cell_root, _agent_session_end(cell_root))
     assert registered["status"] == "finalized"

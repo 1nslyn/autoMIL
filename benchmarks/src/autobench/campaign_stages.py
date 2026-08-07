@@ -38,6 +38,7 @@ from automil.cells import (
     bind_activity_session,
     get_or_create_cell,
     read_activity_report,
+    read_unbound_activity_report,
     resolve_cap_config,
     resolve_cell_identity,
 )
@@ -1246,12 +1247,16 @@ def _materialize_promotion_unlocked(
     cell_root: Path, *, repo_root: Path,
 ) -> dict[str, Any]:
     state = load_stage_state(cell_root)
-    if state["promotion"]["materialized"]:
-        return state
-    if state["phase"] != "promotion-ready":
+    if (
+        not state["promotion"]["materialized"]
+        and state["phase"] != "promotion-ready"
+    ):
         raise CampaignStageError(
             f"promotion can materialize only from promotion-ready, got {state['phase']!r}"
         )
+    _require_closed_discovery_activity(cell_root, state)
+    if state["promotion"]["materialized"]:
+        return state
     candidates = state["discovery"]["promoted_candidates"]
     if not candidates or len(candidates) > PROMOTION_CANDIDATES:
         raise CampaignStageError("frozen promotion candidate count is invalid")
@@ -1542,6 +1547,73 @@ def _finalize_promotion_state(
     return _commit_state(cell_root, state)
 
 
+def _require_closed_discovery_activity(
+    cell_root: Path, state: Mapping[str, Any],
+) -> None:
+    """Require the one bound discovery session to have durable end evidence."""
+    adir = cell_root / "automil"
+    protocol_sha256 = _cell_agent_protocol_sha256(cell_root, state)
+    try:
+        session_payload = json.loads((cell_root / AGENT_SESSION_FILE).read_text())
+        session = _validate_agent_session(
+            session_payload,
+            state=state,
+            agent_protocol_sha256=protocol_sha256,
+        )
+        config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+        identity = resolve_cell_identity(config)
+        campaign_cell = json.loads((adir / "campaign_cell.json").read_text())
+        budget_cell_id = str(campaign_cell["budget_identity"]["cell_id"])
+        if (
+            identity.cell_id != budget_cell_id
+            or (config.get("campaign") or {}).get("budget_cell_id")
+            != budget_cell_id
+        ):
+            raise CampaignStageError(
+                "discovery activity budget identity differs from the frozen cell"
+            )
+        activity = read_activity_report(adir, budget_cell_id)
+    except CampaignStageError:
+        raise
+    except ActivityError as exc:
+        raise CampaignStageError(
+            "SessionEnd and a durable final Claude active-time sample are "
+            f"required before leaving discovery: {exc}"
+        ) from exc
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        yaml.YAMLError,
+    ) as exc:
+        raise CampaignStageError(
+            "discovery activity accounting is invalid: " + str(exc)
+        ) from exc
+
+    expected_session_id = session["session"]["session_id"]
+    if activity.sessions != (expected_session_id,):
+        raise CampaignStageError(
+            "discovery activity journal is not exclusive to the bound agent session"
+        )
+    if activity.bindings != (
+        (expected_session_id, session["binding_sha256"]),
+    ):
+        raise CampaignStageError(
+            "discovery activity binding differs from agent_session.json"
+        )
+    if (
+        activity.open_sessions
+        or activity.ended_sessions != (expected_session_id,)
+        or not activity.complete
+    ):
+        raise CampaignStageError(
+            "SessionEnd and a durable final Claude active-time sample are required "
+            "before promotion or winner selection"
+        )
+
+
 def freeze_promotion(cell_root: Path) -> dict[str, Any]:
     """Reconcile every promotion job and freeze the five-fold eligible pool."""
     with _stage_lock(cell_root):
@@ -1763,12 +1835,13 @@ def select_winner(cell_root: Path) -> dict[str, Any]:
 
 def _select_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     state = load_stage_state(cell_root)
-    if state.get("winner") is not None:
-        return state
-    if state["phase"] != "selection-ready":
+    if state.get("winner") is None and state["phase"] != "selection-ready":
         raise CampaignStageError(
             f"winner can freeze only from selection-ready, got {state['phase']!r}"
         )
+    _require_closed_discovery_activity(cell_root, state)
+    if state.get("winner") is not None:
+        return state
     baseline = state.get("baseline")
     if not isinstance(baseline, dict):
         raise CampaignStageError("native baseline is not registered")
@@ -2264,11 +2337,27 @@ def _bind_campaign_activity_and_open_cell(
                 "campaign budget identity differs from config.yaml"
             )
         report = read_activity_report(adir, identity.cell_id)
-        if report.sessions != (session_id,):
+        unbound_report = read_unbound_activity_report(adir)
+        if report.sessions == (session_id,):
+            # Idempotent retry after the immutable binding was persisted.
+            if unbound_report.sessions:
+                raise CampaignStageError(
+                    "another unbound SessionStart exists for this project"
+                )
+        elif not report.sessions:
+            if unbound_report.sessions != (session_id,):
+                raise CampaignStageError(
+                    "SessionStart was not recorded exclusively for this campaign cell"
+                )
+            if unbound_report.metered_sessions != (session_id,):
+                raise CampaignStageError(
+                    "Claude active-time metrics were not recorded for this session"
+                )
+        else:
             raise CampaignStageError(
                 "SessionStart was not recorded exclusively for this campaign cell"
             )
-        if report.metered_sessions != (session_id,):
+        if report.sessions and report.metered_sessions != (session_id,):
             raise CampaignStageError(
                 "Claude active-time metrics were not recorded for this session"
             )
