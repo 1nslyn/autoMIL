@@ -1319,10 +1319,30 @@ class ExperimentOrchestrator:
         silent unless it actually refuses.
         """
         from automil.cells import blocks_new_work
+        from automil.cells.state import CellStatus
 
         node_id = spec.get("id")
         cell = self._cell_for_spec(spec, warn=False)
         if cell is None or not blocks_new_work(cell):
+            return False
+
+        # A9 exactly-once, final-attempt corner: an attempt that was already
+        # BILLED (crash/unlink-abort inside its launch window, now retrying)
+        # is paid-for work being completed, not new work — and on the last
+        # budgeted attempt the bill itself flips evals_exhausted, so refusing
+        # here would stamp the archived spec cap_refused and leave the freeze
+        # census permanently one short of consumed_evals. Exempt it, unless
+        # the TIME axis has already escalated to terminating/finalized (the
+        # hard wall may not be crossed to start new processes).
+        if (
+            node_id in cell.billed_node_ids
+            and cell.status not in (CellStatus.TERMINATING, CellStatus.FINALIZED)
+        ):
+            logger.info(
+                "Launching already-billed %s despite %s cell %s: a charged "
+                "attempt being retried is not new work.",
+                node_id, cell.status.value, cell.cell_id[:8],
+            )
             return False
 
         logger.warning(

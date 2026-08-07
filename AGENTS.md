@@ -75,7 +75,7 @@ uv run automil viz start
 
 ## Testing
 
-~1600 collected under `tests/` (plus ~1080 in `benchmarks/tests/`; run the two trees as separate pytest invocations — their `tests` package names collide).
+~1600 collected under `tests/` (plus ~1080 in `benchmarks/tests/`; run the two trees as separate pytest invocations FROM THE REPO ROOT — their `tests` package names collide, and one benchmarks test resolves a repo-root-relative script path).
 Grouped by area: `test_graph*.py` (graph API, scoring, reconciliation),
 `backends/` (orchestrator daemon, SLURM/Ray contracts, result-schema validation),
 `cells/` (budget-cap state machine), `gate/` (two-stage generalization gate),

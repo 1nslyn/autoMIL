@@ -381,3 +381,44 @@ def test_queue_unlink_failure_aborts_launch_and_bills_once(tmp_path, monkeypatch
         orch._launch(dict(spec), gpu_id=0)
     assert _read_cell(orch).consumed_evals == 3, "retry must not re-bill"
     assert "node_0001" in orch.running
+
+
+def test_final_attempt_retry_is_not_cap_refused(tmp_path):
+    """A9 final-attempt corner: the bill on the LAST budgeted attempt flips
+    evals_exhausted; if its launch then aborts (crash window / unlink failure),
+    the retry must not be cap-refused — refusal would stamp the archived spec
+    cap_refused and leave the freeze census permanently one short."""
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, eval_budget=3, consumed_evals=2)
+    _seed_graph(orch, "node_0001")
+    _stub_runner(orch, tmp_path, "node_0001")
+
+    # First pass: worktree failure -> billed (3/3, exhausted), archived, no run.
+    import subprocess as _sp
+    orch.runner.create_worktree.side_effect = _sp.CalledProcessError(1, "git worktree")
+    orch._launch(_spec("node_0001"), gpu_id=0)
+    cell = _read_cell(orch)
+    assert cell.consumed_evals == 3
+    assert "node_0001" in cell.billed_node_ids
+
+    # Retry: must pass the cap gate (already billed), launch, and not re-bill.
+    _stub_runner(orch, tmp_path, "node_0001")
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(_spec("node_0001"), gpu_id=0)
+
+    assert "node_0001" in orch.running, "billed attempt must be allowed to run"
+    cell = _read_cell(orch)
+    assert cell.consumed_evals == 3, "retry must not re-bill"
+    spec_json = json.loads((orch.archive_dir / "node_0001" / "spec.json").read_text())
+    assert not (spec_json.get("metadata") or {}).get("cap_refused"), (
+        "a charged attempt must never be stamped cap_refused"
+    )
+
+    # A genuinely NEW spec in the exhausted cell is still refused.
+    _seed_graph(orch, "node_0002")
+    orch._launch(_spec("node_0002"), gpu_id=0)
+    assert "node_0002" not in orch.running
+    spec2 = json.loads((orch.archive_dir / "node_0002" / "spec.json").read_text())
+    assert (spec2.get("metadata") or {}).get("cap_refused") is True
+    assert _read_cell(orch).consumed_evals == 3
