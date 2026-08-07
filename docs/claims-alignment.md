@@ -84,13 +84,14 @@ docs/claims discipline or deferred decision.
 
 | ID | Sev | Claim hit | Finding (evidence) | Elegant fix |
 |---|---|---|---|---|
-| A1 | P0 | C2, C3, C5 | **CLAM's `--hparams` channel is dead.** No `apply_overrides(..., arm="clam")` exists; `clam/train.py::_make_clam_args` reads config directly and `hparam_overrides` is parsed (`run_experiment.py:464`) but never consumed. On 30/130 cells the only admissible scalar channel is a **silent no-op** — attempts get charged for runs identical to baseline. This is the exact H-3 failure mode `hparams.py:1-42` exists to remove, live on the reference arm. | One call at the CLAM entry, same pattern as `abmil/runner.py:73` / `dtfd/runner.py:79`, for classification + survival; channel test mirroring the other arms. |
+| A1 | P0 | C2, C3, C5 | **CLAM's `--hparams` channel is dead.** No `apply_overrides(..., arm="clam")` exists; `clam/train.py::_make_clam_args` reads config directly and `hparam_overrides` is parsed (`run_experiment.py:464`) but never consumed. On 30/130 cells the only admissible scalar channel is a **silent no-op** — attempts get charged for runs identical to baseline, and the archived `config.json` (`clam/runner.py:104` → `config.py:242`) records the unconsumed overrides as if applied, so provenance claims a tuned run that was byte-identical to baseline. This is the exact H-3 failure mode `hparams.py:1-42` exists to remove, live on the reference arm. (Policy variants can still reach lr/wd through `wrap_optimizer`, so the arm is not literally untunable — the *declared scalar channel* is.) | Apply `hparam_overrides` at the CLAM entry for classification + survival. Not a literal one-call clone of `abmil/runner.py:73`: CLAM's declared knobs span **two** dataclasses (ModelConfig + TrainConfig), so the application partitions keys across both with the same `_check_declared` semantics; channel test mirroring the other arms. **Must land together with A4** (a live channel without the capacity locks opens `model_size`). |
 | A2 | P0 | C2, C3 | **CLAM classification passes `metrics={}` to `should_stop`** (`benchmarks/lib/CLAM/utils/core_utils.py:199`), so metric-driven stopping policies are structurally impossible on 15 cells while every other arm supplies val metrics. Unequal policy surface = channel width reported as a model result. | Have `validate`/`validate_clam` return the val metrics they already compute; pass them through. Vendored file is already policy-patched at `:168-170,198-199`. |
 | A3 | P0 | C2, C5 | **`.claude/skills/automil/SKILL.md` is stale** — predates `registry.mode`; tells the agent to aim ≥50% architecture/ensemble proposals and use `automil/variants/<parent>/` model variants, all inadmissible in the campaign. `.agents/` copy matches canonical `_shared`; the Claude copy (the primary runtime) diverged, and **no test guards any copy against drift**. A campaign session would spend its 6h agent-active budget fighting admissibility. | Sync from `agent_assets/_shared` + one test asserting both in-repo copies equal the canonical render (kills the whole drift class). |
-| A4 | P0 | C2, C5 | **Capacity/architecture knobs are tunable under `architecture-preserving`**: `model_size` (clam), `M`,`L` (abmil), `mDim`,`numLayer_Res` (dtfd), `hidden_dim` (nnmil) change widths/depth, but `identity_locked_hparams` lists only CLAM's two loss switches (`config.yaml:84`). `audit_materialized_campaign` (`campaign.py:841-850`) never verifies `allowed_override_options`/`identity_locked_hparams`, so drift passes the 130-root audit. Proposal §5 forbids adding/removing layers and changing widths — reviewer Attack 4 is currently valid. | Config-only: extend `identity_locked_hparams` per roster template; regenerate the manifest; make the audit verify both fields. No new code paths. |
-| A5 | P0 | C5 | **`spec.env` can retarget the seal**: `_SPEC_ENV_BLOCKED` (`_orchestrator_daemon.py:75-82`) omits `AUTOMIL_RESULTS_DIR` (born-sealing target, `:1169-1171`) and `AUTOMIL_DIR_REL` (policy resolution root, `policy_dispatch.py:120`). A hand-dropped queue spec (queue specs are unvalidated, `:991-1005`) un-seals a node or repoints policy resolution. | Add the two keys (plus `AUTOMIL_NODE_ID`) to the frozenset; one test. |
-| A6 | P0 | C5, C2 | **`metrics` keys are unconstrained at ingest** — the firewall strips exactly `held_out`/`summary` (`terminal_writer.py:187-188`); a result carrying `metrics: {"test_auc": …}` would flow test into `graph.json`, `results.tsv`, SSE, *and into the recomputed composite* (`scoring.py:59-77` means over all metric keys), i.e. test driving selection with the firewall's blessing. Campaign's `_validation_folds` (`campaign_stages.py:361-394`) catches it only at freeze, after search already consumed it. | Fail closed at the existing schema-validation choke point in `write_terminal_state`: a metrics key matching the firewall's held-out markers → node crashes with a val-firewall pointer (same path as schema failure). No new layer — one more check where checks already live. |
-| A7 | P0→decision | C2 | **The seam is narrower than the paper's declared protocol** (§2): no loss-shaping seam anywhere, though the proposal's allowed list names label smoothing/focal/class-balanced — the proven ingredients of both anchors. C2's effect size is capped by this. | **Ship-fast constraint (owner decision, 2026-08-07): no protocol-surface growth at the preprint stage.** Default action: narrow the paper's methods text to the implemented surface (docs-only, zero risk) and record the `wrap_criterion_for` seam in the journal ledger (§7). The one candidate exception, pending design review: `label_smoothing` as a *declared scalar* through the existing `--hparams` channel (a `CrossEntropyLoss` kwarg — no new seam, no new code path) — adopt only if its blast radius is confirmed trivial; otherwise it too goes to §7. |
+| A4 | P0 | C2, C5 | **Capacity/architecture knobs are tunable under `architecture-preserving`**: `model_size` (clam: attention width presets, `model_clam.py:81-82`), `M`,`L` (abmil: Linear dims), `mDim`,`numLayer_Res` (dtfd: width + residual depth), `hidden_dim` (nnmil) all change parameter counts, but `identity_locked_hparams` lists only CLAM's two loss switches (`config.yaml:84`). `audit_materialized_campaign` (`campaign.py:841-850`) never verifies `allowed_override_options`/`identity_locked_hparams`, so drift passes the 130-root audit. Proposal §5 excludes width/depth changes by omission from its allowed list plus the attribution catch-all (layers/attention/pooling/heads named verbatim) — reviewer Attack 4 is currently valid. (`numGroup`, `B`, `batch_size`, `max_seq_length`, droprates are correctly tunable: sampling/batch-construction, zero parameters.) | Extend `identity_locked_hparams` per roster template **and move the same five knobs to `search_space.locked` with reasons** — otherwise `coverage_table()` (the paper's methods table) over-reports the searchable set and agents are told "tunable" then rejected at submit. Regenerate the manifest; make the audit verify both fields. |
+| A5 | P0 | C5 | **`spec.env` can retarget or un-gate the seal**: `_SPEC_ENV_BLOCKED` (`_orchestrator_daemon.py:75-82`) omits `AUTOMIL_RESULTS_DIR` (born-sealing target, `:1169-1171`), `AUTOMIL_DIR_REL` (policy resolution root, `policy_dispatch.py:120`), and — most direct — `AUTOMIL_CERTIFY`, which flips the consumer's test-print gates (`core_utils.py:212-228`) so test metrics stream into agent-visible `run.log` during search. Queue specs are unvalidated (`:991-1005`) and launch revalidation never inspects `spec["env"]`, so even preserving mode's fail-closed path passes a post-submit env edit. (Weakest P0 — C-g already concedes shell access — but it is an internal inconsistency in an existing enforcement surface.) | Add `AUTOMIL_RESULTS_DIR`, `AUTOMIL_DIR_REL`, `AUTOMIL_NODE_ID`, `AUTOMIL_CERTIFY` to the frozenset (enumerated, not prefix-wide — `AUTOMIL_VARIANT_*` are legitimate spec env, `apply.py:250-252`); one test. |
+| A6 | P0 | C5, C2 | **`metrics` keys are unconstrained at ingest** — the firewall strips exactly `held_out`/`summary` (`terminal_writer.py:187-188`); a result carrying `metrics: {"test_auc": …}` would flow test into `graph.json`, `results.tsv`, SSE, *and into the recomputed composite* (`scoring.py:59-77` means over all metric keys, names never inspected), i.e. test driving selection with the firewall's blessing. Campaign's `_validation_folds` (`campaign_stages.py:361-394`) catches it only at freeze, after search already consumed it. | Fail closed at the existing schema-validation choke point in `write_terminal_state`: a held-out-named metrics key → node crashes with a val-firewall pointer (same path as schema failure). Key predicate lives in `firewall.py` beside the log markers but is **tighter**: exact names (`held_out`, `heldout`, `summary`) + `test_`/`test-` prefixes — not the log redactor's broad substrings, so no false-positive class is imported. Verified no in-repo consumer collides (iris: `accuracy`/`f1`; autobench: `val_*`). |
+| A7 | P0→resolved | C2 | **The seam is narrower than the paper's declared protocol** (§2): no loss-shaping seam anywhere, though the proposal's allowed list names label smoothing/focal/class-balanced — the proven ingredients of both anchors. C2's effect size is capped by this. **Adversarial review refuted the seam design on the merits**: CLAM constructs one `loss_fn` shared by train *and* validation (`core_utils.py:117-123`, val use at `:363,:423` where val_loss drives early stopping), so a construction-site wrap is not train-only; DTFD builds a single `reduction="none"` criterion for both tiers (`dtfd/train.py:187`); 65/130 cells are survival where the criterion is the grid axis and must stay closed. | **Resolved under the ship-fast constraint (no protocol-surface growth at the preprint stage): docs-only.** Narrow the paper's methods text to the implemented surface; `wrap_criterion_for` goes to the journal ledger (§7). The `label_smoothing` declared-scalar alternative was reviewed as *small but not trivial* (two mandatory fail-loud guards: `bag_loss=svm` incompatibility; survival-task rejection — plus the CLAM smoothed-val_loss semantics caveat), which by the pre-stated adoption rule sends it to §7 as well. |
+| A8 | P0 | C2, C5 | **nnMIL's declared-tunable `dropout` is a silent no-op on the campaign's model** (found during adversarial verification of A4): `classification_trainer.py:74-79` passes `dropout=self.config['dropout']` to the factory, but `model_factory.py:23-25` hardcodes `SimpleMIL(..., dropout=True)` — the tuned value is discarded and `nn.Dropout(0.25)` runs regardless. Same H-3 class as A1: on 30 nnmil cells an agent tuning `dropout` burns attempts on baseline-identical runs with provenance claiming otherwise. | Wire the configured value through the vendored factory if `SimpleMIL` accepts a rate; otherwise move `dropout` to `search_space.locked` for nnmil with the upstream-fidelity reason. Truth either way; decided by reading the vendored model at implementation time. |
 | B1 | P1 | C2 | **The Ladder margin's noise floor is self-reported.** `composite_se` is read verbatim off `result.json` (`terminal_writer.py:283`); `scoring.cross_fold_se` is never called in `src/automil/`; `cells/reconcile.aggregate_folds` has fold composites in hand (`cells/reconcile.py:52-95`) and computes no SE, so budget-killed/partial nodes silently drop to the bare δ. The same machinery that refuses to trust the reported `composite` (CR-1b) trusts the reported SE that *gates* it. | Recompute SE at ingest from `result["validation_folds"]` (agent-visible, val-only, already emitted — `evaluate.py:213`); prefer recomputed, log disagreement — the exact CR-1b pattern. Same helper in `aggregate_folds`. |
 | B2 | P1 | C5 | **`scoring.formula` fails open on a typo and the template teaches the failure.** `config.yaml.j2:148-155` says "documentation-only … NOT evaluate[d]" with examples (`"accuracy"`, `"(val_auc + val_bacc) / 2"`) that `scoring.py:59-66` rejects as reducer names; `terminal_writer.py:229-232` catches the ValueError and **trusts the reported composite** — CR-1b silently disabled by following the template's own comment. | Rewrite the template comment (reducer semantics: `mean`/`max`/`min`/`trust_reported`); validate the reducer name at graph seeding and in `automil check` so the state is unrepresentable; fix the `scoring.py:56-58` docstring that claims fail-loud. |
 | B3 | P1 | C5 | **Remote-backend logs bypass H-1 redaction.** `_handle_completion` redacts at `:2004`, *then* `_drain_remote_backend_log` (`:2309-2353`) writes `run.log` with no redaction; submitit stdout/stderr are symlinked raw (`:432-463`). On SLURM/Ray the log redaction is a no-op. (Local backend: the live-window gap is mitigated consumer-side by the `AUTOMIL_CERTIFY` print gate, `core_utils.py:211-217`.) | Redact after the drain write; replace raw symlinks with a redacted copy at completion. |
@@ -111,37 +112,41 @@ docs/claims discipline or deferred decision.
 Ordered so each change is independently verifiable; none adds a new layer —
 every fix lands inside an existing choke point, seam pattern, or config field.
 
-1. **A1** — wire `apply_overrides(..., arm="clam")` at the CLAM entry
-   (classification + survival) + channel test.
+1. **A1 + A4 + A8 (one batch, before the manifest regen).** Apply CLAM's
+   `hparam_overrides` across ModelConfig + TrainConfig with `_check_declared`
+   semantics (classification + survival) + channel test; extend
+   `identity_locked_hparams` in the five roster templates (`model_size`;
+   `M`,`L`; `mDim`,`numLayer_Res`; `hidden_dim`) **and** move the same knobs to
+   `search_space.locked` with reasons so the declared space and the campaign
+   policy cannot disagree; fix or lock nnmil `dropout`; teach
+   `audit_materialized_campaign` to verify `allowed_override_options` +
+   `identity_locked_hparams`; regenerate + re-lock the manifest once, at the
+   end of the batch.
 2. **A2** — thread val metrics into CLAM classification `should_stop` + test.
 3. **A3** — sync `.claude/skills/automil/SKILL.md` from canonical; add the
    drift test covering both in-repo copies; fold C-c's eval-budget paragraph
    into the canonical skill first so the sync carries it.
-4. **A4** — extend `identity_locked_hparams` in the five roster templates
-   (`model_size`; `M`,`L`; `mDim`,`numLayer_Res`; `hidden_dim`); teach
-   `audit_materialized_campaign` to verify `allowed_override_options` +
-   `identity_locked_hparams`; regenerate + re-lock the manifest.
-5. **A5** — extend `_SPEC_ENV_BLOCKED` + test.
-6. **A6** — held-out-marker check on `metrics` keys at the terminal-writer
-   schema step, fail-closed + test.
-7. **A7** — per the ship-fast constraint: align the paper's methods text with
-   the implemented surface; update `search_space.py` docs and the canonical
-   skill's reachable-family list to say exactly what is reachable. The
-   `label_smoothing` declared-scalar variant ships only if design review
-   confirms a trivial blast radius; the `wrap_criterion_for` seam moves to the
-   journal ledger (§7).
-8. **B1–B6** — as specified in the table, each with a test.
-9. **C-b/C-c/C-d/C-e** — docstring/docs/template truth fixes riding the same
+4. **A5** — extend `_SPEC_ENV_BLOCKED` (`AUTOMIL_RESULTS_DIR`,
+   `AUTOMIL_DIR_REL`, `AUTOMIL_NODE_ID`, `AUTOMIL_CERTIFY`) + test.
+5. **A6** — held-out-named-key check on `metrics` at the terminal-writer
+   schema step (predicate in `firewall.py`: exact names + `test_` prefixes),
+   fail-closed + test.
+6. **A7** — resolved docs-only (see table): methods-text alignment;
+   `search_space.py` + canonical-skill reachable-family truth; seam and
+   `label_smoothing` scalar both recorded in §7.
+7. **B1–B6** — as specified in the table, each with a test.
+8. **C-b/C-c/C-d/C-e** — docstring/docs/template truth fixes riding the same
    branch.
-10. Doc-only items (C-a, C-f, C-g, C-h) live in this file and the paper's
-    methods checklist; no code.
+9. Doc-only items (C-a, C-f, C-g, C-h) live in this file and the paper's
+   methods checklist; no code.
 
 ## 5. Verdict on the second claim
 
 **Can the agent, through the current harness, achieve C2?** After A1/A2/A3
-(without which the answer is *no by construction* — the reference arm can't be
-tuned, its stopping policies are blind, and the primary runtime's instructions
-fight the mode):
+(without which the answer is *no by construction* — the reference arm's
+declared scalar channel is a silent no-op, its stopping policies are blind,
+and the primary runtime's instructions fight the mode; only the
+optimizer-wrapper route would remain live on CLAM):
 
 - The reachable space (scalars + optimizer wrappers + schedules + stopping
   policies + criterion shaping if A7 ships) demonstrably moves MIL AUC at the
@@ -206,7 +211,8 @@ waits.
 
 | Item | What it buys | Why it waits |
 |---|---|---|
-| `wrap_criterion_for` policy seam (loss shaping: smoothing/focal/class-balanced) | The anchors' largest single ingredient on every arm → larger expected C2 lifts | Touches every protected trainer pre-launch; protocol-surface growth; re-verification burden on the one-shot campaign |
+| `wrap_criterion_for` policy seam (loss shaping: smoothing/focal/class-balanced) | The anchors' largest single ingredient on every arm → larger expected C2 lifts | Refuted as-specified by adversarial review: CLAM shares one criterion across train/val (early stopping runs on it), DTFD shares one `reduction="none"` criterion across tiers, 65 survival cells must stay closed — a correct design needs train/val criterion splits and a role taxonomy, i.e. real trainer restructuring |
+| `label_smoothing` as a declared scalar (`CrossEntropyLoss` kwarg via `--hparams`) | Cheapest loss-shaping ingredient, rides existing channel machinery | Reviewed *small but not trivial*: two mandatory fail-loud guards (`bag_loss=svm` incompatibility; survival-task rejection) + CLAM smoothed-val_loss semantics caveat + A1 dependency — protocol-surface growth under the ship-fast rule |
 | Sampler / batch-construction seam | Second proposal-allowed family (WeightedRandomSampler beyond CLAM's bool) | Same class of risk; per-arm dataloader construction differs |
 | Closure-passing `step` so SAM-class optimizers become reachable | The CCRCC anchor's SAM ingredient | Requires trainer-loop restructuring (second forward pass); heaviest of the seam items |
 | Matched-budget Optuna / random-mutation / human-recipe arms | Empirical rebuttal of "just Optuna with Claude" (RQ2, proposal §6.2 methods 2–4) | Multiplies campaign compute; RQ2 is explicitly not pre-registered for the preprint |
