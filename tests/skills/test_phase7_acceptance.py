@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -277,6 +278,22 @@ def test_phase7_acceptance_clause_09_automil_check_passes_on_workstation(tmp_pat
     assert (repo / "automil" / "config.yaml").exists(), (
         "init did not produce config.yaml"
     )
+
+    # ``check`` now returns non-zero for every must-fix issue. Replace the
+    # intentionally invalid template placeholders so this remains a true
+    # workstation acceptance test rather than asserting that blocking setup
+    # errors exit successfully.
+    (repo / "features").mkdir()
+    (repo / "splits").mkdir()
+    (repo / "mapping.csv").write_text("slide_id,label\n")
+    config_path = repo / "automil" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text()) or {}
+    config["data"] = {
+        "features_dir": "features",
+        "splits_dir": "splits",
+        "mapping_csv": "mapping.csv",
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
 
     check_proc = subprocess.run(
         ["automil", "check"],
