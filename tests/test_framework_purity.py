@@ -68,14 +68,9 @@ _ALLOWLIST: dict[str, str] = {
     #    +9 by the architecture-preserving command/identity channels.
     "src/automil/templates/config.yaml.j2:129":
         "autobench-shaped consumers",
-    # 5. Inline example comment in the scoring.formula block showing what an
-    #    autobench consumer formula looks like. Documentation only. Retained by
-    #    08-04 executor.
-    #    Line shifted +1 by 12-02 (added scheduling_policy key to orchestrator block),
-    #    +4 by the run.mil_model addition to the run: block,
-    #    +6 by H-4, -2 by CFG-2, +9 by CR-4, +9 by the preserving channels.
-    "src/automil/templates/config.yaml.j2:155":
-        "autobench consumer",
+    # (The former entry 5 — an "autobench consumer" formula example in the
+    # scoring block — was removed by B2: the rewritten reducer documentation
+    # carries no consumer reference, so no allowlist exception is needed.)
 }
 
 

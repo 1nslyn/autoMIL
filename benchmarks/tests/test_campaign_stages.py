@@ -23,6 +23,7 @@ from autobench.campaign import (
     PROTOCOL,
     PROTOCOL_VERSION,
     STAGE_FOLDS,
+    SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
     content_sha256,
     file_sha256,
 )
@@ -1425,13 +1426,37 @@ def test_discovery_rejects_a_proposal_before_the_bound_session(staged_cell):
     session = json.loads((cell_root / "agent_session.json").read_text())
     spec["submitted_at"] = (
         datetime.fromisoformat(session["session"]["bound_at"])
-        - timedelta(seconds=1)
+        - timedelta(seconds=SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS + 1)
     ).isoformat()
     spec_path.write_text(json.dumps(spec))
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
 
-    with pytest.raises(CampaignStageError, match="predates controller session binding"):
+    # C-j: beyond the declared tolerance -> still fail closed.
+    with pytest.raises(CampaignStageError, match="clock-skew tolerance"):
         freeze_discovery(cell_root)
+
+
+def test_discovery_tolerates_ntp_level_skew_on_the_first_proposal(staged_cell):
+    """C-j (claims-alignment): a submitted_at seconds before bound_at (cross-host
+    NTP skew) used to brick the cell permanently — the timestamps live in hashed
+    archived specs and cannot be legitimately corrected."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=0)
+    spec_path = adir / "orchestrator/archive/node_0001/spec.json"
+    spec = json.loads(spec_path.read_text())
+    session = json.loads((cell_root / "agent_session.json").read_text())
+    spec["submitted_at"] = (
+        datetime.fromisoformat(session["session"]["bound_at"])
+        - timedelta(seconds=SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS - 30)
+    ).isoformat()
+    spec_path.write_text(json.dumps(spec))
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    # completed=0 -> no promotable candidates -> straight to selection-ready;
+    # the point is that freeze SUCCEEDED despite the within-tolerance skew.
+    assert state["phase"] == "selection-ready"
 
 
 def test_finalization_rejects_a_proposal_after_the_session_end(staged_cell):

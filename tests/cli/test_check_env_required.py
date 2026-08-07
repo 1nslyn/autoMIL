@@ -172,14 +172,13 @@ def test_template_has_scoring_block():
         "config.yaml.j2 `scoring:` block missing `formula:` field; "
         "ROADMAP Phase 8 success criterion 3 names this verbatim (F-07 fix)."
     )
-    # Documentation-only contract: per CONTEXT D-200, framework does not
-    # evaluate the formula. Comment block must mention 'documentation-only'
-    # OR 'framework does NOT evaluate' to set the right expectation.
-    assert (
-        "documentation-only" in template
-        or "framework does NOT evaluate" in template
-        or "Documentation-only" in template
-    ), (
-        "config.yaml.j2 scoring block must clarify formula is documentation-"
-        "only (D-200 contract); operators must not expect framework eval."
+    # B2 (claims-alignment): the D-200 "documentation-only" contract is over —
+    # CR-1b treats scoring.formula as the reducer used to recompute the
+    # composite from validation metrics, and an unknown value fails
+    # `automil check` / graph seeding. The comment block must teach the
+    # reducer vocabulary and the explicit opt-out so operators cannot follow
+    # a stale example into silently disabling the leak detector.
+    assert "reducer" in template and "trust_reported" in template, (
+        "config.yaml.j2 scoring block must document the CR-1b reducer "
+        "semantics (mean/max/min) and the trust_reported opt-out (B2)."
     )

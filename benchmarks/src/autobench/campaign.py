@@ -124,6 +124,13 @@ MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
 # depended on untracked agent verbosity (REFUSING_NEW is one-way; the frozen
 # analysis plan fails closed below 60).
 CELL_TIME_CONTAINMENT = "7d"
+# C-j (claims-alignment): submit hosts and the controller host are not the same
+# machine on a cluster, and the freeze used to abort PERMANENTLY on a
+# submitted_at even one second before bound_at — timestamps live in hashed
+# archived specs and cannot be legitimately corrected. Ordinary NTP-level skew
+# is tolerated (declared here, hash-locked via PROTOCOL); anything beyond it
+# still fails closed.
+SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS = 120
 # A4 (claims-alignment): the campaign's identity locks, asserted by the
 # materialization audit so a template that silently lost a lock cannot pass.
 # Flat union across arms — each name exists on exactly one arm's search space
@@ -172,6 +179,7 @@ PROTOCOL = {
         "role": "failure-containment-not-search-budget",
         "scope": "one-cell-stage",
     },
+    "submit_clock_skew_tolerance_seconds": SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
     "identity_locked_hparams": list(EXPECTED_IDENTITY_LOCKED_HPARAMS),
     "agentic_fold_trainings_per_cell": {
         "discovery": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),

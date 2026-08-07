@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Iterator, Mapping
@@ -48,6 +48,7 @@ from autobench.campaign import (
     PROTOCOL,
     PROTOCOL_VERSION,
     STAGE_FOLDS,
+    SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
     classify_attempt_outcome,
     content_sha256,
     expected_promotion_sources,
@@ -997,9 +998,16 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         session_bound = datetime.fromisoformat(
             agent_session["session"]["bound_at"]
         )
-        if submitted < session_bound:
+        # C-j (claims-alignment): submit host != controller host; NTP-level
+        # skew around the first submit must not brick the cell forever. The
+        # tolerance is declared in PROTOCOL (hash-locked); beyond it, fail
+        # closed as before.
+        skew = timedelta(seconds=SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS)
+        if submitted < session_bound - skew:
             raise CampaignStageError(
-                f"discovery spec {archive.name} predates controller session binding"
+                f"discovery spec {archive.name} predates controller session "
+                f"binding by more than the declared "
+                f"{SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS}s clock-skew tolerance"
             )
         spec_session = (spec.get("metadata") or {}).get("agent_session")
         expected_session = {
@@ -2386,6 +2394,10 @@ def finalize_agent_session(
                 raise CampaignStageError(
                     "agent session audit contains an invalid submission timestamp"
                 ) from exc
+            # (No skew tolerance on the upper bound, deliberately: ended_at is
+            # operator-supplied at finalization time and can simply be set at
+            # or after the last proposal; only the controller-stamped bound_at
+            # races the first submit across hosts — C-j.)
             if submitted.tzinfo is None or submitted > ended:
                 raise CampaignStageError(
                     "a discovery proposal falls outside the agent session interval"
