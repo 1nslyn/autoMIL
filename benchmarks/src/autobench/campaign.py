@@ -116,6 +116,28 @@ MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
     DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
     + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])
 )
+# A10 (claims-alignment): the eval axis is the campaign's only binding research
+# budget; the cell's TIME budget is pure failure containment. Without an
+# explicit value the cohort template's 6h agent_active budget rode into every
+# cell — and 60 attempts of normal skill-mandated agent activity bills well
+# past 6h, so whether a cell could complete its pre-registered attempt count
+# depended on untracked agent verbosity (REFUSING_NEW is one-way; the frozen
+# analysis plan fails closed below 60).
+CELL_TIME_CONTAINMENT = "7d"
+# A4 (claims-alignment): the campaign's identity locks, asserted by the
+# materialization audit so a template that silently lost a lock cannot pass.
+# Flat union across arms — each name exists on exactly one arm's search space
+# and no hparams.FIELD_ALIASES entry maps onto any of them (asserted in
+# benchmarks/tests/test_campaign_identity_locks.py), so the union cannot
+# false-lock another arm's legitimate knob.
+EXPECTED_ALLOWED_OVERRIDE_OPTIONS = ("--hparams", "--policy-variant")
+EXPECTED_IDENTITY_LOCKED_HPARAMS = (
+    "no_inst_cluster", "bag_weight",  # clam defining-loss switches
+    "model_size",                     # clam attention-width preset
+    "M", "L",                         # abmil attention/embedding widths
+    "mDim", "numLayer_Res",           # dtfd width + residual depth
+    "hidden_dim",                     # nnmil model width
+)
 PROTOCOL = {
     "protocol_version": PROTOCOL_VERSION,
     "seed": 42,
@@ -145,6 +167,12 @@ PROTOCOL = {
         "role": "failure-containment-not-search-budget",
         "scope": "one-multi-fold-attempt",
     },
+    "cell_time_budget": {
+        "budget": CELL_TIME_CONTAINMENT,
+        "role": "failure-containment-not-search-budget",
+        "scope": "one-cell-stage",
+    },
+    "identity_locked_hparams": list(EXPECTED_IDENTITY_LOCKED_HPARAMS),
     "agentic_fold_trainings_per_cell": {
         "discovery": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),
         "promotion_per_candidate": len(STAGE_FOLDS["promotion"]),
@@ -681,7 +709,11 @@ def materialize_discovery_cells(
             "command": cell["commands"]["discovery"],
             "mil_model": cell["model"],
         }
-        config.setdefault("cap", {})["eval_budget"] = PROTOCOL["discovery_attempts"]
+        cap = config.setdefault("cap", {})
+        cap["eval_budget"] = PROTOCOL["discovery_attempts"]
+        # A10: override the cohort template's time budget — the eval axis is
+        # the only binding research budget; time is failure containment.
+        cap["budget"] = CELL_TIME_CONTAINMENT
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
         config.setdefault("orchestrator", {})["default_timeout_min"] = (
             ATTEMPT_TIMEOUT_MIN
@@ -830,6 +862,8 @@ def audit_materialized_campaign(
             raise CampaignManifestError(f"{cell_id}: agent protocol binding drift")
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
+        if (config.get("cap") or {}).get("budget") != CELL_TIME_CONTAINMENT:
+            raise CampaignManifestError(f"{cell_id}: cell time-containment drift")
         if (config.get("training") or {}).get("fold_count") != len(
             STAGE_FOLDS["discovery"]
         ):
@@ -846,6 +880,13 @@ def audit_materialized_campaign(
             policy.mode != "architecture-preserving"
             or policy.editable != expected_editable
             or policy.allowed_variant_kinds != ("policy",)
+            # A4: assert the VALUES, not template fidelity — materialize already
+            # guarantees fidelity; the hole worth closing is a template that
+            # silently lost a lock (or an override option) before the regen.
+            or sorted(policy.allowed_override_options)
+            != sorted(EXPECTED_ALLOWED_OVERRIDE_OPTIONS)
+            or sorted(policy.identity_locked_hparams)
+            != sorted(EXPECTED_IDENTITY_LOCKED_HPARAMS)
         ):
             raise CampaignManifestError(f"{cell_id}: candidate boundary drift")
         state = load_stage_state(adir.parent)
