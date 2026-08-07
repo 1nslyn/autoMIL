@@ -4,7 +4,19 @@ _Audit of whether the agent, driving autoMIL through the current harness and
 constraints, can actually produce the evidence each preprint claim needs.
 Run 2026-08-07 against `main` (post-#38, `automil-preprint-130-v4`), before any
 campaign cell has launched. Every finding below was verified in code by at
-least two independent readers; file:line citations are to this checkout._
+least two independent readers; file:line citations are to the audited
+checkout (pre-fix)._
+
+**Status: the fix plan in §4 is implemented on this branch.** Every A/B item
+below is FIXED unless its row says otherwise; scope adjustments made during
+implementation (with reasons) are: A7 resolved docs-only under the ship-fast
+constraint; B8 ships the arm-defaults equivalence gate where evidence exists
+(post-H-3 archives) with the pre-H-3 rerun-vs-reuse call left to the operator;
+C-d/C-e resolved as honesty labels rather than deletions (both artifacts are
+load-bearing for acceptance tests / the stable config surface); C-j's
+tolerance covers the controller-stamped lower bound only (`ended_at` is
+operator-supplied and needs none). Two pre-firewall test fixtures and two
+tests that pinned pre-CR-1b behavior were updated to the contract shape._
 
 **Method.** Three independent code sweeps (orchestrator enforcement surfaces;
 campaign + consumer machinery; graph/gate/agent assets), reconciled against the
