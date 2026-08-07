@@ -10,13 +10,20 @@ checkout (pre-fix)._
 **Status: the fix plan in §4 is implemented on this branch.** Every A/B item
 below is FIXED unless its row says otherwise; scope adjustments made during
 implementation (with reasons) are: A7 resolved docs-only under the ship-fast
-constraint; B8 ships the arm-defaults equivalence gate where evidence exists
-(post-H-3 archives) with the pre-H-3 rerun-vs-reuse call left to the operator;
+constraint; B8 ships the arm-defaults equivalence gate where a static
+frozen-tree default exists to compare against (post-H-3 dtfd/titan archives;
+nnMIL's arm block is a data-computed plan, so its reuse stays the operator's
+call) with the pre-H-3 rerun-vs-reuse call left to the operator;
 C-d/C-e resolved as honesty labels rather than deletions (both artifacts are
 load-bearing for acceptance tests / the stable config surface); C-j's
 tolerance covers the controller-stamped lower bound only (`ended_at` is
-operator-supplied and needs none). Two pre-firewall test fixtures and two
-tests that pinned pre-CR-1b behavior were updated to the contract shape._
+operator-supplied and needs none); A10's PROTOCOL key shipped as
+`cell_time_budget` (constant `CELL_TIME_CONTAINMENT = "7d"`), set on discovery
+configs and inherited by promotion's deep-copied config; B6's shared contract
+is `scoring.ingest_signal` at the three reconcile mouths, with the terminal
+writer running the same key-guard/recompute primitives inline (Steps
+2a/2b/2c). Two pre-firewall test fixtures and two tests that pinned pre-CR-1b
+behavior were updated to the contract shape.
 
 **Method.** Three independent code sweeps (orchestrator enforcement surfaces;
 campaign + consumer machinery; graph/gate/agent assets), reconciled against the
@@ -62,7 +69,8 @@ surface is:
    `wrap_optimizer_for(opt, role)`, `wrap_scheduler_for(sched, role)`,
    `should_stop(default, epoch, metrics)`.
 
-Reachability, as the code stands (before the fixes in §4):
+Reachability, as audited — the pre-fix snapshot, kept as the historical
+record (post-fix note below the table):
 
 | Recipe family (proposal §5 "allowed") | clam | abmil | dtfd | titan | nnmil |
 |---|---|---|---|---|---|
@@ -74,6 +82,15 @@ Reachability, as the code stands (before the fixes in §4):
 | Loss shaping (label smoothing, focal, class-balanced) | ✗ no seam | ✗ | ✗ | ✗ | ✗ |
 | Sampling / batch construction | `weighted_sample` bool only | ✗ | ✗ | ✗ | `batch_sampler` string |
 | Ensembling / multi-init, val-threshold opt., augmentation | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+_Post-fix (shipped with §4): the three bolded ✗ cells are closed — clam's
+declared scalar channel is live (A1: `apply_overrides_to_exp_cfg` at the top
+of clam `run_experiment`), clam classification stopping receives real val
+metrics (A2), and nnmil's `dropout` is actually applied (A8) — and A4's
+identity locks remove the capacity knobs from the campaign-tunable sets (clam
+`model_size`; abmil `M`,`L`; dtfd `mDim`,`numLayer_Res`; nnmil `hidden_dim`),
+shrinking the per-arm scalar counts accordingly. Every other cell is
+unchanged._
 
 Two consequences worth stating plainly:
 

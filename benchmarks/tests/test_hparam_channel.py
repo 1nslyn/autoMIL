@@ -279,3 +279,21 @@ class TestCliHparamsFlag:
         assert "--hparams" in out.stdout
         assert "--weight_decay" in out.stdout
         assert "--no_early_stopping" in out.stdout
+
+
+def test_clam_transport_dataclasses_stay_disjoint():
+    """A1 partition safety: apply_overrides_to_exp_cfg resolves model-first, so
+    a field name shared by ModelConfig and TrainConfig would be consumed for
+    the model silently. Pin the disjointness the partition relies on."""
+    from dataclasses import fields
+
+    from autobench.pipeline.config import ModelConfig, TrainConfig
+
+    model_fields = {f.name for f in fields(ModelConfig)}
+    train_fields = {f.name for f in fields(TrainConfig)}
+    shared = model_fields & train_fields
+    assert not shared, (
+        f"ModelConfig and TrainConfig share field(s) {sorted(shared)} — the "
+        "clam opaque-channel partition would silently route them to the model; "
+        "rename the field or teach apply_overrides_to_exp_cfg to refuse."
+    )

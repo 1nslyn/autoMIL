@@ -317,3 +317,67 @@ def test_exhausting_the_eval_budget_flips_the_cell_to_refusing_new(tmp_path):
         "an exhausted eval budget must move the cell along the same state machine "
         "the time cap uses"
     )
+
+
+def test_relaunch_after_crash_window_bills_exactly_once(tmp_path):
+    """A9 exactly-once: a daemon crash inside the archive->unlink window means
+    _launch re-processes the same node on restart — the second pass must not
+    re-bill (billed > archived would deadlock the freeze from the other side).
+    """
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, consumed_evals=2)
+    _seed_graph(orch, "node_0001")
+    _stub_runner(orch, tmp_path, "node_0001")
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(_spec("node_0001"), gpu_id=0)
+    assert _read_cell(orch).consumed_evals == 3
+
+    # Simulate the crash window: the queue file reappears (never unlinked)
+    # and the daemon re-launches the same node after restart.
+    orch.running.pop("node_0001", None)
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(_spec("node_0001"), gpu_id=0)
+
+    cell = _read_cell(orch)
+    assert cell.consumed_evals == 3, "re-processing the same node must not re-bill"
+    assert cell.billed_node_ids.count("node_0001") == 1
+
+
+def test_queue_unlink_failure_aborts_launch_and_bills_once(tmp_path, monkeypatch):
+    """A9: if the queue-file unlink fails, this attempt aborts (no launch with
+    the spec still queued) and the retry next tick does not re-bill."""
+    import pathlib
+
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, consumed_evals=2)
+    _seed_graph(orch, "node_0001")
+    _stub_runner(orch, tmp_path, "node_0001")
+
+    queue_file = orch.queue_dir / "node_0001.json"
+    queue_file.write_text("{}")
+    spec = _spec("node_0001")
+    spec["_file"] = str(queue_file)
+
+    real_unlink = pathlib.Path.unlink
+
+    def failing_unlink(self, *a, **k):
+        if self.name == "node_0001.json":
+            raise OSError("simulated NFS unlink failure")
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", failing_unlink)
+    orch._launch(dict(spec), gpu_id=0)
+    monkeypatch.setattr(pathlib.Path, "unlink", real_unlink)
+
+    assert "node_0001" not in orch.running, "aborted attempt must not launch"
+    assert queue_file.exists(), "spec stays queued for the next tick"
+    assert _read_cell(orch).consumed_evals == 3
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(dict(spec), gpu_id=0)
+    assert _read_cell(orch).consumed_evals == 3, "retry must not re-bill"
+    assert "node_0001" in orch.running

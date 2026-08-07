@@ -130,6 +130,16 @@ class Cell:
     — i.e. produced usable results. REPORTED ONLY: this is never the cap, so the
     paper can quote both attempts and usable results per cell."""
 
+    billed_node_ids: list = dataclasses.field(default_factory=list)
+    """Node ids already billed to this cell — the A9 exactly-once key.
+    ``_launch`` can legitimately re-process one node (daemon crash inside its
+    archive→queue-unlink window, or a failed queue unlink retried next tick);
+    billing keyed on membership here stays exactly-once across those retries,
+    keeping ``consumed_evals`` equal to the archived non-cap-refused census the
+    campaign freeze requires. Bounded by ``eval_budget`` in practice; absent
+    from pre-A9 cell files (default-valued, same contract as the blocks
+    above)."""
+
 
 def make_cell_id(dataset: str, encoder: str, mil_model: str,
                  task: str | None = None) -> str:

@@ -196,6 +196,14 @@ def ingest_signal(
         return leaking, None, None
     try:
         recomputed = recompute_composite(result.get("metrics") or {}, formula)
-    except ValueError:
+    except ValueError as exc:
+        # Reachable only via a legacy graph.json whose STORED formula is
+        # invalid (B2 blocks the config path at seeding). Loud, because the
+        # fallback is trusting the reported scalar — CR-1b off for this node.
+        import logging
+
+        logging.getLogger(__name__).error(
+            "ingest: %s — trusting the reported composite for this payload", exc
+        )
         recomputed = None
     return (), recomputed, recompute_composite_se(result)

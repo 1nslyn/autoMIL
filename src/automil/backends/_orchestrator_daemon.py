@@ -1423,7 +1423,16 @@ class ExperimentOrchestrator:
 
     def _bump_cell_counters(self, spec: dict, *, consumed_delta: int = 0,
                             completed_delta: int = 0) -> None:
-        """Immutable read-modify-write of a cell's eval counters."""
+        """Immutable read-modify-write of a cell's eval counters.
+
+        A9 exactly-once: the consumed (billing) axis is keyed on the node id —
+        ``_launch`` can re-process one node after a crash inside its
+        archive→queue-unlink window or a failed queue unlink, and a re-bill
+        would strand the cell with ``consumed_evals`` above the archived-spec
+        census (the mirror image of the under-billing deadlock A9 fixed). The
+        membership check and the counter advance land in one atomic
+        ``write_cell``.
+        """
         from dataclasses import replace
 
         from automil.cells import write_cell
@@ -1431,12 +1440,20 @@ class ExperimentOrchestrator:
         cell = self._cell_for_spec(spec, warn=False)
         if cell is None:
             return
+        node_id = str(spec.get("id") or "")
+        billed = list(cell.billed_node_ids)
+        if consumed_delta and node_id:
+            if node_id in billed:
+                consumed_delta = 0
+            else:
+                billed.append(node_id)
         try:
             write_cell(
                 replace(
                     cell,
                     consumed_evals=cell.consumed_evals + consumed_delta,
                     completed_evals=cell.completed_evals + completed_delta,
+                    billed_node_ids=billed,
                 ),
                 self.automil_dir / "cells",
             )
@@ -1550,15 +1567,29 @@ class ExperimentOrchestrator:
         # to equal the cell's consumed evals exactly — billing only spawned
         # processes let every pre-spawn failure (admissibility, base_commit,
         # worktree, Popen) archive an unbilled spec and deadlock the cell
-        # permanently. "Archived attempt <=> billed attempt" is now a
-        # construction invariant, which is also what cap.py's bill-at-launch
-        # policy and the campaign README already documented.
+        # permanently. Billing is exactly-once per node id (the cell's
+        # billed_node_ids key), so a crash inside this window or a failed
+        # queue unlink cannot re-bill on retry. Residual fail-open paths
+        # (cell file missing/unreadable, counter write failure) remain
+        # deliberate and are loudly logged — they are I/O faults, not the
+        # per-launch failure modes that used to deadlock every cell.
         self._record_cell_launch(spec)
 
-        # Remove from queue before attempting launch (prevents infinite retry)
+        # Remove from queue before attempting launch (prevents infinite retry).
+        # A9: on unlink failure, abort THIS attempt instead of launching with
+        # the queue file still present — the next tick retries cleanly (the
+        # bill is idempotent, the archive write is an overwrite), whereas
+        # launching now would let the still-queued spec double-dispatch.
         src_file = spec.get("_file")
         if src_file and Path(src_file).exists():
-            Path(src_file).unlink()
+            try:
+                Path(src_file).unlink()
+            except OSError:
+                logger.exception(
+                    "Could not unlink queue file for %s; aborting this launch "
+                    "attempt (billed once; retried next tick)", node_id,
+                )
+                return
 
         # LCH-1/LCH-3: submit-time admissibility is evidence, not authority.
         # Recompute it from the live policy and exact archived overlay before a

@@ -91,10 +91,22 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     payload, (g.meta.get("scoring") or {}).get("formula")
                 )
                 if _leaking:
+                    # Ingest as crash (the ingest_signal contract), not skip:
+                    # this is the ONE tool that refreshes existing executed
+                    # nodes, so it is also the repair path for a node whose
+                    # composite was contaminated before the A6 guard existed.
                     click.echo(
-                        f"  skip {nid}: val-firewall violation — held-out-named "
-                        f"metrics key(s): {', '.join(_leaking)}"
+                        f"  {nid}: val-firewall violation — held-out-named "
+                        f"metrics key(s) {', '.join(_leaking)}; ingesting as crash"
                     )
+                    gnode["status"] = "crash"
+                    gnode["composite"] = 0.0
+                    gnode["metrics"] = {}
+                    gnode["metadata"] = merged_metadata(gnode, {
+                        "result_status": payload.get("status"),
+                        "firewall_violation": list(_leaking),
+                    })
+                    refreshed += 1
                     continue
                 if _comp_rec is not None and payload.get("status") == "completed":
                     gnode["composite"] = _comp_rec
