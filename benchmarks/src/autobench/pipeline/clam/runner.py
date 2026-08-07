@@ -10,6 +10,7 @@ import torch
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.dataset import create_dataset, load_fold_splits
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.hparams import apply_overrides_to_exp_cfg
 from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.clam.train import train_fold
 from autobench.pipeline.policy_dispatch import PolicyRuntime
@@ -91,6 +92,11 @@ def run_experiment(
     results_dir: str | None = None,
 ) -> dict:
     """Run all folds for a single CLAM experiment and return aggregated results."""
+    # A1 (claims-alignment): consume the opaque --hparams channel. CLAM trains
+    # off the shared ModelConfig + TrainConfig, so this is the one arm where the
+    # opaque keys land on exp_cfg itself — before results-dir resolution (CR-5b
+    # cache identity) and before exp_cfg.save (honest provenance).
+    apply_overrides_to_exp_cfg(exp_cfg, arm="clam")
     # CR-5b: seed is now a path segment and the rest of the config is
     # fingerprinted into a sidecar, so a re-run at a different seed or
     # hyperparameter can no longer resume these folds' metrics.json.

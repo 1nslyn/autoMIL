@@ -35,6 +35,7 @@ from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.hparams import (
     all_overrides,
     apply_overrides,
+    apply_overrides_to_exp_cfg,
     apply_overrides_to_plan,
     overrides_from_exp_cfg,
 )
@@ -193,6 +194,50 @@ class TestClamsInstanceClusteringBranchIsReachable:
         exp = _exp()
         exp.model.bag_loss = "svm"
         assert all_overrides(exp) == {"bag_loss": "svm"}
+
+
+class TestClamOpaqueChannel:
+    """A1 (claims-alignment): CLAM's --hparams channel must actually land.
+
+    CLAM trains off the shared ModelConfig + TrainConfig, so the opaque keys are
+    partitioned across both transport dataclasses in place — with the same
+    declared-space enforcement every other arm gets.
+    """
+
+    def test_opaque_keys_partition_across_model_and_train(self):
+        exp = _exp(hparams={"lr": 9e-4, "dropout": 0.4, "bag_loss": "svm", "patience": 25})
+        apply_overrides_to_exp_cfg(exp, arm="clam")
+        assert exp.train.lr == 9e-4
+        assert exp.train.patience == 25
+        assert exp.model.dropout == 0.4
+        assert exp.model.bag_loss == "svm"
+
+    def test_the_wired_values_reach_the_clam_args_namespace(self, tmp_path):
+        from autobench.pipeline.clam.train import _make_clam_args
+
+        exp = _exp(hparams={"lr": 9e-4, "dropout": 0.4})
+        apply_overrides_to_exp_cfg(exp, arm="clam")
+        args = _make_clam_args(exp, str(tmp_path))
+        assert (args.lr, args.drop_out) == (9e-4, 0.4)
+
+    def test_identity_locked_keys_raise_at_train_time_too(self):
+        exp = _exp(hparams={"no_inst_cluster": True})
+        with pytest.raises(ValueError, match="LOCKED"):
+            apply_overrides_to_exp_cfg(exp, arm="clam")
+
+    def test_unknown_keys_fail_loud(self):
+        exp = _exp(hparams={"numGroup": 8})  # DTFD's knob, not CLAM's
+        with pytest.raises(ValueError, match="cannot accept"):
+            apply_overrides_to_exp_cfg(exp, arm="clam")
+
+    def test_empty_channel_is_a_noop(self):
+        from dataclasses import replace
+
+        exp = _exp()
+        model_before, train_before = replace(exp.model), replace(exp.train)
+        apply_overrides_to_exp_cfg(exp, arm="clam")
+        assert exp.model == model_before
+        assert exp.train == train_before
 
 
 class TestCliHparamsFlag:
