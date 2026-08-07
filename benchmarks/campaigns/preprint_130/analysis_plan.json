@@ -5,7 +5,7 @@
     "survival_primary": "test_c_index",
     "survival_scale_rule": "aggregate fold-level c-index values; never pool raw risks across independently trained folds"
   },
-  "campaign_id": "automil-preprint-130-v4",
+  "campaign_id": "automil-preprint-130-v5",
   "estimands": {
     "agent_resources": {
       "fields": [
@@ -34,9 +34,9 @@
         "train-only-source",
         "inadmissible"
       ],
-      "candidate_class_scope": "failure-inclusive census of the 60 launched and charged attempts; submit-time refusals are not launched attempts and remain framework validation evidence rather than campaign outcomes",
+      "candidate_class_scope": "failure-inclusive census of the 30 launched and charged attempts; submit-time refusals are not launched attempts and remain framework validation evidence rather than campaign outcomes",
       "discovery_fields": [
-        "all 60 charged attempts including failures",
+        "all 30 charged attempts including failures",
         "terminal status, reason, budget-killed fact, and deterministically derived outcome class",
         "candidate class and policy hash",
         "validation-only running-best trajectory",
@@ -61,7 +61,7 @@
       ],
       "resource_aggregation": "report the five-fold native baseline, three-fold discovery, and two-fold promotion as separate strata; elapsed_seconds/3600 is named GPU-attached job-hours (not measured accelerator utilization), and any cross-stage agentic-search value is an observed total labelled a lower bound when attempts lack timing",
       "timing": "process evidence is hashed into the 130-cell selection freeze before any held-out value is opened",
-      "unit": "one predeclared cell with exactly 60 discovery attempts and at most 10 promotion jobs"
+      "unit": "one predeclared cell with exactly 30 discovery attempts and at most 10 promotion jobs"
     },
     "tile_ranking_response": {
       "arms": [
@@ -99,7 +99,7 @@
   },
   "missingness": {
     "expected_cells": 130,
-    "expected_discovery_attempts_per_cell": 60,
+    "expected_discovery_attempts_per_cell": 30,
     "expected_folds_per_baseline_and_winner": 5,
     "imputation": "none",
     "policy": "fail closed; do not emit a publication report from an incomplete or inconsistent campaign"

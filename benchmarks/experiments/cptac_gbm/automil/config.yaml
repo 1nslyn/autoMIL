@@ -122,7 +122,6 @@ cap:
   budget: 6h
   safety_buffer: 30m
   mode: agent_active
-  idle_grace_seconds: 300
 
 orchestrator:
   poll_interval_sec: 5
