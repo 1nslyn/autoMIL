@@ -140,10 +140,11 @@ source; then `uv run automil reconcile`.
    workers < cap while the queue is non-empty and free VRAM is large, the loop is
    running serially — submit more specs until the cap binds.
 
-5. **WAIT** on Monitor completion events (do **not** poll). The activity-gated
-   budget bills only the time you are *acting*, not the hours experiments run —
-   so keep working: while a batch trains, run the RESEARCH/DIAGNOSE for the next
-   one rather than sitting idle.
+5. **WAIT** on Monitor completion events (do **not** poll). Agent-active time is
+   Claude Code's native cumulative active-time metric (CLI + user active
+   seconds; idle excluded). Monitor is the event-driven wait mechanism, not the
+   budget clock. Research or diagnosis performed while a batch trains remains
+   active work and is therefore billed normally.
 
 6. **RECONCILE + LEARN.** `uv run automil reconcile`; read results; update
    `learnings.md` (what worked / failed / near-miss, with paper ids). Commit
