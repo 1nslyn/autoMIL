@@ -15,6 +15,7 @@ from autobench.campaign import (
     ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
+    DISCOVERY_ATTEMPTS,
     PROTOCOL_VERSION,
     TILE_ARMS,
     content_sha256,
@@ -384,7 +385,7 @@ def _search_process_summary(cells: list[dict[str, Any]]) -> dict[str, Any]:
         for stage in ("discovery", "promotion")
     )
     return {
-        "discovery_attempts": 60 * len(cells),
+        "discovery_attempts": DISCOVERY_ATTEMPTS * len(cells),
         "candidate_class_counts": dict(sorted(class_counts.items())),
         "result_status_counts": dict(sorted(result_counts.items())),
         "promotion_status_counts": dict(sorted(promotion_counts.items())),
@@ -494,7 +495,7 @@ def build_publication_report(
         ) != list(ATTEMPT_OUTCOME_CLASSES))
         or (plan.get("missingness") or {}).get(
             "expected_discovery_attempts_per_cell"
-        ) != 60
+        ) != DISCOVERY_ATTEMPTS
     ):
         raise CampaignAnalysisError("analysis plan is not frozen for this campaign")
     agent_protocol_path = runtime_root / AGENT_PROTOCOL_FILE

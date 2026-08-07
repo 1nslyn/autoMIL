@@ -33,8 +33,15 @@ from automil.admissibility import (
     load_candidate_policy,
     revalidate_candidate_spec,
 )
-from automil.cells.state import read_cell
-from automil.cells.state import Cell, CellStatus, write_cell
+from automil.cells import (
+    ActivityError,
+    bind_activity_session,
+    get_or_create_cell,
+    read_activity_report,
+    resolve_cap_config,
+    resolve_cell_identity,
+)
+from automil.cells.state import Cell, CellStatus, read_cell, write_cell
 from automil.launch_binding import LaunchBindingError, validate_launch_binding
 
 from autobench.campaign import (
@@ -928,7 +935,7 @@ def _discovery_cell(adir: Path, budget_cell_id: str):
 
 
 def freeze_discovery(cell_root: Path) -> dict[str, Any]:
-    """Freeze up to ten complete candidates after exactly 60 charged attempts."""
+    """Freeze up to ten complete candidates after the charged-attempt budget."""
     with _stage_lock(cell_root):
         return _freeze_discovery_unlocked(cell_root)
 
@@ -958,7 +965,9 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         raise CampaignStageError(f"discovery still has queued/running work: {pending}")
     budget_cell = _discovery_cell(adir, config["budget_identity"]["cell_id"])
     if budget_cell.eval_budget != DISCOVERY_ATTEMPTS:
-        raise CampaignStageError("discovery cell does not carry the frozen 60-attempt cap")
+        raise CampaignStageError(
+            f"discovery cell does not carry the frozen {DISCOVERY_ATTEMPTS}-attempt cap"
+        )
     if budget_cell.consumed_evals != DISCOVERY_ATTEMPTS:
         raise CampaignStageError(
             f"discovery requires exactly {DISCOVERY_ATTEMPTS} charged attempts; "
@@ -1217,8 +1226,9 @@ def _promotion_cell(
         budget_seconds=cap.budget_seconds,
         safety_buffer_seconds=cap.safety_buffer_seconds,
         status=CellStatus.ACTIVE,
-        mode=cap.mode,
-        idle_grace_seconds=cap.idle_grace_seconds,
+        # Promotion has no coding-agent session. Its time wall therefore uses
+        # exact elapsed wall time while the eval axis controls candidate count.
+        mode="wall_clock",
         eval_budget=budget,
     )
     write_cell(created, adir / "cells")
@@ -1286,6 +1296,7 @@ def _materialize_promotion_unlocked(
         )
         (temporary_adir / ".gitignore").write_text(
             "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
+            ".activity.jsonl\n.activity.samples.json\n.activity.lock\n"
             ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
         )
         (temporary_adir / "plan.md").write_text(
@@ -2164,6 +2175,7 @@ def _validate_agent_session(
             session.get("ended_at") is not None
             or session.get("termination_reason") is not None
             or session.get("usage") is not None
+            or session.get("activity") is not None
             or payload.get("attestation_sha256") is not None
         ):
             raise CampaignStageError("open agent session contains post-session fields")
@@ -2178,6 +2190,26 @@ def _validate_agent_session(
         if ended.tzinfo is None or ended < bound:
             raise CampaignStageError("agent session time interval is invalid")
         validate_agent_usage_artifact(session.get("usage"))
+        activity = session.get("activity")
+        if not isinstance(activity, Mapping) or set(activity) != {
+            "source", "active_seconds", "event_count", "sha256",
+        }:
+            raise CampaignStageError("agent session activity attestation is invalid")
+        if activity.get("source") != "claude-native-active-time-v1":
+            raise CampaignStageError("agent session activity source is invalid")
+        if (
+            not isinstance(activity.get("active_seconds"), (int, float))
+            or isinstance(activity.get("active_seconds"), bool)
+            or not math.isfinite(float(activity["active_seconds"]))
+            or float(activity["active_seconds"]) < 0
+            or not isinstance(activity.get("event_count"), int)
+            or isinstance(activity.get("event_count"), bool)
+            or int(activity["event_count"]) < 3
+            or not isinstance(activity.get("sha256"), str)
+            or len(str(activity["sha256"])) != 64
+            or any(char not in "0123456789abcdef" for char in str(activity["sha256"]))
+        ):
+            raise CampaignStageError("agent session activity attestation is invalid")
         canonical = {
             key: value for key, value in payload.items()
             if key != "attestation_sha256"
@@ -2206,6 +2238,87 @@ def _cell_agent_protocol_sha256(
     return protocol_sha256
 
 
+def _bind_campaign_activity_and_open_cell(
+    cell_root: Path,
+    *,
+    cell: Mapping[str, Any],
+    session_id: str,
+    binding_sha256: str,
+) -> None:
+    """Idempotently join the runtime session, journal, and budget cell."""
+    adir = cell_root / "automil"
+    try:
+        config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+        identity = resolve_cell_identity(config)
+        cap = resolve_cap_config(config)
+        budget_identity = cell["budget_identity"]
+        expected_identity = {
+            "dataset": identity.dataset,
+            "task": identity.task,
+            "encoder": identity.encoder,
+            "mil_model": identity.mil_model,
+            "cell_id": identity.cell_id,
+        }
+        if budget_identity != expected_identity:
+            raise CampaignStageError(
+                "campaign budget identity differs from config.yaml"
+            )
+        report = read_activity_report(adir, identity.cell_id)
+        if report.sessions != (session_id,):
+            raise CampaignStageError(
+                "SessionStart was not recorded exclusively for this campaign cell"
+            )
+        if report.metered_sessions != (session_id,):
+            raise CampaignStageError(
+                "Claude active-time metrics were not recorded for this session"
+            )
+        allowed_bindings = ((), ((session_id, binding_sha256),))
+        if report.bindings not in allowed_bindings:
+            raise CampaignStageError(
+                "activity journal has a conflicting launch binding"
+            )
+        bind_activity_session(
+            adir, identity.cell_id, session_id, binding_sha256,
+        )
+        bound_report = read_activity_report(adir, identity.cell_id)
+        if bound_report.bindings != ((session_id, binding_sha256),):
+            raise CampaignStageError("activity journal binding was not persisted")
+        budget_cell = get_or_create_cell(
+            dataset=identity.dataset,
+            encoder=identity.encoder,
+            mil_model=identity.mil_model,
+            task=identity.task,
+            budget_seconds=cap.budget_seconds,
+            safety_buffer_seconds=cap.safety_buffer_seconds,
+            mode=cap.mode,
+            eval_budget=cap.eval_budget,
+            cells_dir=adir / "cells",
+        )
+    except CampaignStageError:
+        raise
+    except (ActivityError, KeyError, OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        raise CampaignStageError(
+            f"cannot bind campaign activity accounting: {exc}"
+        ) from exc
+
+    expected_cap = (
+        identity.cell_id,
+        cap.budget_seconds,
+        cap.safety_buffer_seconds,
+        cap.mode,
+        cap.eval_budget,
+    )
+    actual_cap = (
+        budget_cell.cell_id,
+        budget_cell.budget_seconds,
+        budget_cell.safety_buffer_seconds,
+        budget_cell.mode,
+        budget_cell.eval_budget,
+    )
+    if actual_cap != expected_cap:
+        raise CampaignStageError("persisted campaign budget cell has drifted")
+
+
 def open_agent_session(
     cell_root: Path, session_start: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -2215,9 +2328,38 @@ def open_agent_session(
         if state.get("phase") != "discovery":
             raise CampaignStageError("agent session must open during discovery")
         target = cell_root / AGENT_SESSION_FILE
-        if target.exists():
-            raise CampaignStageError("agent session has already been opened")
         adir = cell_root / "automil"
+        if not isinstance(session_start, Mapping) or set(session_start) != {
+            "session_id", "started_at",
+        }:
+            raise CampaignStageError("agent session start field set is not exact")
+        session_id = session_start.get("session_id")
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise CampaignStageError("agent session session_id is invalid")
+        protocol_sha256 = _cell_agent_protocol_sha256(cell_root, state)
+        cell = json.loads((adir / "campaign_cell.json").read_text())
+        if target.exists():
+            try:
+                current = _validate_agent_session(
+                    json.loads(target.read_text()),
+                    state=state,
+                    agent_protocol_sha256=protocol_sha256,
+                )
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CampaignStageError("agent session record is unreadable") from exc
+            expected_start = {
+                "session_id": current["session"]["session_id"],
+                "started_at": current["session"]["started_at"],
+            }
+            if json.loads(json.dumps(session_start)) != expected_start:
+                raise CampaignStageError("agent session opening is immutable")
+            _bind_campaign_activity_and_open_cell(
+                cell_root,
+                cell=cell,
+                session_id=session_id,
+                binding_sha256=current["binding_sha256"],
+            )
+            return current
         durable_specs = [
             *adir.glob("orchestrator/queue/*.json"),
             *adir.glob("orchestrator/running/**/*.json"),
@@ -2256,17 +2398,9 @@ def open_agent_session(
                 raise CampaignStageError(
                     "agent session must precede proposal planning and learnings"
                 )
-        cell = json.loads((adir / "campaign_cell.json").read_text())
         budget_path = adir / "cells" / f"{cell['budget_identity']['cell_id']}.json"
         if budget_path.is_file() and read_cell(budget_path).consumed_evals != 0:
             raise CampaignStageError("agent session must precede budget consumption")
-        if not isinstance(session_start, Mapping) or set(session_start) != {
-            "session_id", "started_at",
-        }:
-            raise CampaignStageError("agent session start field set is not exact")
-        session_id = session_start.get("session_id")
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise CampaignStageError("agent session session_id is invalid")
         for sibling in cell_root.parent.iterdir():
             sibling_session = sibling / AGENT_SESSION_FILE
             if sibling == cell_root or not sibling_session.is_file():
@@ -2290,11 +2424,10 @@ def open_agent_session(
                 raise CampaignStageError(
                     "agent session_id is already reserved by another cell"
                 )
-        protocol_sha256 = _cell_agent_protocol_sha256(cell_root, state)
         started_at = session_start.get("started_at")
         bound_at = _utc_now()
         payload: dict[str, Any] = {
-            "schema_version": 2,
+            "schema_version": 3,
             "campaign_id": CAMPAIGN_ID,
             "cell_id": state["cell_id"],
             "agent_protocol_sha256": protocol_sha256,
@@ -2306,6 +2439,7 @@ def open_agent_session(
                 "ended_at": None,
                 "termination_reason": None,
                 "usage": None,
+                "activity": None,
             },
             "binding_sha256": content_sha256(_session_binding_payload(
                 state=state, protocol_sha256=protocol_sha256,
@@ -2318,6 +2452,12 @@ def open_agent_session(
             payload, state=state, agent_protocol_sha256=protocol_sha256,
         )
         _atomic_write_json(target, validated)
+        _bind_campaign_activity_and_open_cell(
+            cell_root,
+            cell=cell,
+            session_id=session_id,
+            binding_sha256=validated["binding_sha256"],
+        )
         return validated
 
 
@@ -2353,9 +2493,39 @@ def finalize_agent_session(
             if json.loads(json.dumps(session_end)) != expected:
                 raise CampaignStageError("agent session finalization is immutable")
             return current
+        try:
+            cell = json.loads(
+                (cell_root / "automil/campaign_cell.json").read_text()
+            )
+            budget_cell_id = str(cell["budget_identity"]["cell_id"])
+            activity = read_activity_report(
+                cell_root / "automil", budget_cell_id,
+            )
+        except (ActivityError, KeyError, OSError, TypeError, json.JSONDecodeError) as exc:
+            raise CampaignStageError(
+                f"agent session activity accounting is invalid: {exc}"
+            ) from exc
+        expected_session_id = current["session"]["session_id"]
+        if activity.sessions != (expected_session_id,):
+            raise CampaignStageError(
+                "agent session activity journal is not exclusive to this session"
+            )
+        if activity.bindings != (
+            (expected_session_id, current["binding_sha256"]),
+        ):
+            raise CampaignStageError(
+                "agent session activity binding differs from agent_session.json"
+            )
+        if not activity.complete:
+            raise CampaignStageError(
+                "SessionEnd and a final Claude active-time sample must be recorded "
+                "before finalization"
+            )
         audits = state.get("discovery", {}).get("attempt_audit")
         if not isinstance(audits, list) or len(audits) != DISCOVERY_ATTEMPTS:
-            raise CampaignStageError("agent session lacks the exact 60-proposal audit")
+            raise CampaignStageError(
+                f"agent session lacks the exact {DISCOVERY_ATTEMPTS}-proposal audit"
+            )
         if any(
             not isinstance(row, dict)
             or row.get("agent_session_binding_sha256") != current["binding_sha256"]
@@ -2386,6 +2556,12 @@ def finalize_agent_session(
             "ended_at": session_end["ended_at"],
             "termination_reason": session_end["termination_reason"],
             "usage": session_end["usage"],
+            "activity": {
+                "source": "claude-native-active-time-v1",
+                "active_seconds": activity.active_seconds,
+                "event_count": activity.event_count,
+                "sha256": activity.sha256,
+            },
         })
         prepared["attestation_sha256"] = content_sha256({
             key: value for key, value in prepared.items()
@@ -2490,7 +2666,9 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
         or not isinstance(attempts, list)
         or len(attempts) != DISCOVERY_ATTEMPTS
     ):
-        raise CampaignStageError("process evidence requires exactly 60 discovery attempts")
+        raise CampaignStageError(
+            f"process evidence requires exactly {DISCOVERY_ATTEMPTS} discovery attempts"
+        )
     audit_fields = {
         "node_id", "source_spec_sha256", "submitted_at", "agent_session_id",
         "agent_session_binding_sha256", "candidate_class", "policy_hash",
