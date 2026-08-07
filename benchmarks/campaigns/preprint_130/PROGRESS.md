@@ -108,3 +108,4 @@ One line per week. Keeps a history the Sheet does not.
 | Issue | Owner | Status |
 |---|---|---|
 | Authorship: 3 authors listed, 5 running cohorts; `CITATION.cff` and the manuscript disagree on corresponding author | all | open — blocks public release (P-AUTH-1) |
+| Campaign Sheet sharing must match the repository's intended visibility | Leo | open — verify before public release (P-SHARE-1) |

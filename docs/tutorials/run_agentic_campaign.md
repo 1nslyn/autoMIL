@@ -17,15 +17,11 @@ breaking.
 
 ## 0. Status — what you can and cannot start today
 
-| Gate | Owner | State |
-|---|---|---|
-| 60 CLAM/ABMIL baseline reruns | Leo | 🔄 queued on `fir` (`53319143`) |
-| `agent_protocol.json` generated + hash-verified | Leo | ⬜ **blocks everything** |
-| Real-GPU canary, all 10 arm/task regimes | Leo | ⬜ **blocks all formal cells** |
-| Per-cell agent launcher | Leo | ⬜ not written yet |
-
-**Nobody runs a formal cell until all four are green.** Until then, read this
-document, and if you want to practise, ask Leo for a throwaway cell root.
+[`benchmarks/campaigns/preprint_130/PROGRESS.md`](../../benchmarks/campaigns/preprint_130/PROGRESS.md)
+is the single source of truth for launch gates. **Nobody runs a formal cell
+until every item in its Gates section is green**, including exact 130/130
+manifest coverage, the ten-regime real-GPU canary, the locked agent protocol,
+and the approved allocation. Until then, use only a throwaway cell root.
 
 Tracking lives in two places, and they are not interchangeable:
 
@@ -34,6 +30,11 @@ Tracking lives in two places, and they are not interchangeable:
   where you update your own cells.**
 - [`benchmarks/campaigns/preprint_130/PROGRESS.md`](../../benchmarks/campaigns/preprint_130/PROGRESS.md)
   — the overall view: gates, rolling totals, weekly snapshot. Leo keeps this current.
+
+Before public release, Leo confirms that the Sheet's sharing policy matches the
+repository's intended visibility. The tracked URL is deliberate; sharing state
+is a release check recorded in `PROGRESS.md`, not a reason to copy gate status
+into this runbook.
 
 **Never put a test metric in either one.**
 
@@ -110,26 +111,29 @@ shell environment.
 > missing entirely, `run-baseline` will not fail fast — it fails later, inside
 > training, with a missing-path error. Check it exists before you start.
 
-Every command below uses the workspace-aware form. Use it as written:
+Every command below pins the workspace explicitly so it remains valid after
+entering a materialized cell. Use this form as written:
 
 ```bash
-uv run --package autobench python benchmarks/scripts/<script>.py ...
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/<script>.py" ...
 ```
 
 ---
 
 ## 4. One cell, end to end
 
-Pin the cell root once and reuse it:
+Pin the repository and cell roots once and reuse them. Export both because the
+Claude session and every command run after `cd` must resolve the same workspace:
 
 ```bash
-CELL=benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v2
+export REPO_ROOT="$(git rev-parse --show-toplevel)"
+export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v2"
 ```
 
 ### 4a. Check where the cell is
 
 ```bash
-uv run --package autobench python benchmarks/scripts/campaign_stage.py status --cell-root "$CELL"
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" status --cell-root "$CELL"
 ```
 
 This is your main instrument. It reports the phase, attempts charged against the
@@ -142,8 +146,8 @@ The phase order never skips:
 ### 4b. Run the native baseline
 
 ```bash
-uv run --package autobench python benchmarks/scripts/campaign_stage.py baseline-command --cell-root "$CELL"   # inspect, runs nothing
-uv run --package autobench python benchmarks/scripts/campaign_stage.py run-baseline    --cell-root "$CELL" --gpu 0
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" baseline-command --cell-root "$CELL"   # inspect, runs nothing
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" run-baseline    --cell-root "$CELL" --gpu 0
 ```
 
 Five folds, the arm's own published recipe, outside the 30-attempt budget. It
@@ -160,13 +164,13 @@ in a globally unique `session_id` and timezone-aware ISO-8601 `started_at`, and
 run this command from inside that same Claude session:
 
 ```bash
-uv run automil --project "$CELL" check
-uv run automil --project "$CELL" orchestrator start
+uv run --project "$REPO_ROOT" automil --project "$CELL" check
+uv run --project "$REPO_ROOT" automil --project "$CELL" orchestrator start
 cd "$CELL"
 claude
 
 # Inside that Claude session, after the first metric export:
-uv run --package autobench python benchmarks/scripts/campaign_stage.py open-agent-session \
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" open-agent-session \
   --cell-root "$PWD" --agent-session /abs/path/agent_session_start.json
 ```
 
@@ -182,10 +186,10 @@ attempt counter, or a `session_id` already used by another cell. That is the
 ### 4d. Run discovery
 
 ```bash
-uv run automil --project "$CELL" check
+uv run --project "$REPO_ROOT" automil --project "$CELL" check
 # The orchestrator and ONE fresh Claude session are already running from 4c.
-uv run automil --project "$CELL" status
-uv run automil --project "$CELL" rank
+uv run --project "$REPO_ROOT" automil --project "$CELL" status
+uv run --project "$REPO_ROOT" automil --project "$CELL" rank
 ```
 
 The agent proposes candidates and submits them with `automil submit`. It stops
@@ -196,19 +200,33 @@ at 30 charged attempts.
 ### 4e. Freeze discovery
 
 ```bash
-uv run --package autobench python benchmarks/scripts/campaign_stage.py freeze-discovery --cell-root "$CELL"
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" freeze-discovery --cell-root "$CELL"
 ```
 
 Requires exactly 30 charged attempts and nothing still queued or running. It
 audits all 30 attempts, deduplicates candidates, and freezes the top ≤10 by
 validation mean.
 
+Now end the coding-agent session before any promotion or selection step:
+
+```bash
+# Inside Claude: exit normally so SessionEnd captures and persists the final sample.
+/exit
+
+# Back in the operator shell. Keep agent_session_end.json for step 4h.
+```
+
+The controller refuses promotion and direct/zero-candidate winner selection
+until the exclusive bound discovery session has both `SessionEnd` and its
+durable final active-time sample. Do not bypass that refusal or leave Claude
+open while continuing the controller.
+
 ### 4f. Promotion on folds 3 and 4
 
 ```bash
-uv run --package autobench python benchmarks/scripts/campaign_stage.py materialize-promotion --cell-root "$CELL"
-uv run automil --project "$CELL/promotion" orchestrator start
-uv run --package autobench python benchmarks/scripts/campaign_stage.py freeze-promotion --cell-root "$CELL"
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" materialize-promotion --cell-root "$CELL"
+uv run --project "$REPO_ROOT" automil --project "$CELL/promotion" orchestrator start
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" freeze-promotion --cell-root "$CELL"
 ```
 
 The frozen top-10 are copied byte-exact and re-run on the two held-back
@@ -218,21 +236,22 @@ A candidate that fails is marked ineligible; that is not fatal to the cell.
 ### 4g. Select the winner
 
 ```bash
-uv run --package autobench python benchmarks/scripts/campaign_stage.py select-winner --cell-root "$CELL"
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" select-winner --cell-root "$CELL"
 ```
 
 One winner, chosen on the five-fold **validation** mean, ties broken
 deterministically with the baseline preferred. Immutable once written. Still no
 test data anywhere.
 
-### 4h. Close the session
+### 4h. Finalize the session attestation
 
 ```bash
-uv run --package autobench python benchmarks/scripts/campaign_stage.py finalize-agent-session \
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" finalize-agent-session \
   --cell-root "$CELL" --agent-session /abs/path/agent_session_end.json
 ```
 
-After Claude exits and flushes its final native active-time export, fill
+Claude already exited after step 4e and flushed its final native active-time
+export. After the winner is frozen, fill
 `agent_session_end.template.json` with `session_id`, `ended_at`,
 `termination_reason` and the runtime `usage` block (tokens and cost). **Report
 usage honestly — if a number is unavailable, say unavailable. Never write a
@@ -243,19 +262,21 @@ Then set that cell's `Stage` to `W` in the tracker Sheet, with today's date.
 ### 4i. Shortcut
 
 ```bash
-uv run --package autobench python benchmarks/scripts/campaign_stage.py advance --cell-root "$CELL"
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" advance --cell-root "$CELL"
 ```
 
-Performs one legal transition and stops. It will not run past `winner-frozen`.
+Performs one legal transition and stops. It will not run past `winner-frozen`,
+and it inherits the same closed-discovery-session requirement before promotion
+or winner selection.
 
 ---
 
 ## 5. Certification — Leo only, once, after all 130
 
 ```bash
-uv run --package autobench python benchmarks/scripts/campaign_manifest.py freeze-selections
-uv run --package autobench python benchmarks/scripts/campaign_manifest.py certify-all
-uv run --package autobench python benchmarks/scripts/campaign_manifest.py report
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_manifest.py" freeze-selections
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_manifest.py" certify-all
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_manifest.py" report
 ```
 
 This is the only point in the entire project where held-out data is opened. It
@@ -273,6 +294,7 @@ obstacle — **do not work around it.**
 | `manifest differs...` | Your checkout drifted from the frozen roster | `git pull --ff-only`; do not regenerate the manifest |
 | `native baseline is already running` | A lock is held | Wait; check for an orphaned process before retrying |
 | `open the campaign agent session before the first submit` | Step 4c was skipped | Open the session, then restart the agent |
+| `SessionEnd ... required before promotion or winner selection` | Claude is still open or its final native sample was not saved | Exit Claude normally; verify the SessionEnd hook succeeded; do not hand-edit the journal |
 | attempts ≠ 30 at freeze | Budget not exhausted, or over-run | Report it — do not hand-edit state |
 | `agent session finalization is immutable` | Already finalized with different content | Stop; tell Leo |
 | candidate marked `inadmissible` | The agent touched a protected path | Expected and healthy. It is archived as a violation and does not enter the leaderboard |
@@ -307,7 +329,7 @@ Two standing rules:
 ## 8. Reference
 
 - Protocol authority: [`benchmarks/campaigns/preprint_130/README.md`](../../benchmarks/campaigns/preprint_130/README.md)
-- Frozen roster and operator notes: [`benchmarks/campaigns/preprint_130/README.md`](../../benchmarks/campaigns/preprint_130/README.md)
+- Frozen roster: [`benchmarks/campaigns/preprint_130/manifest.json`](../../benchmarks/campaigns/preprint_130/manifest.json)
 - Pre-registered analysis: [`benchmarks/campaigns/preprint_130/analysis_plan.json`](../../benchmarks/campaigns/preprint_130/analysis_plan.json)
 - Per-cell tracker: [campaign tracker Sheet](https://docs.google.com/spreadsheets/d/1e79rsWlc8BOZoi6xFRWQvyi9M1uDuCexlQCsOTE5gOU/edit)
 - Overall progress: [`benchmarks/campaigns/preprint_130/PROGRESS.md`](../../benchmarks/campaigns/preprint_130/PROGRESS.md)
