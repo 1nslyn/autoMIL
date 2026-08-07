@@ -52,6 +52,30 @@ def redact_held_out(text: str, extra_keys: tuple[str, ...] = ()) -> str:
     return "\n".join(out)
 
 
+def is_held_out_metric_key(key: str) -> bool:
+    """Is this ``metrics`` key held-out-named? (A6, claims-alignment.)
+
+    The seal strips the ``held_out``/``summary`` blocks, but nothing constrained
+    the *names inside* ``metrics`` — a result carrying ``metrics: {"test_auc": …}``
+    would flow test into every agent-facing surface and into the recomputed
+    composite (the mean runs over all metric values), i.e. test driving
+    selection with the firewall's blessing. This predicate deliberately matches
+    the campaign controller's freeze-time rule (any key containing ``test``,
+    plus the held-out markers) so the two enforcement layers cannot disagree;
+    the metric vocabulary is framework-owned (``val_*``), so overcatching a
+    hypothetical legitimate name fails loud with a rename, never silently.
+    """
+    low = str(key).lower()
+    return "test" in low or "held_out" in low or "heldout" in low or low == "summary"
+
+
+def held_out_metric_keys(metrics: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The held-out-named keys present in a result's ``metrics`` block."""
+    if not isinstance(metrics, Mapping):
+        return ()
+    return tuple(str(k) for k in metrics if is_held_out_metric_key(str(k)))
+
+
 def held_out_keys(result: Mapping[str, Any]) -> tuple[str, ...]:
     """Metric names declared in the result's sealed ``held_out`` block."""
     block = (result or {}).get("held_out")

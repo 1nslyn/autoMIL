@@ -302,11 +302,16 @@ def test_handle_completion_with_cap_cancel_reason_calls_reconcile(tmp_path: Path
     sealed = node_archive / "certify"
     sealed.mkdir(parents=True, exist_ok=True)
     for i in range(2):
+        # Real fold-writer shape (clam/runner.py): metrics is validation-only,
+        # test lives in the sealed held_out block. A held-out-named key inside
+        # metrics now fails the node closed (A6) — see test_terminal_writer.py
+        # for the guard's own positive test.
         fold_data = {
             "fold_index": i,
             "fold_count": 5,
             "status": "completed",
-            "metrics": {"val_auc": 0.85, "val_bacc": 0.80, "test_auc": 0.84, "test_bacc": 0.79},
+            "metrics": {"val_auc": 0.85, "val_bacc": 0.80},
+            "held_out": {"test_auc": 0.84, "test_bacc": 0.79},
             "composite": 0.82,
             "elapsed_seconds": 400,
             "peak_vram_mb": 4500,

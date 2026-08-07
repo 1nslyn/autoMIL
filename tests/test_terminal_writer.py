@@ -269,3 +269,68 @@ def test_graph_updated_before_tsv(tmp_path: Path) -> None:
     assert (archive_dir / "result.json").exists(), (
         "archive result.json must exist before TSV writer is called"
     )
+
+
+def test_held_out_named_metrics_key_fails_the_node_closed(tmp_path: Path) -> None:
+    """A6 (claims-alignment): a held-out-named key inside `metrics` is a
+    val-firewall violation — it would flow into every agent-facing surface and
+    into the recomputed composite (test driving selection). The node crashes
+    with a pointer, exactly like a schema failure."""
+    from automil.terminal_writer import write_terminal_state
+    from automil.graph import ExperimentGraph
+
+    graph, node_id = _make_graph(tmp_path)
+    completed_dir, archive_dir = _make_dirs(tmp_path, node_id)
+
+    result = {
+        "status": "completed",
+        "composite": 0.99,
+        "metrics": {"val_auc": 0.85, "test_auc": 0.99},
+        "held_out": {"test_bacc": 0.9},
+    }
+    write_terminal_state(
+        node_id=node_id, result=result, graph=graph,
+        completed_dir=completed_dir, archive_dir=archive_dir,
+        results_tsv_writer=lambda *a, **k: None,
+        spec={"description": "leaky"}, elapsed_s=1.0, gpu_id=0,
+    )
+
+    archived = json.loads((archive_dir / "result.json").read_text())
+    assert archived["status"] == "crash"
+    assert "val-firewall violation" in archived["error"]
+    assert "test_auc" in archived["error"]
+    assert archived["metrics"] == {}
+    assert archived["composite"] == 0.0
+
+    reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    gnode = reloaded.get_node(node_id)
+    assert gnode["status"] == "crash"
+    assert gnode["composite"] == 0.0
+
+
+def test_val_only_metrics_pass_the_key_guard(tmp_path: Path) -> None:
+    """The guard must not touch the legitimate consumer vocabulary (val_*)."""
+    from automil.terminal_writer import write_terminal_state
+
+    graph, node_id = _make_graph(tmp_path)
+    completed_dir, archive_dir = _make_dirs(tmp_path, node_id)
+
+    result = {
+        "status": "completed",
+        "composite": 0.825,
+        "metrics": {"val_auc": 0.85, "val_bacc": 0.80},
+        "held_out": {"test_auc": 0.84},
+    }
+    write_terminal_state(
+        node_id=node_id, result=result, graph=graph,
+        completed_dir=completed_dir, archive_dir=archive_dir,
+        results_tsv_writer=lambda *a, **k: None,
+        spec={"description": "clean"}, elapsed_s=1.0, gpu_id=0,
+    )
+
+    archived = json.loads((archive_dir / "result.json").read_text())
+    assert archived["status"] == "completed"
+    assert archived["metrics"] == {"val_auc": 0.85, "val_bacc": 0.80}
+    assert "held_out" not in archived
+    sealed = json.loads((archive_dir / "certify" / "certify.json").read_text())
+    assert sealed["held_out"] == {"test_auc": 0.84}

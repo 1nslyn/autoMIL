@@ -180,6 +180,32 @@ def write_terminal_state(
             "error": f"result.json failed schema validation: {msg}",
         }
 
+    # Step 2a — A6 (claims-alignment): a held-out-named key INSIDE ``metrics``
+    # is a val-firewall violation, not a stylistic nit — it would enter every
+    # agent-facing surface and the recomputed composite (test driving
+    # selection). Fail closed exactly like a schema failure: the node crashes
+    # with a pointer naming the offending keys, and no certify.json is minted.
+    from automil.firewall import held_out_metric_keys as _held_out_metric_keys
+
+    _leaking = _held_out_metric_keys(result.get("metrics"))
+    if _leaking:
+        logger.error(
+            "val-firewall violation for %s: held-out-named metrics key(s) %s — "
+            "`metrics` is the validation-only selection block; test belongs in "
+            "the sealed `held_out` block. Failing the node closed.",
+            node_id, ", ".join(_leaking),
+        )
+        result = {
+            "status": "crash",
+            "composite": 0.0,
+            "metrics": {},
+            "error": (
+                "val-firewall violation: held-out-named key(s) in `metrics`: "
+                f"{', '.join(_leaking)}. `metrics` is validation-only; test "
+                "metrics belong in the sealed `held_out` block."
+            ),
+        }
+
     # Val-firewall: quarantine test. ``held_out`` (test metrics) and the full
     # ``summary`` (which embeds test) are split into a sealed certify.json sidecar
     # and stripped from every agent-facing artifact (graph node, completed/,
