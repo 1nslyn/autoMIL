@@ -165,10 +165,15 @@ def _run_gate(repo: Path, automil_dir: Path, node_id: str) -> str:
 _BAD_TRAIN_PY = "import nonexistent_module_xyz_07_09  # ImportError\n"
 
 _GOOD_TRAIN_PY = (
+    # The contract shape (docs/training-script-contract.md): `metrics` is
+    # validation-only; test metrics live in the sealed `held_out` block. A
+    # held-out-named key inside `metrics` now fails the node closed (A6),
+    # so the pre-firewall shape this fixture used to carry is known-BAD.
     "import json, pathlib\n"
     "result = {\n"
     "    'status': 'completed',\n"
-    "    'metrics': {'val_auc': 0.5, 'val_bacc': 0.5, 'test_auc': 0.5, 'test_bacc': 0.5},\n"
+    "    'metrics': {'val_auc': 0.5, 'val_bacc': 0.5},\n"
+    "    'held_out': {'test_auc': 0.5, 'test_bacc': 0.5},\n"
     "    'composite': 0.5, 'elapsed_seconds': 1, 'peak_vram_mb': 100,\n"
     "}\n"
     "pathlib.Path('result.json').write_text(json.dumps(result))\n"
