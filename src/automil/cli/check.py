@@ -201,6 +201,18 @@ def check():
                 if not resolved.exists():
                     warnings.append(f"data.{key} path does not exist: {path}")
 
+        # B2 (claims-alignment): an unknown scoring.formula used to disable
+        # CR-1b silently at run time. Fail here, before anything runs.
+        from automil.scoring import known_formula
+        _formula = (config.get("scoring") or {}).get("formula")
+        if _formula and not known_formula(str(_formula)):
+            issues.append(
+                f"scoring.formula {_formula!r} is not a known reducer "
+                "(mean | max | min | trust_reported). Arithmetic expressions "
+                "are not evaluated; document the recipe in "
+                "metrics.composite_formula instead."
+            )
+
         # Check files.editable
         editable = config.get("files", {}).get("editable", [])
         if not editable:

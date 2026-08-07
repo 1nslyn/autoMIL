@@ -144,15 +144,18 @@ env:
   #     - "configs/.env.local"
   dotenv_files: []
 
-# --- Composite scoring (DEC-04 / D-200) ---
-# scoring.formula is documentation-only: the framework does NOT evaluate it.
-# Your training script computes the composite and writes it to result.json
-# directly. State the formula here so collaborators (and future you) can
-# understand the composite recipe at a glance.
-#
-# Examples:
-#   formula: "accuracy"                     # sklearn-iris consumer
-#   formula: "(val_auc + val_bacc) / 2"     # autobench consumer
+# --- Composite scoring (DEC-04 / D-200 / CR-1b) ---
+# scoring.formula is the REDUCER the framework uses to recompute the composite
+# from the validation `metrics` block at ingest (CR-1b: the val-firewall does
+# not trust the reported scalar). Valid values:
+#   formula: ""                # default -> "mean" over metrics values; this
+#                              #   reproduces (val_auc + val_bacc) / 2 and a
+#                              #   lone val_c_index exactly
+#   formula: "mean" | "max" | "min"
+#   formula: "trust_reported"  # explicit opt-out; weakens the val-firewall
+# Anything else (e.g. an arithmetic expression) fails `automil check` and graph
+# seeding — it is NOT evaluated. Document the human-readable recipe in a
+# comment or in metrics.composite_formula (informational) instead.
 #
 # scoring.technique_map is a {pattern: tag} dict for description-driven
 # auto-tagging. When `automil submit` / `automil propose` is called WITHOUT

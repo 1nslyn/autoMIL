@@ -254,10 +254,24 @@ def _config_scoring_formula(graph_path) -> str | None:
         import yaml
         cfg = yaml.safe_load(config_path.read_text()) or {}
         raw = (cfg.get("scoring") or {}).get("formula")
-        return str(raw) if raw else None
+        value = str(raw) if raw else None
     except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
         logger.warning("Could not read scoring.formula from %s: %s", config_path, exc)
         return None
+    # B2 (claims-alignment): validate OUTSIDE the blanket except — an unknown
+    # reducer name used to fall through per-result to "trusting the reported
+    # composite", i.e. a typo (or following the template's old arithmetic
+    # examples) silently disabled CR-1b. Fail at config load instead.
+    from automil.scoring import known_formula
+    if value is not None and not known_formula(value):
+        raise ValueError(
+            f"scoring.formula {value!r} in {config_path} is not a known reducer. "
+            "Valid values: mean | max | min (reducers over the validation "
+            "metrics) or trust_reported (explicit opt-out, weakens the "
+            "val-firewall). Arithmetic expressions are not evaluated — state "
+            "the human-readable recipe in metrics.composite_formula instead."
+        )
+    return value
 
 
 @contextlib.contextmanager

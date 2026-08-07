@@ -110,7 +110,7 @@ env:
   passthrough: [AUTOMIL_*]       # vars forwarded into experiment subprocesses
 
 scoring:
-  formula: ""                    # documentation-only; describe your composite recipe
+  formula: ""                    # composite reducer: "" -> mean | max | min | trust_reported
 
 baseline:
   composite: 0.0                 # your starting performance
@@ -141,9 +141,11 @@ A few notes on each:
 - **`env.passthrough`** controls what the orchestrator forwards into each
   experiment subprocess. `AUTOMIL_*` matches all framework variables
   including `AUTOMIL_RUNTIME` (declared, never inferred, D-87).
-- **`scoring.formula`** is documentation-only. Your training script
-  computes the composite scalar and writes it to `result.json`. State the
-  formula here so collaborators can read the recipe at a glance.
+- **`scoring.formula`** is the reducer the framework uses to recompute the
+  composite from the validation `metrics` block at ingest (CR-1b — the
+  val-firewall does not trust the reported scalar). `""` means `mean`, which
+  reproduces the standard composites exactly; `trust_reported` opts out.
+  Arithmetic expressions are rejected by `automil check`.
 - **`cap.budget` / `cap.safety_buffer`** are consumer-supplied durations
   (`6h`, `30m`, `90s`, `2d`, or a bare number of seconds; the legacy
   `cap.budget_seconds` integer keys still work). The framework provides the

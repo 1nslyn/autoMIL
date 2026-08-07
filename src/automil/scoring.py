@@ -42,6 +42,20 @@ _REDUCERS = {
 }
 
 
+def known_formula(name: object) -> bool:
+    """Is this a valid ``scoring.formula`` value? (B2, claims-alignment.)
+
+    Valid: empty/None (framework default), a reducer name, or an explicit
+    opt-out. Anything else — e.g. an arithmetic expression like
+    ``"(val_auc + val_bacc) / 2"`` — is a config error that used to be caught
+    only per-result at ERROR level while silently trusting the reported
+    composite (CR-1b disabled by a comment's own example). Config seeding and
+    ``automil check`` validate with this predicate so the state is
+    unrepresentable before any run.
+    """
+    return (not name) or name in _REDUCERS or name in _OPT_OUT
+
+
 def recompute_composite(
     metrics: Mapping[str, object] | None,
     formula: str = DEFAULT_FORMULA,
@@ -53,8 +67,12 @@ def recompute_composite(
     finite numeric value. Callers keep the reported composite in that case.
 
     Raises:
-        ValueError: unknown formula name (fail loud on a typo rather than
-            silently falling back to trusting the agent-reported scalar).
+        ValueError: unknown formula name. Note the terminal writer catches this
+            per-result and keeps the reported composite as a last resort — the
+            fail-closed guard against a typo'd formula lives at config-load
+            time (graph seeding validates with :func:`known_formula`, and
+            ``automil check`` reports it), so this raise is defense-in-depth
+            for values injected outside the config path.
     """
     if not formula or formula in _OPT_OUT:
         return None

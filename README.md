@@ -179,12 +179,13 @@ env:
   passthrough: [AUTOMIL_*]     # vars forwarded to experiment subprocesses
 
 scoring:
-  # Documentation-only. Your training script computes the composite scalar
-  # and writes it to result.json directly; the framework does NOT evaluate
-  # this string. State the formula here so collaborators can read the
-  # recipe at a glance. Examples:
-  #   formula: "accuracy"                                          # sklearn-iris
-  #   formula: "(val_auc + val_bacc + test_auc + test_bacc) / 4"   # autobench
+  # The reducer CR-1b uses to recompute the composite from the validation
+  # `metrics` block at ingest — the val-firewall does not trust the reported
+  # scalar. "" -> "mean" over the metrics values (reproduces the standard
+  # composites exactly); also: max | min | trust_reported (explicit opt-out,
+  # weakens the firewall). Arithmetic expressions are rejected by
+  # `automil check`; test metrics never belong in the composite (they live
+  # in the sealed `held_out` block).
   formula: ""
 
 cap:
