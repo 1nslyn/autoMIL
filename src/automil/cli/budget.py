@@ -81,7 +81,7 @@ def budget_show() -> None:
     """Show the resolved cap and per-cell consumed/remaining."""
     import yaml
 
-    from automil.cells import consumed_seconds, format_duration, list_cells
+    from automil.cells import consumed_seconds, format_duration, scan_cells
     from automil.cells.capconfig import resolve_cap_config
 
     adir = _find_automil_dir()
@@ -101,8 +101,9 @@ def budget_show() -> None:
         f"eval_budget:   {cap.eval_budget if cap.eval_budget is not None else 'none (time-only)'}"
     )
 
-    cells = list_cells()
-    if not cells:
+    scan = scan_cells(adir / "cells")
+    cells = list(scan.cells)
+    if not cells and not scan.errors:
         return
     click.echo("")
     click.echo(
@@ -110,18 +111,23 @@ def budget_show() -> None:
         f"{'evals':<10}{'usable':<8}"
     )
     click.echo("-" * 64)
+    inspection_errors: list[str] = []
+    from automil.cli._activity_inspection import inspect_agent_activity
+
+    activity_inspections = inspect_agent_activity(adir, cells)
     for c in cells:
         if c.mode == "agent_active":
-            from automil.cells.activity import ActivityError, read_activity_report
-            try:
-                report = read_activity_report(adir, c.cell_id)
-                if not report.sessions:
-                    raise ActivityError("no SessionStart event was recorded")
-                active = report.active_seconds
-            except ActivityError as exc:
-                raise click.ClickException(
-                    f"Cell {c.cell_id[:8]} activity journal is invalid: {exc}"
-                ) from exc
+            inspection = activity_inspections[c.cell_id]
+            if inspection.error is not None:
+                message = f"Cell {c.cell_id[:8]} {inspection.error}"
+                inspection_errors.append(message)
+                click.echo(
+                    f"{c.cell_id[:8]:<10}{c.status.value:<14}"
+                    f"{'DEGRADED':<11}{'-':<11}"
+                    f"{'-':<10}{c.completed_evals:<8}"
+                )
+                continue
+            active = inspection.active_seconds
         else:
             active = None
         consumed = consumed_seconds(c, agent_active_seconds=active)
@@ -131,6 +137,16 @@ def budget_show() -> None:
             f"{c.cell_id[:8]:<10}{c.status.value:<14}"
             f"{_fmt_hms(consumed):<11}{_fmt_hms(remaining):<11}"
             f"{evals:<10}{c.completed_evals:<8}"
+        )
+    for error in scan.errors:
+        click.echo(f"INVALID  {error.path.name}: {error.message}")
+        inspection_errors.append(str(error))
+    for message in inspection_errors:
+        if "activity " in message:
+            click.echo(f"DEGRADED  {message}")
+    if inspection_errors:
+        raise click.ClickException(
+            f"{len(inspection_errors)} cell journal issue(s) require attention"
         )
 
 

@@ -18,6 +18,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -40,7 +41,15 @@ _PROMETHEUS_LABEL = re.compile(
 )
 _EVENT_KEYS = {
     "session_open": frozenset({"event", "cell_id", "session_id", "observed_at"}),
-    "session_end": frozenset({"event", "cell_id", "session_id", "observed_at"}),
+    "session_end": frozenset(
+        {
+            "event",
+            "cell_id",
+            "session_id",
+            "final_sample_observed_at",
+            "observed_at",
+        }
+    ),
     "session_bind": frozenset(
         {"event", "cell_id", "session_id", "binding_sha256", "observed_at"}
     ),
@@ -49,6 +58,39 @@ _EVENT_KEYS = {
 
 class ActivityError(ValueError):
     """The activity state or an incoming activity event is invalid."""
+
+
+class ActivityHealth(str, Enum):
+    """Whether stored evidence currently permits agent-active work."""
+
+    OPEN_HEALTHY = "open-healthy"
+    ENDED_COMPLETE = "ended-complete"
+    DEGRADED = "degraded"
+
+
+@dataclass(frozen=True)
+class ActivityObservation:
+    """One attempt to observe the runtime's live cumulative counters."""
+
+    available: bool
+    sessions: tuple[str, ...] = ()
+    observed_at: float | None = None
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.available:
+            if self.error is not None:
+                raise ActivityError(
+                    "an available activity observation cannot carry an error"
+                )
+            if self.observed_at is None:
+                raise ActivityError(
+                    "an available activity observation requires observed_at"
+                )
+        elif self.sessions:
+            raise ActivityError(
+                "an unavailable activity observation cannot carry sessions"
+            )
 
 
 @dataclass(frozen=True)
@@ -62,11 +104,27 @@ class ActivityReport:
     event_count: int
     sha256: str
     bindings: tuple[tuple[str, str], ...]
+    open_sessions: tuple[str, ...]
+    ended_sessions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ActivityAssessment:
+    """Admission-facing interpretation of authentic stored activity evidence."""
+
+    active_seconds: float
+    health: ActivityHealth
+    reason: str | None
+    sessions: tuple[str, ...]
+    open_sessions: tuple[str, ...]
+    ended_sessions: tuple[str, ...]
+    admissible: bool
+    complete: bool
 
 
 @dataclass
 class _Session:
-    cell_id: str
+    cell_id: str | None
     session_id: str
     opened_at: float
     open_event: dict[str, Any]
@@ -86,14 +144,15 @@ class _Replay:
 
 def record_hook_event(
     automil_dir: Path | str,
-    cell_id: str,
+    cell_id: str | None,
     payload: Mapping[str, Any],
     observed_at: float | None = None,
+    final_sample_observed_at: float | None = None,
 ) -> None:
     """Normalize and append one supported Claude session hook event."""
 
     timestamp = _timestamp(time.time() if observed_at is None else observed_at)
-    cell = _identifier(cell_id, "cell_id")
+    cell = _optional_identifier(cell_id, "cell_id")
     if not isinstance(payload, Mapping):
         raise ActivityError("hook payload must be an object")
     hook_name = _identifier(payload.get("hook_event_name"), "hook_event_name")
@@ -107,7 +166,17 @@ def record_hook_event(
             )
         event = _event("session_open", cell, session_id, timestamp)
     elif hook_name == "SessionEnd":
-        event = _event("session_end", cell, session_id, timestamp)
+        if final_sample_observed_at is None:
+            raise ActivityError(
+                "SessionEnd requires the exact final active-time observation"
+            )
+        event = _event(
+            "session_end",
+            cell,
+            session_id,
+            timestamp,
+            final_sample_observed_at=_timestamp(final_sample_observed_at),
+        )
     else:
         raise ActivityError(f"unsupported hook event {hook_name!r}")
 
@@ -118,7 +187,7 @@ def bind_activity_session(
     automil_dir: Path | str,
     cell_id: str,
     session_id: str,
-    binding_sha256: str,
+    binding_sha256: str | None = None,
     observed_at: float | None = None,
 ) -> None:
     """Attach an immutable launch-binding digest to an existing session."""
@@ -128,7 +197,11 @@ def bind_activity_session(
         _identifier(cell_id, "cell_id"),
         _identifier(session_id, "session_id"),
         _timestamp(time.time() if observed_at is None else observed_at),
-        binding_sha256=_sha256(binding_sha256, "binding_sha256"),
+        binding_sha256=(
+            None
+            if binding_sha256 is None
+            else _sha256(binding_sha256, "binding_sha256")
+        ),
     )
     _append_event(Path(automil_dir), event)
 
@@ -166,8 +239,6 @@ def ingest_prometheus_metrics(
                     raise ActivityError(
                         f"active-time regression for session {session_id!r}"
                     )
-                if active_seconds == prior["active_seconds"]:
-                    continue
                 if timestamp < prior["observed_at"]:
                     raise ActivityError(
                         f"timestamp regression for session {session_id!r}"
@@ -176,11 +247,23 @@ def ingest_prometheus_metrics(
                 raise ActivityError(
                     f"timestamp regression for session {session_id!r}"
                 )
-            samples[session_id] = {
+            if session.ended_at is not None:
+                if prior is None:
+                    raise ActivityError(
+                        f"ended session {session_id!r} has no final sample"
+                    )
+                if active_seconds != prior["active_seconds"]:
+                    raise ActivityError(
+                        f"active-time changed for ended session {session_id!r}"
+                    )
+                continue
+            next_sample = {
                 "active_seconds": active_seconds,
                 "observed_at": timestamp,
             }
-            advanced += 1
+            if prior != next_sample:
+                samples[session_id] = next_sample
+                advanced += 1
         if advanced:
             _write_samples_atomic(root, samples)
         return observed_sessions
@@ -203,6 +286,84 @@ def read_activity_report(
         replay = _read_journal_unlocked(root)
         samples = _read_samples_unlocked(root)
 
+    _attach_samples(replay, samples)
+
+    sessions = [session for session in replay.sessions.values() if session.cell_id == cell]
+    return _activity_report(sessions, replay.events)
+
+
+def read_unbound_activity_report(automil_dir: Path | str) -> ActivityReport:
+    """Read project-local sessions which have not yet been assigned to a cell."""
+
+    root = Path(automil_dir)
+    journal_path = root / ACTIVITY_JOURNAL_FILENAME
+    samples_path = root / ACTIVITY_SAMPLES_FILENAME
+    if not journal_path.exists() and not samples_path.exists():
+        return _empty_report()
+    with _activity_lock(root, exclusive=False):
+        replay = _read_journal_unlocked(root)
+        samples = _read_samples_unlocked(root)
+    _attach_samples(replay, samples)
+    sessions = [
+        session for session in replay.sessions.values() if session.cell_id is None
+    ]
+    return _activity_report(sessions, replay.events)
+
+
+def assess_activity(
+    report: ActivityReport,
+    observation: ActivityObservation | None,
+) -> ActivityAssessment:
+    """Assess admission without inventing time or changing the cell cap state."""
+
+    if report.complete:
+        return ActivityAssessment(
+            active_seconds=report.active_seconds,
+            health=ActivityHealth.ENDED_COMPLETE,
+            reason=None,
+            sessions=report.sessions,
+            open_sessions=report.open_sessions,
+            ended_sessions=report.ended_sessions,
+            admissible=True,
+            complete=True,
+        )
+
+    reason: str | None = None
+    if not report.sessions:
+        reason = "no bound activity session has been recorded"
+    elif report.metered_sessions != report.sessions:
+        reason = "one or more activity sessions have no authentic sample"
+    elif not report.open_sessions:
+        reason = "activity session evidence is incomplete"
+    elif observation is None or not observation.available:
+        reason = (
+            observation.error
+            if observation is not None and observation.error
+            else "live activity telemetry is unavailable"
+        )
+    elif observation.sessions != report.open_sessions:
+        reason = (
+            "observed activity session set does not match the bound open sessions: "
+            f"expected {report.open_sessions!r}, observed {observation.sessions!r}"
+        )
+
+    health = ActivityHealth.OPEN_HEALTHY if reason is None else ActivityHealth.DEGRADED
+    return ActivityAssessment(
+        active_seconds=report.active_seconds,
+        health=health,
+        reason=reason,
+        sessions=report.sessions,
+        open_sessions=report.open_sessions,
+        ended_sessions=report.ended_sessions,
+        admissible=health is ActivityHealth.OPEN_HEALTHY,
+        complete=False,
+    )
+
+
+def _attach_samples(
+    replay: _Replay,
+    samples: Mapping[str, Mapping[str, float]],
+) -> None:
     for session_id, sample in samples.items():
         session = replay.sessions.get(session_id)
         if session is None:
@@ -215,16 +376,33 @@ def read_activity_report(
             )
         session.active_seconds = sample["active_seconds"]
         session.sample_observed_at = sample["observed_at"]
+    for session in replay.sessions.values():
+        if session.end_event is None:
+            continue
+        if session.sample_observed_at is None:
+            raise ActivityError(
+                f"ended session {session.session_id!r} has no final sample"
+            )
+        if (
+            session.sample_observed_at
+            != session.end_event["final_sample_observed_at"]
+        ):
+            raise ActivityError(
+                f"ended session {session.session_id!r} final sample is stale"
+            )
 
-    sessions = [
-        session for session in replay.sessions.values() if session.cell_id == cell
-    ]
+
+def _activity_report(
+    sessions: list[_Session],
+    all_events: list[dict[str, Any]],
+) -> ActivityReport:
     metered = [
         session.session_id
         for session in sessions
         if session.active_seconds is not None
     ]
-    evidence = [event for event in replay.events if event["cell_id"] == cell]
+    session_ids = {session.session_id for session in sessions}
+    evidence = [event for event in all_events if event["session_id"] in session_ids]
     evidence.extend(
         _event(
             "active_sample",
@@ -255,6 +433,20 @@ def read_activity_report(
                 if session.binding_sha256 is not None
             )
         ),
+        open_sessions=tuple(
+            sorted(
+                session.session_id
+                for session in sessions
+                if session.ended_at is None
+            )
+        ),
+        ended_sessions=tuple(
+            sorted(
+                session.session_id
+                for session in sessions
+                if session.ended_at is not None
+            )
+        ),
     )
 
 
@@ -267,6 +459,8 @@ def _empty_report() -> ActivityReport:
         event_count=0,
         sha256=hashlib.sha256(b"").hexdigest(),
         bindings=(),
+        open_sessions=(),
+        ended_sessions=(),
     )
 
 
@@ -333,7 +527,7 @@ def _prometheus_number(raw: str) -> float:
 
 def _event(
     kind: str,
-    cell_id: str,
+    cell_id: str | None,
     session_id: str,
     observed_at: float,
     **extra: object,
@@ -351,6 +545,12 @@ def _identifier(value: object, name: str) -> str:
     if not isinstance(value, str) or not value or value.strip() != value:
         raise ActivityError(f"{name} must be a non-empty trimmed string")
     return value
+
+
+def _optional_identifier(value: object, name: str) -> str | None:
+    if value is None:
+        return None
+    return _identifier(value, name)
 
 
 def _timestamp(value: object) -> float:
@@ -417,6 +617,23 @@ def _append_event(automil_dir: Path, event: dict[str, Any]) -> None:
             replay = _read_journal_unlocked(automil_dir)
             if not _apply_event(replay, event):
                 return
+            if event["event"] == "session_end":
+                sample = _read_samples_unlocked(automil_dir).get(event["session_id"])
+                if sample is None:
+                    raise ActivityError(
+                        f"session {event['session_id']!r} has no final "
+                        "active-time sample"
+                    )
+                if sample["observed_at"] != event["final_sample_observed_at"]:
+                    raise ActivityError(
+                        f"session {event['session_id']!r} final active-time "
+                        "sample is stale"
+                    )
+                if sample["observed_at"] > event["observed_at"]:
+                    raise ActivityError(
+                        f"final active-time sample for session "
+                        f"{event['session_id']!r} is newer than SessionEnd"
+                    )
             with path.open("ab") as journal:
                 journal.write(_canonical_line(event))
                 journal.flush()
@@ -471,14 +688,21 @@ def _validate_journal_event(raw: object) -> dict[str, Any]:
         raise ActivityError(f"invalid fields for {kind!r}")
     event = _event(
         kind,
-        _identifier(raw.get("cell_id"), "cell_id"),
+        _optional_identifier(raw.get("cell_id"), "cell_id"),
         _identifier(raw.get("session_id"), "session_id"),
         _timestamp(raw.get("observed_at")),
     )
     if kind == "session_bind":
-        event["binding_sha256"] = _sha256(
-            raw.get("binding_sha256"), "binding_sha256"
+        digest = raw.get("binding_sha256")
+        event["binding_sha256"] = (
+            None if digest is None else _sha256(digest, "binding_sha256")
         )
+    elif kind == "session_end":
+        event["final_sample_observed_at"] = _timestamp(
+            raw.get("final_sample_observed_at")
+        )
+        if event["final_sample_observed_at"] > event["observed_at"]:
+            raise ActivityError("final active-time sample is newer than SessionEnd")
     return event
 
 
@@ -512,18 +736,22 @@ def _apply_event(replay: _Replay, event: dict[str, Any]) -> bool:
         if kind == "session_end":
             raise ActivityError(f"unmatched session_end for session {session_id!r}")
         raise ActivityError(f"event for unopened session {session_id!r}")
-    if session.cell_id != cell_id:
+    if kind == "session_end" and cell_id is not None and session.cell_id != cell_id:
         raise ActivityError(f"session {session_id!r} belongs to another cell")
 
     if kind == "session_bind":
         digest = event["binding_sha256"]
         if session.ended_at is not None:
             raise ActivityError(f"session_bind after session {session_id!r} ended")
-        if session.binding_sha256 is not None:
+        if session.cell_id is not None:
+            if session.cell_id != cell_id:
+                raise ActivityError(f"conflicting binding for session {session_id!r}")
             if session.binding_sha256 == digest:
                 return False
-            raise ActivityError(f"conflicting binding for session {session_id!r}")
+            if session.binding_sha256 is not None:
+                raise ActivityError(f"conflicting binding for session {session_id!r}")
         _require_monotonic(session, observed_at)
+        session.cell_id = cell_id
         session.binding_sha256 = digest
     elif kind == "session_end":
         if session.end_event is not None:

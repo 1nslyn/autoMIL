@@ -10,9 +10,13 @@ from automil.cells.activity import (
     ACTIVITY_JOURNAL_FILENAME,
     ACTIVITY_SAMPLES_FILENAME,
     ActivityError,
+    ActivityHealth,
+    ActivityObservation,
+    assess_activity,
     bind_activity_session,
     ingest_prometheus_metrics,
     read_activity_report,
+    read_unbound_activity_report,
     record_hook_event,
 )
 
@@ -29,7 +33,13 @@ def _record(
     payload = {"hook_event_name": event, "session_id": session_id, **extra}
     if event == "SessionStart":
         payload.setdefault("source", "startup")
-    record_hook_event(tmp_path, cell_id, payload, observed_at=at)
+    record_hook_event(
+        tmp_path,
+        cell_id,
+        payload,
+        observed_at=at,
+        final_sample_observed_at=at if event == "SessionEnd" else None,
+    )
 
 
 def _metrics(
@@ -57,7 +67,7 @@ def _metrics(
 def test_report_uses_claude_native_active_time_not_session_wall_time(tmp_path):
     _record(tmp_path, "SessionStart", 1_000.0)
     assert ingest_prometheus_metrics(
-        tmp_path, _metrics(cli=120.5, user=30.0), observed_at=50_000.0
+        tmp_path, _metrics(cli=120.5, user=30.0), observed_at=91_000.0
     ) == ("session-1",)
     _record(tmp_path, "SessionEnd", 91_000.0)
 
@@ -100,14 +110,133 @@ def test_active_time_regression_is_rejected(tmp_path):
         ingest_prometheus_metrics(tmp_path, _metrics(cli=9), observed_at=3.0)
 
 
-def test_final_export_may_arrive_after_session_end(tmp_path):
+def test_session_end_requires_a_persisted_final_sample(tmp_path):
     _record(tmp_path, "SessionStart", 1.0)
-    _record(tmp_path, "SessionEnd", 2.0)
-    assert read_activity_report(tmp_path, "cell-1").complete is False
+    with pytest.raises(ActivityError, match="final active-time sample"):
+        _record(tmp_path, "SessionEnd", 2.0)
 
     ingest_prometheus_metrics(tmp_path, _metrics(cli=7), observed_at=3.0)
+    with pytest.raises(ActivityError, match="stale"):
+        _record(tmp_path, "SessionEnd", 4.0)
+
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=7), observed_at=4.0)
+    _record(tmp_path, "SessionEnd", 4.0)
 
     assert read_activity_report(tmp_path, "cell-1").complete is True
+
+
+def test_ended_session_rejects_a_tampered_final_sample_token(tmp_path):
+    _record(tmp_path, "SessionStart", 1.0)
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=7), observed_at=2.0)
+    _record(tmp_path, "SessionEnd", 2.0)
+    samples_path = tmp_path / ACTIVITY_SAMPLES_FILENAME
+    samples = json.loads(samples_path.read_text())
+    samples["sessions"]["session-1"]["observed_at"] = 1.5
+    samples_path.write_text(json.dumps(samples))
+
+    with pytest.raises(ActivityError, match="final sample is stale"):
+        read_activity_report(tmp_path, "cell-1")
+
+
+def test_ended_session_sample_is_immutable(tmp_path):
+    _record(tmp_path, "SessionStart", 1.0)
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=7), observed_at=3.0)
+    _record(tmp_path, "SessionEnd", 3.0)
+
+    assert ingest_prometheus_metrics(
+        tmp_path, _metrics(cli=7), observed_at=4.0
+    ) == ("session-1",)
+    with pytest.raises(ActivityError, match="ended session"):
+        ingest_prometheus_metrics(tmp_path, _metrics(cli=8), observed_at=5.0)
+
+    report = read_activity_report(tmp_path, "cell-1")
+    assert report.active_seconds == 7.0
+    assert report.open_sessions == ()
+    assert report.ended_sessions == ("session-1",)
+
+
+def test_project_session_can_be_opened_unbound_then_bound_once(tmp_path):
+    record_hook_event(
+        tmp_path,
+        None,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-1",
+            "source": "startup",
+        },
+        observed_at=1.0,
+    )
+
+    unbound = read_unbound_activity_report(tmp_path)
+    assert unbound.sessions == ("session-1",)
+    assert read_activity_report(tmp_path, "cell-1").sessions == ()
+
+    digest = "a" * 64
+    bind_activity_session(tmp_path, "cell-1", "session-1", digest, observed_at=2.0)
+    assert read_unbound_activity_report(tmp_path).sessions == ()
+    assert read_activity_report(tmp_path, "cell-1").bindings == (
+        ("session-1", digest),
+    )
+    with pytest.raises(ActivityError, match="conflicting binding"):
+        bind_activity_session(
+            tmp_path, "cell-2", "session-1", digest, observed_at=3.0
+        )
+
+
+def test_activity_assessment_distinguishes_live_complete_and_degraded(tmp_path):
+    _record(tmp_path, "SessionStart", 1.0)
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=7), observed_at=2.0)
+    report = read_activity_report(tmp_path, "cell-1")
+
+    live = assess_activity(
+        report,
+        ActivityObservation(
+            available=True, sessions=("session-1",), observed_at=2.0
+        ),
+    )
+    assert live.health is ActivityHealth.OPEN_HEALTHY
+    assert live.admissible is True
+    assert live.active_seconds == 7.0
+
+    unavailable = assess_activity(
+        report,
+        ActivityObservation(available=False, error="connection refused"),
+    )
+    assert unavailable.health is ActivityHealth.DEGRADED
+    assert unavailable.admissible is False
+    assert unavailable.active_seconds == 7.0
+
+    foreign = assess_activity(
+        report,
+        ActivityObservation(
+            available=True, sessions=("session-2",), observed_at=3.0
+        ),
+    )
+    assert foreign.health is ActivityHealth.DEGRADED
+    assert "does not match" in foreign.reason
+
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=7), observed_at=4.0)
+    _record(tmp_path, "SessionEnd", 4.0)
+    ended = assess_activity(
+        read_activity_report(tmp_path, "cell-1"),
+        ActivityObservation(available=False, error="endpoint gone"),
+    )
+    assert ended.health is ActivityHealth.ENDED_COMPLETE
+    assert ended.complete is True
+    assert ended.admissible is True
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"available": True, "observed_at": 1.0, "error": "contradiction"},
+        {"available": True, "sessions": ("session-1",)},
+        {"available": False, "sessions": ("session-1",), "error": "gone"},
+    ],
+)
+def test_activity_observation_rejects_contradictory_states(kwargs):
+    with pytest.raises(ActivityError):
+        ActivityObservation(**kwargs)
 
 
 def test_unknown_session_export_is_ignored_until_start_hook_arrives(tmp_path):
@@ -149,6 +278,7 @@ def test_binding_is_immutable_and_cannot_follow_session_end(tmp_path):
             tmp_path, "cell-1", "session-1", "b" * 64, observed_at=3.0
         )
 
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=1), observed_at=4.0)
     _record(tmp_path, "SessionEnd", 4.0)
     with pytest.raises(ActivityError, match="session_bind after session"):
         bind_activity_session(

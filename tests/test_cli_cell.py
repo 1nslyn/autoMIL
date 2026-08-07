@@ -12,6 +12,11 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from automil.cells.activity import (
+    ActivityObservation,
+    ingest_prometheus_metrics,
+    record_hook_event,
+)
 from automil.cells.state import Cell, CellStatus, write_cell
 from automil.cli.cell import cell_group
 
@@ -372,3 +377,102 @@ def test_cell_status_consumed_grows_with_started_at(tmp_path, monkeypatch):
     assert "01:00:" in result.output, (
         f"Expected '01:00:' in output for 1-hour-old cell.\nGot:\n{result.output}"
     )
+
+
+@pytest.mark.parametrize("command", ["list", "status"])
+def test_cell_inspection_shows_valid_and_obsolete_rows_then_exits_nonzero(
+    tmp_path, monkeypatch, command,
+):
+    """One obsolete journal is visible but cannot hide the healthy cells."""
+    automil_dir = _setup_automil_overlay(tmp_path)
+    cells_dir = automil_dir / "cells"
+    monkeypatch.chdir(tmp_path)
+
+    valid = _make_cell(cell_id="healthy0123456789")
+    write_cell(valid, cells_dir)
+    obsolete = json.loads((cells_dir / f"{valid.cell_id}.json").read_text())
+    obsolete["last_tick_at"] = time.time()
+    (cells_dir / "broken-journal.json").write_text(json.dumps(obsolete))
+
+    result = CliRunner().invoke(cell_group, [command])
+
+    assert result.exit_code != 0
+    assert "healthy0" in result.output
+    assert "broken-journal.json" in result.output
+    assert "obsolete" in result.output.lower()
+    assert "last_tick_at" in result.output
+
+
+def test_cell_list_marks_unmetered_activity_row_degraded_without_hiding_healthy_cell(
+    tmp_path, monkeypatch,
+):
+    """Structurally incomplete activity evidence is reported per row."""
+    automil_dir = _setup_automil_overlay(tmp_path)
+    cells_dir = automil_dir / "cells"
+    monkeypatch.chdir(tmp_path)
+    write_cell(_make_cell(cell_id="healthy0123456789"), cells_dir)
+    agent_cell = _make_cell(
+        cell_id="agentbad12345678",
+        mode="agent_active",
+    )
+    write_cell(agent_cell, cells_dir)
+    record_hook_event(
+        automil_dir,
+        agent_cell.cell_id,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-unmetered",
+            "source": "startup",
+        },
+        observed_at=1.0,
+    )
+
+    result = CliRunner().invoke(cell_group, ["list"])
+
+    assert result.exit_code != 0
+    assert "healthy0" in result.output
+    assert "agentbad" in result.output
+    assert "DEGRADED" in result.output
+    assert "sample" in result.output.lower()
+
+
+@pytest.mark.parametrize("command", ["list", "status"])
+def test_cell_inspection_marks_wrong_live_session_as_telemetry_degraded(
+    tmp_path, monkeypatch, command,
+):
+    """Historical samples cannot disguise a mismatched live Claude session."""
+    automil_dir = _setup_automil_overlay(tmp_path)
+    cell = _make_cell(cell_id="agentlive1234567", mode="agent_active")
+    write_cell(cell, automil_dir / "cells")
+    record_hook_event(
+        automil_dir,
+        cell.cell_id,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "expected-session",
+            "source": "startup",
+        },
+        observed_at=1.0,
+    )
+    ingest_prometheus_metrics(
+        automil_dir,
+        'claude_code_active_time_total'
+        '{session_id="expected-session",type="cli"} 7\n',
+        observed_at=2.0,
+    )
+    monkeypatch.setattr(
+        "automil.activity_metrics.observe_activity_metrics",
+        lambda *_args, **_kwargs: ActivityObservation(
+            available=True,
+            sessions=("foreign-session",),
+            observed_at=3.0,
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(cell_group, [command])
+
+    assert result.exit_code != 0
+    assert "agentliv" in result.output
+    assert "DEGRADED" in result.output
+    assert "does not match" in result.output

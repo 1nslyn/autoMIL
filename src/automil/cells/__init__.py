@@ -13,11 +13,16 @@ import logging
 
 from automil.cells.activity import (
     ACTIVITY_JOURNAL_FILENAME,
+    ActivityAssessment,
     ActivityError,
+    ActivityHealth,
+    ActivityObservation,
     ActivityReport,
+    assess_activity,
     bind_activity_session,
     ingest_prometheus_metrics,
     read_activity_report,
+    read_unbound_activity_report,
     record_hook_event,
 )
 from automil.cells.cap import (
@@ -39,11 +44,14 @@ from automil.cells.identity import (
     resolve_cell_identity,
 )
 from automil.cells.registry import (
+    CellRegistryScan,
+    CellSchemaError,
     blocks_new_work,
     get_cell,
     get_or_create_cell,
     is_refusing_new,
     list_cells,
+    scan_cells,
 )
 from automil.cells.state import (
     BLOCKING_STATUSES,
@@ -59,13 +67,19 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "ACTIVITY_JOURNAL_FILENAME",
+    "ActivityAssessment",
     "ActivityError",
+    "ActivityHealth",
+    "ActivityObservation",
     "ActivityReport",
     "BLOCKING_STATUSES",
     "CapResolved",
     "Cell",
+    "CellRegistryScan",
+    "CellSchemaError",
     "CellStatus",
     "aggregate_folds",
+    "assess_activity",
     "bind_activity_session",
     "blocks_new_work",
     "consumed_seconds",
@@ -76,12 +90,14 @@ __all__ = [
     "ingest_prometheus_metrics",
     "is_refusing_new",
     "list_cells",
+    "scan_cells",
     "make_cell_id",
     "next_status",
     "parse_duration",
     "parse_eval_budget",
     "read_cell",
     "read_activity_report",
+    "read_unbound_activity_report",
     "record_hook_event",
     "reconcile_budget_kill",
     "remaining_evals",

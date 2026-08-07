@@ -611,11 +611,15 @@ def test_tick_cells_agent_active_does_not_bill_idle_session_wall(tmp_path: Path,
 
 
 def test_tick_cells_agent_active_fails_closed_after_metric_endpoint_loss(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, caplog
 ) -> None:
-    """Losing the native clock refuses new work instead of reusing a stale value."""
+    """Losing telemetry preserves authentic time and never destroys the cell."""
     import automil.backends._orchestrator_daemon as dm
-    from automil.cells.activity import ActivityError
+    from automil.cells.activity import (
+        ActivityObservation,
+        ingest_prometheus_metrics,
+        record_hook_event,
+    )
 
     fixed_now = 1_000_000.0
     monkeypatch.setattr(dm.time, "time", lambda: fixed_now)
@@ -629,16 +633,57 @@ def test_tick_cells_agent_active_fails_closed_after_metric_endpoint_loss(
         budget_seconds=20,
         safety_buffer_seconds=5,
     )
-    orch._activity_refresh_error = ActivityError(
-        "Claude active-time metrics endpoint is unavailable"
+    record_hook_event(
+        tmp_path / "automil",
+        cell_id,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-1",
+            "source": "startup",
+        },
+        observed_at=fixed_now - 5,
+    )
+    ingest_prometheus_metrics(
+        tmp_path / "automil",
+        _active_metrics("session-1", 5),
+        observed_at=fixed_now - 1,
+    )
+    unavailable = ActivityObservation(
+        available=False,
+        sessions=(),
+        observed_at=fixed_now,
+        error="Claude active-time metrics endpoint is unavailable",
     )
     orch.backend = MagicMock()
     orch.running = {}
 
-    orch._tick_cells()
+    import logging
+
+    with caplog.at_level(
+        logging.INFO, logger="automil.backends._orchestrator_daemon"
+    ):
+        for _ in range(4):
+            orch._tick_cells(activity_observation=unavailable)
+        recovered = ActivityObservation(
+            available=True,
+            sessions=("session-1",),
+            observed_at=fixed_now,
+            error=None,
+        )
+        orch._tick_cells(activity_observation=recovered)
 
     updated = json.loads((cells_dir / f"{cell_id}.json").read_text())
-    assert updated["status"] == "refusing-new"
+    assert updated["status"] == "active"
+    orch.backend.cancel.assert_not_called()
+    assert sum(
+        "Holding new work" in record.getMessage()
+        for record in caplog.records
+    ) == 1
+
+    assert sum(
+        "telemetry recovered" in record.getMessage()
+        for record in caplog.records
+    ) == 1
 
 
 # ---------------------------------------------------------------------------

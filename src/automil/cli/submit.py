@@ -441,6 +441,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # silently choose different cells.
     from automil.cells import (  # noqa: E402
         ActivityError,
+        CellSchemaError,
         blocks_new_work,
         consumed_seconds,
         get_cell,
@@ -470,43 +471,111 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     _encoder_name = _identity.encoder
     _mil_model_norm = _identity.mil_model
 
+    # Existing cells own their immutable accounting mode (D-134). Resolve the
+    # target journal before choosing a time source: consulting current config
+    # first can either demand activity evidence from a wall-clock cell or bypass
+    # an agent-active journal after a config edit.
+    cells_dir = adir / "cells"
+    try:
+        _persisted_cell = get_cell(_identity.cell_id, cells_dir=cells_dir)
+    except CellSchemaError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _effective_mode = (
+        _persisted_cell.mode if _persisted_cell is not None else _cap.mode
+    )
+    _campaign_cfg = _automil_cfg.get("campaign")
+    if _campaign_cfg is not None and not isinstance(_campaign_cfg, dict):
+        raise click.ClickException("campaign must be a mapping in config.yaml")
+    if _campaign_cfg is not None and _persisted_cell is None:
+        raise click.ClickException(
+            "campaign budget cell is missing; open the campaign agent session "
+            "before the first submit"
+        )
+
     _activity_report = None
     _active_seconds = None
-    if _cap.mode == "agent_active":
+    if _effective_mode == "agent_active":
+        from automil.cells.activity import (  # noqa: PLC0415
+            assess_activity,
+            bind_activity_session,
+            read_unbound_activity_report,
+        )
+        from automil.activity_metrics import observe_activity_metrics  # noqa: PLC0415
+
         try:
+            # Refresh durable cumulative evidence immediately before admission;
+            # this distinguishes an unavailable endpoint from an empty or
+            # foreign scrape without fabricating consumed seconds.
+            _activity_observation = observe_activity_metrics(adir)
             _activity_report = read_activity_report(adir, _identity.cell_id)
+
+            # A normal project SessionStart is intentionally unbound: submit is
+            # the first point where the final identity precedence
+            # (--mil-model -> config -> proposal) is known. Campaign sessions
+            # are bound earlier to their stronger launch digest and must never
+            # be silently rebound here.
+            if (
+                not _activity_report.sessions
+                and _campaign_cfg is None
+                and _persisted_cell is None
+            ):
+                unbound = read_unbound_activity_report(adir)
+                unbound_assessment = assess_activity(
+                    unbound, _activity_observation,
+                )
+                if (
+                    unbound.sessions != unbound.open_sessions
+                    or len(unbound.sessions) != 1
+                ):
+                    raise ActivityError(
+                        "agent_active accounting requires exactly one open, "
+                        "project-local SessionStart"
+                    )
+                if not unbound_assessment.admissible:
+                    raise ActivityError(
+                        unbound_assessment.reason
+                        or "project-local activity evidence is not admissible"
+                    )
+                bind_activity_session(
+                    adir,
+                    _identity.cell_id,
+                    unbound.sessions[0],
+                )
+                _activity_report = read_activity_report(adir, _identity.cell_id)
+
+            assessment = assess_activity(
+                _activity_report, _activity_observation,
+            )
         except ActivityError as exc:
             raise click.ClickException(
                 f"activity accounting is invalid: {exc}"
             ) from exc
-        if not _activity_report.sessions:
+        if assessment.complete:
             raise click.ClickException(
-                "agent_active accounting has no SessionStart event for this cell; "
-                "run from a runtime initialized with the autoMIL observer, "
-                "or explicitly choose cap.mode: wall_clock"
+                "agent_active accounting has no open session; start a fresh "
+                "project-local Claude session before submitting new work"
             )
-        if _activity_report.metered_sessions != _activity_report.sessions:
+        if (
+            len(_activity_report.sessions) != 1
+            or len(_activity_report.open_sessions) != 1
+        ):
             raise click.ClickException(
-                "agent_active accounting has no Claude active-time sample for this "
-                "session; start the orchestrator and retry after its next metrics "
-                "scrape, or explicitly choose cap.mode: wall_clock"
+                "agent_active accounting requires exactly one bound open session; "
+                "start a fresh project-local Claude session for this cell"
             )
-        if _activity_report.complete:
+        if not assessment.admissible:
             raise click.ClickException(
-                "agent_active accounting has no open session; start a fresh Claude "
-                "session before submitting new work"
+                "agent_active accounting is degraded and new work is paused: "
+                f"{assessment.reason or assessment.health.value}"
             )
-        _active_seconds = _activity_report.active_seconds
+        _active_seconds = assessment.active_seconds
 
     # The manifest payload is consumer-owned; the binding contract is generic.
     # Verify its bytes, then prove command, budget, and cell hashes all resolve
     # from the same unique manifest row before stamping them into the queue spec.
     _campaign_spec: dict[str, object] | None = None
     _campaign_agent_session: dict[str, str] | None = None
-    _campaign_cfg = _automil_cfg.get("campaign")
     if _campaign_cfg is not None:
-        if not isinstance(_campaign_cfg, dict):
-            raise click.ClickException("campaign must be a mapping in config.yaml")
         _required_campaign = (
             "campaign_id", "manifest", "manifest_sha256", "cell_id",
             "cell_sha256", "budget_cell_id", "stage",
@@ -597,9 +666,8 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 f"campaign config is not bound to its manifest: {exc}"
             ) from exc
 
-    cells_dir = adir / "cells"
     if _campaign_spec is not None:
-        _cell = get_cell(_identity.cell_id, cells_dir=cells_dir)
+        _cell = _persisted_cell
         if _cell is None:
             raise click.ClickException(
                 "campaign budget cell is missing; open the campaign agent session "

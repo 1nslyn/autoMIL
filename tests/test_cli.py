@@ -144,7 +144,11 @@ class TestInit:
 
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         hooks = settings.get("hooks", {})
-        command = {"type": "command", "command": "uv run automil activity ingest"}
+        command = {
+            "type": "command",
+            "command": "uv run automil activity ingest",
+            "timeout": 15,
+        }
         assert hooks["SessionStart"] == [{"matcher": "startup", "hooks": [command]}]
         assert hooks["SessionEnd"] == [{"hooks": [command]}]
         assert settings["env"]["OTEL_METRICS_EXPORTER"] == "prometheus"
@@ -197,8 +201,61 @@ class TestCheck:
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
         result = cli_runner.invoke(main, ["check"])
-        assert result.exit_code == 0
+        assert result.exit_code != 0
         assert "placeholder" in result.output.lower() or "ISSUES" in result.output
+
+    def test_check_uses_cell_local_claude_settings_inside_outer_git_repo(
+        self, cli_runner, tmp_path, monkeypatch,
+    ):
+        """A materialized cell owns its observer settings, even without a nested .git."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        init_result = cli_runner.invoke(main, ["init", "--no-healthcheck"])
+        assert init_result.exit_code == 0, init_result.output
+
+        cell_root = tmp_path / "campaign-cell"
+        cell_root.mkdir()
+        (tmp_path / "automil").rename(cell_root / "automil")
+        (tmp_path / ".claude").rename(cell_root / ".claude")
+        # Deliberately leave an invalid outer setting: check must not consult it.
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".claude" / "settings.json").write_text("{}")
+        monkeypatch.chdir(cell_root)
+
+        result = cli_runner.invoke(main, ["check"])
+
+        assert "requires the Claude active-time observer" not in result.output
+        assert "missing observer setting" not in result.output
+        assert str(tmp_path / ".claude" / "settings.json") not in result.output
+
+    def test_check_reports_obsolete_cell_journal_as_must_fix(
+        self, cli_runner, tmp_path, monkeypatch,
+    ):
+        """Setup validation rejects old accounting evidence with a useful filename."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert cli_runner.invoke(main, ["init", "--no-healthcheck"]).exit_code == 0
+        cells_dir = tmp_path / "automil" / "cells"
+        cells_dir.mkdir(exist_ok=True)
+        (cells_dir / "old-cell.json").write_text(json.dumps({
+            "cell_id": "old-cell",
+            "dataset": "dataset",
+            "encoder": "encoder",
+            "mil_model": "model",
+            "started_at": 1.0,
+            "budget_seconds": 21600,
+            "safety_buffer_seconds": 1800,
+            "status": "active",
+            "mode": "agent_active",
+            "consumed_active_seconds": 100.0,
+        }))
+
+        result = cli_runner.invoke(main, ["check"])
+
+        assert result.exit_code != 0
+        assert "old-cell.json" in result.output
+        assert "obsolete cell schema" in result.output.lower()
+        assert "consumed_active_seconds" in result.output
 
     def test_check_accepts_existing_relative_data_paths(self, cli_runner, tmp_path, monkeypatch):
         """Relative data paths should be resolved from the project root."""

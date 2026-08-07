@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 import yaml
 from click.testing import CliRunner
 
 from automil.activity_hooks import (
+    ACTIVITY_HOOK_TIMEOUT_SEC,
     claude_activity_environment,
     claude_activity_hooks,
 )
+from automil.cells.activity import ActivityObservation
 from automil.cells.identity import CellIdentityError, resolve_cell_identity
 from automil.cells.state import make_cell_id
 from automil.cli import main
@@ -40,7 +43,11 @@ def test_canonical_claude_observer_uses_native_metric_and_session_hooks():
     for event, entries in hooks.items():
         assert len(entries) == 1
         assert entries[0]["hooks"] == [
-            {"type": "command", "command": "custom ingest"}
+            {
+                "type": "command",
+                "command": "custom ingest",
+                "timeout": ACTIVITY_HOOK_TIMEOUT_SEC,
+            }
         ]
         assert "async" not in str(entries[0])
     assert hooks["SessionStart"][0]["matcher"] == "startup"
@@ -85,9 +92,21 @@ def test_resolve_cell_identity_rejects_missing_current_schema(config):
 
 
 def test_activity_ingest_real_cli_accepts_claude_payloads(tmp_path, monkeypatch):
+    from automil.cells.activity import ingest_prometheus_metrics
+
+    def observe(automil_dir):
+        observed_at = time.time()
+        ingest_prometheus_metrics(
+            automil_dir,
+            'claude_code_active_time_total{session_id="session-123",type="cli"} 7\n',
+            observed_at=observed_at,
+        )
+        return ActivityObservation(
+            available=True, sessions=("session-123",), observed_at=observed_at
+        )
+
     monkeypatch.setattr(
-        "automil.activity_metrics.refresh_activity_metrics",
-        lambda *_: ("session-123",),
+        "automil.activity_metrics.observe_activity_metrics", observe
     )
     config = _config(task={"name": "tcga_luad"})
     _write_config(tmp_path, config)
@@ -120,9 +139,7 @@ def test_activity_ingest_real_cli_accepts_claude_payloads(tmp_path, monkeypatch)
         "session_open",
         "session_end",
     ]
-    assert {record["cell_id"] for record in records} == {
-        resolve_cell_identity(config).cell_id
-    }
+    assert {record["cell_id"] for record in records} == {None}
     assert {record["session_id"] for record in records} == {"session-123"}
 
 
@@ -173,7 +190,10 @@ def test_session_end_requires_its_final_native_metric(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "automil.activity_metrics.refresh_activity_metrics", lambda *_: None
+        "automil.activity_metrics.observe_activity_metrics",
+        lambda *_: ActivityObservation(
+            available=False, error="connection refused"
+        ),
     )
     payload = {
         "hook_event_name": "SessionEnd",

@@ -5,7 +5,6 @@ import json
 import sys
 
 import click
-import yaml
 
 from automil.cli import main
 from automil.cli._helpers import _find_automil_dir
@@ -27,30 +26,29 @@ def ingest() -> None:
         raise click.ClickException("hook payload must be one JSON object")
 
     automil_dir = _find_automil_dir()
-    config_path = automil_dir / "config.yaml"
-    try:
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError) as exc:
-        raise click.ClickException(f"cannot read {config_path}: {exc}") from exc
-
-    from automil.activity_metrics import refresh_activity_metrics
+    from automil.activity_metrics import observe_activity_metrics
     from automil.cells.activity import ActivityError, record_hook_event
-    from automil.cells.identity import CellIdentityError, resolve_cell_identity
 
     try:
-        identity = resolve_cell_identity(config)
+        final_sample_observed_at = None
         if payload.get("hook_event_name") == "SessionEnd":
-            observed_sessions = refresh_activity_metrics(automil_dir)
-            if (
-                observed_sessions is None
-                or payload.get("session_id") not in observed_sessions
-            ):
+            observation = observe_activity_metrics(automil_dir)
+            expected = (payload.get("session_id"),)
+            if not observation.available or observation.sessions != expected:
                 raise ActivityError(
                     "cannot read this session's final Claude active-time metric "
                     "before SessionEnd"
                 )
-        record_hook_event(automil_dir, identity.cell_id, payload)
+            final_sample_observed_at = observation.observed_at
+        # Hooks identify the runtime session, not a mutable config-derived cell.
+        # Submit binds this project-local session once it resolves final identity.
+        record_hook_event(
+            automil_dir,
+            None,
+            payload,
+            final_sample_observed_at=final_sample_observed_at,
+        )
         if payload.get("hook_event_name") == "SessionStart":
-            refresh_activity_metrics(automil_dir)
-    except (ActivityError, CellIdentityError) as exc:
+            observe_activity_metrics(automil_dir)
+    except ActivityError as exc:
         raise click.ClickException(str(exc)) from exc

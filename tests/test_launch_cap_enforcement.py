@@ -51,7 +51,8 @@ def _make_orch(tmp_path: Path) -> Any:
 
 
 def _write_cell(automil_dir: Path, *, status: CellStatus = CellStatus.ACTIVE,
-                eval_budget: int | None = None, consumed_evals: int = 0) -> Cell:
+                eval_budget: int | None = None, consumed_evals: int = 0,
+                mode: str = "wall_clock") -> Cell:
     cell = Cell(
         cell_id=CELL_ID,
         dataset="ds",
@@ -61,7 +62,7 @@ def _write_cell(automil_dir: Path, *, status: CellStatus = CellStatus.ACTIVE,
         budget_seconds=21600,
         safety_buffer_seconds=1800,
         status=status,
-        mode="wall_clock",
+        mode=mode,
         eval_budget=eval_budget,
         consumed_evals=consumed_evals,
     )
@@ -205,6 +206,63 @@ def test_launch_refuses_when_the_eval_budget_is_spent_but_status_is_stale(tmp_pa
     assert _FakePopen.calls == [], (
         "the launch gate must read consumed_evals, not only the tick-lagged status"
     )
+
+
+def test_launch_holds_agent_active_spec_during_outage_then_recovers(tmp_path):
+    """Telemetry degradation is recoverable: keep the queue entry and retry."""
+    from automil.cells.activity import (
+        ActivityObservation,
+        ingest_prometheus_metrics,
+        record_hook_event,
+    )
+
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, mode="agent_active")
+    record_hook_event(
+        orch.automil_dir,
+        CELL_ID,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-1",
+            "source": "startup",
+        },
+    )
+    ingest_prometheus_metrics(
+        orch.automil_dir,
+        'claude_code_active_time_total{session_id="session-1",type="cli"} 5\n',
+    )
+    _seed_graph(orch)
+    spec = _write_queued_spec(orch)
+    _stub_runner(orch, tmp_path)
+    unavailable = ActivityObservation(
+        available=False,
+        sessions=(),
+        observed_at=time.time(),
+        error="endpoint unavailable",
+    )
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(spec, gpu_id=0, activity_observation=unavailable)
+
+    assert _FakePopen.calls == []
+    assert (orch.queue_dir / f"{NODE_ID}.json").exists()
+    assert ExperimentGraph(path=orch.automil_dir / "graph.json").get_node(
+        NODE_ID
+    )["status"] == "running"
+
+    recovered = ActivityObservation(
+        available=True,
+        sessions=("session-1",),
+        observed_at=time.time(),
+        error=None,
+    )
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(spec, gpu_id=0, activity_observation=recovered)
+
+    assert len(_FakePopen.calls) == 1
+    assert NODE_ID in orch.running
 
 
 def test_refusal_cancels_the_graph_node_and_archives_the_spec(tmp_path):

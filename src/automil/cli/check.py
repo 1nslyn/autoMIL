@@ -273,7 +273,12 @@ def check():
                     missing_claude_activity_hooks,
                 )
 
-                settings_path = git_root / ".claude" / "settings.json"
+                # Campaign cells intentionally live inside the controller's
+                # outer git repository and do not contain their own .git.
+                # Their runtime overlay is nevertheless cell-local, adjacent
+                # to automil/config.yaml; the git root remains authoritative
+                # only for repo-owned training source.
+                settings_path = adir.parent / ".claude" / "settings.json"
                 try:
                     settings = json.loads(settings_path.read_text())
                 except (OSError, json.JSONDecodeError) as exc:
@@ -313,6 +318,14 @@ def check():
     for d in ["queue", "running", "archive", "completed"]:
         if not (adir / "orchestrator" / d).exists():
             issues.append(f"automil/orchestrator/{d}/ missing. Run 'automil init'.")
+
+    # Cell files are accounting evidence. Report each obsolete/invalid journal
+    # independently so operators can rematerialize the affected cells without
+    # one bad row hiding the rest of the registry.
+    from automil.cells import scan_cells  # noqa: PLC0415
+
+    for error in scan_cells(adir / "cells").errors:
+        issues.append(f"Cell journal {error.path.name}: {error.message}")
 
     # D-172/D-173: Phase 6 backend validation (only when a non-local backend is selected).
     backend_name = (config.get("backend", {}) or {}).get("name", "local")
@@ -508,3 +521,4 @@ def check():
         click.echo(f"\n{len(warnings)} warning(s), no blocking issues.")
     else:
         click.echo(f"\n{len(issues)} issue(s) must be fixed before running.")
+        raise click.exceptions.Exit(1)

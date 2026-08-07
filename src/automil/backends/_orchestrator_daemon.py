@@ -27,6 +27,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -82,6 +83,14 @@ _SPEC_ENV_BLOCKED: frozenset[str] = frozenset({
 })
 
 logger = logging.getLogger(__name__)
+
+
+class _CellAdmission(str, Enum):
+    """Launch decision kept separate from the monotone cap state."""
+
+    ALLOW = "allow"
+    HOLD_TELEMETRY = "hold-telemetry"
+    REFUSE_CAP = "refuse-cap"
 
 # ---------------------------------------------------------------------------
 # nvidia-smi path pinning (CLN-05)
@@ -512,7 +521,9 @@ class ExperimentOrchestrator:
         self.pid_file = self.orch_dir / "orchestrator.pid"
         self.log_file = self.orch_dir / "orchestrator.log"
         self.gpu_state_file = self.orch_dir / "gpu_state.json"
-        self._activity_refresh_error = None
+        # Diagnostic state only.  It is never consulted for billing or cap
+        # transitions; it merely suppresses repeated outage messages.
+        self._activity_health_by_cell: dict[str, str] = {}
 
         self.runner = Runner(self.project_root)
 
@@ -542,9 +553,6 @@ class ExperimentOrchestrator:
         run_config = self.config.get("run", {}) if self.config else {}
         self.run_script = run_config.get("script", "train.py")
         self.run_command = run_config.get("command")
-
-        cap_cfg = self.config.get("cap", {}) if self.config else {}
-        self._agent_active_clock = cap_cfg.get("mode") == "agent_active"
 
         orch_cfg = self.config.get("orchestrator", {}) if self.config else {}
         self.poll_interval = orch_cfg.get("poll_interval_sec", POLL_INTERVAL_SEC)
@@ -1272,6 +1280,115 @@ class ExperimentOrchestrator:
                 )
             return None
 
+    def _observe_activity_for_tick(self):
+        """Return one shared native-meter observation for this daemon tick.
+
+        Open journaled sessions, rather than mutable ``config.yaml``, decide
+        whether the exporter is relevant. Completed sessions use their durable
+        final sample and never probe an endpoint that has legitimately exited.
+        A missing endpoint is represented as data and never converted into
+        consumed budget.
+        """
+        from automil.activity_metrics import observe_activity_metrics
+        from automil.cells import list_cells
+        from automil.cells.activity import (
+            ACTIVITY_JOURNAL_FILENAME,
+            ActivityError,
+            read_activity_report,
+            read_unbound_activity_report,
+        )
+
+        if not (self.automil_dir / ACTIVITY_JOURNAL_FILENAME).exists():
+            return None
+        try:
+            if read_unbound_activity_report(self.automil_dir).open_sessions:
+                return observe_activity_metrics(self.automil_dir)
+            for cell in list_cells(self.automil_dir / "cells"):
+                if (
+                    cell.mode == "agent_active"
+                    and read_activity_report(
+                        self.automil_dir, cell.cell_id,
+                    ).open_sessions
+                ):
+                    return observe_activity_metrics(self.automil_dir)
+        except ActivityError:
+            # The per-cell assessment path reports the durable journal error.
+            # A scrape cannot repair corrupt lifecycle evidence.
+            return None
+        return None
+
+    def _note_activity_health(self, cell, assessment) -> None:
+        """Log activity degradation and recovery once per state change."""
+        if cell.status.value == "finalized" or assessment.complete:
+            self._activity_health_by_cell.pop(cell.cell_id, None)
+            return
+        reason = None if assessment.admissible else assessment.reason
+        previous = self._activity_health_by_cell.get(cell.cell_id)
+        if reason is None:
+            if previous is not None:
+                logger.info(
+                    "Claude active-time telemetry recovered for cell %s",
+                    cell.cell_id[:8],
+                )
+                self._activity_health_by_cell.pop(cell.cell_id, None)
+            return
+        if previous != reason:
+            logger.warning(
+                "Holding new work for cell %s until active-time telemetry "
+                "recovers: %s",
+                cell.cell_id[:8], reason,
+            )
+            self._activity_health_by_cell[cell.cell_id] = reason
+
+    def _cell_admission(self, spec: dict, *, activity_observation=None):
+        """Classify a queued cell spec without mutating queue or cap state."""
+        from automil.cells import blocks_new_work
+        from automil.cells.activity import (
+            ActivityError,
+            assess_activity,
+            read_activity_report,
+        )
+
+        cell_id = (spec.get("metadata") or {}).get("cell_id")
+        if not cell_id:
+            return _CellAdmission.ALLOW
+        cell = self._cell_for_spec(spec, warn=False)
+        if cell is None or blocks_new_work(cell):
+            return _CellAdmission.REFUSE_CAP
+        if cell.mode != "agent_active":
+            return _CellAdmission.ALLOW
+        try:
+            report = read_activity_report(self.automil_dir, cell.cell_id)
+            assessment = assess_activity(report, activity_observation)
+        except ActivityError as exc:
+            previous = self._activity_health_by_cell.get(cell.cell_id)
+            reason = str(exc)
+            if previous != reason:
+                logger.warning(
+                    "Holding new work for cell %s: invalid activity evidence: %s",
+                    cell.cell_id[:8], reason,
+                )
+                self._activity_health_by_cell[cell.cell_id] = reason
+            return _CellAdmission.HOLD_TELEMETRY
+        self._note_activity_health(cell, assessment)
+        return (
+            _CellAdmission.ALLOW
+            if assessment.admissible
+            else _CellAdmission.HOLD_TELEMETRY
+        )
+
+    def _block_cell_spec(self, spec: dict, *, activity_observation=None) -> bool:
+        """Apply the tri-state launch gate; true means do not launch now."""
+        admission = self._cell_admission(
+            spec, activity_observation=activity_observation,
+        )
+        if admission is _CellAdmission.ALLOW:
+            return False
+        if admission is _CellAdmission.HOLD_TELEMETRY:
+            # The exporter can recover.  Keep both queue and graph state intact.
+            return True
+        return self._refuse_closed_cell_spec(spec)
+
     def _refuse_closed_cell_spec(self, spec: dict) -> bool:
         """Refuse a queued spec whose budget cell has closed. True iff refused (CAP-1).
 
@@ -1517,12 +1634,14 @@ class ExperimentOrchestrator:
         path.write_text(json.dumps(payload, indent=2))
         return path
 
-    def _launch(self, spec: dict, gpu_id: int):
+    def _launch(self, spec: dict, gpu_id: int, *, activity_observation=None):
         """Launch an experiment in an isolated git worktree."""
         node_id = spec["id"]
-        # CAP-1: the cap must bind here, not only at submit time. Idempotent with
-        # the pre-check in tick() — a refused spec is already gone from queue/.
-        if self._refuse_closed_cell_spec(spec):
+        # The cap and telemetry gate must bind here, not only at submit time.
+        # This reloads persisted cell state immediately before worktree creation.
+        if self._block_cell_spec(
+            spec, activity_observation=activity_observation,
+        ):
             return
         archive = self.archive_dir / node_id
         archive.mkdir(parents=True, exist_ok=True)
@@ -1768,7 +1887,7 @@ class ExperimentOrchestrator:
                 result.append(_NodeHandle(node_id=node_id))
         return result
 
-    def _tick_cells(self) -> None:
+    def _tick_cells(self, *, activity_observation=None) -> None:
         """Advance cap state machine for all cells (CAP-02 / D-114).
 
         Idempotent: re-running on an already-transitioned cell is a no-op
@@ -1783,12 +1902,15 @@ class ExperimentOrchestrator:
         import signal as _sig
         from dataclasses import replace
         from automil.cells import (
-            ActivityError,
             CellStatus,
             list_cells,
             next_status,
-            read_activity_report,
             write_cell,
+        )
+        from automil.cells.activity import (
+            ActivityError,
+            assess_activity,
+            read_activity_report,
         )
 
         now = time.time()
@@ -1804,30 +1926,30 @@ class ExperimentOrchestrator:
             agent_active_seconds = None
             if cell.mode == "agent_active":
                 try:
-                    if self._activity_refresh_error is not None:
-                        raise ActivityError(str(self._activity_refresh_error))
                     activity = read_activity_report(
                         self.automil_dir, cell.cell_id,
                     )
-                    if not activity.sessions:
-                        raise ActivityError(
-                            "no session boundary has been recorded for this cell"
-                        )
-                    if activity.metered_sessions != activity.sessions:
-                        raise ActivityError(
-                            "Claude active-time metrics are missing for this cell"
-                        )
-                    agent_active_seconds = activity.active_seconds
-                except ActivityError as exc:
-                    # Missing or corrupt accounting must stop work, never grant
-                    # an unmetered budget.  The journal remains authoritative;
-                    # no synthetic accumulator is written into the Cell.
-                    logger.error(
-                        "_tick_cells: invalid activity journal for %s; "
-                        "failing closed: %s",
-                        cell.cell_id[:8], exc,
+                    assessment = assess_activity(
+                        activity, activity_observation,
                     )
-                    agent_active_seconds = float(cell.budget_seconds)
+                    self._note_activity_health(cell, assessment)
+                    # Even while live telemetry is degraded, the last authentic
+                    # cumulative sample remains valid input to the pure cap
+                    # reducer.  No unavailable observation can add seconds.
+                    agent_active_seconds = assessment.active_seconds
+                except ActivityError as exc:
+                    reason = str(exc)
+                    if self._activity_health_by_cell.get(cell.cell_id) != reason:
+                        logger.warning(
+                            "_tick_cells: preserving cell %s because its activity "
+                            "evidence is invalid: %s",
+                            cell.cell_id[:8], reason,
+                        )
+                        self._activity_health_by_cell[cell.cell_id] = reason
+                    # Invalid evidence cannot safely drive any time transition.
+                    # Evaluation-count transitions are handled on later valid
+                    # ticks; never synthesize the budget to force closure.
+                    continue
             running = self._running_in_cell(cell.cell_id)
             new_status = next_status(
                 cell,
@@ -2699,28 +2821,13 @@ class ExperimentOrchestrator:
         # 0. Hot-reload config so concurrency bumps take effect live
         self._reload_orchestrator_config()
 
-        if self._agent_active_clock:
-            from automil.activity_metrics import refresh_activity_metrics
-            from automil.cells.activity import ActivityError
-
-            try:
-                observed_sessions = refresh_activity_metrics(self.automil_dir)
-                if observed_sessions is None:
-                    self._activity_refresh_error = ActivityError(
-                        "Claude active-time metrics endpoint is unavailable"
-                    )
-                    logger.error("Claude active-time metrics endpoint is unavailable")
-                else:
-                    self._activity_refresh_error = None
-            except ActivityError as exc:
-                self._activity_refresh_error = exc
-                logger.error("Invalid Claude active-time metric: %s", exc)
+        activity_observation = self._observe_activity_for_tick()
 
         # 1. Check running experiments
         self._check_running()
 
         # Phase 4 step 1.5: cap state machine (D-114).
-        self._tick_cells()
+        self._tick_cells(activity_observation=activity_observation)
 
         # 2. Schedule pending experiments (skip if draining)
         if not self.draining:
@@ -2733,14 +2840,18 @@ class ExperimentOrchestrator:
                 # CAP-1: decide admission BEFORE the GPU search, so a spec whose
                 # cell has closed is withdrawn immediately instead of lingering
                 # in the queue for as long as the cluster stays busy.
-                if self._refuse_closed_cell_spec(spec):
+                if self._block_cell_spec(
+                    spec, activity_observation=activity_observation,
+                ):
                     continue
 
                 needed_gb = spec.get("estimated_vram_gb", self.default_vram)
                 gpu = self._find_best_gpu(needed_gb)
 
                 if gpu is not None and self._pre_launch_check(gpu, needed_gb):
-                    self._launch(spec, gpu)
+                    self._launch(
+                        spec, gpu, activity_observation=activity_observation,
+                    )
 
         # 3. Save state
         self._save_state()

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Mapping
 
 CLAUDE_ACTIVITY_COMMAND = "uv run automil activity ingest"
+ACTIVITY_HOOK_TIMEOUT_SEC = 15
 ACTIVITY_METRICS_HOST = "127.0.0.1"
 ACTIVITY_METRICS_PORT = 9464
 ACTIVITY_METRICS_PATH = "/metrics"
@@ -34,7 +35,11 @@ def claude_activity_hooks(
     cell.  Only fresh session startup is recorded: automatic compaction keeps
     the same session open and therefore must not create a second boundary.
     """
-    command_hook = {"type": "command", "command": command}
+    command_hook = {
+        "type": "command",
+        "command": command,
+        "timeout": ACTIVITY_HOOK_TIMEOUT_SEC,
+    }
 
     def entry(*, matcher: str | None = None) -> dict[str, object]:
         value: dict[str, object] = {"hooks": [dict(command_hook)]}
@@ -84,6 +89,7 @@ __all__ = [
     "ACTIVITY_METRICS_PATH",
     "ACTIVITY_METRICS_PORT",
     "ACTIVITY_METRICS_URL",
+    "ACTIVITY_HOOK_TIMEOUT_SEC",
     "CLAUDE_ACTIVITY_COMMAND",
     "claude_activity_environment",
     "claude_activity_hooks",
