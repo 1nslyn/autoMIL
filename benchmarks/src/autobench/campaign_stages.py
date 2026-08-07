@@ -2214,6 +2214,16 @@ def open_agent_session(
         state = load_stage_state(cell_root)
         if state.get("phase") != "discovery":
             raise CampaignStageError("agent session must open during discovery")
+        # B7 (claims-alignment): the baseline is the incumbent AND the only
+        # fail-closed data preflight (TITAN's missing features surface here,
+        # not as 60 charged crashes). Ordering was runbook-only: a session
+        # could open, burn attempts with no incumbent, and a reconcile-created
+        # graph would then brick baseline registration permanently.
+        if not state.get("baseline"):
+            raise CampaignStageError(
+                "agent session requires a registered native baseline — run "
+                "`campaign_stage.py run-baseline` (or register-baseline) first"
+            )
         target = cell_root / AGENT_SESSION_FILE
         if target.exists():
             raise CampaignStageError("agent session has already been opened")

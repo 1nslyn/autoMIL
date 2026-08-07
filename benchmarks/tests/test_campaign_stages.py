@@ -598,11 +598,18 @@ def test_baseline_registration_rejects_mutated_campaign_cell(staged_cell):
 
 def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
+    # B7: the session itself now refuses to open without a registered baseline
+    # (the freeze's own baseline check stays as defense-in-depth behind it).
+    with pytest.raises(CampaignStageError, match="baseline"):
+        open_agent_session(cell_root, {
+            "session_id": "fixture-session",
+            "started_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        })
+    register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"])
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], 59)
-    with pytest.raises(CampaignStageError, match="baseline"):
-        freeze_discovery(cell_root)
-    register_baseline(cell_root, _baseline(cell_root))
     with pytest.raises(CampaignStageError, match="exactly 60"):
         freeze_discovery(cell_root)
 
@@ -1244,6 +1251,7 @@ def test_agent_session_is_prebound_to_every_proposal_then_finalized(
     staged_cell,
 ):
     cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))  # B7: baseline precedes the session
     opened = open_agent_session(cell_root, {
         "session_id": "fixture-session",
         "started_at": (
@@ -1258,7 +1266,6 @@ def test_agent_session_is_prebound_to_every_proposal_then_finalized(
                 datetime.now(timezone.utc) - timedelta(minutes=1)
             ).isoformat(),
         })
-    register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=0)
     _open_budget_cell(
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
@@ -1332,6 +1339,7 @@ def test_agent_session_open_rejects_preexisting_graph_proposal(staged_cell):
 
 def test_agent_session_open_rejects_preexisting_candidate_file(staged_cell):
     cell_root, adir, _, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))  # B7
     policy = adir / "variants/_policies/prebuilt.py"
     policy.parent.mkdir(parents=True)
     policy.write_text("# created before the bound session\n")
@@ -1347,6 +1355,7 @@ def test_agent_session_open_rejects_preexisting_candidate_file(staged_cell):
 
 def test_agent_session_id_is_reserved_across_cells_at_open(staged_cell):
     cell_root, _, _, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))  # B7
     sibling = cell_root.parent / "other-cell"
     sibling.mkdir()
     (sibling / "agent_session.json").write_text(json.dumps({
@@ -1364,6 +1373,7 @@ def test_agent_session_id_is_reserved_across_cells_at_open(staged_cell):
 
 def test_agent_session_open_rejects_nonobject_sibling_reservation(staged_cell):
     cell_root, _, _, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))  # B7
     sibling = cell_root.parent / "other-cell"
     sibling.mkdir()
     (sibling / "agent_session.json").write_text("[]")
@@ -1379,6 +1389,7 @@ def test_agent_session_open_rejects_nonobject_sibling_reservation(staged_cell):
 
 def test_agent_session_open_rejects_nonobject_nested_sibling_record(staged_cell):
     cell_root, _, _, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))  # B7
     sibling = cell_root.parent / "other-cell"
     sibling.mkdir()
     (sibling / "agent_session.json").write_text(json.dumps({"session": [1]}))
