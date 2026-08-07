@@ -155,6 +155,25 @@ class TestArchitecturePreservingProposalPolicy:
         assert "architecture-preserving" in result.output
         assert _proposed_kinds(tmp_path) == []
 
+    def test_missing_kind_is_rejected_at_creation(
+        self, cli_runner, tmp_path, monkeypatch,
+    ):
+        """B4 (claims-alignment): kind=None used to slip through as
+        'unspecified' and hard-fail one command later in `automil portfolio`
+        with a message that never named the offender."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+        _set_architecture_preserving(tmp_path)
+
+        result = cli_runner.invoke(
+            main,
+            ["propose", "--parent", "root", "--desc", "untyped idea"],
+        )
+        assert result.exit_code != 0
+        assert "Missing --kind" in result.output
+        assert _proposed_kinds(tmp_path) == []
+
     def test_recipe_only_portfolio_has_no_structural_quota(
         self, cli_runner, tmp_path, monkeypatch,
     ):

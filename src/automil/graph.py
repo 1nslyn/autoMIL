@@ -132,6 +132,13 @@ def _accept(child_composite: float, parent_composite: float, margin: float = 0.0
 #: 0 would ship the feature switched off, which is how it got missed the first time.
 DEFAULT_SE_MULTIPLIER = 1.0
 
+#: B5 (claims-alignment): the statuses that count as "kept" for best-node and
+#: certify selection. `candidate` (nominated for the gate) and `registered`
+#: (gate-passed) are *better*-validated keep-states — walking `keep` alone
+#: silently evicted a node from `best_node` and from `automil certify`'s
+#: default target the moment it was nominated.
+KEEP_CLASS = frozenset({"keep", "candidate", "registered"})
+
 
 def node_composite_se(node: dict | None) -> float | None:
     """Cross-fold SE of a node's composite, or ``None`` if it was never measured.
@@ -820,9 +827,11 @@ class ExperimentGraph:
         call ``self.save()`` — recompute_best does NOT persist (so the CLI
         ``--dry-run`` flag can skip save).
 
-        Walk semantics (D-10): only nodes where ``type == "executed"`` AND
-        ``status == "keep"``. Discarded / crashed / cancelled / budget-killed /
-        proposed nodes are excluded.
+        Walk semantics (D-10, B5): only nodes where ``type == "executed"`` AND
+        ``status`` is in the keep-class (``keep`` / ``candidate`` /
+        ``registered`` — nomination and gate passage must not evict a node from
+        best). Discarded / crashed / cancelled / budget-killed / proposed nodes
+        are excluded.
 
         Composite formula (D-11): uses the existing per-node ``composite`` field
         as already populated by train.py → result.json → orchestrator pipeline.
@@ -836,7 +845,7 @@ class ExperimentGraph:
 
         keep_nodes: list[tuple[str, float]] = []
         for node_id, node in self.nodes.items():
-            if node.get("type") == "executed" and node.get("status") == "keep":
+            if node.get("type") == "executed" and node.get("status") in KEEP_CLASS:
                 keep_nodes.append((node_id, float(node.get("composite", 0.0))))
 
         if not keep_nodes:

@@ -277,3 +277,25 @@ def test_cli_reconcile_without_flag_unchanged(tmp_path, monkeypatch):
     # Best should still be wrong because --recompute-best wasn't passed.
     reloaded = json.loads(graph_path.read_text())
     assert reloaded["meta"]["best_node_id"] == "node_0001"
+
+
+def test_candidate_and_registered_stay_in_the_best_walk(tmp_path):
+    """B5 (claims-alignment): nominating a node (status keep -> candidate) or
+    passing the gate (-> registered) must not evict it from best_node."""
+    from automil.graph import ExperimentGraph
+
+    g = ExperimentGraph(path=tmp_path / "graph.json")
+    low = g.add_executed(parent_id=None, description="low", techniques=[],
+                         metrics={"composite": 0.5}, status="keep")
+    high = g.add_executed(parent_id=None, description="high", techniques=[],
+                          metrics={"composite": 0.9}, status="keep")
+    g.recompute_best()
+    assert g.meta["best_node_id"] == high
+
+    for better_state in ("candidate", "registered"):
+        g.nodes[high]["status"] = better_state
+        g.recompute_best()
+        assert g.meta["best_node_id"] == high, (
+            f"{better_state} is a better-validated keep-state; best must not "
+            f"fall back to the lower keep node {low}"
+        )
