@@ -512,6 +512,7 @@ class ExperimentOrchestrator:
         self.pid_file = self.orch_dir / "orchestrator.pid"
         self.log_file = self.orch_dir / "orchestrator.log"
         self.gpu_state_file = self.orch_dir / "gpu_state.json"
+        self._activity_refresh_error = None
 
         self.runner = Runner(self.project_root)
 
@@ -541,6 +542,9 @@ class ExperimentOrchestrator:
         run_config = self.config.get("run", {}) if self.config else {}
         self.run_script = run_config.get("script", "train.py")
         self.run_command = run_config.get("command")
+
+        cap_cfg = self.config.get("cap", {}) if self.config else {}
+        self._agent_active_clock = cap_cfg.get("mode") == "agent_active"
 
         orch_cfg = self.config.get("orchestrator", {}) if self.config else {}
         self.poll_interval = orch_cfg.get("poll_interval_sec", POLL_INTERVAL_SEC)
@@ -1251,9 +1255,9 @@ class ExperimentOrchestrator:
         path = self.automil_dir / "cells" / f"{cell_id}.json"
         if not path.exists():
             if warn:
-                logger.warning(
+                logger.error(
                     "Spec %s references cell %s which has no cells/<id>.json; "
-                    "launching UNCAPPED (this evaluation is billed to no budget).",
+                    "the launch will be refused.",
                     spec.get("id"), str(cell_id)[:8],
                 )
             return None
@@ -1261,8 +1265,9 @@ class ExperimentOrchestrator:
             return read_cell(path)
         except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
             if warn:
-                logger.warning(
-                    "Could not read cell %s for spec %s (%s); launching UNCAPPED.",
+                logger.error(
+                    "Could not read cell %s for spec %s (%s); the launch will "
+                    "be refused.",
                     str(cell_id)[:8], spec.get("id"), exc,
                 )
             return None
@@ -1283,12 +1288,10 @@ class ExperimentOrchestrator:
         via ``completed/``, would have ``reconcile`` promote a phantom executed
         node with composite 0.0.
 
-        Specs with no ``metadata.cell_id`` (or a dangling one) are NOT refused:
-        ``Backend.submit`` is a first-class submission path — the gate uses it —
-        and dropping its work would be destructive. They are reported by
-        ``_record_cell_launch`` instead, once per dispatch rather than once per
-        poll: an evaluation billed to no cell dilutes the equal-effort
-        accounting, so it must never be silent.
+        Specs with no ``metadata.cell_id`` remain valid because ``Backend.submit``
+        is a first-class non-cell submission path. A spec that *declares* a cell
+        but references missing or malformed state is refused: silently launching
+        it unmetered would turn accounting corruption into unlimited budget.
 
         This method is called on every poll for every pending spec, so it stays
         silent unless it actually refuses.
@@ -1296,16 +1299,26 @@ class ExperimentOrchestrator:
         from automil.cells import blocks_new_work
 
         node_id = spec.get("id")
-        cell = self._cell_for_spec(spec, warn=False)
-        if cell is None or not blocks_new_work(cell):
+        cell_id = (spec.get("metadata") or {}).get("cell_id")
+        if not cell_id:
             return False
-
-        logger.warning(
-            "Refusing to launch %s: cell %s is %s (consumed_evals=%d/%s). Dequeuing "
-            "the spec and cancelling the node — a closed cell never re-opens.",
-            node_id, cell.cell_id[:8], cell.status.value, cell.consumed_evals,
-            cell.eval_budget if cell.eval_budget is not None else "-",
-        )
+        cell = self._cell_for_spec(spec, warn=False)
+        if cell is None:
+            logger.error(
+                "Refusing to launch %s: declared cell %s is missing or invalid.",
+                node_id, str(cell_id)[:8],
+            )
+        elif not blocks_new_work(cell):
+            return False
+        else:
+            logger.warning(
+                "Refusing to launch %s: cell %s is %s "
+                "(consumed_evals=%d/%s). Dequeuing the spec and cancelling "
+                "the node — a closed cell never re-opens.",
+                node_id, cell.cell_id[:8], cell.status.value,
+                cell.consumed_evals,
+                cell.eval_budget if cell.eval_budget is not None else "-",
+            )
 
         src_file = spec.get("_file")
         if src_file and Path(src_file).exists():
@@ -1328,7 +1341,7 @@ class ExperimentOrchestrator:
         except OSError:
             logger.exception("Could not archive refused spec for %s", node_id)
 
-        self._cancel_node_for_cap_refusal(node_id, cell.cell_id)
+        self._cancel_node_for_cap_refusal(node_id, str(cell_id))
         return True
 
     def _cancel_node_for_cap_refusal(self, node_id: str, cell_id: str) -> None:
@@ -1742,8 +1755,8 @@ class ExperimentOrchestrator:
         """Return _NodeHandle list for in-self.running experiments tagged with cell_id.
 
         cell_id matching uses spec["metadata"]["cell_id"] (set by submit, Plan 04-06).
-        Legacy nodes without a cell_id never match — they are immune to cap
-        enforcement (D-117 backward compat).
+        Specs submitted directly through a backend without a cell identity do
+        not belong to a budget cell and therefore never match.
 
         Returns:
             List of _NodeHandle(node_id=...) for matching experiments.
@@ -1770,12 +1783,12 @@ class ExperimentOrchestrator:
         import signal as _sig
         from dataclasses import replace
         from automil.cells import (
-            accrue_active,
+            ActivityError,
+            CellStatus,
             list_cells,
             next_status,
-            read_last_action_at,
+            read_activity_report,
             write_cell,
-            CellStatus,
         )
 
         now = time.time()
@@ -1787,19 +1800,42 @@ class ExperimentOrchestrator:
         if not cells_dir.exists():
             logger.debug("_tick_cells: no cells dir at %s; skipping", cells_dir)
             return
-        # P2.2: project-level agent-activity marker drives agent_active billing.
-        last_action_at = read_last_action_at(self.automil_dir)
         for cell in list_cells(cells_dir):
-            # Advance the agent_active budget BEFORE the state machine so
-            # next_status sees this tick's consumed time. No-op for wall_clock.
-            cell = accrue_active(cell, now, last_action_at)
+            agent_active_seconds = None
+            if cell.mode == "agent_active":
+                try:
+                    if self._activity_refresh_error is not None:
+                        raise ActivityError(str(self._activity_refresh_error))
+                    activity = read_activity_report(
+                        self.automil_dir, cell.cell_id,
+                    )
+                    if not activity.sessions:
+                        raise ActivityError(
+                            "no session boundary has been recorded for this cell"
+                        )
+                    if activity.metered_sessions != activity.sessions:
+                        raise ActivityError(
+                            "Claude active-time metrics are missing for this cell"
+                        )
+                    agent_active_seconds = activity.active_seconds
+                except ActivityError as exc:
+                    # Missing or corrupt accounting must stop work, never grant
+                    # an unmetered budget.  The journal remains authoritative;
+                    # no synthetic accumulator is written into the Cell.
+                    logger.error(
+                        "_tick_cells: invalid activity journal for %s; "
+                        "failing closed: %s",
+                        cell.cell_id[:8], exc,
+                    )
+                    agent_active_seconds = float(cell.budget_seconds)
             running = self._running_in_cell(cell.cell_id)
-            new_status = next_status(cell, now, len(running))
+            new_status = next_status(
+                cell,
+                now,
+                len(running),
+                agent_active_seconds=agent_active_seconds,
+            )
             if new_status == cell.status:
-                # Persist the accrual (consumed_active_seconds / last_tick_at)
-                # even when the status is unchanged, else it never advances.
-                if cell.mode == "agent_active":
-                    write_cell(cell, cells_dir)
                 continue
             if new_status == CellStatus.TERMINATING:
                 for handle in running:
@@ -2663,6 +2699,23 @@ class ExperimentOrchestrator:
         # 0. Hot-reload config so concurrency bumps take effect live
         self._reload_orchestrator_config()
 
+        if self._agent_active_clock:
+            from automil.activity_metrics import refresh_activity_metrics
+            from automil.cells.activity import ActivityError
+
+            try:
+                observed_sessions = refresh_activity_metrics(self.automil_dir)
+                if observed_sessions is None:
+                    self._activity_refresh_error = ActivityError(
+                        "Claude active-time metrics endpoint is unavailable"
+                    )
+                    logger.error("Claude active-time metrics endpoint is unavailable")
+                else:
+                    self._activity_refresh_error = None
+            except ActivityError as exc:
+                self._activity_refresh_error = exc
+                logger.error("Invalid Claude active-time metric: %s", exc)
+
         # 1. Check running experiments
         self._check_running()
 
@@ -2718,27 +2771,27 @@ class ExperimentOrchestrator:
         self.runner.prune_stale_worktrees()
         self._recover_orphans()
 
-        logger.info(
-            "Orchestrator started. Accelerator: %s, slots: %s, poll=%ss, safety=%sGB",
-            self._accelerator or "cuda",
-            list(self.gpu_allocations.keys()),
-            self.poll_interval,
-            self.safety_margin_gb,
-        )
-
-        # Signal handlers
-        def handle_signal(signum, frame):
-            sig_name = signal.Signals(signum).name
-            logger.info(f"Received {sig_name}, shutting down gracefully...")
-            self._shutdown = True
-
-        signal.signal(signal.SIGTERM, handle_signal)
-        signal.signal(signal.SIGINT, handle_signal)
-
-        # Write PID file
-        _write_pid_file(self.pid_file)
-
         try:
+            logger.info(
+                "Orchestrator started. Accelerator: %s, slots: %s, poll=%ss, safety=%sGB",
+                self._accelerator or "cuda",
+                list(self.gpu_allocations.keys()),
+                self.poll_interval,
+                self.safety_margin_gb,
+            )
+
+            # Signal handlers
+            def handle_signal(signum, frame):
+                sig_name = signal.Signals(signum).name
+                logger.info(f"Received {sig_name}, shutting down gracefully...")
+                self._shutdown = True
+
+            signal.signal(signal.SIGTERM, handle_signal)
+            signal.signal(signal.SIGINT, handle_signal)
+
+            # Write PID file
+            _write_pid_file(self.pid_file)
+
             while not self._shutdown:
                 try:
                     self.tick()

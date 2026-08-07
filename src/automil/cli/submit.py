@@ -34,9 +34,9 @@ from automil.cli._helpers import (
 @click.option("--parent", default=None, help="Parent node ID")
 @click.option("--techniques", multiple=True, help="Technique tags")
 @click.option("--budget-seconds", default=None, type=int,
-              help="Override cap.budget_seconds for this cell (D-134; honored only on cell creation; ignored on subsequent submits joining an existing cell with logged INFO).")
+              help="Override cap.budget for this cell in seconds (honored only on cell creation; ignored on later submits joining the cell).")
 @click.option("--safety-buffer-seconds", default=None, type=int,
-              help="Override cap.safety_buffer_seconds for this cell (D-134; same scoping as --budget-seconds).")
+              help="Override cap.safety_buffer for this cell in seconds (same scoping as --budget-seconds).")
 @click.option("--mil-model", default=None,
               help="MIL model identifier for budget cell keying (D-12, REC-04). "
                    "Resolved: --mil-model flag → run.mil_model in config → "
@@ -418,8 +418,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     ).hexdigest()
 
     # D-134 + P2.3: Resolve cap config — CLI flag > cap.<key> duration >
-    # legacy cap.<key>_seconds int > framework fallback. Honored only on the
-    # submit that opens the cell.
+    # framework fallback. Honored only on the submit that opens the cell.
     from automil.cells.capconfig import resolve_cap_config  # noqa: E402
     try:
         _cap = resolve_cap_config(
@@ -437,51 +436,25 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             f"(got buffer={_cap.safety_buffer_seconds}s, budget={_cap.budget_seconds}s)"
         )
 
-    # D-116: Cell refusal hook — call get_or_create_cell BEFORE writing the queue spec.
-    # metadata.cell_id is the cap-membership tag the daemon reads to count in-cell experiments.
+    # Resolve one exact budget identity from the current config schema.  The
+    # The observer uses the same resolver, so accounting and submission cannot
+    # silently choose different cells.
     from automil.cells import (  # noqa: E402
+        ActivityError,
         blocks_new_work,
         consumed_seconds,
+        get_cell,
         get_or_create_cell,
+        read_activity_report,
+        resolve_cell_identity,
     )
 
-    # Cell identity: key the cap-cell by the optimization target. Real configs
-    # expose this via project.name (dataset+task) and encoders.primary — NOT
-    # top-level dataset/encoder, which never existed in any shipped config and
-    # silently collapsed every cell to (unknown, unknown), defeating per-lineage
-    # budget enforcement. Prefer the real schema; keep legacy keys as fallback.
-    def _cfg_path(cfg: object, *keys: str) -> str | None:
-        cur = cfg
-        for k in keys:
-            if not isinstance(cur, dict):
-                return None
-            cur = cur.get(k)
-        return cur if isinstance(cur, str) and cur.strip() else None
-
-    _dataset_name = (
-        _cfg_path(_automil_cfg, "project", "name")
-        or _cfg_path(_automil_cfg, "dataset", "name")  # legacy schema
-        or _cfg_path(_automil_cfg, "task", "name")
-        or "unknown"
-    )
-    _encoder_name = (
-        _cfg_path(_automil_cfg, "encoders", "primary")
-        or _cfg_path(_automil_cfg, "encoder", "name")  # legacy schema
-        or "unknown"
-    )
-    if _dataset_name == "unknown" or _encoder_name == "unknown":
-        click.echo(
-            f"  warning: cell identity falling back to (dataset={_dataset_name}, "
-            f"encoder={_encoder_name}); set project.name and encoders.primary in "
-            f"config.yaml so per-lineage budgets key correctly.",
-            err=True,
-        )
-    # D-12 (REC-04): resolve mil_model — flag → config → propose node metadata → error.
+    # D-12 (REC-04): explicit flag, then current config, then proposal metadata.
     _mil_model_raw = (
-        mil_model                                                          # --mil-model flag
-        or (_automil_cfg.get("run") or {}).get("mil_model")               # config fallback
+        mil_model
+        or (_automil_cfg.get("run") or {}).get("mil_model")
         or (graph_json.get("nodes", {}).get(node) or {})
-           .get("metadata", {}).get("mil_model")                          # propose-time metadata
+           .get("metadata", {}).get("mil_model")
     )
     if not _mil_model_raw:
         raise click.ClickException(
@@ -489,25 +462,41 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             "at propose time with automil propose --mil-model). This pins the budget cell "
             "to a specific MIL model so re-parenting does not open a fresh budget. (D-12, REC-04)"
         )
-    from automil.cells.state import normalize_mil_model
-    _mil_model_norm = normalize_mil_model(_mil_model_raw)
+    try:
+        _identity = resolve_cell_identity(_automil_cfg, mil_model=_mil_model_raw)
+    except ValueError as exc:
+        raise click.ClickException(f"cannot resolve budget cell: {exc}") from exc
+    _dataset_name = _identity.dataset
+    _encoder_name = _identity.encoder
+    _mil_model_norm = _identity.mil_model
 
-    # M-14 (audit 2026-07-23): the task participates in cell identity, so a
-    # cohort's classification and survival searches get separate budgets instead
-    # of the first one to run draining the shared clock. Absent task.name keeps
-    # the legacy 3-tuple identity.
-    _task_name = _cfg_path(_automil_cfg, "task", "name")
-    _cell = get_or_create_cell(
-        dataset=_dataset_name,
-        encoder=_encoder_name,
-        mil_model=_mil_model_norm,
-        budget_seconds=_cap.budget_seconds,
-        safety_buffer_seconds=_cap.safety_buffer_seconds,
-        idle_grace_seconds=_cap.idle_grace_seconds,
-        mode=_cap.mode,
-        task=_task_name if _task_name != _dataset_name else None,
-        eval_budget=_cap.eval_budget,
-    )
+    _activity_report = None
+    _active_seconds = None
+    if _cap.mode == "agent_active":
+        try:
+            _activity_report = read_activity_report(adir, _identity.cell_id)
+        except ActivityError as exc:
+            raise click.ClickException(
+                f"activity accounting is invalid: {exc}"
+            ) from exc
+        if not _activity_report.sessions:
+            raise click.ClickException(
+                "agent_active accounting has no SessionStart event for this cell; "
+                "run from a runtime initialized with the autoMIL observer, "
+                "or explicitly choose cap.mode: wall_clock"
+            )
+        if _activity_report.metered_sessions != _activity_report.sessions:
+            raise click.ClickException(
+                "agent_active accounting has no Claude active-time sample for this "
+                "session; start the orchestrator and retry after its next metrics "
+                "scrape, or explicitly choose cap.mode: wall_clock"
+            )
+        if _activity_report.complete:
+            raise click.ClickException(
+                "agent_active accounting has no open session; start a fresh Claude "
+                "session before submitting new work"
+            )
+        _active_seconds = _activity_report.active_seconds
 
     # The manifest payload is consumer-owned; the binding contract is generic.
     # Verify its bytes, then prove command, budget, and cell hashes all resolve
@@ -557,7 +546,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 _manifest_path,
                 _campaign_binding,
                 base_run_command=_base_run_command,
-                budget_cell_id=_cell.cell_id,
+                budget_cell_id=_identity.cell_id,
             )
             _protocol_sha256 = _campaign_cfg.get("agent_protocol_sha256")
             if (
@@ -587,11 +576,71 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 "agent_protocol_sha256": _protocol_sha256,
                 "binding_sha256": _launch_binding["binding_sha256"],
             }
+            if _activity_report is None:
+                raise ValueError("campaign discovery requires agent_active accounting")
+            expected_session = (_launch_binding["session_id"],)
+            expected_binding = (
+                (_launch_binding["session_id"], _launch_binding["binding_sha256"]),
+            )
+            if _activity_report.sessions != expected_session:
+                raise ValueError(
+                    "activity journal is not exclusive to the bound campaign session"
+                )
+            if _activity_report.bindings != expected_binding:
+                raise ValueError(
+                    "activity journal is not bound to agent_session.json"
+                )
+            if _activity_report.complete:
+                raise ValueError("the bound campaign agent session has already ended")
         except ValueError as exc:
             raise click.ClickException(
                 f"campaign config is not bound to its manifest: {exc}"
             ) from exc
-    if blocks_new_work(_cell):
+
+    cells_dir = adir / "cells"
+    if _campaign_spec is not None:
+        _cell = get_cell(_identity.cell_id, cells_dir=cells_dir)
+        if _cell is None:
+            raise click.ClickException(
+                "campaign budget cell is missing; open the campaign agent session "
+                "before the first submit"
+            )
+        expected_cap = (
+            _cap.budget_seconds,
+            _cap.safety_buffer_seconds,
+            _cap.mode,
+            _cap.eval_budget,
+        )
+        actual_cap = (
+            _cell.budget_seconds,
+            _cell.safety_buffer_seconds,
+            _cell.mode,
+            _cell.eval_budget,
+        )
+        if actual_cap != expected_cap:
+            raise click.ClickException(
+                "campaign budget cell differs from the frozen config"
+            )
+    else:
+        _cell = get_or_create_cell(
+            dataset=_identity.dataset,
+            encoder=_identity.encoder,
+            mil_model=_identity.mil_model,
+            budget_seconds=_cap.budget_seconds,
+            safety_buffer_seconds=_cap.safety_buffer_seconds,
+            mode=_cap.mode,
+            task=_identity.task,
+            eval_budget=_cap.eval_budget,
+            cells_dir=cells_dir,
+        )
+
+    _consumed = consumed_seconds(
+        _cell, agent_active_seconds=_active_seconds,
+    )
+    _time_refusing = (
+        _cell.budget_seconds - _consumed <= _cell.safety_buffer_seconds
+    )
+    if blocks_new_work(_cell) or _time_refusing:
         # H-2: name whichever axis is binding. The eval axis can bind while the
         # status still reads ACTIVE (status only advances on the next daemon tick).
         _evals_msg = (
@@ -600,7 +649,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         )
         raise click.ClickException(
             f"Cell {_cell.cell_id[:8]} is {_cell.status.value}: budget exhausted "
-            f"({consumed_seconds(_cell):.0f}/{_cell.budget_seconds}s consumed"
+            f"({_consumed:.0f}/{_cell.budget_seconds}s consumed"
             f"{_evals_msg}). "
             f"Wait for cell to finalize, or submit with a different "
             f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
@@ -649,7 +698,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     spec.setdefault("metadata", {})["runtime"] = os.environ.get("AUTOMIL_RUNTIME", "unknown")
     # D-117: stamp metadata.cell_id — symmetric to metadata.backend and metadata.runtime.
     # The daemon's _running_in_cell() filters in-cell experiments by this field.
-    # Backward compat: legacy nodes without metadata.cell_id are treated as cell-less (no cap enforcement).
+    # Direct backend specs may be cell-less; every CLI submit is explicitly metered.
     spec.setdefault("metadata", {})["cell_id"] = _cell.cell_id
     if _campaign_spec is not None:
         spec.setdefault("metadata", {})["campaign"] = _campaign_spec

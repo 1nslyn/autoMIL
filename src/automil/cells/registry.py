@@ -38,15 +38,15 @@ def get_or_create_cell(
     mil_model: str,
     budget_seconds: int,
     safety_buffer_seconds: int,
-    idle_grace_seconds: int = 300,
     mode: str = "agent_active",
     task: str | None = None,
     eval_budget: int | None = None,
+    cells_dir: Path | None = None,
 ) -> Cell:
     """Return existing cell or create a new one (lazy + idempotent, D-116, REC-04).
 
-    D-134: all cap parameters (budget_seconds, safety_buffer_seconds,
-    idle_grace_seconds, mode) apply ONLY when this call CREATES the cell. If the
+    D-134: all cap parameters (budget_seconds, safety_buffer_seconds, mode)
+    apply ONLY when this call CREATES the cell. If the
     cell already exists, the persisted values are kept and any override is logged
     at INFO. Allowing later submits to extend a cell's budget = sandbagging vector.
 
@@ -58,7 +58,6 @@ def get_or_create_cell(
             Graph parent lineage stays separate — re-parenting does not fork the budget.
         budget_seconds: cap; honored only on creation.
         safety_buffer_seconds: refusing-new lead time; honored only on creation.
-        idle_grace_seconds: agent-active idle grace; honored only on creation.
         mode: "agent_active" or "wall_clock"; honored only on creation.
         task: M-14 — participates in cell identity so a cohort's classification
             and survival searches do not share (and starve) one budget. None
@@ -66,29 +65,30 @@ def get_or_create_cell(
         eval_budget: H-2 — evaluation-count cap (the primary equal-effort axis);
             honored only on creation, same as every other cap parameter. None
             leaves the cell time-only.
+        cells_dir: explicit registry directory for a controller that already
+            owns a project path; defaults to the current project's registry.
     """
-    cells_dir = _cells_dir()
+    cells_dir = cells_dir if cells_dir is not None else _cells_dir()
     cell_id = make_cell_id(dataset, encoder, mil_model, task)
     path = cells_dir / f"{cell_id}.json"
     if path.exists():
         cell = read_cell(path)
         if (cell.budget_seconds != budget_seconds
                 or cell.safety_buffer_seconds != safety_buffer_seconds
-                or cell.idle_grace_seconds != idle_grace_seconds
                 or cell.mode != mode
                 or cell.eval_budget != eval_budget):
             logger.info(
-                "Cell %s already open (budget=%ds buffer=%ds idle_grace=%ds mode=%s "
+                "Cell %s already open (budget=%ds buffer=%ds mode=%s "
                 "eval_budget=%s); ignoring override (budget=%ds buffer=%ds "
-                "idle_grace=%ds mode=%s eval_budget=%s) per D-134.",
+                "mode=%s eval_budget=%s) per D-134.",
                 cell_id[:8], cell.budget_seconds, cell.safety_buffer_seconds,
-                cell.idle_grace_seconds, cell.mode, cell.eval_budget,
-                budget_seconds, safety_buffer_seconds, idle_grace_seconds, mode,
+                cell.mode, cell.eval_budget,
+                budget_seconds, safety_buffer_seconds, mode,
                 eval_budget,
             )
         return cell
 
-    # First submit for this (dataset, encoder, mil_model) triple → open the cell.
+    # First lifecycle owner for this identity opens the cell.
     cell = Cell(
         cell_id=cell_id,
         dataset=dataset,
@@ -99,9 +99,6 @@ def get_or_create_cell(
         safety_buffer_seconds=safety_buffer_seconds,
         status=CellStatus.ACTIVE,
         mode=mode,
-        idle_grace_seconds=idle_grace_seconds,
-        consumed_active_seconds=0.0,
-        last_tick_at=None,
         eval_budget=eval_budget,
         consumed_evals=0,
         completed_evals=0,
@@ -116,7 +113,7 @@ def get_or_create_cell(
     return cell
 
 
-def get_cell(cell_id: str) -> Cell | None:
+def get_cell(cell_id: str, cells_dir: Path | None = None) -> Cell | None:
     """Return Cell with the given cell_id, or None if not found.
 
     Returns None gracefully when called from a non-project cwd (the
@@ -125,10 +122,11 @@ def get_cell(cell_id: str) -> Cell | None:
     *know* they're inside a project should pre-validate via
     ``_find_automil_dir()`` if they want loud failures on misconfig.
     """
-    try:
-        cells_dir = _cells_dir()
-    except click.ClickException:
-        return None
+    if cells_dir is None:
+        try:
+            cells_dir = _cells_dir()
+        except click.ClickException:
+            return None
     path = cells_dir / f"{cell_id}.json"
     if not path.exists():
         return None

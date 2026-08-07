@@ -12,12 +12,15 @@ from __future__ import annotations
 import logging
 
 from automil.cells.activity import (
-    ACTIVITY_FILENAME,
-    read_last_action_at,
-    touch_last_action,
+    ACTIVITY_JOURNAL_FILENAME,
+    ActivityError,
+    ActivityReport,
+    bind_activity_session,
+    ingest_prometheus_metrics,
+    read_activity_report,
+    record_hook_event,
 )
 from automil.cells.cap import (
-    accrue_active,
     evals_exhausted,
     next_status,
     remaining_evals,
@@ -30,6 +33,11 @@ from automil.cells.capconfig import (
     resolve_cap_config,
 )
 from automil.cells.reconcile import aggregate_folds, reconcile_budget_kill
+from automil.cells.identity import (
+    CellIdentity,
+    CellIdentityError,
+    resolve_cell_identity,
+)
 from automil.cells.registry import (
     blocks_new_work,
     get_cell,
@@ -50,19 +58,22 @@ from automil.cells.state import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "ACTIVITY_FILENAME",
+    "ACTIVITY_JOURNAL_FILENAME",
+    "ActivityError",
+    "ActivityReport",
     "BLOCKING_STATUSES",
     "CapResolved",
     "Cell",
     "CellStatus",
-    "accrue_active",
     "aggregate_folds",
+    "bind_activity_session",
     "blocks_new_work",
     "consumed_seconds",
     "evals_exhausted",
     "format_duration",
     "get_cell",
     "get_or_create_cell",
+    "ingest_prometheus_metrics",
     "is_refusing_new",
     "list_cells",
     "make_cell_id",
@@ -70,10 +81,13 @@ __all__ = [
     "parse_duration",
     "parse_eval_budget",
     "read_cell",
-    "read_last_action_at",
+    "read_activity_report",
+    "record_hook_event",
     "reconcile_budget_kill",
     "remaining_evals",
     "resolve_cap_config",
-    "touch_last_action",
     "write_cell",
+    "CellIdentity",
+    "CellIdentityError",
+    "resolve_cell_identity",
 ]

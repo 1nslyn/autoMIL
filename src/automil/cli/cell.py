@@ -62,6 +62,29 @@ def _format_evals(cell) -> str:
     return f"{cell.consumed_evals}/{budget}"
 
 
+def _consumed_seconds(cell) -> float:
+    """Resolve current cap usage from the cell's authoritative time source."""
+    from automil.cells import consumed_seconds
+
+    if cell.mode == "wall_clock":
+        return consumed_seconds(cell)
+    from automil.cells.activity import ActivityError, read_activity_report
+    from automil.cli._helpers import _find_automil_dir
+
+    try:
+        report = read_activity_report(
+            _find_automil_dir(), cell.cell_id,
+        )
+        if not report.sessions:
+            raise ActivityError("no SessionStart event was recorded")
+        active = report.active_seconds
+    except ActivityError as exc:
+        raise click.ClickException(
+            f"Cell {cell.cell_id[:8]} activity journal is invalid: {exc}"
+        ) from exc
+    return consumed_seconds(cell, agent_active_seconds=active)
+
+
 @cell_group.command("status")
 @click.argument("cell_id", required=False)
 @click.option("--no-header", is_flag=True, default=False, help="Suppress header row.")
@@ -69,7 +92,7 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
     """Show budget state for one cell (or all cells if CELL_ID omitted)."""
     from datetime import datetime
 
-    from automil.cells import consumed_seconds, get_cell, list_cells  # lazy
+    from automil.cells import get_cell, list_cells  # lazy
 
     if cell_id is not None:
         # Tolerant prefix match: allow operator to type a short prefix
@@ -102,7 +125,7 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
         click.echo(header)
         click.echo("-" * len(header))
     for cell in cells:
-        consumed = consumed_seconds(cell)
+        consumed = _consumed_seconds(cell)
         consumed_str = _format_consumed(consumed)
         budget_str = _format_budget(cell.budget_seconds)
         cb = f"{consumed_str}/{budget_str}"
@@ -120,7 +143,7 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
 @click.option("--no-header", is_flag=True, default=False, help="Pipe-friendly: no header.")
 def cell_list(no_header: bool) -> None:
     """Short-form cell listing (cell_id, status, consumed/budget)."""
-    from automil.cells import consumed_seconds, list_cells  # lazy
+    from automil.cells import list_cells  # lazy
 
     cells = list_cells()
     if not cells:
@@ -132,7 +155,7 @@ def cell_list(no_header: bool) -> None:
         )
         click.echo("-" * 56)
     for cell in cells:
-        consumed_str = _format_consumed(consumed_seconds(cell))
+        consumed_str = _format_consumed(_consumed_seconds(cell))
         budget_str = _format_budget(cell.budget_seconds)
         cb = f"{consumed_str}/{budget_str}"
         click.echo(

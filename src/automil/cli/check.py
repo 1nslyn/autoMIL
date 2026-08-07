@@ -1,6 +1,7 @@
 """check command: validate project setup before running experiments."""
 from __future__ import annotations
 
+import json
 import os
 import site
 import subprocess
@@ -257,11 +258,9 @@ def check():
         from automil.cells.capconfig import resolve_cap_config  # noqa: PLC0415
         try:
             cap = resolve_cap_config(config)
-            grace = (f", idle_grace={format_duration(cap.idle_grace_seconds)}"
-                     if cap.mode == "agent_active" else "")
             click.echo(
                 f"cap budget: {format_duration(cap.budget_seconds)} "
-                f"(mode={cap.mode}{grace}, "
+                f"(mode={cap.mode}, "
                 f"safety_buffer={format_duration(cap.safety_buffer_seconds)})"
             )
             if not (0 < cap.safety_buffer_seconds < cap.budget_seconds):
@@ -269,6 +268,30 @@ def check():
                     f"cap.safety_buffer ({cap.safety_buffer_seconds}s) must satisfy "
                     f"0 < buffer < budget ({cap.budget_seconds}s)."
                 )
+            if cap.mode == "agent_active":
+                from automil.activity_hooks import (  # noqa: PLC0415
+                    missing_claude_activity_hooks,
+                )
+
+                settings_path = git_root / ".claude" / "settings.json"
+                try:
+                    settings = json.loads(settings_path.read_text())
+                except (OSError, json.JSONDecodeError) as exc:
+                    issues.append(
+                        "cap.mode=agent_active requires the Claude active-time "
+                        f"observer, but {settings_path} is unreadable: {exc}. "
+                        "Run `uv run automil init --update --runtime claude "
+                        "--no-healthcheck`, or choose cap.mode: wall_clock."
+                    )
+                else:
+                    missing_hooks = missing_claude_activity_hooks(settings)
+                    if missing_hooks:
+                        issues.append(
+                            "cap.mode=agent_active is missing observer setting(s): "
+                            f"{', '.join(missing_hooks)}. Run `uv run "
+                            "automil init --update --runtime claude "
+                            "--no-healthcheck`."
+                        )
         except ValueError as exc:
             issues.append(f"cap config invalid: {exc}")
 
