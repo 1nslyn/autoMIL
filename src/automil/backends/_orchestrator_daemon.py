@@ -442,15 +442,20 @@ def _drain_log_iter_with_timeout(backend, handle, timeout: float = 60.0) -> list
 
 
 def _symlink_slurm_logs(automil_dir: Path, archive_node_dir: Path, spec_data: dict) -> None:
-    """D-171: symlink submitit's native stdout/stderr logs into archive/<id>/.
+    """D-171 / B3: copy submitit's native stdout/stderr logs into archive/<id>/,
+    with held-out redaction applied to the copies.
 
-    Creates archive/<id>/slurm-stdout.out and archive/<id>/slurm-stderr.err as
-    symlinks (NOT copies) pointing at submitit-logs/{opaque_id}_0_log.out/.err.
-    Reduces disk usage — submitit already owns those files on disk.
+    Previously these were symlinks to submitit's raw files — an unredacted
+    agent-visible view of the same stdout H-1 redacts in run.log (redacting a
+    symlink target would corrupt submitit's own file). Copies cost disk but
+    keep the firewall closed; redaction uses the generic held-out markers
+    (the result's own held_out keys are not known at drain time).
 
     This is a module-level function (NOT a method) so it can be tested without
     instantiating ExperimentOrchestrator.
     """
+    from automil.firewall import redact_log_file
+
     opaque_id = spec_data.get("opaque_id", "")
     if not opaque_id:
         return
@@ -463,14 +468,16 @@ def _symlink_slurm_logs(automil_dir: Path, archive_node_dir: Path, spec_data: di
     stderr_dst = archive_node_dir / "slurm-stderr.err"
     if stdout_src.exists() and not stdout_dst.exists():
         try:
-            stdout_dst.symlink_to(stdout_src.resolve())
+            shutil.copyfile(stdout_src, stdout_dst)
+            redact_log_file(stdout_dst)
         except OSError as exc:
-            logger.warning("D-171 stdout symlink failed: %s", exc)
+            logger.warning("D-171 stdout copy failed: %s", exc)
     if stderr_src.exists() and not stderr_dst.exists():
         try:
-            stderr_dst.symlink_to(stderr_src.resolve())
+            shutil.copyfile(stderr_src, stderr_dst)
+            redact_log_file(stderr_dst)
         except OSError as exc:
-            logger.warning("D-171 stderr symlink failed: %s", exc)
+            logger.warning("D-171 stderr copy failed: %s", exc)
 
 
 def _submitted_at_key(spec: dict) -> str:
@@ -2020,6 +2027,13 @@ class ExperimentOrchestrator:
             )
             return
 
+        # B3 (claims-alignment): drain the remote backend log BEFORE collection
+        # and redaction — it used to run last, so on SLURM/Ray the H-1
+        # redaction below operated on a file that did not exist yet (a no-op),
+        # and the crash-synthesis path classified OOM/timeout against an empty
+        # log. One moved call fixes all three. No-op for the local backend.
+        self._drain_remote_backend_log(node_id, archive)
+
         result = self._collect_or_synthesize_result(node_id, archive, returncode, wt_path)
 
         # H-1 (audit 2026-07-23): run.log is the raw training stdout at the
@@ -2073,8 +2087,8 @@ class ExperimentOrchestrator:
         # attempt was already billed at launch).
         self._record_cell_completion(spec, result.get("status", ""))
 
-        # D-170: cross-backend log unification (no-op for local backend).
-        self._drain_remote_backend_log(node_id, archive)
+        # (B3: the D-170 cross-backend log drain moved above collection so the
+        # drained log is covered by redaction and crash classification.)
 
         # Clean running spec — use backend-aware path (WR-02 fix: D-169).
         # self.running_dir is the alias for running/local/ only; SLURM/Ray specs
