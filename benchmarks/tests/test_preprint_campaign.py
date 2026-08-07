@@ -18,6 +18,8 @@ from autobench.campaign import (
     CERTIFICATION_FOLDS,
     CAMPAIGN_ID,
     DATASETS,
+    DISCOVERY_AGENT_ACTIVE_BUDGET,
+    DISCOVERY_ATTEMPTS,
     PROTOCOL,
     PROTOCOL_VERSION,
     CampaignManifestError,
@@ -161,13 +163,14 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
         "retrain": False,
     }
     assert protocol["agentic_fold_trainings_per_cell"] == {
-        "discovery": 60 * 3,
+        "discovery": DISCOVERY_ATTEMPTS * 3,
         "promotion_per_candidate": 2,
         "promotion_candidates_min": 0,
         "promotion_candidates_max": 10,
-        "minimum": 180,
-        "maximum": 200,
+        "minimum": 90,
+        "maximum": 110,
     }
+    assert protocol["discovery_agent_active_budget"] == "12h"
     assert protocol["attempt_timeout"] == {
         "minutes": 360,
         "role": "failure-containment-not-search-budget",
@@ -256,7 +259,8 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         )
         assert config["campaign"]["protocol_version"] == PROTOCOL_VERSION
         assert "base_commit" not in config["campaign"]
-        assert config["cap"]["eval_budget"] == 60
+        assert config["cap"]["eval_budget"] == DISCOVERY_ATTEMPTS
+        assert config["cap"]["budget"] == DISCOVERY_AGENT_ACTIVE_BUDGET
         assert config["training"]["fold_count"] == 3
         assert config["orchestrator"]["default_timeout_min"] == 360
         assert config["files"]["editable"] == [

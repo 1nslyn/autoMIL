@@ -14,7 +14,12 @@ import yaml
 
 import autobench.campaign_stages as campaign_stages
 from automil.admissibility import load_candidate_policy
-from automil.cells.state import Cell, CellStatus, read_cell, write_cell
+from automil.cells.activity import (
+    ingest_prometheus_metrics,
+    read_activity_report,
+    record_hook_event,
+)
+from automil.cells.state import Cell, CellStatus, make_cell_id, read_cell, write_cell
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
@@ -93,6 +98,7 @@ def staged_cell(tmp_path):
     cell_root = tmp_path / "dataset__arm__task"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
+    budget_cell_id = make_cell_id("dataset", "encoder", "model", "task")
     cell_without_hash = {
         "cell_id": "dataset__arm__task",
         "dataset": "dataset",
@@ -121,7 +127,7 @@ def staged_cell(tmp_path):
             ),
         },
         "budget_identity": {
-            "cell_id": "b" * 16,
+            "cell_id": budget_cell_id,
             "dataset": "dataset",
             "encoder": "encoder",
             "mil_model": "model",
@@ -146,6 +152,9 @@ def staged_cell(tmp_path):
     (tmp_path / AGENT_PROTOCOL_FILE).write_text(json.dumps(AGENT_PROTOCOL))
     (adir / "campaign_cell.json").write_text(json.dumps(cell))
     (adir / "config.yaml").write_text(yaml.safe_dump({
+        "project": {"name": "dataset"},
+        "task": {"name": "task"},
+        "encoders": {"primary": "encoder"},
         "registry": {
             "mode": "architecture-preserving",
             "protected": ["models/**"],
@@ -158,6 +167,12 @@ def staged_cell(tmp_path):
             ],
         },
         "run": {"command": cell["commands"]["discovery"], "mil_model": "model"},
+        "cap": {
+            "budget": "12h",
+            "safety_buffer": "30m",
+            "mode": "agent_active",
+            "eval_budget": DISCOVERY_ATTEMPTS,
+        },
         "campaign": {
             "campaign_id": CAMPAIGN_ID,
             "manifest": "manifest.json",
@@ -247,6 +262,7 @@ def _attempts(
     cell_root = adir.parent
     session_path = cell_root / "agent_session.json"
     if not session_path.exists():
+        _record_session_start(adir)
         open_agent_session(cell_root, {
             "session_id": "fixture-session",
             "started_at": (
@@ -289,7 +305,9 @@ def _attempts(
                 bound_at + timedelta(seconds=index + 1)
             ).isoformat(),
             "metadata": {
-                "cell_id": "b" * 16,
+                "cell_id": yaml.safe_load(
+                    (adir / "config.yaml").read_text()
+                )["campaign"]["budget_cell_id"],
                 "agent_session": {
                     "session_id": session["session"]["session_id"],
                     "agent_protocol_sha256": session["agent_protocol_sha256"],
@@ -599,11 +617,15 @@ def test_baseline_registration_rejects_mutated_campaign_cell(staged_cell):
 def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     _attempts(adir, cell["cell_id"])
-    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], 59)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS - 1,
+    )
     with pytest.raises(CampaignStageError, match="baseline"):
         freeze_discovery(cell_root)
     register_baseline(cell_root, _baseline(cell_root))
-    with pytest.raises(CampaignStageError, match="exactly 60"):
+    with pytest.raises(
+        CampaignStageError, match=f"exactly {DISCOVERY_ATTEMPTS}",
+    ):
         freeze_discovery(cell_root)
 
 
@@ -618,10 +640,10 @@ def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
     state = freeze_discovery(cell_root)
     promoted = state["discovery"]["promoted_candidates"]
     assert state["phase"] == "promotion-ready"
-    assert state["discovery"]["attempts_charged"] == 60
+    assert state["discovery"]["attempts_charged"] == DISCOVERY_ATTEMPTS
     assert state["discovery"]["complete_candidates"] == 12
     assert state["discovery"]["unique_complete_candidates"] == 12
-    assert len(state["discovery"]["attempt_audit"]) == 60
+    assert len(state["discovery"]["attempt_audit"]) == DISCOVERY_ATTEMPTS
     assert len(promoted) == PROTOCOL["promotion_candidates"] == 10
     assert [candidate["candidate_id"] for candidate in promoted] == [
         f"node_{index:04d}" for index in range(12, 2, -1)
@@ -1221,6 +1243,7 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
 
 def _agent_session_end(cell_root: Path) -> dict:
     session = json.loads((cell_root / "agent_session.json").read_text())
+    _record_session_end(cell_root / "automil")
     ended_at = (
         datetime.fromisoformat(session["session"]["bound_at"])
         + timedelta(hours=1)
@@ -1240,10 +1263,46 @@ def _agent_session_end(cell_root: Path) -> dict:
     }
 
 
+def _record_session_start(
+    adir: Path, session_id: str = "fixture-session",
+) -> None:
+    config = yaml.safe_load((adir / "config.yaml").read_text())
+    record_hook_event(
+        adir,
+        config["campaign"]["budget_cell_id"],
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": session_id,
+            "source": "startup",
+        },
+    )
+    ingest_prometheus_metrics(
+        adir,
+        "claude_code_active_time_total"
+        f'{{session_id="{session_id}",type="cli"}} 1.0\n',
+    )
+
+
+def _record_session_end(
+    adir: Path, session_id: str = "fixture-session",
+) -> None:
+    config = yaml.safe_load((adir / "config.yaml").read_text())
+    cell_id = config["campaign"]["budget_cell_id"]
+    report = read_activity_report(adir, cell_id)
+    if report.complete:
+        return
+    record_hook_event(
+        adir,
+        cell_id,
+        {"hook_event_name": "SessionEnd", "session_id": session_id},
+    )
+
+
 def test_agent_session_is_prebound_to_every_proposal_then_finalized(
     staged_cell,
 ):
     cell_root, adir, cell, _, _ = staged_cell
+    _record_session_start(adir)
     opened = open_agent_session(cell_root, {
         "session_id": "fixture-session",
         "started_at": (
@@ -1251,7 +1310,7 @@ def test_agent_session_is_prebound_to_every_proposal_then_finalized(
         ).isoformat(),
     })
     assert opened["status"] == "open"
-    with pytest.raises(CampaignStageError, match="already been opened"):
+    with pytest.raises(CampaignStageError, match="immutable"):
         open_agent_session(cell_root, {
             "session_id": "second-session",
             "started_at": (
@@ -1285,6 +1344,7 @@ def test_checked_in_session_templates_execute_the_controller_contract(staged_cel
             datetime.now(timezone.utc) - timedelta(minutes=1)
         ).isoformat(),
     })
+    _record_session_start(adir)
     opened = open_agent_session(cell_root, start)
     _attempts(adir, cell["cell_id"], completed=0)
     _open_budget_cell(
@@ -1304,6 +1364,7 @@ def test_checked_in_session_templates_execute_the_controller_contract(staged_cel
         ).isoformat(),
     })
     end["usage"]["basis"] = "fixture runtime does not expose usage"
+    _record_session_end(adir)
     finalized = finalize_agent_session(cell_root, end)
 
     assert finalized["status"] == "finalized"
@@ -1434,7 +1495,9 @@ def test_finalization_rejects_a_proposal_after_the_session_end(staged_cell):
     bound_at = datetime.fromisoformat(
         json.loads((cell_root / "agent_session.json").read_text())["session"]["bound_at"]
     )
-    session_end["ended_at"] = (bound_at + timedelta(seconds=30)).isoformat()
+    session_end["ended_at"] = (
+        bound_at + timedelta(seconds=DISCOVERY_ATTEMPTS // 2)
+    ).isoformat()
 
     with pytest.raises(CampaignStageError, match="outside the agent session interval"):
         finalize_agent_session(cell_root, session_end)
