@@ -237,7 +237,7 @@ hardware:
 # statistical-power requirement supplies different values. Pre-registration
 # (D-138) is enforced regardless of these values.
 gate:
-  auto_nominate:    false        # D-142 default: operator-driven nomination only
+  auto_nominate:    false        # RESERVED (C-e): parsed + validated, but NO automatic nomination path exists — nomination is always `automil nominate` (operator-driven, D-142). Setting true changes nothing today.
   K:                2            # O-01 default: max(2, N_cells//3) generous starting K
   p_threshold:      0.05         # O-02 default: conventional alpha; Bonferroni divides
   bootstrap_reps:   1000         # GTE-04 locked: 1000 per F1 paper §4.4

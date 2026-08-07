@@ -451,8 +451,8 @@ your-project/                    # your repo (untouched)
 | Runtime                       |    Support Level     | How to Start                                                                                                                                                         |
 | ----------------------------- | :------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Claude Code**               |     First-class      | `automil init --runtime claude` then `/automil-setup`, then `/automil`                                                                                               |
-| **Codex**                     |     First-class      | `automil init --runtime codex`; per-runtime SKILL/AGENTS overlay shipped                                                                                             |
-| **OpenCode**                  |     First-class      | `automil init --runtime opencode`; per-runtime SKILL/AGENTS overlay shipped                                                                                          |
+| **Codex**                     |     First-class      | `automil init --runtime codex`; installs the shared AGENTS.md + CLI-fallback trajectory capture                                                                      |
+| **OpenCode**                  |     First-class      | `automil init --runtime opencode`; installs the shared AGENTS.md + trajectory plugin                                                                                 |
 | **DeepSeek**                  | First-class (routed) | `automil init --runtime deepseek-via-opencode` (or `deepseek-via-codex`); DeepSeek is a model accessed through a host runtime                                        |
 | **Cursor / Aider / Windsurf** |      Compatible      | Point the agent at `automil/program.md` and the [contract](docs/training-script-contract.md), any agent that can read files, edit code, and run shell commands works |
 

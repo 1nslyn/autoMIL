@@ -1,13 +1,14 @@
 # autoMIL Setup, Codex notes
 
-This file is the Codex per-runtime overlay for the automil-setup skill. Codex
-renders the merged result as plain markdown without YAML frontmatter, per the
-Codex AGENTS.md and Skills conventions.
-
-The shared canonical content lives at
-`src/automil/agent_assets/_shared/skills/automil-setup/SKILL.md`. _overlay.py
-merges it with this file at install time and writes the result to
-`.codex/instructions.md` (per cli/init.py codex branch).
+This file holds Codex-specific notes for the automil-setup skill. Honesty note
+(claims-alignment C-d): **no code path currently consumes this file** — the
+`init` codex branch copies `_shared/AGENTS.md` verbatim and never calls
+`merge_skill` for skills, and `show-skill` looks for overlays at the runtime
+directory root, not under `skills/`. It is retained as the D-196 acceptance
+artifact (plain markdown, no YAML frontmatter — the format a future codex
+merge would require) and as the reference text for operators wiring Codex by
+hand. The shared canonical content lives at
+`src/automil/agent_assets/_shared/skills/automil-setup/SKILL.md`.
 
 ## Codex-specific notes
 

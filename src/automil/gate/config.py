@@ -38,6 +38,10 @@ class GateConfig:
     K: int = DEFAULT_K
     p_threshold: float = DEFAULT_P_THRESHOLD
     bootstrap_reps: int = DEFAULT_BOOTSTRAP_REPS
+    #: RESERVED (claims-alignment C-e): parsed and validated, but no automatic
+    #: nomination path exists anywhere — nomination is always the operator's
+    #: `automil nominate`. Kept so the CFG-1 config surface stays stable; the
+    #: template comment says the same so nobody expects behavior from it.
     auto_nominate: bool = DEFAULT_AUTO_NOMINATE
 
 
