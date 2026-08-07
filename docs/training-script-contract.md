@@ -162,6 +162,16 @@ via `automil certify`), `status` (one of completed, crash, budget_killed,
 cancelled), `elapsed_seconds`, `peak_vram_mb`, `fold_results`, `partial`.
 `additionalProperties: true` means consumers may extend.
 
+Two ingest rules sit on top of the schema. (a) Held-out-named keys inside
+`metrics` (any key containing `test`, `held_out`, or `heldout`, or named
+`summary`) fail the node closed with a val-firewall error: test values belong
+only in `held_out`. (b) An optional `validation_folds` list of per-fold
+validation projections, shaped
+`[{"fold_index": <int>, "metrics": {"val_...": <number>}, "composite": <number>}, ...]`,
+lets the framework recompute `composite_se` (the cross-fold standard error
+that feeds the Ladder keep-margin) from the per-fold composites; when present,
+the recomputed SE is preferred over a reported `composite_se`.
+
 Minimum valid payload:
 
 ```json
@@ -194,8 +204,11 @@ references this schema's location. Schema path in the error:
 
 The `composite` field is the single scalar used by the experiment tree for
 ranking and keep/discard (UCB scoring, Ladder margin). It is the
-**validation** selection signal, never test. The framework trusts it as an
-opaque number and never recomputes or inspects it; test metrics belong in
+**validation** selection signal, never test. When a `metrics` block is
+present the framework recomputes the composite from it at ingest (the
+`scoring.formula` reducer, `mean` by default; CR-1b) and prefers the
+recomputed value, logging any disagreement; a bare `{"composite": ...}`
+payload is used as reported. Test metrics belong in
 `held_out` instead, sealed away from search and revealed once via
 `automil certify`. Higher is always better. For loss minimization, negate:
 `"composite": -val_loss`.

@@ -307,7 +307,8 @@ The minimum valid payload is:
 is optional. Under the **val-firewall**, `metrics` is validation-only and is
 what `composite` is computed from; any test metrics go in a sealed `held_out`
 block that the orchestrator quarantines under `archive/<node>/certify/` and
-reveals once via `automil certify`, so test never drives search. A full example
+reveals once via `automil certify`, so test never drives search; held-out-named
+keys (e.g. `test_*`) inside `metrics` fail the node closed at ingest. A full example
 payload from the autobench consumer:
 
 ```json

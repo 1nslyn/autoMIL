@@ -13,10 +13,11 @@ protocol independently for every cell:
 - paired baseline-and-winner reveal of the already sealed five-fold held-out
   results.
 
-There is no final retraining. Crashes and partial runs consume discovery
-attempts. An incomplete promotion candidate is ineligible. The native baseline
-wins an exact tie against a searched candidate; searched-candidate ties use the
-stable node ID.
+There is no final retraining. Crashes, partial runs, and launch failures
+consume discovery attempts — an attempt is billed exactly once, when its spec
+is archived. An incomplete promotion candidate is ineligible. The native
+baseline wins an exact tie against a searched candidate; searched-candidate
+ties use the stable node ID.
 
 ## 1. Preflight
 
@@ -103,10 +104,13 @@ Git commit, diff, and command provenance do not enter this decision.
 
 Fill `agent_session.template.json` with the runtime session identifier and a
 timezone-aware start time, then bind it before the first proposal. The command
-fails if any discovery spec already exists or the attempt budget has been
-consumed. After those pristine-state checks, the controller records its own
+fails if the native baseline is not yet registered (Section 3), if any
+discovery spec already exists, or if the attempt budget has been consumed.
+After those pristine-state checks, the controller records its own
 `bound_at`; every charged proposal must carry a timezone-aware `submitted_at`
-at or after that controller timestamp.
+no earlier than that controller timestamp minus the declared 120-second
+clock-skew tolerance (`PROTOCOL.submit_clock_skew_tolerance_seconds`); beyond
+that the freeze fails closed.
 
 ```bash
 uv run python benchmarks/scripts/campaign_stage.py open-agent-session \
@@ -175,8 +179,9 @@ reveals held-out data.
 After the winner freezes, fill `agent_session_end.template.json` from the runtime
 usage record and finalize the same pre-bound session. Exact, estimated, and
 unavailable usage are represented explicitly; unavailable token/cost fields
-must be null and carry a reason. Finalization verifies that all 60 proposal
-timestamps fall inside this session interval.
+must be null and carry a reason. Finalization verifies that no proposal
+timestamp falls after the session's end (the start bound was already checked
+at freeze, with the declared clock-skew tolerance).
 
 ```bash
 uv run python benchmarks/scripts/campaign_stage.py finalize-agent-session \
