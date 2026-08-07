@@ -26,7 +26,10 @@ class SimpleMIL(nn.Module):
         self.V = nn.Linear(self.D, self.H)    # path a
         self.U = nn.Linear(self.D, self.H)    # path b
         self.w = nn.Linear(self.H, 1)         # attention scoring
-        self.drop = nn.Dropout(0.25) if dropout else nn.Identity()
+        # `dropout` accepts the legacy bool toggle (True -> the original 0.25)
+        # or a float rate from the training plan; falsy (False / 0.0) disables.
+        _rate = 0.25 if isinstance(dropout, bool) else float(dropout)
+        self.drop = nn.Dropout(_rate) if dropout else nn.Identity()
         self.cls = nn.Linear(self.D, pred_num)
 
         # Debug information
