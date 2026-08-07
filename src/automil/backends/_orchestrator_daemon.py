@@ -1357,14 +1357,16 @@ class ExperimentOrchestrator:
             logger.exception("cap refusal: could not cancel graph node %s", node_id)
 
     def _record_cell_launch(self, spec: dict) -> None:
-        """Bill one evaluation to the dispatching cell (H-2).
+        """Bill one evaluation to the dispatching cell (H-2, A9).
 
-        Called once the process is actually spawned. A launch that never got that
-        far (missing base_commit, worktree failure, Popen error) dispatched
-        nothing and is therefore not billed: it is an infrastructure fault, not
-        an attempt by the agent. Everything that DID start counts — crashed,
-        partial and budget-killed alike — because equal effort means equal
-        attempts, not equal successes.
+        Called when the attempt's spec is archived — the moment it becomes a
+        countable attempt — not after Popen. Everything past the cap-refusal
+        gate counts: crashed, partial, budget-killed, and pre-spawn failures
+        (admissibility, base_commit, worktree, Popen) alike, because equal
+        effort means equal attempts, not equal successes, and because the
+        campaign freeze requires archived attempts == billed attempts exactly
+        (a pre-spawn failure that archived without billing deadlocked the cell
+        permanently).
 
         Also the single place an unbillable launch is reported: exactly once per
         dispatch, so the operator can find (and the paper can quantify) every
@@ -1517,6 +1519,16 @@ class ExperimentOrchestrator:
         # Save spec (without internal keys)
         spec_clean = {k: v for k, v in spec.items() if k not in ("_file",)}
         (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2))
+
+        # A9 (claims-alignment): bill at archive time, not after Popen. The
+        # freeze census counts archived non-cap-refused specs and requires it
+        # to equal the cell's consumed evals exactly — billing only spawned
+        # processes let every pre-spawn failure (admissibility, base_commit,
+        # worktree, Popen) archive an unbilled spec and deadlock the cell
+        # permanently. "Archived attempt <=> billed attempt" is now a
+        # construction invariant, which is also what cap.py's bill-at-launch
+        # policy and the campaign README already documented.
+        self._record_cell_launch(spec)
 
         # Remove from queue before attempting launch (prevents infinite retry)
         src_file = spec.get("_file")
@@ -1698,10 +1710,9 @@ class ExperimentOrchestrator:
         )
         self.gpu_allocations.setdefault(gpu_id, []).append(node_id)
 
-        # H-2: the experiment is dispatched — bill it to its cell. Done here (not
-        # at completion) so crashed and budget-killed attempts cost the same as
-        # successful ones.
-        self._record_cell_launch(spec)
+        # H-2/A9: billing happened at archive time (top of _launch), so crashed,
+        # budget-killed, and pre-spawn-failed attempts all cost the same as
+        # successful ones and the archive census equals the billed count.
 
         # Copy spec to running dir for orphan recovery.
         # Use _backend_running_dir to ensure running/local/ exists (created on demand

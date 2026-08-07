@@ -10,6 +10,7 @@ both attempts and usable results per cell.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import time
 from pathlib import Path
 from typing import Any
@@ -149,8 +150,15 @@ def test_launch_without_a_cell_id_bills_nothing(tmp_path):
     assert _read_cell(orch).consumed_evals == 1
 
 
-def test_a_failed_launch_is_not_billed(tmp_path):
-    """Nothing was dispatched, so nothing is owed: worktree failure is infra, not effort."""
+def test_a_pre_spawn_failure_is_billed(tmp_path):
+    """A9: archived attempt <=> billed attempt, worktree failure included.
+
+    The campaign freeze requires archived non-cap-refused specs == consumed
+    evals exactly; billing only spawned processes let one pre-spawn failure
+    (admissibility, base_commit, worktree, Popen) archive an unbilled spec and
+    deadlock the cell permanently. Billing happens at archive time now, so the
+    two counts agree by construction.
+    """
     import subprocess as _sp
 
     orch = _make_orch(tmp_path)
@@ -161,7 +169,29 @@ def test_a_failed_launch_is_not_billed(tmp_path):
 
     orch._launch(_spec("node_0001"), gpu_id=0)
 
+    assert _read_cell(orch).consumed_evals == 3
+    spec_json = json.loads((orch.archive_dir / "node_0001" / "spec.json").read_text())
+    assert not (spec_json.get("metadata") or {}).get("cap_refused"), (
+        "the archived spec is a countable attempt, not a cap refusal"
+    )
+
+
+def test_a_cap_refused_spec_stays_unbilled_and_census_excluded(tmp_path):
+    """The one legitimate archived-but-unbilled shape: cap refusal (pre-archive gate)."""
+    from automil.cells.state import CellStatus as _CS
+
+    orch = _make_orch(tmp_path)
+    cell = _write_cell(orch.automil_dir, consumed_evals=2)
+    cell = replace(cell, status=_CS.REFUSING_NEW)
+    write_cell(cell, orch.automil_dir / "cells")
+    _seed_graph(orch, "node_0001")
+    _stub_runner(orch, tmp_path, "node_0001")
+
+    orch._launch(_spec("node_0001"), gpu_id=0)
+
     assert _read_cell(orch).consumed_evals == 2
+    spec_json = json.loads((orch.archive_dir / "node_0001" / "spec.json").read_text())
+    assert (spec_json.get("metadata") or {}).get("cap_refused") is True
 
 
 # ---------------------------------------------------------------------------
