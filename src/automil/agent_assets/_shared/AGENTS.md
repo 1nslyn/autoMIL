@@ -14,7 +14,11 @@ This project uses autoMIL — an autonomous experiment framework for ML.
 
 ## Constraints
 
-- Cap: 6h per cell (framework-enforced, Phase 4).
+- Budget: consumer-declared per cell in `automil/config.yaml` (`cap.budget`,
+  time axis — 6h is only the framework fallback) and, when set,
+  `cap.eval_budget` — a hard cap on **launched attempts**. Every launched
+  attempt is charged, including crashes and budget-kills; check remaining
+  with `uv run automil cell status`.
 - Trajectories captured automatically (gitignored by default).
 
 ## Runtime

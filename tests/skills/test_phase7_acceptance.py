@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -155,18 +156,21 @@ def test_phase7_acceptance_clause_05_idempotency_zero_unprompted_changes():
 # ---------------------------------------------------------------------------
 
 def test_phase7_acceptance_clause_06_setup_done_gate_aborts_on_bad_config():
-    """D-198 clause 6: known-bad config fails the dry-run gate; skill aborts.
+    """D-198 clause 6 has direct end-to-end coverage in the main test run.
 
-    Accept returncode 0 (all PASS) or 5 (all SKIP -- automil not on PATH in CI).
+    Do not recursively invoke pytest here: the direct tests launch real daemon
+    subprocesses, and nesting them duplicates minutes of work while adding no
+    coverage.  This clause pins the named acceptance cases; pytest executes
+    their bodies independently in the same suite.
     """
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest",
-         "tests/skills/test_setup_dry_run_gate.py", "-q", "--tb=line"],
-        cwd=_REPO_ROOT, capture_output=True, text=True,
-    )
-    assert result.returncode in {0, 5}, (
-        f"dry-run gate tests failed unexpectedly:\n{result.stdout[-500:]}"
-    )
+    test_file = _REPO_ROOT / "tests" / "skills" / "test_setup_dry_run_gate.py"
+    text = test_file.read_text()
+    for name in (
+        "test_setup_gate_aborts_on_known_bad_config",
+        "test_setup_gate_passes_on_known_good_config",
+        "test_setup_gate_polling_terminates_within_90s",
+    ):
+        assert f"def {name}(" in text, f"missing direct acceptance test: {name}"
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +278,22 @@ def test_phase7_acceptance_clause_09_automil_check_passes_on_workstation(tmp_pat
     assert (repo / "automil" / "config.yaml").exists(), (
         "init did not produce config.yaml"
     )
+
+    # ``check`` now returns non-zero for every must-fix issue. Replace the
+    # intentionally invalid template placeholders so this remains a true
+    # workstation acceptance test rather than asserting that blocking setup
+    # errors exit successfully.
+    (repo / "features").mkdir()
+    (repo / "splits").mkdir()
+    (repo / "mapping.csv").write_text("slide_id,label\n")
+    config_path = repo / "automil" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text()) or {}
+    config["data"] = {
+        "features_dir": "features",
+        "splits_dir": "splits",
+        "mapping_csv": "mapping.csv",
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
 
     check_proc = subprocess.run(
         ["automil", "check"],

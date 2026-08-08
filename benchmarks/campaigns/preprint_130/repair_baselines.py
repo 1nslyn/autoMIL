@@ -181,7 +181,19 @@ def _validate_identity(
 def validate_historical_baseline(
     cell: Mapping[str, Any], source: Path,
 ) -> dict[str, Any]:
-    """Validate an unchanged legacy result and its five-fold evidence."""
+    """Validate an unchanged legacy result and its five-fold evidence.
+
+    B8 (claims-alignment): reuse should prove recipe equivalence with the
+    frozen tree where evidence exists — C2's estimand is winner minus native
+    baseline *within the same protocol*. Post-H-3 archives carry an ``arm``
+    block that must equal the current arm defaults (dtfd/titan; a tuned
+    historical run is not a native baseline). Pre-H-3 archives carry no arm
+    block, so config equivalence is unprovable there, and config equivalence
+    can never see code-behavior drift (e.g. determinism-semantics changes)
+    either way — rerunning under the frozen tree is the fallback that closes
+    both residuals, recorded as an operator pre-launch decision in
+    docs/claims-alignment.md (B8).
+    """
     framework = str(cell.get("framework"))
     if framework in HISTORICAL_STALE_FRAMEWORKS:
         raise HistoricalBaselineError(
@@ -190,7 +202,33 @@ def validate_historical_baseline(
     if framework not in HISTORICAL_REUSABLE_FRAMEWORKS:
         raise HistoricalBaselineError(f"framework {framework!r} has no reuse rule")
 
-    return _validate_result_bundle(cell, source)
+    validated = _validate_result_bundle(cell, source)
+
+    # Where the archive DOES carry recipe evidence, it must match the frozen
+    # tree's defaults — a tuned historical run is not a native baseline. The
+    # pre-H-3 historical format has no `arm` block at all; for those, config
+    # equivalence is unprovable and the reuse decision is an operator call
+    # (rerun under the frozen tree is the fallback that settles it).
+    config = _load_object(source / "config.json", "historical config")
+    arm_block = config.get("arm")
+    if isinstance(arm_block, Mapping):
+        if framework == "dtfd":
+            from autobench.pipeline.dtfd.config import DTFDConfig
+            if dict(arm_block) != asdict(DTFDConfig()):
+                raise HistoricalBaselineError(
+                    "historical DTFD run does not use the frozen tree's "
+                    "upstream defaults — not a native baseline; rerun instead "
+                    "of reusing"
+                )
+        elif framework == "titan":
+            from autobench.pipeline.titan.config import TitanHeadConfig
+            if dict(arm_block) != asdict(TitanHeadConfig()):
+                raise HistoricalBaselineError(
+                    "historical TITAN run does not use the frozen tree's "
+                    "locked linear-probe defaults — rerun instead of reusing"
+                )
+
+    return validated
 
 
 def _validate_result_bundle(

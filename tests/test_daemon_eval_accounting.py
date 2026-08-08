@@ -10,6 +10,7 @@ both attempts and usable results per cell.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import time
 from pathlib import Path
 from typing import Any
@@ -149,8 +150,15 @@ def test_launch_without_a_cell_id_bills_nothing(tmp_path):
     assert _read_cell(orch).consumed_evals == 1
 
 
-def test_a_failed_launch_is_not_billed(tmp_path):
-    """Nothing was dispatched, so nothing is owed: worktree failure is infra, not effort."""
+def test_a_pre_spawn_failure_is_billed(tmp_path):
+    """A9: archived attempt <=> billed attempt, worktree failure included.
+
+    The campaign freeze requires archived non-cap-refused specs == consumed
+    evals exactly; billing only spawned processes let one pre-spawn failure
+    (admissibility, base_commit, worktree, Popen) archive an unbilled spec and
+    deadlock the cell permanently. Billing happens at archive time now, so the
+    two counts agree by construction.
+    """
     import subprocess as _sp
 
     orch = _make_orch(tmp_path)
@@ -161,7 +169,29 @@ def test_a_failed_launch_is_not_billed(tmp_path):
 
     orch._launch(_spec("node_0001"), gpu_id=0)
 
+    assert _read_cell(orch).consumed_evals == 3
+    spec_json = json.loads((orch.archive_dir / "node_0001" / "spec.json").read_text())
+    assert not (spec_json.get("metadata") or {}).get("cap_refused"), (
+        "the archived spec is a countable attempt, not a cap refusal"
+    )
+
+
+def test_a_cap_refused_spec_stays_unbilled_and_census_excluded(tmp_path):
+    """The one legitimate archived-but-unbilled shape: cap refusal (pre-archive gate)."""
+    from automil.cells.state import CellStatus as _CS
+
+    orch = _make_orch(tmp_path)
+    cell = _write_cell(orch.automil_dir, consumed_evals=2)
+    cell = replace(cell, status=_CS.REFUSING_NEW)
+    write_cell(cell, orch.automil_dir / "cells")
+    _seed_graph(orch, "node_0001")
+    _stub_runner(orch, tmp_path, "node_0001")
+
+    orch._launch(_spec("node_0001"), gpu_id=0)
+
     assert _read_cell(orch).consumed_evals == 2
+    spec_json = json.loads((orch.archive_dir / "node_0001" / "spec.json").read_text())
+    assert (spec_json.get("metadata") or {}).get("cap_refused") is True
 
 
 # ---------------------------------------------------------------------------
@@ -287,3 +317,167 @@ def test_exhausting_the_eval_budget_flips_the_cell_to_refusing_new(tmp_path):
         "an exhausted eval budget must move the cell along the same state machine "
         "the time cap uses"
     )
+
+
+def test_relaunch_after_crash_window_bills_exactly_once(tmp_path):
+    """A9 exactly-once: a daemon crash inside the archive->unlink window means
+    _launch re-processes the same node on restart — the second pass must not
+    re-bill (billed > archived would deadlock the freeze from the other side).
+    """
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, consumed_evals=2)
+    _seed_graph(orch, "node_0001")
+    _stub_runner(orch, tmp_path, "node_0001")
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(_spec("node_0001"), gpu_id=0)
+    assert _read_cell(orch).consumed_evals == 3
+
+    # Simulate the crash window: the queue file reappears (never unlinked)
+    # and the daemon re-launches the same node after restart.
+    orch.running.pop("node_0001", None)
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(_spec("node_0001"), gpu_id=0)
+
+    cell = _read_cell(orch)
+    assert cell.consumed_evals == 3, "re-processing the same node must not re-bill"
+    assert cell.billed_node_ids.count("node_0001") == 1
+
+
+def test_queue_unlink_failure_aborts_launch_and_bills_once(tmp_path, monkeypatch):
+    """A9: if the queue-file unlink fails, this attempt aborts (no launch with
+    the spec still queued) and the retry next tick does not re-bill."""
+    import pathlib
+
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, consumed_evals=2)
+    _seed_graph(orch, "node_0001")
+    _stub_runner(orch, tmp_path, "node_0001")
+
+    queue_file = orch.queue_dir / "node_0001.json"
+    queue_file.write_text("{}")
+    spec = _spec("node_0001")
+    spec["_file"] = str(queue_file)
+
+    real_unlink = pathlib.Path.unlink
+
+    def failing_unlink(self, *a, **k):
+        if self.name == "node_0001.json":
+            raise OSError("simulated NFS unlink failure")
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", failing_unlink)
+    orch._launch(dict(spec), gpu_id=0)
+    monkeypatch.setattr(pathlib.Path, "unlink", real_unlink)
+
+    assert "node_0001" not in orch.running, "aborted attempt must not launch"
+    assert queue_file.exists(), "spec stays queued for the next tick"
+    assert _read_cell(orch).consumed_evals == 3
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(dict(spec), gpu_id=0)
+    assert _read_cell(orch).consumed_evals == 3, "retry must not re-bill"
+    assert "node_0001" in orch.running
+
+
+def test_final_attempt_retry_is_not_cap_refused(tmp_path):
+    """A9 final-attempt corner: the bill on the LAST budgeted attempt flips
+    evals_exhausted; if its launch then aborts (crash window / unlink failure),
+    the retry must not be cap-refused — refusal would stamp the archived spec
+    cap_refused and leave the freeze census permanently one short."""
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, eval_budget=3, consumed_evals=2)
+    _seed_graph(orch, "node_0001")
+    _stub_runner(orch, tmp_path, "node_0001")
+
+    # First pass: worktree failure -> billed (3/3, exhausted), archived, no run.
+    import subprocess as _sp
+    orch.runner.create_worktree.side_effect = _sp.CalledProcessError(1, "git worktree")
+    orch._launch(_spec("node_0001"), gpu_id=0)
+    cell = _read_cell(orch)
+    assert cell.consumed_evals == 3
+    assert "node_0001" in cell.billed_node_ids
+
+    # Retry: must pass the cap gate (already billed), launch, and not re-bill.
+    _stub_runner(orch, tmp_path, "node_0001")
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(_spec("node_0001"), gpu_id=0)
+
+    assert "node_0001" in orch.running, "billed attempt must be allowed to run"
+    cell = _read_cell(orch)
+    assert cell.consumed_evals == 3, "retry must not re-bill"
+    spec_json = json.loads((orch.archive_dir / "node_0001" / "spec.json").read_text())
+    assert not (spec_json.get("metadata") or {}).get("cap_refused"), (
+        "a charged attempt must never be stamped cap_refused"
+    )
+
+    # A genuinely NEW spec in the exhausted cell is still refused.
+    _seed_graph(orch, "node_0002")
+    orch._launch(_spec("node_0002"), gpu_id=0)
+    assert "node_0002" not in orch.running
+    spec2 = json.loads((orch.archive_dir / "node_0002" / "spec.json").read_text())
+    assert (spec2.get("metadata") or {}).get("cap_refused") is True
+    assert _read_cell(orch).consumed_evals == 3
+
+
+# ---------------------------------------------------------------------------
+# unreadable declared cells — held, never canceled
+# ---------------------------------------------------------------------------
+
+
+def test_unreadable_declared_cell_holds_the_spec_instead_of_cancelling(tmp_path):
+    """A transient read failure must not irreversibly destroy queued work.
+
+    Refusal unlinks the queue spec and cancels the graph node; a missing or
+    unreadable cell file can be a transient condition (fd pressure, filesystem
+    blip), so the spec is HELD — fail-closed without destruction — and admission
+    recovers on a later tick once the cell file is readable again.
+    """
+    orch = _make_orch(tmp_path)
+    _seed_graph(orch, "node_0001")
+    spec = _spec("node_0001")
+    qfile = orch.queue_dir / "node_0001.json"
+    qfile.write_text(json.dumps(spec))
+    spec["_file"] = str(qfile)
+
+    # No cells/<id>.json at all: held.
+    assert orch._block_cell_spec(spec) is True
+    assert qfile.exists(), "held spec must stay queued"
+
+    # Corrupt cell file: held, not canceled.
+    cells_dir = orch.automil_dir / "cells"
+    cells_dir.mkdir(parents=True, exist_ok=True)
+    (cells_dir / f"{CELL_ID}.json").write_text("{broken")
+    assert orch._block_cell_spec(spec) is True
+    assert qfile.exists(), "held spec must stay queued"
+    graph = ExperimentGraph(path=orch.automil_dir / "graph.json")
+    assert graph.nodes["node_0001"]["status"] == "running", (
+        "a held node must not be canceled"
+    )
+
+    # The cell file becomes readable: admission recovers without operator help.
+    _write_cell(orch.automil_dir)
+    assert orch._block_cell_spec(spec) is False
+    assert qfile.exists()
+
+
+def test_pre_native_metering_cell_layout_is_rejected_not_reinterpreted(tmp_path):
+    """A mode-less legacy cell file must fail loudly, not default to agent_active."""
+    path = tmp_path / "legacy.json"
+    payload = {
+        "cell_id": CELL_ID, "dataset": "ds", "encoder": "enc",
+        "mil_model": "clam sb", "started_at": 1.0, "budget_seconds": 21600,
+        "safety_buffer_seconds": 1800, "status": "active",
+    }
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="obsolete cell layout"):
+        read_cell(path)
+
+    payload["mode"] = "wall_clock"
+    path.write_text(json.dumps(payload))
+    assert read_cell(path).mode == "wall_clock"

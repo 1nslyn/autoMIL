@@ -132,6 +132,13 @@ def _accept(child_composite: float, parent_composite: float, margin: float = 0.0
 #: 0 would ship the feature switched off, which is how it got missed the first time.
 DEFAULT_SE_MULTIPLIER = 1.0
 
+#: B5 (claims-alignment): the statuses that count as "kept" for best-node and
+#: certify selection. `candidate` (nominated for the gate) and `registered`
+#: (gate-passed) are *better*-validated keep-states — walking `keep` alone
+#: silently evicted a node from `best_node` and from `automil certify`'s
+#: default target the moment it was nominated.
+KEEP_CLASS = frozenset({"keep", "candidate", "registered"})
+
 
 def node_composite_se(node: dict | None) -> float | None:
     """Cross-fold SE of a node's composite, or ``None`` if it was never measured.
@@ -254,10 +261,24 @@ def _config_scoring_formula(graph_path) -> str | None:
         import yaml
         cfg = yaml.safe_load(config_path.read_text()) or {}
         raw = (cfg.get("scoring") or {}).get("formula")
-        return str(raw) if raw else None
+        value = str(raw) if raw else None
     except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
         logger.warning("Could not read scoring.formula from %s: %s", config_path, exc)
         return None
+    # B2 (claims-alignment): validate OUTSIDE the blanket except — an unknown
+    # reducer name used to fall through per-result to "trusting the reported
+    # composite", i.e. a typo (or following the template's old arithmetic
+    # examples) silently disabled CR-1b. Fail at config load instead.
+    from automil.scoring import known_formula
+    if value is not None and not known_formula(value):
+        raise ValueError(
+            f"scoring.formula {value!r} in {config_path} is not a known reducer. "
+            "Valid values: mean | max | min (reducers over the validation "
+            "metrics) or trust_reported (explicit opt-out, weakens the "
+            "val-firewall). Arithmetic expressions are not evaluated — state "
+            "the human-readable recipe in metrics.composite_formula instead."
+        )
+    return value
 
 
 @contextlib.contextmanager
@@ -806,9 +827,11 @@ class ExperimentGraph:
         call ``self.save()`` — recompute_best does NOT persist (so the CLI
         ``--dry-run`` flag can skip save).
 
-        Walk semantics (D-10): only nodes where ``type == "executed"`` AND
-        ``status == "keep"``. Discarded / crashed / cancelled / budget-killed /
-        proposed nodes are excluded.
+        Walk semantics (D-10, B5): only nodes where ``type == "executed"`` AND
+        ``status`` is in the keep-class (``keep`` / ``candidate`` /
+        ``registered`` — nomination and gate passage must not evict a node from
+        best). Discarded / crashed / cancelled / budget-killed / proposed nodes
+        are excluded.
 
         Composite formula (D-11): uses the existing per-node ``composite`` field
         as already populated by train.py → result.json → orchestrator pipeline.
@@ -822,7 +845,7 @@ class ExperimentGraph:
 
         keep_nodes: list[tuple[str, float]] = []
         for node_id, node in self.nodes.items():
-            if node.get("type") == "executed" and node.get("status") == "keep":
+            if node.get("type") == "executed" and node.get("status") in KEEP_CLASS:
                 keep_nodes.append((node_id, float(node.get("composite", 0.0))))
 
         if not keep_nodes:
@@ -975,12 +998,45 @@ class ExperimentGraph:
                 if node and node["type"] == "executed":
                     continue
 
+                # B6 (claims-alignment): reconcile ingest runs the same
+                # sanitation as the terminal writer — key-guard first (a
+                # held-out-named metrics key means crash-not-ingest; averaging
+                # it would put test into selection), then the val-recomputed
+                # composite and fold-derived SE, preferring both over the
+                # reported values.
+                from automil.scoring import ingest_signal as _ingest_signal
+                _leaking, _comp_rec, _se_rec = _ingest_signal(
+                    completion, (self.meta.get("scoring") or {}).get("formula")
+                )
+                if _leaking:
+                    logger.error(
+                        "reconcile: val-firewall violation for %s — held-out-named "
+                        "metrics key(s) %s; ingesting as crash.",
+                        node_id, ", ".join(_leaking),
+                    )
+                    completion = {
+                        **completion, "status": "crash", "composite": 0.0,
+                        "metrics": {},
+                        "error": (
+                            "val-firewall violation: held-out-named key(s) in "
+                            f"`metrics`: {', '.join(_leaking)}"
+                        ),
+                    }
+
+                # Initialized for every status (a crash-only completion used to
+                # leave composite_se unbound); the completed branch upgrades
+                # both to the recomputed values.
+                composite = completion.get("composite", 0.0)
+                composite_se = node_composite_se(completion)   # CR-4 legacy fallback
+
                 orch_status = completion.get("status", "")
                 if orch_status in ("oom", "crash", "timeout"):
                     graph_status = orch_status
                 elif orch_status == "completed":
-                    composite = completion.get("composite", 0.0)
-                    composite_se = node_composite_se(completion)   # CR-4
+                    if _comp_rec is not None:
+                        composite = _comp_rec
+                    if _se_rec is not None:
+                        composite_se = _se_rec
                     comp_metrics = completion.get("metrics", {})
                     gm = completion.get("graph_metadata", {})
                     if not gm:
@@ -1008,12 +1064,14 @@ class ExperimentGraph:
 
                 comp_metrics = completion.get("metrics", {})
                 metrics = dict(comp_metrics)  # D-200: spread consumer metrics
-                metrics["composite"] = completion.get("composite", 0.0)
+                # B6: store the same composite the keep/discard decision used
+                # (val-recomputed when available), never a diverging reported one.
+                metrics["composite"] = composite
                 metrics["vram_gb"] = completion.get("peak_vram_mb", 0) / 1024
                 metrics["elapsed_min"] = completion.get("elapsed_seconds", 0) / 60
                 metrics["gpu"] = completion.get("gpu", -1)
                 metrics["status"] = graph_status
-                metrics["global_delta"] = completion.get("composite", 0) - self.meta.get("best_composite", 0)
+                metrics["global_delta"] = composite - self.meta.get("best_composite", 0)
                 metrics["composite_se"] = composite_se   # CR-4: lifted by add_executed
 
                 config_hash = completion.get("config_hash")
@@ -1108,9 +1166,35 @@ class ExperimentGraph:
                         spec_file = node_dir / "spec.json"
                         spec = json.loads(spec_file.read_text()) if spec_file.exists() else {}
                         gm = spec.get("graph_metadata", {})
+                        # B6: same ingest sanitation as the terminal writer.
+                        from automil.scoring import ingest_signal as _ingest_signal
+                        _leaking, _comp_rec, _se_rec = _ingest_signal(
+                            result, (self.meta.get("scoring") or {}).get("formula")
+                        )
+                        if _leaking:
+                            logger.error(
+                                "reconcile(archive): val-firewall violation for %s — "
+                                "held-out-named metrics key(s) %s; ingesting as crash.",
+                                node_id_r, ", ".join(_leaking),
+                            )
+                            result = {
+                                **result, "status": "crash", "composite": 0.0,
+                                "metrics": {},
+                                "error": (
+                                    "val-firewall violation: held-out-named key(s) "
+                                    f"in `metrics`: {', '.join(_leaking)}"
+                                ),
+                            }
                         r_metrics = result.get("metrics", {})
-                        composite = result.get("composite", 0.0)
-                        composite_se = node_composite_se(result)   # CR-4
+                        composite = (
+                            _comp_rec
+                            if _comp_rec is not None and result.get("status") == "completed"
+                            else result.get("composite", 0.0)
+                        )
+                        composite_se = (
+                            _se_rec if _se_rec is not None
+                            else node_composite_se(result)   # CR-4 legacy fallback
+                        )
                         num = int(node_id_r.split("_")[1])
                         if num >= self.meta["next_id"]:
                             self.meta["next_id"] = num + 1

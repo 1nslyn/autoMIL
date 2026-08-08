@@ -23,7 +23,7 @@ autoMIL overlays an `automil/` subdirectory onto an existing git repo. It does N
 - Experiments are tracked as a directed tree in `graph.json`, not a flat log
 - Each experiment stores only its changed files (overlay), not the full repo
 - The orchestrator runs experiments in git worktrees, overlaying modified files on a base commit
-- Keep/discard is decided by the framework via single-axis composite-score comparison, gated by a predeclared Ladder keep-margin (child kept iff `child.composite > parent.composite + accept_margin`; δ defaults to 0.0 in `meta.scoring`, seeded from `config.yaml`'s `scoring.accept_margin`). The composite is the **validation** selection signal (the val-firewall: test never drives selection), reported by the training script via `result.json` (see D-200)
+- Keep/discard is decided by the framework via single-axis composite-score comparison, gated by a predeclared Ladder keep-margin (child kept iff `child.composite > parent.composite + margin`, where `margin = max(accept_margin, se_multiplier x the parent's composite_se)`; δ defaults to 0.0 in `meta.scoring`, seeded from `config.yaml`'s `scoring.accept_margin`). The composite is the **validation** selection signal (the val-firewall: test never drives selection), carried in `result.json` and recomputed by the framework at ingest from the validation `metrics` block (CR-1b), with `composite_se` recomputed from `validation_folds` when present (see D-200); held-out-named keys inside `metrics` fail the node closed
 - `results.tsv` is written solely by the orchestrator from `result.json`, never by train.py
 - `_recover_orphans()` only runs in the daemon loop (`run()`), never on construction (to prevent `status`/`stop` from corrupting live runs)
 - Viz dashboard binds 127.0.0.1 by default; opt in to LAN access via `viz.host` in config.yaml (no auth on the SSE stream)
@@ -75,7 +75,7 @@ uv run automil viz start
 
 ## Testing
 
-~600 tests across ~130 files under `tests/` (plus ~420 in `benchmarks/tests/`).
+~1600 collected under `tests/` (plus ~1080 in `benchmarks/tests/`; run the two trees as separate pytest invocations FROM THE REPO ROOT — their `tests` package names collide, and one benchmarks test resolves a repo-root-relative script path).
 Grouped by area: `test_graph*.py` (graph API, scoring, reconciliation),
 `backends/` (orchestrator daemon, SLURM/Ray contracts, result-schema validation),
 `cells/` (budget-cap state machine), `gate/` (two-stage generalization gate),
@@ -218,3 +218,13 @@ Planning lives in `tasks/todo.md` (current plan + review) and `tasks/lessons.md`
 the codebase, `CHANGELOG.md`, and git history are the record. The v1.0/v1.1
 milestone documents that used to live under `.planning/` were removed on
 2026-08-06 and are recoverable from git history at commit `7de69a8`.
+
+## Long-term implementation principles
+
+- Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
+- Choose the simplest implementation that fully meets the current requirements. Avoid speculative abstractions, configuration, and indirection.
+- Grow the system in layers. Start from the smallest version that works end to end, and add each new capability on top of a product that already works. Never trade a working product for unfinished complexity.
+- Keep components modular and concerns clearly separated.
+- Prefer established, well-maintained libraries when they reduce overall complexity or improve reliability. Do not reimplement common functionality without a clear reason.
+- Lean on the dependencies already in the project before writing your own implementation or adding packages. Do not assume a library lacks a capability without checking its documentation and types.
+- Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later.

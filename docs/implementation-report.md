@@ -10,8 +10,8 @@
 
 Build a standalone, open-source framework that enables any coding agent to
 autonomously discover model improvements for any user's training code under
-a configurable per-cell wall-clock budget (e.g. 6h for the autoMIL-paper
-campaign, 60s for the sklearn-iris demo), with discovered variants
+a configurable per-cell time budget (the framework fallback is 6h; the frozen
+preprint campaign pins 12 agent-active hours plus 30 launches), with discovered variants
 reproducible, attributable to their parents, and portable across machines
 and LLM runtimes.
 
@@ -29,7 +29,7 @@ search predefined parameter spaces; they cannot invent new architectures,
 combine techniques creatively, or learn from failed experiments. Coding
 agents can read code, design experiments, and modify any file, but they
 lack infrastructure for persistent tracking, parallel execution, knowledge
-retention across sessions, hard wall-clock budgets that ship with cells,
+retention across sessions, hard time budgets that ship with cells,
 and reproducibility guarantees.
 
 ## Solution Overview
@@ -51,7 +51,7 @@ automil CLI  ─►  Variant Registry (Phase 1) + Experiment Graph
 Backend ABC  ─►  LocalBackend / SLURMBackend / RayBackend
     │              same submit/poll/cancel/log_iter contract
     │
-    │  git worktree + overlay; configurable per-cell wall-clock cap;
+    │  git worktree + overlay; configurable per-cell time cap;
     │  typed CPU/CUDA/ROCm slot + framework-owned masks
     ▼
 Isolated Execution  ─►  result.json (JSON-Schema validated at ingest)
@@ -121,7 +121,7 @@ automil/
 | **Variant registry, not runtime config** | 1 | Architectural changes need committed code modules. Config holds values, not callable code. Registry-only path reproduces a node end-to-end via `automil verify-repro`. |
 | **Backend ABC validated against ≥2 implementations IN-phase** | 2 | LocalBackend re-export shim + MockSLURMBackend fixture lock the contract against eventual-consistency status, opaque job IDs, fire-and-forget cancel, BEFORE Phase 6 inherits it. |
 | **Multi-runtime asset reorg with `_shared/` canonical + per-runtime overlays** | 3 | Avoid quadratic duplication across runtimes. `automil show-skill --runtime <r>` renders the merged result; ≥2 runtimes validated end-to-end. |
-| **Configurable per-cell wall-clock cap (mechanism, not value)** | 4 | Framework-enforced two-tier state machine (refuse-new at T-buffer, terminate at T) with per-fold checkpoint protocol; SIGTERM with 30s grace is the cap contract honored across all backends. The *values* (`budget_seconds`, `safety_buffer_seconds`) are consumer-supplied via `automil/config.yaml` or per-cell via `automil submit --budget-seconds N --safety-buffer-seconds M` (D-134). Examples: 21600 (6h, autoMIL-paper campaign), 60 (sklearn-iris). Budget-killed runs reconcile to `executed` (with partial composite), never `crash`. |
+| **Configurable per-cell time cap (mechanism, not value)** | 4 | Framework-enforced two-tier state machine (refuse-new at T-buffer, terminate at T) with per-fold checkpoint protocol; SIGTERM with 30s grace is the cap contract honored across all backends. `agent_active` replays Claude Code's native cumulative active-time metric (CLI + user active seconds, idle excluded), scraped from Claude's localhost Prometheus endpoint and bound by synchronous session hooks; `wall_clock` is the portable fallback. The duration and safety buffer are consumer-supplied via `automil/config.yaml` or per-cell CLI overrides. The framework fallback is 6h; the frozen preprint campaign pins 12 agent-active hours and 30 launches. Live cap enforcement trails the native counter by at most one daemon-poll interval; the `SessionEnd` hook captures the final value. Budget-killed runs reconcile to `executed` (with partial composite), never `crash`. |
 | **Pre-registered manifest + paired statistical test** | 5 | Held-out cells invisible to the search agent; manual nomination by default; promotion-rate metric exposed via SSE. Pitfall-6 anti-acceptance gate enforces single-file isolation. |
 | **Pluggable backends as opt-in extras** | 6 | `uv sync` (no extras) keeps submitit and ray uninstalled. Per-backend `running/` namespacing prevents cross-backend corruption (D-168). |
 | **Hardware autodetect at init time, not runtime** | 7 | `LocalBackend.healthcheck()` reports detected hardware; `automil init` stamps detected GPU count, VRAM (`numpy.quantile(.95)` of empirical `vram_gb` when ≥10 rows), and concurrency defaults. Detect-and-warn pattern; never decides for the user. |
@@ -160,15 +160,16 @@ key set.
 
 ### Cell concept (Phase 4)
 
-A `cell` is the `(dataset, encoder, parent_id)` tuple, the natural unit
-of experimentation. Each cell carries a wall-clock budget. The state
-machine has three states:
+A `cell` is identified by `(dataset, task, encoder, mil_model)`, independent of
+graph re-parenting. Each cell carries a time budget. The state machine has four
+states:
 
 - **`active`**, new submits accepted; consumed seconds tracked.
 - **`refusing-new`**, at `T - safety_buffer`; submits rejected; running
   experiments allowed to finish.
 - **`terminating`**, at `T`; SIGTERM sent to running experiments; cell
-  enters `closed` once all are reconciled.
+  enters `finalized` once all are reconciled.
+- **`finalized`**, terminal; no further work may enter the cell.
 
 Per-fold checkpoints (`fold_<i>_result.json`) ensure that SIGTERM during
 training preserves completed-fold work; budget-killed runs reconcile to
@@ -280,9 +281,9 @@ deferred workstation UAT items resolve.
 The core value statement is the contract:
 
 > An agent can autonomously discover model improvements for any user's
-> training code under a configurable per-cell wall-clock budget (6h for
-> the autoMIL-paper campaign, 60s for the sklearn-iris demo, whatever the
-> consumer picks), with discovered variants reproducible, attributable to
+> training code under a configurable per-cell time budget (the framework
+> fallback is 6h; the frozen preprint campaign pins 12 agent-active hours plus
+> 30 launches), with discovered variants reproducible, attributable to
 > their parents, and portable across machines and LLM runtimes.
 
 All 9 phases shipped, 92 plans executed, 69 v1 requirements delivered.

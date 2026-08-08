@@ -42,6 +42,20 @@ _REDUCERS = {
 }
 
 
+def known_formula(name: object) -> bool:
+    """Is this a valid ``scoring.formula`` value? (B2, claims-alignment.)
+
+    Valid: empty/None (framework default), a reducer name, or an explicit
+    opt-out. Anything else — e.g. an arithmetic expression like
+    ``"(val_auc + val_bacc) / 2"`` — is a config error that used to be caught
+    only per-result at ERROR level while silently trusting the reported
+    composite (CR-1b disabled by a comment's own example). Config seeding and
+    ``automil check`` validate with this predicate so the state is
+    unrepresentable before any run.
+    """
+    return (not name) or name in _REDUCERS or name in _OPT_OUT
+
+
 def recompute_composite(
     metrics: Mapping[str, object] | None,
     formula: str = DEFAULT_FORMULA,
@@ -53,8 +67,12 @@ def recompute_composite(
     finite numeric value. Callers keep the reported composite in that case.
 
     Raises:
-        ValueError: unknown formula name (fail loud on a typo rather than
-            silently falling back to trusting the agent-reported scalar).
+        ValueError: unknown formula name. Note the terminal writer catches this
+            per-result and keeps the reported composite as a last resort — the
+            fail-closed guard against a typo'd formula lives at config-load
+            time (graph seeding validates with :func:`known_formula`, and
+            ``automil check`` reports it), so this raise is defense-in-depth
+            for values injected outside the config path.
     """
     if not formula or formula in _OPT_OUT:
         return None
@@ -125,3 +143,67 @@ def cross_fold_se(fold_values: Iterable[object] | None) -> float | None:
     mean = sum(values) / n
     variance = sum((x - mean) ** 2 for x in values) / (n - 1)
     return math.sqrt(variance) / math.sqrt(n)
+
+
+def recompute_composite_se(result: Mapping[str, object] | None) -> float | None:
+    """Derive the cross-fold SE from the result's own validation-fold evidence.
+
+    B1 (claims-alignment): ``composite_se`` gates the Ladder keep-margin
+    (``max(δ, k·SE)``), yet it was read verbatim off ``result.json`` — the same
+    agent-editable payload the composite machinery refuses to trust. When the
+    result carries ``validation_folds`` (the val-only per-fold projection every
+    benchmark runner emits), recompute the SE from those composites; the caller
+    prefers this value and keeps the reported one only as the legacy fallback.
+
+    Returns ``None`` when fewer than two folds carry a finite composite —
+    same contract as :func:`cross_fold_se`.
+    """
+    if not isinstance(result, Mapping):
+        return None
+    folds = result.get("validation_folds")
+    if not isinstance(folds, list):
+        return None
+    return cross_fold_se(
+        fold.get("composite") for fold in folds if isinstance(fold, Mapping)
+    )
+
+
+def ingest_signal(
+    result: Mapping[str, object] | None,
+    formula: str | None,
+) -> tuple[tuple[str, ...], float | None, float | None]:
+    """One sanitation contract for every mouth that turns a result payload into
+    graph state (the terminal writer and the reconcile scans — B6).
+
+    Returns ``(leaking_keys, composite_recomputed, se_recomputed)``:
+
+    - ``leaking_keys``: held-out-named keys found inside ``metrics``. Non-empty
+      means the payload violates the val-firewall and the caller must ingest it
+      as a crash (composite 0.0, metrics dropped) — recomputing over it would
+      *average test into selection*, worse than trusting the reported scalar.
+    - ``composite_recomputed``: the val-derived composite, or ``None`` to keep
+      the reported value (opt-out formula, no usable metrics, or an unknown
+      reducer name — the caller logs that case).
+    - ``se_recomputed``: the val-fold-derived SE, or ``None`` to keep the
+      reported value.
+    """
+    from automil.firewall import held_out_metric_keys
+
+    if not isinstance(result, Mapping):
+        return (), None, None
+    leaking = held_out_metric_keys(result.get("metrics"))
+    if leaking:
+        return leaking, None, None
+    try:
+        recomputed = recompute_composite(result.get("metrics") or {}, formula)
+    except ValueError as exc:
+        # Reachable only via a legacy graph.json whose STORED formula is
+        # invalid (B2 blocks the config path at seeding). Loud, because the
+        # fallback is trusting the reported scalar — CR-1b off for this node.
+        import logging
+
+        logging.getLogger(__name__).error(
+            "ingest: %s — trusting the reported composite for this payload", exc
+        )
+        recomputed = None
+    return (), recomputed, recompute_composite_se(result)

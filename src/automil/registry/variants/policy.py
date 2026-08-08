@@ -1,8 +1,13 @@
 """PolicyVariant ABC — parent-agnostic training-policy variants (REG-01 / D-21).
 
-Policies wrap the optimizer / scheduler to implement strategies like SAM,
-Lookahead, gradient accumulation, etc. The default `step` delegates to
-`opt.step()` so non-SAM-style policies need only override `wrap_optimizer`.
+Policies wrap the optimizer / scheduler to implement single-point strategies —
+Lookahead, gradient clipping, per-group learning rates, custom schedules inside
+a wrapped ``step()`` — and refine stopping decisions from supplied validation
+metrics. Two honesty notes (claims-alignment C-b): ``step`` is a
+consumer-optional part of the contract that none of the shipped benchmark
+trainers currently invoke (they call the wrapped optimizer's ``step()``
+directly), and SAM-class two-pass optimizers are out of reach through this
+seam regardless — no closure re-evaluates the loss at the perturbed point.
 """
 from __future__ import annotations
 
@@ -57,8 +62,12 @@ class PolicyVariant(ABC):
     def step(self, loss: Any, opt: Any) -> None:
         """Default step: delegate to opt.step() after backward.
 
-        SAM-style two-step policies override this to implement `first_step`
-        + `second_step`. The default works for vanilla / Lookahead-only /
-        gradient-accumulation policies.
+        Consumer-optional: a trainer MAY route its step through this hook
+        (e.g. for gradient accumulation or loss-aware stepping), but none of
+        the shipped benchmark trainers do — they call the wrapped optimizer's
+        ``step()`` directly, so policies must not rely on this being invoked.
+        Note SAM-style two-step optimization is unreachable either way: this
+        hook receives the loss tensor, not a closure, so the loss cannot be
+        re-evaluated at the perturbed point.
         """
         opt.step()

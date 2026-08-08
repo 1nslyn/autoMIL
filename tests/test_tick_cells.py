@@ -56,11 +56,12 @@ def _write_cell_json(cells_dir: Path, cell_id: str, status: str,
         "cell_id": cell_id,
         "dataset": "test",
         "encoder": "enc",
-        "parent_id": "node_0001",
+        "mil_model": "model",
         "started_at": started_at,
         "budget_seconds": budget_seconds,
         "safety_buffer_seconds": safety_buffer_seconds,
         "status": status,
+        "mode": "wall_clock",
     }
     (cells_dir / f"{cell_id}.json").write_text(json.dumps(payload, indent=2))
 
@@ -302,11 +303,16 @@ def test_handle_completion_with_cap_cancel_reason_calls_reconcile(tmp_path: Path
     sealed = node_archive / "certify"
     sealed.mkdir(parents=True, exist_ok=True)
     for i in range(2):
+        # Real fold-writer shape (clam/runner.py): metrics is validation-only,
+        # test lives in the sealed held_out block. A held-out-named key inside
+        # metrics now fails the node closed (A6) — see test_terminal_writer.py
+        # for the guard's own positive test.
         fold_data = {
             "fold_index": i,
             "fold_count": 5,
             "status": "completed",
-            "metrics": {"val_auc": 0.85, "val_bacc": 0.80, "test_auc": 0.84, "test_bacc": 0.79},
+            "metrics": {"val_auc": 0.85, "val_bacc": 0.80},
+            "held_out": {"test_auc": 0.84, "test_bacc": 0.79},
             "composite": 0.82,
             "elapsed_seconds": 400,
             "peak_vram_mb": 4500,
@@ -502,61 +508,187 @@ def test_automil_fold_count_injected_into_subprocess_env(tmp_path: Path) -> None
 # Test 9/10: activity-gated budget accrual through _tick_cells (P2.2)
 # ---------------------------------------------------------------------------
 
-def _write_agent_active_cell(cells_dir: Path, cell_id: str, now: float,
-                             consumed: float, last_tick_offset: float) -> None:
+def _write_agent_active_cell(
+    cells_dir: Path,
+    cell_id: str,
+    now: float,
+    *,
+    budget_seconds: int,
+    safety_buffer_seconds: int,
+) -> None:
     cells_dir.mkdir(parents=True, exist_ok=True)
     payload = {
-        "cell_id": cell_id, "dataset": "test", "encoder": "enc", "parent_id": "root",
-        "started_at": now - 100, "budget_seconds": 21600, "safety_buffer_seconds": 1800,
-        "status": "active", "mode": "agent_active", "idle_grace_seconds": 300,
-        "consumed_active_seconds": consumed, "last_tick_at": now - last_tick_offset,
+        "cell_id": cell_id,
+        "dataset": "test",
+        "encoder": "enc",
+        "mil_model": "model",
+        "started_at": now - 100,
+        "budget_seconds": budget_seconds,
+        "safety_buffer_seconds": safety_buffer_seconds,
+        "status": "active",
+        "mode": "agent_active",
     }
     (cells_dir / f"{cell_id}.json").write_text(json.dumps(payload, indent=2))
 
 
-def test_tick_cells_agent_active_accrues_while_agent_acting(tmp_path: Path, monkeypatch) -> None:
-    """agent_active cell: a fresh .last_action_at → consumed_active_seconds advances."""
+def _active_metrics(session_id: str, seconds: float) -> str:
+    return (
+        "claude_code_active_time_total"
+        f'{{session_id="{session_id}",type="cli"}} {seconds}\n'
+    )
+
+
+def test_tick_cells_agent_active_uses_claude_metric(tmp_path: Path, monkeypatch) -> None:
+    """The cap state machine consumes Claude's measured active seconds."""
     import automil.backends._orchestrator_daemon as dm
+    from automil.cells.activity import ingest_prometheus_metrics, record_hook_event
     FIXED_NOW = 1_000_000.0
     monkeypatch.setattr(dm.time, "time", lambda: FIXED_NOW)
 
     orch = _make_orch(tmp_path)
     cells_dir = tmp_path / "automil" / "cells"
-    _write_agent_active_cell(cells_dir, "active0000000001", FIXED_NOW,
-                             consumed=10.0, last_tick_offset=5.0)
-    # Agent acted 1s ago (< idle_grace 300) → active.
-    (tmp_path / "automil" / ".last_action_at").write_text(str(FIXED_NOW - 1))
+    cell_id = "active0000000001"
+    _write_agent_active_cell(
+        cells_dir, cell_id, FIXED_NOW,
+        budget_seconds=10, safety_buffer_seconds=6,
+    )
+    record_hook_event(
+        tmp_path / "automil",
+        cell_id,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-1",
+            "source": "startup",
+        },
+        observed_at=FIXED_NOW - 5,
+    )
+    ingest_prometheus_metrics(
+        tmp_path / "automil", _active_metrics("session-1", 5),
+        observed_at=FIXED_NOW - 1,
+    )
 
     orch.backend = MagicMock()
     orch.running = {}
     orch._tick_cells()
 
-    updated = json.loads((cells_dir / "active0000000001.json").read_text())
-    assert updated["consumed_active_seconds"] == 15.0  # 10 + 5s elapsed
-    assert updated["last_tick_at"] == FIXED_NOW
+    updated = json.loads((cells_dir / f"{cell_id}.json").read_text())
+    assert updated["status"] == "refusing-new"
+    assert "consumed_active_seconds" not in updated
+    assert "last_tick_at" not in updated
+
+
+def test_tick_cells_agent_active_does_not_bill_idle_session_wall(tmp_path: Path, monkeypatch) -> None:
+    """A long session with ten active seconds remains below the cap."""
+    import automil.backends._orchestrator_daemon as dm
+    from automil.cells.activity import ingest_prometheus_metrics, record_hook_event
+    FIXED_NOW = 1_000_000.0
+    monkeypatch.setattr(dm.time, "time", lambda: FIXED_NOW)
+
+    orch = _make_orch(tmp_path)
+    cells_dir = tmp_path / "automil" / "cells"
+    cell_id = "idle000000000001"
+    _write_agent_active_cell(
+        cells_dir, cell_id, FIXED_NOW,
+        budget_seconds=20, safety_buffer_seconds=5,
+    )
+    record_hook_event(
+        tmp_path / "automil",
+        cell_id,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-1",
+            "source": "startup",
+        },
+        observed_at=FIXED_NOW - 100,
+    )
+    ingest_prometheus_metrics(
+        tmp_path / "automil", _active_metrics("session-1", 10),
+        observed_at=FIXED_NOW - 1,
+    )
+
+    orch.backend = MagicMock()
+    orch.running = {}
+    orch._tick_cells()
+
+    updated = json.loads((cells_dir / f"{cell_id}.json").read_text())
     assert updated["status"] == "active"
+    assert "consumed_active_seconds" not in updated
 
 
-def test_tick_cells_agent_active_frozen_while_waiting(tmp_path: Path, monkeypatch) -> None:
-    """agent_active cell: no recent activity → budget clock frozen (agent waiting)."""
+def test_tick_cells_agent_active_fails_closed_after_metric_endpoint_loss(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    """Losing telemetry preserves authentic time and never destroys the cell."""
     import automil.backends._orchestrator_daemon as dm
-    FIXED_NOW = 1_000_000.0
-    monkeypatch.setattr(dm.time, "time", lambda: FIXED_NOW)
+    from automil.cells.activity import (
+        ActivityObservation,
+        ingest_prometheus_metrics,
+        record_hook_event,
+    )
 
+    fixed_now = 1_000_000.0
+    monkeypatch.setattr(dm.time, "time", lambda: fixed_now)
     orch = _make_orch(tmp_path)
     cells_dir = tmp_path / "automil" / "cells"
-    _write_agent_active_cell(cells_dir, "idle000000000001", FIXED_NOW,
-                             consumed=10.0, last_tick_offset=5.0)
-    # Stale marker: agent's last action was 1h ago (>> idle_grace) → waiting.
-    (tmp_path / "automil" / ".last_action_at").write_text(str(FIXED_NOW - 3600))
-
+    cell_id = "lostmeter0000001"
+    _write_agent_active_cell(
+        cells_dir,
+        cell_id,
+        fixed_now,
+        budget_seconds=20,
+        safety_buffer_seconds=5,
+    )
+    record_hook_event(
+        tmp_path / "automil",
+        cell_id,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-1",
+            "source": "startup",
+        },
+        observed_at=fixed_now - 5,
+    )
+    ingest_prometheus_metrics(
+        tmp_path / "automil",
+        _active_metrics("session-1", 5),
+        observed_at=fixed_now - 1,
+    )
+    unavailable = ActivityObservation(
+        available=False,
+        sessions=(),
+        observed_at=fixed_now,
+        error="Claude active-time metrics endpoint is unavailable",
+    )
     orch.backend = MagicMock()
     orch.running = {}
-    orch._tick_cells()
 
-    updated = json.loads((cells_dir / "idle000000000001.json").read_text())
-    assert updated["consumed_active_seconds"] == 10.0  # unchanged — clock paused
-    assert updated["last_tick_at"] == FIXED_NOW         # tick still advanced
+    import logging
+
+    with caplog.at_level(
+        logging.INFO, logger="automil.backends._orchestrator_daemon"
+    ):
+        for _ in range(4):
+            orch._tick_cells(activity_observation=unavailable)
+        recovered = ActivityObservation(
+            available=True,
+            sessions=("session-1",),
+            observed_at=fixed_now,
+            error=None,
+        )
+        orch._tick_cells(activity_observation=recovered)
+
+    updated = json.loads((cells_dir / f"{cell_id}.json").read_text())
+    assert updated["status"] == "active"
+    orch.backend.cancel.assert_not_called()
+    assert sum(
+        "Holding new work" in record.getMessage()
+        for record in caplog.records
+    ) == 1
+
+    assert sum(
+        "telemetry recovered" in record.getMessage()
+        for record in caplog.records
+    ) == 1
 
 
 # ---------------------------------------------------------------------------

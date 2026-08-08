@@ -188,3 +188,81 @@ def test_archive_recovery_path_applies_the_noise_floor(tmp_path: Path) -> None:
     node = graph.get_node("node_0099")
     assert node["status"] == "discard"
     assert node["composite_se"] == 0.04
+
+
+def test_recomputed_se_beats_the_reported_one(tmp_path: Path) -> None:
+    """B1 (claims-alignment): the SE that gates the Ladder margin is recomputed
+    from the result's own validation_folds — an under-reported composite_se
+    (which would collapse the margin to the bare delta) is overridden."""
+    from automil.graph import ExperimentGraph
+
+    graph = ExperimentGraph(path=tmp_path / "graph.json")
+    node_id = graph.add_executed(
+        parent_id=None, description="n", techniques=[],
+        metrics={"composite": 0.5}, status="keep",
+    )
+    graph.nodes[node_id]["status"] = "running"
+    graph.save()
+
+    result = {
+        "status": "completed",
+        "composite": 0.75,
+        "composite_se": 0.000001,  # self-reported, implausibly small
+        "metrics": {"val_auc": 0.8, "val_bacc": 0.7},
+        "validation_folds": [
+            {"fold_index": 0, "composite": 0.70},
+            {"fold_index": 1, "composite": 0.75},
+            {"fold_index": 2, "composite": 0.80},
+        ],
+    }
+    completed_dir, archive_dir = _write(tmp_path, graph, node_id, result)
+
+    from automil.scoring import cross_fold_se
+    expected = cross_fold_se([0.70, 0.75, 0.80])
+    reloaded = ExperimentGraph(path=tmp_path / "graph.json")
+    assert reloaded.get_node(node_id)["composite_se"] == expected
+    archived = json.loads((archive_dir / "result.json").read_text())
+    assert archived["composite_se"] == expected
+    completed = json.loads((completed_dir / f"{node_id}.json").read_text())
+    assert completed["composite_se"] == expected
+
+
+def test_reported_se_survives_without_fold_evidence(tmp_path: Path) -> None:
+    """Legacy results without validation_folds keep the reported SE (fallback)."""
+    from automil.graph import ExperimentGraph
+
+    graph = ExperimentGraph(path=tmp_path / "graph.json")
+    node_id = graph.add_executed(
+        parent_id=None, description="n", techniques=[],
+        metrics={"composite": 0.5}, status="keep",
+    )
+    graph.nodes[node_id]["status"] = "running"
+    graph.save()
+
+    result = {
+        "status": "completed", "composite": 0.75, "composite_se": 0.03,
+        "metrics": {"val_auc": 0.8, "val_bacc": 0.7},
+    }
+    _write(tmp_path, graph, node_id, result)
+    reloaded = ExperimentGraph(path=tmp_path / "graph.json")
+    assert reloaded.get_node(node_id)["composite_se"] == 0.03
+
+
+def test_aggregate_folds_computes_the_se(tmp_path: Path) -> None:
+    """B1: budget-killed / partial reconstructions carry a measured noise floor
+    instead of silently dropping to the bare predeclared delta."""
+    from automil.cells.reconcile import aggregate_folds
+    from automil.scoring import cross_fold_se
+
+    node_archive = tmp_path / "certify"
+    node_archive.mkdir()
+    for i, comp in enumerate((0.70, 0.80)):
+        (node_archive / f"fold_{i}_result.json").write_text(json.dumps({
+            "fold_index": i, "status": "completed",
+            "metrics": {"val_auc": comp}, "composite": comp,
+            "elapsed_seconds": 10, "peak_vram_mb": 100,
+        }))
+
+    payload = aggregate_folds(node_archive, expected_fold_count=5)
+    assert payload["status"] == "partial"
+    assert payload["composite_se"] == cross_fold_se([0.70, 0.80])

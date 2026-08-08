@@ -94,13 +94,18 @@ def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_mod
     from automil.admissibility import load_candidate_policy
     candidate_policy = load_candidate_policy(adir)
     if candidate_policy.mode == "architecture-preserving" and (
-        kind is not None and kind not in PRESERVING_KINDS
+        kind is None or kind not in PRESERVING_KINDS
     ):
+        # B4 (claims-alignment): refuse at the write. kind=None used to slip
+        # through as "unspecified" and hard-fail one command later in
+        # `automil portfolio` with a message that never named the offender —
+        # burning agent-active budget on a loop the skill mandates every batch.
+        offender = "Missing --kind" if kind is None else f"Refusing {kind!r} proposal"
         raise click.ClickException(
-            f"Refusing {kind!r} proposal in architecture-preserving mode: "
-            "the executable surface supports declared scalars plus train-only "
-            "optimizer/update, scheduler, and stopping policies; it has no "
-            "data/sampling hook. Use kind 'hp' or 'regularization'."
+            f"{offender} in architecture-preserving mode: only 'hp' or "
+            "'regularization' are admissible — the executable surface is "
+            "declared scalars plus train-only optimizer/update, scheduler, "
+            "and stopping policies; there is no data/sampling hook."
         )
     # CR-2 (audit 2026-07-23): propose is the agent's most frequent write. Do the
     # whole read-modify-write under locked_update so a concurrent daemon

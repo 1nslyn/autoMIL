@@ -35,6 +35,10 @@ def _init_git_repo(path: Path):
 
 def _do_submit(tmp_path: Path, cli_runner: CliRunner) -> dict:
     """Run `automil submit` with a single model.py file and return the queue spec dict."""
+    config_path = tmp_path / "automil" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text()) or {}
+    config.setdefault("cap", {})["mode"] = "wall_clock"
+    config_path.write_text(yaml.safe_dump(config))
     (tmp_path / "model.py").write_text("print('changed')\n")
     result = cli_runner.invoke(
         main,

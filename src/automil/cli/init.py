@@ -8,6 +8,10 @@ from pathlib import Path
 
 import click
 
+from automil.activity_hooks import (
+    claude_activity_environment,
+    claude_activity_hooks,
+)
 from automil.backends.base import HealthReport  # noqa: F401
 from automil.cli import main
 from automil.cli._helpers import _find_git_root
@@ -38,19 +42,14 @@ def _register_claude_hooks(
     project_claude: Path,
     package_dir: Path,
 ) -> None:
-    """Register the Stop hook and the activity hooks in .claude/settings.json.
+    """Register the Stop guard and exact Claude active-time observer.
 
-    - Stop (on_stop.sh): loop-guard + trajectory recording.
-    - PostToolUse / UserPromptSubmit / SessionStart (on_tool.sh): the
-      agent-activity signal for the activity-gated budget (P2.1). Registered
-      async so they never add latency to the agent's tool calls.
-
-    Idempotent: each hook is added only if its command isn't already present, so
-    re-running init / --update never duplicates entries.
+    autoMIL-owned legacy/activity entries are normalized on every update while
+    unrelated user settings are preserved.
     """
     settings_path = project_claude / "settings.json"
     stop_cmd = f"bash {project_root / '.claude' / 'hooks' / 'on_stop.sh'}"
-    tool_cmd = f"bash {project_root / '.claude' / 'hooks' / 'on_tool.sh'}"
+    activity_hooks = claude_activity_hooks()
 
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
@@ -58,32 +57,81 @@ def _register_claude_hooks(
         project_claude.mkdir(parents=True, exist_ok=True)
         settings = {}
 
+    original = json.dumps(settings, sort_keys=True)
     hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise click.ClickException(f"{settings_path}: hooks must be an object")
+    env = settings.setdefault("env", {})
+    if not isinstance(env, dict):
+        raise click.ClickException(f"{settings_path}: env must be an object")
+    required_env = claude_activity_environment()
+    preserved = {
+        key: env[key]
+        for key in required_env
+        if key in env and env[key] != required_env[key]
+    }
+    for key, value in required_env.items():
+        env.setdefault(key, value)
+    if preserved:
+        click.echo(
+            "warning: keeping existing telemetry env "
+            + ", ".join(f"{k}={v!r}" for k, v in sorted(preserved.items()))
+            + "; native active-time metering requires "
+            + ", ".join(f"{k}={v}" for k, v in sorted(required_env.items()))
+            + " — agent_active cells hold admission until the exporter matches",
+            err=True,
+        )
 
-    def _ensure(event: str, command: str, *, matcher: str | None = None,
-                extra: dict | None = None) -> bool:
+    # Remove every obsolete on_tool.sh registration and normalize any prior
+    # activity-ingest registration to the exact event/matcher matrix below.
+    for event, entries in list(hooks.items()):
+        if not isinstance(entries, list):
+            continue
+        kept_entries: list[dict] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                kept_entries.append(entry)
+                continue
+            commands = entry.get("hooks")
+            if not isinstance(commands, list):
+                kept_entries.append(entry)
+                continue
+            kept_commands = [
+                hook for hook in commands
+                if not (
+                    isinstance(hook, dict)
+                    and isinstance(hook.get("command"), str)
+                    and (
+                        "on_tool.sh" in hook["command"]
+                        or hook["command"].endswith("automil activity ingest")
+                    )
+                )
+            ]
+            if kept_commands:
+                normalized = dict(entry)
+                normalized["hooks"] = kept_commands
+                kept_entries.append(normalized)
+        if kept_entries:
+            hooks[event] = kept_entries
+        else:
+            del hooks[event]
+
+    def _ensure(event: str, command: str, *, matcher: str | None = None) -> None:
         """Append a hook entry for *event* if *command* isn't already present."""
         entries = hooks.setdefault(event, [])
         if any(command in str(e) for e in entries):
-            return False
+            return
         hook_obj = {"type": "command", "command": command}
-        if extra:
-            hook_obj.update(extra)
         entry: dict = {"hooks": [hook_obj]}
         if matcher is not None:
             entry["matcher"] = matcher
         entries.append(entry)
-        return True
 
-    changed = False
-    changed |= _ensure("Stop", stop_cmd)
-    # Activity signal: fire on every tool call (matcher "*") plus turn/session
-    # start so the daemon can tell working from waiting. async = non-blocking.
-    changed |= _ensure("PostToolUse", tool_cmd, matcher="*", extra={"async": True})
-    changed |= _ensure("UserPromptSubmit", tool_cmd, extra={"async": True})
-    changed |= _ensure("SessionStart", tool_cmd, extra={"async": True})
+    _ensure("Stop", stop_cmd)
+    for event, entries in activity_hooks.items():
+        hooks.setdefault(event, []).extend(entries)
 
-    if changed:
+    if json.dumps(settings, sort_keys=True) != original:
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
 
@@ -96,11 +144,9 @@ def _install_runtime_assets(
 ) -> None:
     """Install per-runtime overlay assets (skill, hooks, native files).
 
-    D-92: per-runtime overlay loop. Hook scripts are not installed here
-    (that is Plan 03-10). This function installs:
     - Skill files into .claude/skills/ (for claude runtime)
+    - Runtime hook scripts and settings registrations
     - Native runtime instruction files (CLAUDE.md, .opencode/AGENTS.md, etc.)
-    - settings.json hook registration (claude only)
     """
     shared_dir = package_dir / "agent_assets" / "_shared"
     overlay_dir = package_dir / "agent_assets" / rt
@@ -144,12 +190,18 @@ def _install_runtime_assets(
                 if f.is_file():
                     dst = hooks_dst / f.name
                     # Hooks are framework-managed; honor --update so new/changed
-                    # hook scripts (e.g. the activity-signal hook) reach existing
+                    # hook scripts (e.g. the Stop guard) reach existing
                     # projects without a manual reinstall.
                     if not dst.exists() or update:
                         shutil.copy2(f, dst)
                         if f.suffix == ".sh":
                             dst.chmod(dst.stat().st_mode | 0o111)
+
+        # on_tool.sh was the lossy timestamp adapter. Native activity metrics
+        # need only lifecycle hooks, so --update removes any installed copy.
+        obsolete_hook = project_claude / "hooks" / "on_tool.sh"
+        if update and obsolete_hook.exists():
+            obsolete_hook.unlink()
 
         # .claude/CLAUDE.md: first line @AGENTS.md (D-90)
         claude_md = project_claude / "CLAUDE.md"
@@ -160,7 +212,7 @@ def _install_runtime_assets(
             )
             click.echo("  Created: .claude/CLAUDE.md")
 
-        # Register stop hook in settings.json
+        # Register the Stop guard and activity journal in settings.json.
         _register_claude_hooks(project_root, project_claude, package_dir)
         click.echo("  Runtime: claude, assets installed")
 
@@ -454,6 +506,6 @@ def init(path: str, task: str, encoder: str, runtime: str | None, update: bool, 
     click.echo(f"autoMIL initialized at {automil_dir}/")
     click.echo("Next steps:")
     click.echo(f"  1. Edit {automil_dir}/config.yaml with your project settings")
-    click.echo(f"  2. Run: automil orchestrator start")
+    click.echo(f"  2. Run: uv run automil orchestrator start")
     runtimes_display = ", ".join(runtimes_to_install)
     click.echo(f"  3. Start your coding agent ({runtimes_display} -> /automil-setup)")

@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import hashlib
+import time
 from unittest.mock import MagicMock
 
 import yaml
+
+from automil.cells.state import Cell, CellStatus, write_cell
 
 
 def _valid_preserving_spec(orch, node_id: str) -> dict:
@@ -195,6 +198,20 @@ def test_campaign_cell_binding_drift_fails_before_worktree(tmp_path):
             "protocol_version": "preprint-v1",
         },
     }
+    write_cell(
+        Cell(
+            cell_id="budget-1",
+            dataset="dataset",
+            encoder="encoder",
+            mil_model="arm",
+            started_at=time.time(),
+            budget_seconds=43200,
+            safety_buffer_seconds=1800,
+            status=CellStatus.ACTIVE,
+            mode="wall_clock",
+        ),
+        adir / "cells",
+    )
 
     orch.runner = MagicMock()
     orch._mark_crashed = MagicMock()

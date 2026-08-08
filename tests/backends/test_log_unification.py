@@ -87,3 +87,30 @@ def test_log_iter_close_60s_timeout(tmp_path):
     elapsed = time.monotonic() - start
     assert elapsed < 3.0, f"drain took {elapsed:.2f}s; expected < 3.0s"
     assert isinstance(lines, list)
+
+
+def test_slurm_logs_are_copied_and_redacted(tmp_path):
+    """B3 (claims-alignment): submitit logs land as redacted COPIES, not raw
+    symlinks — a symlink was an unredacted agent-visible view of the same
+    stdout H-1 redacts in run.log."""
+    from automil.backends._orchestrator_daemon import _symlink_slurm_logs
+
+    automil_dir = tmp_path / "automil"
+    submitit_logs = automil_dir / "orchestrator" / "running" / "slurm" / "submitit-logs"
+    submitit_logs.mkdir(parents=True)
+    (submitit_logs / "op1_0_log.out").write_text(
+        "epoch 1 val_auc 0.80\nTest error: 0.2000, ROC AUC: 0.9000\n"
+    )
+    (submitit_logs / "op1_0_log.err").write_text("some warning\n")
+    archive = tmp_path / "archive" / "node_0001"
+    archive.mkdir(parents=True)
+
+    _symlink_slurm_logs(automil_dir, archive, {"opaque_id": "op1"})
+
+    stdout_copy = archive / "slurm-stdout.out"
+    assert stdout_copy.exists() and not stdout_copy.is_symlink()
+    text = stdout_copy.read_text()
+    assert "val_auc 0.80" in text, "validation lines survive"
+    assert "REDACTED" in text and "0.9000" not in text, "test line is redacted"
+    stderr_copy = archive / "slurm-stderr.err"
+    assert stderr_copy.exists() and not stderr_copy.is_symlink()

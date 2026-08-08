@@ -187,16 +187,17 @@ def train(datasets, cur, args):
     for epoch in range(args.max_epochs):
         if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:     
             train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
-            stop = validate_clam(cur, epoch, model, val_loader, args.n_classes, 
+            stop, val_metrics = validate_clam(cur, epoch, model, val_loader, args.n_classes,
                 early_stopping, writer, loss_fn, args.results_dir)
-        
+
         else:
             train_loop(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn)
-            stop = validate(cur, epoch, model, val_loader, args.n_classes, 
+            stop, val_metrics = validate(cur, epoch, model, val_loader, args.n_classes,
                 early_stopping, writer, loss_fn, args.results_dir)
-        
+
         if policy_runtime is not None:
-            stop = policy_runtime.should_stop(stop, epoch=epoch, metrics={})
+            # A2 (claims-alignment): validation metrics, same as every other arm.
+            stop = policy_runtime.should_stop(stop, epoch=epoch, metrics=val_metrics)
         if stop:
             break
 
@@ -396,9 +397,9 @@ def validate(cur, epoch, model, loader, n_classes, early_stopping = None, writer
         
         if early_stopping.early_stop:
             print("Early stopping")
-            return True
+            return True, {"val_loss": val_loss, "val_error": val_error, "val_auc": auc}
 
-    return False
+    return False, {"val_loss": val_loss, "val_error": val_error, "val_auc": auc}
 
 def validate_clam(cur, epoch, model, loader, n_classes, early_stopping = None, writer = None, loss_fn = None, results_dir = None):
     model.eval()
@@ -486,9 +487,9 @@ def validate_clam(cur, epoch, model, loader, n_classes, early_stopping = None, w
         
         if early_stopping.early_stop:
             print("Early stopping")
-            return True
+            return True, {"val_loss": val_loss, "val_error": val_error, "val_auc": auc}
 
-    return False
+    return False, {"val_loss": val_loss, "val_error": val_error, "val_auc": auc}
 
 def summary(model, loader, n_classes):
     acc_logger = Accuracy_Logger(n_classes=n_classes)

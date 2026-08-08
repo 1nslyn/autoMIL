@@ -103,7 +103,7 @@ def advance(cell_root: Path, repo_root: Path) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Operate one immutable 60→top-10→five-fold campaign cell.",
+        description="Operate one immutable discovery→top-10→five-fold campaign cell.",
     )
     parser.add_argument(
         "action",

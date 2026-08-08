@@ -36,6 +36,7 @@ def _init_git_repo(path: Path):
 def _set_config(tmp_path: Path, **sections) -> None:
     cfg_path = tmp_path / "automil" / "config.yaml"
     cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    cfg.setdefault("cap", {})["mode"] = "wall_clock"
     for key, value in sections.items():
         cfg[key] = value
     cfg_path.write_text(yaml.safe_dump(cfg))
@@ -72,8 +73,8 @@ class TestSubmitCellIdentity:
         assert cell["dataset"] == "tcga_luad_egfr", cell
         assert cell["encoder"] == "hoptimus1", cell
 
-    def test_legacy_dataset_encoder_keys_still_honored(self, cli_runner, tmp_path, monkeypatch):
-        """Back-compat: top-level dataset.name / encoder.name still resolve."""
+    def test_legacy_dataset_encoder_keys_are_rejected(self, cli_runner, tmp_path, monkeypatch):
+        """Removed top-level dataset/encoder aliases do not identify a cell."""
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
@@ -86,13 +87,19 @@ class TestSubmitCellIdentity:
             encoder={"name": "legacy_enc"},
         )
 
-        cell = _submit_and_read_cell(tmp_path, cli_runner)
+        (tmp_path / "model.py").write_text("print('changed')\n")
+        result = cli_runner.invoke(
+            main,
+            ["submit", "--node", "node_0001", "--desc", "legacy identity",
+             "--files", "model.py", "--mil-model", "test_model"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code != 0
+        assert "config.project.name" in result.output
+        assert not list((tmp_path / "automil" / "cells").glob("*.json"))
 
-        assert cell["dataset"] == "legacy_ds", cell
-        assert cell["encoder"] == "legacy_enc", cell
-
-    def test_missing_identity_falls_back_to_unknown_with_warning(self, cli_runner, tmp_path, monkeypatch):
-        """No project.name, task.name, or encoders.primary → 'unknown' + a stderr warning."""
+    def test_missing_identity_is_rejected(self, cli_runner, tmp_path, monkeypatch):
+        """Incomplete current-schema identity fails before a cell is opened."""
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
@@ -107,11 +114,9 @@ class TestSubmitCellIdentity:
              "--mil-model", "test_model"],  # D-12: required; this test is about dataset/encoder identity
             catch_exceptions=False,
         )
-        assert result.exit_code == 0, result.output
-        assert "falling back to" in result.output
-        cell = json.loads(next((tmp_path / "automil" / "cells").glob("*.json")).read_text())
-        assert cell["dataset"] == "unknown", cell
-        assert cell["encoder"] == "unknown", cell
+        assert result.exit_code != 0
+        assert "config.project.name" in result.output
+        assert not list((tmp_path / "automil" / "cells").glob("*.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +259,7 @@ class TestMilModelCellIdentity:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         cli_runner.invoke(main, ["init"])
+        _set_config(tmp_path)
         # Deliberately do NOT pass --mil-model or override run: rely on the template default.
         (tmp_path / "model.py").write_text("print('changed')\n")
         result = cli_runner.invoke(

@@ -105,9 +105,10 @@ scalars plus executable train-only recipe policy.
       (`git restore --source=HEAD -- <each-file>`). Never bulk-restore.
    **Saturate every GPU**, submit until the VRAM bin-packer is full, not one run
    per GPU.
-5. **WAIT** for completion events (Monitor; do not poll). The activity-gated
-   budget bills only the time you are acting, keep researching the next batch
-   while this one trains.
+5. **WAIT** for completion events (Monitor; do not poll). Agent-active time is
+   Claude Code's native active-time counter (CLI + user active seconds; idle is
+   excluded). Monitor is the event-driven wait mechanism, not the budget clock.
+   Research performed during training remains active work and is billed.
 6. **RECONCILE + LEARN.** `automil reconcile`; read results; update
    `learnings.md`; commit winners. Loop back to RESEARCH.
 

@@ -39,12 +39,19 @@ _MULTI_REVEAL_REFUSAL = (
 
 
 def _sorted_keep_nodes(graph) -> list[dict]:
-    """Executed keep-nodes, best validation composite first (id breaks ties)."""
+    """Executed keep-class nodes, best validation composite first (id ties).
+
+    B5: `candidate` and `registered` are better-validated keep-states —
+    excluding them meant nominating your best node silently pointed
+    `automil certify` at a worse one.
+    """
+    from automil.graph import KEEP_CLASS
+
     keeps = [
         n for n in graph.nodes.values()
         if isinstance(n, dict)
         and n.get("type") == "executed"
-        and n.get("status") == "keep"
+        and n.get("status") in KEEP_CLASS
     ]
     # D-12 tie-break: highest composite first, lexicographically smaller id wins ties
     # (matches recompute_best / meta.best_node_id so `certify` reports the canonical winner).

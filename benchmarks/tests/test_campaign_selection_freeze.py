@@ -11,6 +11,7 @@ import autobench.campaign_stages as campaign_stages
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
+    DISCOVERY_ATTEMPTS,
     content_sha256,
     file_sha256,
     load_manifest,
@@ -122,7 +123,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         },
     }
     state["discovery"].update({
-        "attempts_charged": 60,
+        "attempts_charged": DISCOVERY_ATTEMPTS,
         "complete_candidates": 0,
         "unique_complete_candidates": 0,
         "frozen": True,
@@ -146,7 +147,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
                 "candidate_sha256": None,
                 "validation_mean": None,
             }
-            for index in range(60)
+            for index in range(DISCOVERY_ATTEMPTS)
         ],
         "promoted_candidates": [],
     })
@@ -170,7 +171,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         json.dumps(state, indent=2, sort_keys=True) + "\n"
     )
     session = {
-        "schema_version": 2,
+        "schema_version": 3,
         "campaign_id": CAMPAIGN_ID,
         "cell_id": cell["cell_id"],
         "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
@@ -188,6 +189,12 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
                 "cached_input_tokens": None,
                 "cost_usd": None,
                 "basis": "fixture runtime does not expose usage",
+            },
+            "activity": {
+                "source": "claude-native-active-time-v1",
+                "active_seconds": 3600.0,
+                "event_count": 3,
+                "sha256": "d" * 64,
             },
         },
         "binding_sha256": session_binding,

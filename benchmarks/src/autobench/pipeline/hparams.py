@@ -52,6 +52,7 @@ __all__ = [
     "FIELD_ALIASES",
     "all_overrides",
     "apply_overrides",
+    "apply_overrides_to_exp_cfg",
     "apply_overrides_to_plan",
     "explicit_overrides",
     "overrides_from_exp_cfg",
@@ -250,6 +251,47 @@ def apply_overrides(
             f"(Refusing to discard the override silently; that is the H-3 defect.)"
         )
     return replace(cfg, **concrete) if concrete else cfg
+
+
+def apply_overrides_to_exp_cfg(exp_cfg: Any, *, arm: str = "clam") -> None:
+    """Same contract for the arm that trains off the shared transport (CLAM).
+
+    CLAM's knobs live directly on ``exp_cfg.model`` / ``exp_cfg.train`` — its
+    canonical channel is natively live, so unlike the sibling arms there is no
+    separate config dataclass to hand to ``apply_overrides``, and the opaque
+    ``--hparams`` channel was parsed but never consumed (the H-3 defect on the
+    reference arm; claims-alignment A1). Only the opaque channel is applied:
+    re-routing the canonical diff would be a second path for values that are
+    already in effect.
+
+    Partitions the opaque keys across the two transport dataclasses and applies
+    each slice through ``apply_overrides`` with full declared-space enforcement;
+    a key unknown to both raises through the standard unknown-knob error rather
+    than vanishing. Mutates ``exp_cfg`` in place. Must run before results-dir
+    resolution and ``exp_cfg.save`` so CR-5b cache identity and the archived
+    provenance record the effective values.
+    """
+    overrides = getattr(exp_cfg, "hparam_overrides", None)
+    if not overrides:
+        return
+    remaining = {k: v for k, v in overrides.items() if v is not None}
+    for attr in ("model", "train"):
+        section = getattr(exp_cfg, attr, None)
+        if section is None:
+            continue
+        slice_ = {
+            name: value for name, value in remaining.items()
+            if _resolve_field(section, name) is not None
+        }
+        if slice_:
+            setattr(exp_cfg, attr, apply_overrides(section, slice_, arm=arm))
+            for name in slice_:
+                del remaining[name]
+    if remaining:
+        # Neither dataclass knows these keys — surface the standard fail-loud
+        # unknown-knob error (with TrainConfig's field list) instead of a
+        # bespoke message.
+        apply_overrides(exp_cfg.train, remaining, arm=arm)
 
 
 def apply_overrides_to_plan(

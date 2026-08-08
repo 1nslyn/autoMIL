@@ -5,7 +5,6 @@ import pytest
 
 from automil.cells.capconfig import (
     DEFAULT_BUDGET_SECONDS,
-    DEFAULT_IDLE_GRACE_SECONDS,
     DEFAULT_MODE,
     DEFAULT_SAFETY_BUFFER_SECONDS,
     format_duration,
@@ -43,27 +42,26 @@ class TestResolveCapConfig:
         cap = resolve_cap_config({})
         assert cap.budget_seconds == DEFAULT_BUDGET_SECONDS
         assert cap.safety_buffer_seconds == DEFAULT_SAFETY_BUFFER_SECONDS
-        assert cap.idle_grace_seconds == DEFAULT_IDLE_GRACE_SECONDS
         assert cap.mode == DEFAULT_MODE == "agent_active"
 
     def test_duration_keys(self):
         cfg = {"cap": {"budget": "2h", "safety_buffer": "10m",
-                       "idle_grace": "1m", "mode": "wall_clock"}}
+                       "mode": "wall_clock"}}
         cap = resolve_cap_config(cfg)
         assert cap.budget_seconds == 7200
         assert cap.safety_buffer_seconds == 600
-        assert cap.idle_grace_seconds == 60
         assert cap.mode == "wall_clock"
 
-    def test_legacy_seconds_keys(self):
+    def test_obsolete_seconds_keys_are_rejected(self):
         cfg = {"cap": {"budget_seconds": 100, "safety_buffer_seconds": 10}}
-        cap = resolve_cap_config(cfg)
-        assert cap.budget_seconds == 100
-        assert cap.safety_buffer_seconds == 10
+        with pytest.raises(ValueError, match="obsolete cap key"):
+            resolve_cap_config(cfg)
 
-    def test_duration_key_wins_over_legacy(self):
-        cfg = {"cap": {"budget": "5h", "budget_seconds": 999}}
-        assert resolve_cap_config(cfg).budget_seconds == 18000
+    @pytest.mark.parametrize("key", ["idle_grace", "idle_grace_seconds"])
+    def test_obsolete_idle_grace_keys_are_rejected_not_ignored(self, key):
+        """A removed billing knob must fail loudly, not become a silent no-op."""
+        with pytest.raises(ValueError, match="obsolete cap key"):
+            resolve_cap_config({"cap": {key: 300}})
 
     def test_cli_override_wins_over_config(self):
         cfg = {"cap": {"budget": "6h"}}
@@ -79,7 +77,6 @@ class TestResolveCapConfig:
         with pytest.raises(ValueError):
             resolve_cap_config({"cap": {"budget": "later"}})
 
-    def test_non_dict_cap_tolerated(self):
-        # A malformed cap (e.g. a string) falls back to defaults, not a crash.
-        cap = resolve_cap_config({"cap": "nonsense"})
-        assert cap.budget_seconds == DEFAULT_BUDGET_SECONDS
+    def test_non_dict_cap_rejected(self):
+        with pytest.raises(ValueError, match="cap must be a mapping"):
+            resolve_cap_config({"cap": "nonsense"})

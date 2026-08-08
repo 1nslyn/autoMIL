@@ -406,3 +406,41 @@ def test_atomic_json_is_project_group_readable(tmp_path):
     baselines._write_json_atomic(target, {"ok": True})
     assert stat.S_IMODE(target.stat().st_mode) == 0o640
     assert target.stat().st_gid == tmp_path.stat().st_gid
+
+
+def test_reuse_refuses_a_tuned_arm_block(tmp_path):
+    """B8 (claims-alignment): a post-H-3 archive whose arm block deviates from
+    the frozen tree's defaults is not a native baseline — reuse must refuse."""
+    import pytest as _pytest
+    from dataclasses import asdict
+    from autobench.pipeline.dtfd.config import DTFDConfig
+
+    cell = _cell(framework="dtfd")
+    source = _legacy_result(tmp_path, cell)
+    config_path = source / "config.json"
+    config = json.loads(config_path.read_text())
+    tuned = asdict(DTFDConfig())
+    tuned["lr"] = 9e-4
+    config["arm"] = tuned
+    config_path.write_text(json.dumps(config))
+
+    with _pytest.raises(
+        baselines.HistoricalBaselineError, match="upstream defaults"
+    ):
+        baselines.validate_historical_baseline(cell, source)
+
+
+def test_reuse_accepts_a_default_arm_block(tmp_path):
+    """The equivalence gate passes exactly the frozen tree's defaults."""
+    from dataclasses import asdict
+    from autobench.pipeline.dtfd.config import DTFDConfig
+
+    cell = _cell(framework="dtfd")
+    source = _legacy_result(tmp_path, cell)
+    config_path = source / "config.json"
+    config = json.loads(config_path.read_text())
+    config["arm"] = asdict(DTFDConfig())
+    config_path.write_text(json.dumps(config))
+
+    validated = baselines.validate_historical_baseline(cell, source)
+    assert validated["folds"]

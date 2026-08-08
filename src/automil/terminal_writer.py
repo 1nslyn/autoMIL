@@ -180,12 +180,58 @@ def write_terminal_state(
             "error": f"result.json failed schema validation: {msg}",
         }
 
+    # Step 2a — A6 (claims-alignment): a held-out-named key INSIDE ``metrics``
+    # is a val-firewall violation, not a stylistic nit — it would enter every
+    # agent-facing surface and the recomputed composite (test driving
+    # selection). Fail closed exactly like a schema failure: the node crashes
+    # with a pointer naming the offending keys, and no certify.json is minted.
+    from automil.firewall import held_out_metric_keys as _held_out_metric_keys
+
+    _leaking = _held_out_metric_keys(result.get("metrics"))
+    if _leaking:
+        logger.error(
+            "val-firewall violation for %s: held-out-named metrics key(s) %s — "
+            "`metrics` is the validation-only selection block; test belongs in "
+            "the sealed `held_out` block. Failing the node closed.",
+            node_id, ", ".join(_leaking),
+        )
+        result = {
+            "status": "crash",
+            "composite": 0.0,
+            "metrics": {},
+            "error": (
+                "val-firewall violation: held-out-named key(s) in `metrics`: "
+                f"{', '.join(_leaking)}. `metrics` is validation-only; test "
+                "metrics belong in the sealed `held_out` block."
+            ),
+        }
+
     # Val-firewall: quarantine test. ``held_out`` (test metrics) and the full
     # ``summary`` (which embeds test) are split into a sealed certify.json sidecar
     # and stripped from every agent-facing artifact (graph node, completed/,
     # results.tsv, archive/result.json). Read once by ``automil certify``.
     sealed = {k: result[k] for k in ("held_out", "summary") if k in result}
     result = {k: v for k, v in result.items() if k not in ("held_out", "summary")}
+
+    # Step 2c — B1 (claims-alignment): the SE that gates the Ladder keep-margin
+    # must not be trusted verbatim off agent-editable training output. Recompute
+    # it from the result's own val-only per-fold evidence when present; the
+    # recomputed value replaces the reported one here so every downstream
+    # artifact (graph node, completed/, archive result.json) round-trips it.
+    from automil.scoring import recompute_composite_se as _recompute_se
+
+    _se_recomputed = _recompute_se(result)
+    if _se_recomputed is not None:
+        _se_reported = result.get("composite_se")
+        if isinstance(_se_reported, (int, float)) and not isinstance(_se_reported, bool) \
+                and abs(float(_se_reported) - _se_recomputed) > 1e-6:
+            logger.warning(
+                "terminal_writer: reported composite_se %.6f for %s disagrees with "
+                "the value recomputed from validation_folds (%.6f); using the "
+                "recomputed value (CR-4 noise floor must not be self-reported).",
+                float(_se_reported), node_id, _se_recomputed,
+            )
+        result = {**result, "composite_se": _se_recomputed}
 
     raw_status = result.get("status", "crash")
 

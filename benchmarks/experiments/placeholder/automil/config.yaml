@@ -64,8 +64,14 @@ registry:
   mode: "architecture-preserving"
   allowed_override_options: ["--hparams", "--policy-variant"]
   allowed_variant_kinds: ["policy"]
-  # These scalar switches erase CLAM's defining instance-loss mechanism.
-  identity_locked_hparams: ["no_inst_cluster", "bag_weight"]
+  # Identity locks (claims-alignment A4): the two scalar switches that erase
+  # CLAM's defining instance-loss mechanism, plus every arm's capacity /
+  # architecture knobs — width and depth change parameter counts, so tuning
+  # them breaks architecture-preserving attribution (clam model_size; abmil
+  # M, L; dtfd mDim, numLayer_Res; nnmil hidden_dim). Flat union across arms:
+  # each name exists on exactly one arm, so nothing else can be false-locked.
+  identity_locked_hparams: ["no_inst_cluster", "bag_weight", "model_size",
+                            "M", "L", "mDim", "numLayer_Res", "hidden_dim"]
   protected:
     # --- evaluation protocol: splits, prep, metrics ---
     - "benchmarks/src/autobench/pipeline/splits.py"

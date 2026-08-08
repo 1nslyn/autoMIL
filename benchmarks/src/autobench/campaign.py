@@ -20,11 +20,12 @@ from typing import Any, Mapping
 
 import yaml
 
+from automil.activity_hooks import claude_activity_settings
 from automil.cells.state import make_cell_id, normalize_mil_model
 
-SCHEMA_VERSION = 4
-CAMPAIGN_ID = "automil-preprint-130-v4"
-PROTOCOL_VERSION = "preprint-v1"
+SCHEMA_VERSION = 5
+CAMPAIGN_ID = "automil-preprint-130-v5"
+PROTOCOL_VERSION = "preprint-v2"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
 DATASETS = (
@@ -47,7 +48,20 @@ STAGE_FOLDS = {
 }
 CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
 BASELINE_FOLDS = CERTIFICATION_FOLDS
-DISCOVERY_ATTEMPTS = 60
+DISCOVERY_ATTEMPTS = 30
+DISCOVERY_AGENT_ACTIVE_BUDGET = "12h"
+AGENT_TIME_ACCOUNTING = {
+    "source": "claude-native-active-time-v1",
+    "metric": "claude_code.active_time.total",
+    "observer": "localhost Prometheus scrape",
+    "session_binding": "synchronous SessionStart/SessionEnd hooks",
+}
+# Promotion runs with no coding agent in the loop, so its wall-clock cap is
+# pure runaway containment, never a search budget: the eval axis (exact frozen
+# candidate count) is the only binding limit. Sized far above the worst case
+# (10 candidates x 2 folds x the 6h attempt timeout ~= 5d serial) so the cap
+# can only ever catch a hung job, not kill legitimate in-flight promotion.
+PROMOTION_WALL_CLOCK_CONTAINMENT = "7d"
 PROMOTION_CANDIDATES = 10
 ATTEMPT_OUTCOME_CLASSES = (
     "completed", "budget-killed", "timeout", "oom", "cancelled",
@@ -110,18 +124,42 @@ def expected_promotion_sources(
 # This is a failure-containment wall clock for one submitted multi-fold attempt,
 # not an optimization budget.  Three CLAM classification folds take about
 # 206 minutes in the committed timing census; six hours leaves a substantial
-# guard band without changing the equal 60-attempt research budget.
+# guard band without changing the equal 30-attempt research budget.
 ATTEMPT_TIMEOUT_MIN = 360
 MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
     DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
     + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])
+)
+# C-j (claims-alignment): submit hosts and the controller host are not the same
+# machine on a cluster, and the freeze used to abort PERMANENTLY on a
+# submitted_at even one second before bound_at — timestamps live in hashed
+# archived specs and cannot be legitimately corrected. Ordinary NTP-level skew
+# is tolerated (declared here, hash-locked via PROTOCOL); anything beyond it
+# still fails closed.
+SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS = 120
+# A4 (claims-alignment): the campaign's identity locks, asserted by the
+# materialization audit so a template that silently lost a lock cannot pass.
+# Flat union across arms — each name exists on exactly one arm's search space
+# and no hparams.FIELD_ALIASES entry maps onto any of them (asserted in
+# benchmarks/tests/test_campaign_identity_locks.py), so the union cannot
+# false-lock another arm's legitimate knob.
+EXPECTED_ALLOWED_OVERRIDE_OPTIONS = ("--hparams", "--policy-variant")
+EXPECTED_IDENTITY_LOCKED_HPARAMS = (
+    "no_inst_cluster", "bag_weight",  # clam defining-loss switches
+    "model_size",                     # clam attention-width preset
+    "M", "L",                         # abmil attention/embedding widths
+    "mDim", "numLayer_Res",           # dtfd width + residual depth
+    "hidden_dim",                     # nnmil model width
 )
 PROTOCOL = {
     "protocol_version": PROTOCOL_VERSION,
     "seed": 42,
     "split_folds": 5,
     "discovery_attempts": DISCOVERY_ATTEMPTS,
+    "discovery_agent_active_budget": DISCOVERY_AGENT_ACTIVE_BUDGET,
+    "agent_time_accounting": AGENT_TIME_ACCOUNTING,
     "promotion_candidates": PROMOTION_CANDIDATES,
+    "promotion_wall_clock_containment": PROMOTION_WALL_CLOCK_CONTAINMENT,
     "attempt_outcome_classes": list(ATTEMPT_OUTCOME_CLASSES),
     "frozen_winners": 1,
     "stage_folds": {key: list(value) for key, value in STAGE_FOLDS.items()},
@@ -145,6 +183,8 @@ PROTOCOL = {
         "role": "failure-containment-not-search-budget",
         "scope": "one-multi-fold-attempt",
     },
+    "submit_clock_skew_tolerance_seconds": SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
+    "identity_locked_hparams": list(EXPECTED_IDENTITY_LOCKED_HPARAMS),
     "agentic_fold_trainings_per_cell": {
         "discovery": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),
         "promotion_per_candidate": len(STAGE_FOLDS["promotion"]),
@@ -636,6 +676,7 @@ def materialize_discovery_cells(
                 pass
             raise
     written: list[Path] = []
+    activity_settings = claude_activity_settings()
     for cell in manifest["cells"]:
         cell_root = output_root / cell["cell_id"]
         adir = cell_root / "automil"
@@ -681,7 +722,11 @@ def materialize_discovery_cells(
             "command": cell["commands"]["discovery"],
             "mil_model": cell["model"],
         }
-        config.setdefault("cap", {})["eval_budget"] = PROTOCOL["discovery_attempts"]
+        config.setdefault("cap", {})["budget"] = PROTOCOL[
+            "discovery_agent_active_budget"
+        ]
+        config["cap"]["mode"] = "agent_active"
+        config["cap"]["eval_budget"] = PROTOCOL["discovery_attempts"]
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
         config.setdefault("orchestrator", {})["default_timeout_min"] = (
             ATTEMPT_TIMEOUT_MIN
@@ -708,6 +753,9 @@ def materialize_discovery_cells(
                 state = load_stage_state(cell_root)
                 existing_cell = json.loads((adir / "campaign_cell.json").read_text())
                 existing_config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+                existing_settings = json.loads(
+                    (cell_root / ".claude/settings.json").read_text()
+                )
             except (OSError, json.JSONDecodeError, yaml.YAMLError, ValueError) as exc:
                 raise CampaignManifestError(
                     f"existing discovery root is incomplete or corrupt: {cell_root}"
@@ -720,7 +768,12 @@ def materialize_discovery_cells(
                 state.get("cell_id"), state.get("cell_sha256"),
                 state.get("manifest_sha256"), state.get("protocol_version"),
             )
-            if existing_cell != cell or existing_config != config or actual_state != expected_state:
+            if (
+                existing_cell != cell
+                or existing_config != config
+                or existing_settings != activity_settings
+                or actual_state != expected_state
+            ):
                 raise CampaignManifestError(
                     f"existing discovery root is bound to different inputs: {cell_root}"
                 )
@@ -742,7 +795,13 @@ def materialize_discovery_cells(
             )
             (staging_adir / ".gitignore").write_text(
                 "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
+                ".activity.jsonl\n.activity.samples.json\n.activity.lock\n"
                 ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
+            )
+            settings_path = staging_root / ".claude" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            settings_path.write_text(
+                json.dumps(activity_settings, indent=2, sort_keys=True) + "\n"
             )
             (staging_adir / "plan.md").write_text(
                 f"# Discovery plan — {cell['cell_id']}\n\nNo proposals queued yet.\n"
@@ -809,6 +868,7 @@ def audit_materialized_campaign(
         try:
             cell = json.loads((adir / "campaign_cell.json").read_text())
             config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+            settings = json.loads((adir.parent / ".claude/settings.json").read_text())
         except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
             raise CampaignManifestError(f"cannot read materialized root {adir}: {exc}") from exc
         cell_id = cell.get("cell_id")
@@ -828,8 +888,16 @@ def audit_materialized_campaign(
             raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
         if campaign.get("agent_protocol_sha256") != agent_protocol_sha256:
             raise CampaignManifestError(f"{cell_id}: agent protocol binding drift")
+        if settings != claude_activity_settings():
+            raise CampaignManifestError(f"{cell_id}: activity observer contract drift")
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
+        if (config.get("cap") or {}).get(
+            "budget"
+        ) != DISCOVERY_AGENT_ACTIVE_BUDGET:
+            raise CampaignManifestError(f"{cell_id}: agent-active budget drift")
+        if (config.get("cap") or {}).get("mode") != "agent_active":
+            raise CampaignManifestError(f"{cell_id}: activity clock mode drift")
         if (config.get("training") or {}).get("fold_count") != len(
             STAGE_FOLDS["discovery"]
         ):
@@ -846,6 +914,13 @@ def audit_materialized_campaign(
             policy.mode != "architecture-preserving"
             or policy.editable != expected_editable
             or policy.allowed_variant_kinds != ("policy",)
+            # A4: assert the VALUES, not template fidelity — materialize already
+            # guarantees fidelity; the hole worth closing is a template that
+            # silently lost a lock (or an override option) before the regen.
+            or sorted(policy.allowed_override_options)
+            != sorted(EXPECTED_ALLOWED_OVERRIDE_OPTIONS)
+            or sorted(policy.identity_locked_hparams)
+            != sorted(EXPECTED_IDENTITY_LOCKED_HPARAMS)
         ):
             raise CampaignManifestError(f"{cell_id}: candidate boundary drift")
         state = load_stage_state(adir.parent)

@@ -21,8 +21,11 @@ def create_mil_model(model_type, input_dim=2560, hidden_dim=512, num_classes=2, 
     
     if model_type == "simple_mil":
         from .models.simple_mil import SimpleMIL
+        # Pass the plan's rate through (defaults to the original 0.25 above) —
+        # a hardcoded `dropout=True` made the declared-tunable knob a silent
+        # no-op on this model (claims-alignment A8, the H-3 defect class).
         return SimpleMIL(input_dim=input_dim, hidden_dim=hidden_dim, pred_num=num_classes,
-                        activation=activation, dropout=True)
+                        activation=activation, dropout=dropout)
     elif model_type == "ab_mil_fixed_feat":
         from .models.ab_mil_fixed_feat import AB_MIL
         hidden_dim = 512

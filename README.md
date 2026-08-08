@@ -88,7 +88,7 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 | **Pluggable backends**               | `local` (default), `slurm` (submitit, opt-in via `[slurm]` extra), `ray` (raw `@ray.remote`, opt-in via `[ray]` extra). Same `Backend` ABC; same cap contract.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | **Hardware autodetect**              | `automil init` probes CUDA / ROCm / CPU via `LocalBackend.healthcheck()` and stamps detected GPU count, VRAM, and concurrency defaults into `config.yaml`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **Variant registry**                 | Architectural changes ship as committed variant modules (`automil/variants/<parent>/<name>.py`) selected via config. Registry-only path reproduces a node end-to-end via `automil verify-repro`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **Configurable per-cell budget cap** | Two-tier state machine (`refusing-new` at T-buffer, `terminating` at T) with per-fold checkpoints and a SIGTERM contract. Budget is set as a duration (`cap.budget: 6h`, also `30m`/`90s`/`2d`; legacy `cap.budget_seconds` still works) — set it with `automil budget set 6h` / inspect with `automil budget show`, or per-cell via `automil submit --budget-seconds N` (D-134, honored only on the submit that creates the cell). **`cap.mode: agent_active`** (default) bills only the time the agent is actually working (a `PostToolUse` hook stamps activity; the clock pauses while experiments run and the agent waits → more proposing per budget); `wall_clock` is the legacy continuous clock. 6h is just the autoMIL-paper default. Budget-killed runs reconcile to `executed` with partial composite, never `crash`. |
+| **Configurable per-cell budget cap** | Two-tier state machine (`refusing-new` at T-buffer, `terminating` at T) with per-fold checkpoints and a SIGTERM contract. Budget is set as a duration (`cap.budget: 6h`, also `30m`/`90s`/`2d`) — set it with `uv run automil budget set 6h` / inspect with `uv run automil budget show`, or per-cell via `uv run automil submit --budget-seconds N` (D-134, honored only on the submit that creates the cell). **`cap.mode: agent_active`** consumes Claude Code's native cumulative `claude_code.active_time.total` metric (CLI + user active seconds; idle excluded), scraped from Claude's localhost Prometheus endpoint and bound to the cell by synchronous session hooks. `wall_clock` is the portable fallback for runtimes without that observer. The framework fallback is 6h; the frozen preprint campaign pins 12h plus exactly 30 launches. Budget-killed runs reconcile to `executed` with partial composite, never `crash`. |
 | **Validation-firewall**              | Keep/discard selects on **validation** only; test metrics are sealed at ingest into a quarantined `held_out` block and revealed exactly once via `automil certify`. Test never drives search, so final numbers aren't selected on test.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **Generalization gate**              | Pre-registered held-out manifest + paired Wilcoxon + bootstrap CI + Bonferroni, ships a `candidate` node status, manual nomination by default, promotion-rate metric exposed via SSE.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | **Trajectory recorder**              | Per-submit JSONL using OpenTelemetry `gen_ai.*` keys with secret redaction (`sk-…`, `hf_…`, AWS keys) and bounded rotation (5 MB soft / 50 MB hard).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -179,27 +179,24 @@ env:
   passthrough: [AUTOMIL_*]     # vars forwarded to experiment subprocesses
 
 scoring:
-  # Documentation-only. Your training script computes the composite scalar
-  # and writes it to result.json directly; the framework does NOT evaluate
-  # this string. State the formula here so collaborators can read the
-  # recipe at a glance. Examples:
-  #   formula: "accuracy"                                          # sklearn-iris
-  #   formula: "(val_auc + val_bacc + test_auc + test_bacc) / 4"   # autobench
+  # The reducer CR-1b uses to recompute the composite from the validation
+  # `metrics` block at ingest — the val-firewall does not trust the reported
+  # scalar. "" -> "mean" over the metrics values (reproduces the standard
+  # composites exactly); also: max | min | trust_reported (explicit opt-out,
+  # weakens the firewall). Arithmetic expressions are rejected by
+  # `automil check`; test metrics never belong in the composite (they live
+  # in the sealed `held_out` block).
   formula: ""
 
 cap:
-  # Consumer-supplied — 6h is just the autoMIL-paper default. Durations accept
-  # 6h / 30m / 90s / 2d (or a bare number = seconds; legacy *_seconds ints still
-  # work). Set it the easy way: `automil budget set 6h` / `automil budget show`.
+  # Consumer-supplied; 6h is the generic framework fallback. Durations accept
+  # 6h / 30m / 90s / 2d (or a bare number = seconds). Set it with
+  # `uv run automil budget set 6h`; inspect with `uv run automil budget show`.
   budget: 6h
   safety_buffer: 30m
-  # mode: agent_active (default) bills only while the agent is actually working
-  # (PostToolUse activity) — the clock PAUSES while experiments run and the agent
-  # waits, so you get more proposing time per budget. wall_clock = legacy
-  # continuous now-since-creation. idle_grace_seconds: how long after the agent's
-  # last action the clock keeps running (agent_active only).
+  # agent_active = Claude Code's native active-time counter, bound to this cell
+  # by synchronous session hooks. wall_clock = time since cell creation.
   mode: agent_active
-  idle_grace_seconds: 300
 ```
 
 Ensure your training script honors the
@@ -306,7 +303,8 @@ The minimum valid payload is:
 is optional. Under the **val-firewall**, `metrics` is validation-only and is
 what `composite` is computed from; any test metrics go in a sealed `held_out`
 block that the orchestrator quarantines under `archive/<node>/certify/` and
-reveals once via `automil certify`, so test never drives search. A full example
+reveals once via `automil certify`, so test never drives search; held-out-named
+keys (e.g. `test_*`) inside `metrics` fail the node closed at ingest. A full example
 payload from the autobench consumer:
 
 ```json
@@ -450,8 +448,8 @@ your-project/                    # your repo (untouched)
 | Runtime                       |    Support Level     | How to Start                                                                                                                                                         |
 | ----------------------------- | :------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Claude Code**               |     First-class      | `automil init --runtime claude` then `/automil-setup`, then `/automil`                                                                                               |
-| **Codex**                     |     First-class      | `automil init --runtime codex`; per-runtime SKILL/AGENTS overlay shipped                                                                                             |
-| **OpenCode**                  |     First-class      | `automil init --runtime opencode`; per-runtime SKILL/AGENTS overlay shipped                                                                                          |
+| **Codex**                     |     First-class      | `automil init --runtime codex`; installs the shared AGENTS.md + CLI-fallback trajectory capture                                                                      |
+| **OpenCode**                  |     First-class      | `automil init --runtime opencode`; installs the shared AGENTS.md + trajectory plugin                                                                                 |
 | **DeepSeek**                  | First-class (routed) | `automil init --runtime deepseek-via-opencode` (or `deepseek-via-codex`); DeepSeek is a model accessed through a host runtime                                        |
 | **Cursor / Aider / Windsurf** |      Compatible      | Point the agent at `automil/program.md` and the [contract](docs/training-script-contract.md), any agent that can read files, edit code, and run shell commands works |
 
