@@ -248,11 +248,14 @@ def test_activity_close_finalizes_dead_session_and_refuses_live_one(
         'claude_code_active_time_total{session_id="session-123",type="cli"} 42\n',
     )
 
-    # While the exporter still serves this session, close refuses.
+    # While the exporter still serves this session, close refuses — even if an
+    # unrelated session's sample would make a full observation invalid (the
+    # guard reads the raw exposition, not the journal-validated ingest).
     monkeypatch.setattr(
-        "automil.activity_metrics.observe_activity_metrics",
-        lambda *_a, **_k: ActivityObservation(
-            available=True, sessions=("session-123",), observed_at=1.0
+        "automil.activity_metrics.fetch_activity_exposition",
+        lambda **_k: (
+            'claude_code_active_time_total{session_id="other",type="cli"} 1\n'
+            'claude_code_active_time_total{session_id="session-123",type="cli"} 43\n'
         ),
     )
     refused = CliRunner().invoke(
@@ -263,11 +266,13 @@ def test_activity_close_finalizes_dead_session_and_refuses_live_one(
     assert "still exporting" in refused.output
 
     # Exporter dead (process gone): the durable sample becomes the attested end.
+    from automil.cells.activity import ActivityError
+
+    def _dead(**_kwargs):
+        raise ActivityError("Claude metrics endpoint unavailable")
+
     monkeypatch.setattr(
-        "automil.activity_metrics.observe_activity_metrics",
-        lambda *_a, **_k: ActivityObservation(
-            available=False, error="connection refused"
-        ),
+        "automil.activity_metrics.fetch_activity_exposition", _dead
     )
     closed = CliRunner().invoke(
         main,

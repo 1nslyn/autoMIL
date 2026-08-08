@@ -78,12 +78,24 @@ def close(session_id: str, attest: str) -> None:
     """
 
     automil_dir = _find_automil_dir()
-    from automil.activity_metrics import observe_activity_metrics
-    from automil.cells.activity import ActivityError, close_dead_session
+    from automil.activity_metrics import fetch_activity_exposition
+    from automil.cells.activity import (
+        ActivityError,
+        close_dead_session,
+        parse_active_sessions,
+    )
 
     try:
-        observation = observe_activity_metrics(automil_dir)
-        if observation.available and session_id in observation.sessions:
+        # Liveness guard independent of journal-ingest validity: refuse
+        # whenever the endpoint answers and the target session is present,
+        # even if an unrelated session would make a full observation invalid.
+        try:
+            exposition = fetch_activity_exposition()
+        except ActivityError:
+            exposition = None  # endpoint dead — the case close exists for
+        if exposition is not None and session_id in parse_active_sessions(
+            exposition
+        ):
             raise ActivityError(
                 f"session {session_id!r} is still exporting metrics; "
                 "end the live session instead of operator-closing it"

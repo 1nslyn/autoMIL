@@ -297,6 +297,17 @@ def close_dead_session(
         return float(prior["active_seconds"])
 
 
+def parse_active_sessions(exposition: str) -> tuple[str, ...]:
+    """Session ids present in a raw exposition, independent of journal state.
+
+    Liveness checks must use this rather than a full observation: an ingest
+    can fail on an unrelated session's invalid sample, and that failure must
+    not blind the caller to the target session being demonstrably alive.
+    """
+
+    return tuple(sorted(_parse_active_samples(exposition)))
+
+
 def bind_activity_session(
     automil_dir: Path | str,
     cell_id: str,

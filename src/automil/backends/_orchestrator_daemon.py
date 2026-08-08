@@ -543,6 +543,9 @@ class ExperimentOrchestrator:
         # Diagnostic state only.  It is never consulted for billing or cap
         # transitions; it merely suppresses repeated outage messages.
         self._activity_health_by_cell: dict[str, str] = {}
+        # Log-dedup for declared-but-unreadable cell holds, separate from
+        # activity health so a file blip never fakes a telemetry transition.
+        self._unreadable_cell_logged: set[str] = set()
 
         self.runner = Runner(self.project_root)
 
@@ -1390,15 +1393,15 @@ class ExperimentOrchestrator:
             # blocks the launch but keeps queue and graph state intact. A
             # transient read error (fd pressure, filesystem blip) recovers on
             # a later tick; refusal here would cancel the node irreversibly.
-            reason = "declared cell file is missing or unreadable"
-            previous = self._activity_health_by_cell.get(str(cell_id))
-            if previous != reason:
+            if str(cell_id) not in self._unreadable_cell_logged:
                 logger.warning(
-                    "Holding new work for cell %s: %s.",
-                    str(cell_id)[:8], reason,
+                    "Holding new work for cell %s: declared cell file is "
+                    "missing or unreadable.",
+                    str(cell_id)[:8],
                 )
-                self._activity_health_by_cell[str(cell_id)] = reason
+                self._unreadable_cell_logged.add(str(cell_id))
             return _CellAdmission.HOLD_TELEMETRY
+        self._unreadable_cell_logged.discard(str(cell_id))
         if blocks_new_work(cell):
             return _CellAdmission.REFUSE_CAP
         if cell.mode != "agent_active":
