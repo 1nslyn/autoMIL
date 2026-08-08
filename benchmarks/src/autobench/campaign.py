@@ -20,11 +20,12 @@ from typing import Any, Mapping
 
 import yaml
 
+from automil.activity_hooks import claude_activity_settings
 from automil.cells.state import make_cell_id, normalize_mil_model
 
-SCHEMA_VERSION = 4
-CAMPAIGN_ID = "automil-preprint-130-v4"
-PROTOCOL_VERSION = "preprint-v1"
+SCHEMA_VERSION = 5
+CAMPAIGN_ID = "automil-preprint-130-v5"
+PROTOCOL_VERSION = "preprint-v2"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
 DATASETS = (
@@ -47,7 +48,14 @@ STAGE_FOLDS = {
 }
 CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
 BASELINE_FOLDS = CERTIFICATION_FOLDS
-DISCOVERY_ATTEMPTS = 60
+DISCOVERY_ATTEMPTS = 30
+DISCOVERY_AGENT_ACTIVE_BUDGET = "12h"
+AGENT_TIME_ACCOUNTING = {
+    "source": "claude-native-active-time-v1",
+    "metric": "claude_code.active_time.total",
+    "observer": "localhost Prometheus scrape",
+    "session_binding": "synchronous SessionStart/SessionEnd hooks",
+}
 PROMOTION_CANDIDATES = 10
 ATTEMPT_OUTCOME_CLASSES = (
     "completed", "budget-killed", "timeout", "oom", "cancelled",
@@ -110,20 +118,12 @@ def expected_promotion_sources(
 # This is a failure-containment wall clock for one submitted multi-fold attempt,
 # not an optimization budget.  Three CLAM classification folds take about
 # 206 minutes in the committed timing census; six hours leaves a substantial
-# guard band without changing the equal 60-attempt research budget.
+# guard band without changing the equal 30-attempt research budget.
 ATTEMPT_TIMEOUT_MIN = 360
 MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
     DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
     + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])
 )
-# A10 (claims-alignment): the eval axis is the campaign's only binding research
-# budget; the cell's TIME budget is pure failure containment. Without an
-# explicit value the cohort template's 6h agent_active budget rode into every
-# cell — and 60 attempts of normal skill-mandated agent activity bills well
-# past 6h, so whether a cell could complete its pre-registered attempt count
-# depended on untracked agent verbosity (REFUSING_NEW is one-way; the frozen
-# analysis plan fails closed below 60).
-CELL_TIME_CONTAINMENT = "7d"
 # C-j (claims-alignment): submit hosts and the controller host are not the same
 # machine on a cluster, and the freeze used to abort PERMANENTLY on a
 # submitted_at even one second before bound_at — timestamps live in hashed
@@ -150,6 +150,8 @@ PROTOCOL = {
     "seed": 42,
     "split_folds": 5,
     "discovery_attempts": DISCOVERY_ATTEMPTS,
+    "discovery_agent_active_budget": DISCOVERY_AGENT_ACTIVE_BUDGET,
+    "agent_time_accounting": AGENT_TIME_ACCOUNTING,
     "promotion_candidates": PROMOTION_CANDIDATES,
     "attempt_outcome_classes": list(ATTEMPT_OUTCOME_CLASSES),
     "frozen_winners": 1,
@@ -173,11 +175,6 @@ PROTOCOL = {
         "minutes": ATTEMPT_TIMEOUT_MIN,
         "role": "failure-containment-not-search-budget",
         "scope": "one-multi-fold-attempt",
-    },
-    "cell_time_budget": {
-        "budget": CELL_TIME_CONTAINMENT,
-        "role": "failure-containment-not-search-budget",
-        "scope": "one-cell-stage",
     },
     "submit_clock_skew_tolerance_seconds": SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
     "identity_locked_hparams": list(EXPECTED_IDENTITY_LOCKED_HPARAMS),
@@ -672,6 +669,7 @@ def materialize_discovery_cells(
                 pass
             raise
     written: list[Path] = []
+    activity_settings = claude_activity_settings()
     for cell in manifest["cells"]:
         cell_root = output_root / cell["cell_id"]
         adir = cell_root / "automil"
@@ -717,11 +715,11 @@ def materialize_discovery_cells(
             "command": cell["commands"]["discovery"],
             "mil_model": cell["model"],
         }
-        cap = config.setdefault("cap", {})
-        cap["eval_budget"] = PROTOCOL["discovery_attempts"]
-        # A10: override the cohort template's time budget — the eval axis is
-        # the only binding research budget; time is failure containment.
-        cap["budget"] = CELL_TIME_CONTAINMENT
+        config.setdefault("cap", {})["budget"] = PROTOCOL[
+            "discovery_agent_active_budget"
+        ]
+        config["cap"]["mode"] = "agent_active"
+        config["cap"]["eval_budget"] = PROTOCOL["discovery_attempts"]
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
         config.setdefault("orchestrator", {})["default_timeout_min"] = (
             ATTEMPT_TIMEOUT_MIN
@@ -748,6 +746,9 @@ def materialize_discovery_cells(
                 state = load_stage_state(cell_root)
                 existing_cell = json.loads((adir / "campaign_cell.json").read_text())
                 existing_config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+                existing_settings = json.loads(
+                    (cell_root / ".claude/settings.json").read_text()
+                )
             except (OSError, json.JSONDecodeError, yaml.YAMLError, ValueError) as exc:
                 raise CampaignManifestError(
                     f"existing discovery root is incomplete or corrupt: {cell_root}"
@@ -760,7 +761,12 @@ def materialize_discovery_cells(
                 state.get("cell_id"), state.get("cell_sha256"),
                 state.get("manifest_sha256"), state.get("protocol_version"),
             )
-            if existing_cell != cell or existing_config != config or actual_state != expected_state:
+            if (
+                existing_cell != cell
+                or existing_config != config
+                or existing_settings != activity_settings
+                or actual_state != expected_state
+            ):
                 raise CampaignManifestError(
                     f"existing discovery root is bound to different inputs: {cell_root}"
                 )
@@ -782,7 +788,13 @@ def materialize_discovery_cells(
             )
             (staging_adir / ".gitignore").write_text(
                 "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
+                ".activity.jsonl\n.activity.samples.json\n.activity.lock\n"
                 ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
+            )
+            settings_path = staging_root / ".claude" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            settings_path.write_text(
+                json.dumps(activity_settings, indent=2, sort_keys=True) + "\n"
             )
             (staging_adir / "plan.md").write_text(
                 f"# Discovery plan — {cell['cell_id']}\n\nNo proposals queued yet.\n"
@@ -849,6 +861,7 @@ def audit_materialized_campaign(
         try:
             cell = json.loads((adir / "campaign_cell.json").read_text())
             config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+            settings = json.loads((adir.parent / ".claude/settings.json").read_text())
         except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
             raise CampaignManifestError(f"cannot read materialized root {adir}: {exc}") from exc
         cell_id = cell.get("cell_id")
@@ -868,10 +881,16 @@ def audit_materialized_campaign(
             raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
         if campaign.get("agent_protocol_sha256") != agent_protocol_sha256:
             raise CampaignManifestError(f"{cell_id}: agent protocol binding drift")
+        if settings != claude_activity_settings():
+            raise CampaignManifestError(f"{cell_id}: activity observer contract drift")
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
-        if (config.get("cap") or {}).get("budget") != CELL_TIME_CONTAINMENT:
-            raise CampaignManifestError(f"{cell_id}: cell time-containment drift")
+        if (config.get("cap") or {}).get(
+            "budget"
+        ) != DISCOVERY_AGENT_ACTIVE_BUDGET:
+            raise CampaignManifestError(f"{cell_id}: agent-active budget drift")
+        if (config.get("cap") or {}).get("mode") != "agent_active":
+            raise CampaignManifestError(f"{cell_id}: activity clock mode drift")
         if (config.get("training") or {}).get("fold_count") != len(
             STAGE_FOLDS["discovery"]
         ):

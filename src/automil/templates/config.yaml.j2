@@ -197,10 +197,11 @@ policy:
   variant: null    # e.g. "sam_lookahead"
 
 # Cap configuration: consumer-supplied, NOT framework-mandated.
-# autoMIL is generic; the values below are just the defaults Leo's autoMIL-paper
-# campaign uses, 6h is NOT special, set whatever fits your compute. Durations
-# accept 6h / 30m / 90s / 2d (or a bare number = seconds). Change anytime with
-# `automil budget set 6h`; per-cell override via `automil submit --budget-seconds`.
+# autoMIL is generic; these are framework fallbacks. The frozen preprint
+# campaign separately pins 12h plus exactly 30 launches per cell. Durations
+# accept 6h / 30m / 90s / 2d (or a bare number = seconds). Change with
+# `uv run automil budget set 6h`; per-cell override via
+# `uv run automil submit --budget-seconds`.
 # All cap values are honored ONLY on the submit that opens a cell (D-134).
 cap:
   budget: 6h               # agent-active working budget; e.g. 6h, 30m, 90s
@@ -217,14 +218,11 @@ cap:
   #   null = no eval cap (time-only). Set an integer to enable, e.g. 40.
   eval_budget: null
   # mode: how the budget clock is metered.
-  #   agent_active (default), bills only while the agent is actually working
-  #     (PostToolUse activity); the clock PAUSES while experiments run and the
-  #     agent waits, so you get more proposing time per budget.
-  #   wall_clock, legacy continuous now-since-creation (counts GPU + idle time).
+  #   agent_active (default) = Claude Code's native active-time counter (CLI +
+  #     user active seconds; idle excluded), scraped from Claude's localhost
+  #     Prometheus endpoint. Synchronous hooks bind session to cell.
+  #   wall_clock = continuous time since cell creation (counts GPU + idle time).
   mode: agent_active
-  idle_grace_seconds: 300  # agent_active only: gap (s) since the agent's last
-                           # action that still counts as "working" before the
-                           # clock pauses. Set ≥ your longest think/edit gap.
 
 hardware:
   accelerator: {{ healthcheck_accelerator | default("cpu") }}

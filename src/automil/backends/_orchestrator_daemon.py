@@ -27,6 +27,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -94,6 +95,14 @@ _SPEC_ENV_BLOCKED: frozenset[str] = frozenset({
 })
 
 logger = logging.getLogger(__name__)
+
+
+class _CellAdmission(str, Enum):
+    """Launch decision kept separate from the monotone cap state."""
+
+    ALLOW = "allow"
+    HOLD_TELEMETRY = "hold-telemetry"
+    REFUSE_CAP = "refuse-cap"
 
 # ---------------------------------------------------------------------------
 # nvidia-smi path pinning (CLN-05)
@@ -531,6 +540,9 @@ class ExperimentOrchestrator:
         self.pid_file = self.orch_dir / "orchestrator.pid"
         self.log_file = self.orch_dir / "orchestrator.log"
         self.gpu_state_file = self.orch_dir / "gpu_state.json"
+        # Diagnostic state only.  It is never consulted for billing or cap
+        # transitions; it merely suppresses repeated outage messages.
+        self._activity_health_by_cell: dict[str, str] = {}
 
         self.runner = Runner(self.project_root)
 
@@ -1276,9 +1288,9 @@ class ExperimentOrchestrator:
         path = self.automil_dir / "cells" / f"{cell_id}.json"
         if not path.exists():
             if warn:
-                logger.warning(
+                logger.error(
                     "Spec %s references cell %s which has no cells/<id>.json; "
-                    "launching UNCAPPED (this evaluation is billed to no budget).",
+                    "the launch will be refused.",
                     spec.get("id"), str(cell_id)[:8],
                 )
             return None
@@ -1286,11 +1298,121 @@ class ExperimentOrchestrator:
             return read_cell(path)
         except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
             if warn:
-                logger.warning(
-                    "Could not read cell %s for spec %s (%s); launching UNCAPPED.",
+                logger.error(
+                    "Could not read cell %s for spec %s (%s); the launch will "
+                    "be refused.",
                     str(cell_id)[:8], spec.get("id"), exc,
                 )
             return None
+
+    def _observe_activity_for_tick(self):
+        """Return one shared native-meter observation for this daemon tick.
+
+        Open journaled sessions, rather than mutable ``config.yaml``, decide
+        whether the exporter is relevant. Completed sessions use their durable
+        final sample and never probe an endpoint that has legitimately exited.
+        A missing endpoint is represented as data and never converted into
+        consumed budget.
+        """
+        from automil.activity_metrics import observe_activity_metrics
+        from automil.cells import list_cells
+        from automil.cells.activity import (
+            ACTIVITY_JOURNAL_FILENAME,
+            ActivityError,
+            read_activity_report,
+            read_unbound_activity_report,
+        )
+
+        if not (self.automil_dir / ACTIVITY_JOURNAL_FILENAME).exists():
+            return None
+        try:
+            if read_unbound_activity_report(self.automil_dir).open_sessions:
+                return observe_activity_metrics(self.automil_dir)
+            for cell in list_cells(self.automil_dir / "cells"):
+                if (
+                    cell.mode == "agent_active"
+                    and read_activity_report(
+                        self.automil_dir, cell.cell_id,
+                    ).open_sessions
+                ):
+                    return observe_activity_metrics(self.automil_dir)
+        except ActivityError:
+            # The per-cell assessment path reports the durable journal error.
+            # A scrape cannot repair corrupt lifecycle evidence.
+            return None
+        return None
+
+    def _note_activity_health(self, cell, assessment) -> None:
+        """Log activity degradation and recovery once per state change."""
+        if cell.status.value == "finalized" or assessment.complete:
+            self._activity_health_by_cell.pop(cell.cell_id, None)
+            return
+        reason = None if assessment.admissible else assessment.reason
+        previous = self._activity_health_by_cell.get(cell.cell_id)
+        if reason is None:
+            if previous is not None:
+                logger.info(
+                    "Claude active-time telemetry recovered for cell %s",
+                    cell.cell_id[:8],
+                )
+                self._activity_health_by_cell.pop(cell.cell_id, None)
+            return
+        if previous != reason:
+            logger.warning(
+                "Holding new work for cell %s until active-time telemetry "
+                "recovers: %s",
+                cell.cell_id[:8], reason,
+            )
+            self._activity_health_by_cell[cell.cell_id] = reason
+
+    def _cell_admission(self, spec: dict, *, activity_observation=None):
+        """Classify a queued cell spec without mutating queue or cap state."""
+        from automil.cells import blocks_new_work
+        from automil.cells.activity import (
+            ActivityError,
+            assess_activity,
+            read_activity_report,
+        )
+
+        cell_id = (spec.get("metadata") or {}).get("cell_id")
+        if not cell_id:
+            return _CellAdmission.ALLOW
+        cell = self._cell_for_spec(spec, warn=False)
+        if cell is None or blocks_new_work(cell):
+            return _CellAdmission.REFUSE_CAP
+        if cell.mode != "agent_active":
+            return _CellAdmission.ALLOW
+        try:
+            report = read_activity_report(self.automil_dir, cell.cell_id)
+            assessment = assess_activity(report, activity_observation)
+        except ActivityError as exc:
+            previous = self._activity_health_by_cell.get(cell.cell_id)
+            reason = str(exc)
+            if previous != reason:
+                logger.warning(
+                    "Holding new work for cell %s: invalid activity evidence: %s",
+                    cell.cell_id[:8], reason,
+                )
+                self._activity_health_by_cell[cell.cell_id] = reason
+            return _CellAdmission.HOLD_TELEMETRY
+        self._note_activity_health(cell, assessment)
+        return (
+            _CellAdmission.ALLOW
+            if assessment.admissible
+            else _CellAdmission.HOLD_TELEMETRY
+        )
+
+    def _block_cell_spec(self, spec: dict, *, activity_observation=None) -> bool:
+        """Apply the tri-state launch gate; true means do not launch now."""
+        admission = self._cell_admission(
+            spec, activity_observation=activity_observation,
+        )
+        if admission is _CellAdmission.ALLOW:
+            return False
+        if admission is _CellAdmission.HOLD_TELEMETRY:
+            # The exporter can recover.  Keep both queue and graph state intact.
+            return True
+        return self._refuse_closed_cell_spec(spec)
 
     def _refuse_closed_cell_spec(self, spec: dict) -> bool:
         """Refuse a queued spec whose budget cell has closed. True iff refused (CAP-1).
@@ -1308,12 +1430,10 @@ class ExperimentOrchestrator:
         via ``completed/``, would have ``reconcile`` promote a phantom executed
         node with composite 0.0.
 
-        Specs with no ``metadata.cell_id`` (or a dangling one) are NOT refused:
-        ``Backend.submit`` is a first-class submission path — the gate uses it —
-        and dropping its work would be destructive. They are reported by
-        ``_record_cell_launch`` instead, once per dispatch rather than once per
-        poll: an evaluation billed to no cell dilutes the equal-effort
-        accounting, so it must never be silent.
+        Specs with no ``metadata.cell_id`` remain valid because ``Backend.submit``
+        is a first-class non-cell submission path. A spec that *declares* a cell
+        but references missing or malformed state is refused: silently launching
+        it unmetered would turn accounting corruption into unlimited budget.
 
         This method is called on every poll for every pending spec, so it stays
         silent unless it actually refuses.
@@ -1322,35 +1442,44 @@ class ExperimentOrchestrator:
         from automil.cells.state import CellStatus
 
         node_id = spec.get("id")
-        cell = self._cell_for_spec(spec, warn=False)
-        if cell is None or not blocks_new_work(cell):
+        cell_id = (spec.get("metadata") or {}).get("cell_id")
+        if not cell_id:
             return False
-
-        # A9 exactly-once, final-attempt corner: an attempt that was already
-        # BILLED (crash/unlink-abort inside its launch window, now retrying)
-        # is paid-for work being completed, not new work — and on the last
-        # budgeted attempt the bill itself flips evals_exhausted, so refusing
-        # here would stamp the archived spec cap_refused and leave the freeze
-        # census permanently one short of consumed_evals. Exempt it, unless
-        # the TIME axis has already escalated to terminating/finalized (the
-        # hard wall may not be crossed to start new processes).
-        if (
+        cell = self._cell_for_spec(spec, warn=False)
+        if cell is None:
+            logger.error(
+                "Refusing to launch %s: declared cell %s is missing or invalid.",
+                node_id, str(cell_id)[:8],
+            )
+        elif not blocks_new_work(cell):
+            return False
+        elif (
             node_id in cell.billed_node_ids
             and cell.status not in (CellStatus.TERMINATING, CellStatus.FINALIZED)
         ):
+            # A9 exactly-once, final-attempt corner: an attempt that was already
+            # BILLED (crash/unlink-abort inside its launch window, now retrying)
+            # is paid-for work being completed, not new work — and on the last
+            # budgeted attempt the bill itself flips evals_exhausted, so refusing
+            # here would stamp the archived spec cap_refused and leave the freeze
+            # census permanently one short of consumed_evals. Exempt it, unless
+            # the TIME axis has already escalated to terminating/finalized (the
+            # hard wall may not be crossed to start new processes).
             logger.info(
                 "Launching already-billed %s despite %s cell %s: a charged "
                 "attempt being retried is not new work.",
                 node_id, cell.status.value, cell.cell_id[:8],
             )
             return False
-
-        logger.warning(
-            "Refusing to launch %s: cell %s is %s (consumed_evals=%d/%s). Dequeuing "
-            "the spec and cancelling the node — a closed cell never re-opens.",
-            node_id, cell.cell_id[:8], cell.status.value, cell.consumed_evals,
-            cell.eval_budget if cell.eval_budget is not None else "-",
-        )
+        else:
+            logger.warning(
+                "Refusing to launch %s: cell %s is %s "
+                "(consumed_evals=%d/%s). Dequeuing the spec and cancelling "
+                "the node — a closed cell never re-opens.",
+                node_id, cell.cell_id[:8], cell.status.value,
+                cell.consumed_evals,
+                cell.eval_budget if cell.eval_budget is not None else "-",
+            )
 
         src_file = spec.get("_file")
         if src_file and Path(src_file).exists():
@@ -1373,7 +1502,7 @@ class ExperimentOrchestrator:
         except OSError:
             logger.exception("Could not archive refused spec for %s", node_id)
 
-        self._cancel_node_for_cap_refusal(node_id, cell.cell_id)
+        self._cancel_node_for_cap_refusal(node_id, str(cell_id))
         return True
 
     def _cancel_node_for_cap_refusal(self, node_id: str, cell_id: str) -> None:
@@ -1568,12 +1697,14 @@ class ExperimentOrchestrator:
         path.write_text(json.dumps(payload, indent=2))
         return path
 
-    def _launch(self, spec: dict, gpu_id: int):
+    def _launch(self, spec: dict, gpu_id: int, *, activity_observation=None):
         """Launch an experiment in an isolated git worktree."""
         node_id = spec["id"]
-        # CAP-1: the cap must bind here, not only at submit time. Idempotent with
-        # the pre-check in tick() — a refused spec is already gone from queue/.
-        if self._refuse_closed_cell_spec(spec):
+        # The cap and telemetry gate must bind here, not only at submit time.
+        # This reloads persisted cell state immediately before worktree creation.
+        if self._block_cell_spec(
+            spec, activity_observation=activity_observation,
+        ):
             return
         archive = self.archive_dir / node_id
         archive.mkdir(parents=True, exist_ok=True)
@@ -1829,8 +1960,8 @@ class ExperimentOrchestrator:
         """Return _NodeHandle list for in-self.running experiments tagged with cell_id.
 
         cell_id matching uses spec["metadata"]["cell_id"] (set by submit, Plan 04-06).
-        Legacy nodes without a cell_id never match — they are immune to cap
-        enforcement (D-117 backward compat).
+        Specs submitted directly through a backend without a cell identity do
+        not belong to a budget cell and therefore never match.
 
         Returns:
             List of _NodeHandle(node_id=...) for matching experiments.
@@ -1842,7 +1973,7 @@ class ExperimentOrchestrator:
                 result.append(_NodeHandle(node_id=node_id))
         return result
 
-    def _tick_cells(self) -> None:
+    def _tick_cells(self, *, activity_observation=None) -> None:
         """Advance cap state machine for all cells (CAP-02 / D-114).
 
         Idempotent: re-running on an already-transitioned cell is a no-op
@@ -1857,12 +1988,15 @@ class ExperimentOrchestrator:
         import signal as _sig
         from dataclasses import replace
         from automil.cells import (
-            accrue_active,
+            CellStatus,
             list_cells,
             next_status,
-            read_last_action_at,
             write_cell,
-            CellStatus,
+        )
+        from automil.cells.activity import (
+            ActivityError,
+            assess_activity,
+            read_activity_report,
         )
 
         now = time.time()
@@ -1874,19 +2008,42 @@ class ExperimentOrchestrator:
         if not cells_dir.exists():
             logger.debug("_tick_cells: no cells dir at %s; skipping", cells_dir)
             return
-        # P2.2: project-level agent-activity marker drives agent_active billing.
-        last_action_at = read_last_action_at(self.automil_dir)
         for cell in list_cells(cells_dir):
-            # Advance the agent_active budget BEFORE the state machine so
-            # next_status sees this tick's consumed time. No-op for wall_clock.
-            cell = accrue_active(cell, now, last_action_at)
+            agent_active_seconds = None
+            if cell.mode == "agent_active":
+                try:
+                    activity = read_activity_report(
+                        self.automil_dir, cell.cell_id,
+                    )
+                    assessment = assess_activity(
+                        activity, activity_observation,
+                    )
+                    self._note_activity_health(cell, assessment)
+                    # Even while live telemetry is degraded, the last authentic
+                    # cumulative sample remains valid input to the pure cap
+                    # reducer.  No unavailable observation can add seconds.
+                    agent_active_seconds = assessment.active_seconds
+                except ActivityError as exc:
+                    reason = str(exc)
+                    if self._activity_health_by_cell.get(cell.cell_id) != reason:
+                        logger.warning(
+                            "_tick_cells: preserving cell %s because its activity "
+                            "evidence is invalid: %s",
+                            cell.cell_id[:8], reason,
+                        )
+                        self._activity_health_by_cell[cell.cell_id] = reason
+                    # Invalid evidence cannot safely drive any time transition.
+                    # Evaluation-count transitions are handled on later valid
+                    # ticks; never synthesize the budget to force closure.
+                    continue
             running = self._running_in_cell(cell.cell_id)
-            new_status = next_status(cell, now, len(running))
+            new_status = next_status(
+                cell,
+                now,
+                len(running),
+                agent_active_seconds=agent_active_seconds,
+            )
             if new_status == cell.status:
-                # Persist the accrual (consumed_active_seconds / last_tick_at)
-                # even when the status is unchanged, else it never advances.
-                if cell.mode == "agent_active":
-                    write_cell(cell, cells_dir)
                 continue
             if new_status == CellStatus.TERMINATING:
                 for handle in running:
@@ -2762,11 +2919,13 @@ class ExperimentOrchestrator:
         # 0. Hot-reload config so concurrency bumps take effect live
         self._reload_orchestrator_config()
 
+        activity_observation = self._observe_activity_for_tick()
+
         # 1. Check running experiments
         self._check_running()
 
         # Phase 4 step 1.5: cap state machine (D-114).
-        self._tick_cells()
+        self._tick_cells(activity_observation=activity_observation)
 
         # 2. Schedule pending experiments (skip if draining)
         if not self.draining:
@@ -2779,14 +2938,18 @@ class ExperimentOrchestrator:
                 # CAP-1: decide admission BEFORE the GPU search, so a spec whose
                 # cell has closed is withdrawn immediately instead of lingering
                 # in the queue for as long as the cluster stays busy.
-                if self._refuse_closed_cell_spec(spec):
+                if self._block_cell_spec(
+                    spec, activity_observation=activity_observation,
+                ):
                     continue
 
                 needed_gb = spec.get("estimated_vram_gb", self.default_vram)
                 gpu = self._find_best_gpu(needed_gb)
 
                 if gpu is not None and self._pre_launch_check(gpu, needed_gb):
-                    self._launch(spec, gpu)
+                    self._launch(
+                        spec, gpu, activity_observation=activity_observation,
+                    )
 
         # 3. Save state
         self._save_state()
@@ -2817,27 +2980,27 @@ class ExperimentOrchestrator:
         self.runner.prune_stale_worktrees()
         self._recover_orphans()
 
-        logger.info(
-            "Orchestrator started. Accelerator: %s, slots: %s, poll=%ss, safety=%sGB",
-            self._accelerator or "cuda",
-            list(self.gpu_allocations.keys()),
-            self.poll_interval,
-            self.safety_margin_gb,
-        )
-
-        # Signal handlers
-        def handle_signal(signum, frame):
-            sig_name = signal.Signals(signum).name
-            logger.info(f"Received {sig_name}, shutting down gracefully...")
-            self._shutdown = True
-
-        signal.signal(signal.SIGTERM, handle_signal)
-        signal.signal(signal.SIGINT, handle_signal)
-
-        # Write PID file
-        _write_pid_file(self.pid_file)
-
         try:
+            logger.info(
+                "Orchestrator started. Accelerator: %s, slots: %s, poll=%ss, safety=%sGB",
+                self._accelerator or "cuda",
+                list(self.gpu_allocations.keys()),
+                self.poll_interval,
+                self.safety_margin_gb,
+            )
+
+            # Signal handlers
+            def handle_signal(signum, frame):
+                sig_name = signal.Signals(signum).name
+                logger.info(f"Received {sig_name}, shutting down gracefully...")
+                self._shutdown = True
+
+            signal.signal(signal.SIGTERM, handle_signal)
+            signal.signal(signal.SIGINT, handle_signal)
+
+            # Write PID file
+            _write_pid_file(self.pid_file)
+
             while not self._shutdown:
                 try:
                     self.tick()

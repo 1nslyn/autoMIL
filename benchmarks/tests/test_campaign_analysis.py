@@ -11,6 +11,7 @@ import pytest
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
+    DISCOVERY_ATTEMPTS,
     PROTOCOL_VERSION,
     content_sha256,
     file_sha256,
@@ -114,7 +115,7 @@ def _search_process(cell_id: str) -> dict:
             "candidate_sha256": None,
             "validation_mean": None,
         }
-        for index in range(60)
+        for index in range(DISCOVERY_ATTEMPTS)
     ]
     return {
         "schema_version": 1,
@@ -124,18 +125,18 @@ def _search_process(cell_id: str) -> dict:
             "resources": _missing_resources(1),
         },
         "discovery": {
-            "attempt_budget": 60,
-            "attempts_charged": 60,
+            "attempt_budget": DISCOVERY_ATTEMPTS,
+            "attempts_charged": DISCOVERY_ATTEMPTS,
             "baseline_validation_mean": 0.5,
             "complete_candidates": 0,
             "unique_complete_candidates": 0,
             "promoted_candidates": 0,
             "candidate_class_counts": {
-                "config-only": 60,
+                "config-only": DISCOVERY_ATTEMPTS,
                 "train-only-source": 0,
                 "inadmissible": 0,
             },
-            "result_status_counts": {"crash": 60},
+            "result_status_counts": {"crash": DISCOVERY_ATTEMPTS},
             "outcome_class_counts": {
                 "completed": 0,
                 "budget-killed": 0,
@@ -143,7 +144,7 @@ def _search_process(cell_id: str) -> dict:
                 "oom": 0,
                 "cancelled": 0,
                 "partial": 0,
-                "crash": 60,
+                "crash": DISCOVERY_ATTEMPTS,
                 "missing-result": 0,
                 "unknown": 0
             },
@@ -161,7 +162,7 @@ def _search_process(cell_id: str) -> dict:
                 }
                 for index, row in enumerate(attempts)
             ],
-            "resources": _missing_resources(60),
+            "resources": _missing_resources(DISCOVERY_ATTEMPTS),
         },
         "promotion": {
             "candidate_budget": 10,
@@ -205,11 +206,13 @@ def _eligible_process(cell_id: str = "fixture-cell") -> dict:
         "complete_candidates": 2,
         "unique_complete_candidates": 2,
         "promoted_candidates": 2,
-        "result_status_counts": {"completed": 2, "crash": 58},
+        "result_status_counts": {
+            "completed": 2, "crash": DISCOVERY_ATTEMPTS - 2,
+        },
         "outcome_class_counts": {
             **discovery["outcome_class_counts"],
             "completed": 2,
-            "crash": 58,
+            "crash": DISCOVERY_ATTEMPTS - 2,
         },
     })
     best = 0.5
@@ -467,7 +470,7 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
             "process_sha256": content_sha256(process),
         })
         session = {
-            "schema_version": 2,
+            "schema_version": 3,
             "campaign_id": CAMPAIGN_ID,
             "cell_id": cell["cell_id"],
             "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
@@ -479,6 +482,12 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
                 "ended_at": "2026-08-04T02:00:00+00:00",
                 "termination_reason": "budget-complete",
                 "usage": usage,
+                "activity": {
+                    "source": "claude-native-active-time-v1",
+                    "active_seconds": 3600.0,
+                    "event_count": 3,
+                    "sha256": "d" * 64,
+                },
             },
             "binding_sha256": session_binding,
             "attestation_sha256": None,
@@ -1024,7 +1033,7 @@ def test_process_evidence_rejects_mixed_negative_resource_values():
     attempts[2]["elapsed_seconds"] = -1.0
     process["discovery"]["resources"]["elapsed_seconds"] = {
         "reported": 3,
-        "missing": 57,
+        "missing": DISCOVERY_ATTEMPTS - 3,
         "maximum": 100.0,
         "total": 149.0,
         "gpu_attached_job_hours": 149.0 / 3600,
@@ -1038,7 +1047,9 @@ def test_process_evidence_rejects_mixed_negative_resource_values():
 
 def test_process_evidence_recomputes_exact_top10_promotion_sources():
     process = _eligible_process()
-    process["promotion"]["jobs"][0]["source_node_id"] = "node_0059"
+    process["promotion"]["jobs"][0]["source_node_id"] = (
+        f"node_{DISCOVERY_ATTEMPTS:04d}"
+    )
 
     with pytest.raises(CampaignAnalysisError, match="promotion job value drift"):
         _validated_process_evidence(

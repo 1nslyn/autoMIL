@@ -1,22 +1,20 @@
 """Cap configuration parsing + resolution (P2.3).
 
-Human-readable durations (``cap.budget: 6h``) and the ``cap.mode`` /
-``cap.idle_grace`` knobs are resolved here, with back-compat for the legacy
-integer-seconds keys (``cap.budget_seconds``) and the framework fallbacks.
+Human-readable durations (``cap.budget: 6h``) and ``cap.mode`` are resolved
+here against the current config schema and framework fallbacks.
 
 Precedence (highest first): explicit CLI override → ``cap.<key>`` duration →
-legacy ``cap.<key>_seconds`` int → framework default.
+framework default.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 
-# Framework fallbacks — Leo's autoMIL-paper campaign defaults; every consumer
-# may override in config.yaml. 6h budget / 30m buffer / 5m idle-grace.
+# Generic framework fallbacks; every consumer may override them. The frozen
+# preprint campaign separately pins 12h plus exactly 30 launches.
 DEFAULT_BUDGET_SECONDS = 21600
 DEFAULT_SAFETY_BUFFER_SECONDS = 1800
-DEFAULT_IDLE_GRACE_SECONDS = 300
 DEFAULT_MODE = "agent_active"
 VALID_MODES = ("agent_active", "wall_clock")
 
@@ -67,19 +65,17 @@ class CapResolved:
 
     budget_seconds: int
     safety_buffer_seconds: int
-    idle_grace_seconds: int
     mode: str
     eval_budget: int | None = DEFAULT_EVAL_BUDGET
 
 
-def _resolve_seconds(cap: dict, dur_key: str, legacy_key: str, default: int,
-                     override: int | None) -> int:
+def _resolve_seconds(
+    cap: dict, key: str, default: int, override: int | None,
+) -> int:
     if override is not None:
         return int(override)
-    if dur_key in cap:
-        return parse_duration(cap[dur_key])
-    if legacy_key in cap:
-        return parse_duration(cap[legacy_key])
+    if key in cap:
+        return parse_duration(cap[key])
     return default
 
 
@@ -122,16 +118,24 @@ def resolve_cap_config(
     Raises ``ValueError`` on an invalid duration, an unknown ``cap.mode``, or a
     non-positive / non-integer ``cap.eval_budget``.
     """
-    cap = automil_cfg.get("cap", {}) if isinstance(automil_cfg, dict) else {}
+    if not isinstance(automil_cfg, dict):
+        raise ValueError("config must be a mapping")
+    cap = automil_cfg.get("cap", {})
     if not isinstance(cap, dict):
-        cap = {}
+        raise ValueError("cap must be a mapping")
+    obsolete = sorted(
+        key for key in ("budget_seconds", "safety_buffer_seconds") if key in cap
+    )
+    if obsolete:
+        raise ValueError(
+            f"obsolete cap key(s) {obsolete}; use cap.budget and "
+            "cap.safety_buffer durations"
+        )
 
-    budget = _resolve_seconds(cap, "budget", "budget_seconds", DEFAULT_BUDGET_SECONDS, budget_override)
-    buffer = _resolve_seconds(cap, "safety_buffer", "safety_buffer_seconds",
-                              DEFAULT_SAFETY_BUFFER_SECONDS, buffer_override)
-    idle_grace = _resolve_seconds(cap, "idle_grace", "idle_grace_seconds",
-                                  DEFAULT_IDLE_GRACE_SECONDS, None)
-
+    budget = _resolve_seconds(cap, "budget", DEFAULT_BUDGET_SECONDS, budget_override)
+    buffer = _resolve_seconds(
+        cap, "safety_buffer", DEFAULT_SAFETY_BUFFER_SECONDS, buffer_override,
+    )
     mode = str(cap.get("mode", DEFAULT_MODE))
     if mode not in VALID_MODES:
         raise ValueError(
@@ -149,7 +153,6 @@ def resolve_cap_config(
     return CapResolved(
         budget_seconds=budget,
         safety_buffer_seconds=buffer,
-        idle_grace_seconds=idle_grace,
         mode=mode,
         eval_budget=eval_budget,
     )

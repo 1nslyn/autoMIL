@@ -33,7 +33,7 @@ def validate_launch_binding(
     }
     session_fields = {
         "session_id", "started_at", "bound_at", "ended_at",
-        "termination_reason", "usage",
+        "termination_reason", "usage", "activity",
     }
     if not isinstance(raw, Mapping) or set(raw) != top_fields:
         raise LaunchBindingError("agent session field set is not exact")
@@ -67,7 +67,7 @@ def validate_launch_binding(
         "bound_at": session["bound_at"],
     }
     if (
-        raw.get("schema_version") != 2
+        raw.get("schema_version") != 3
         or raw.get("campaign_id") != campaign_id
         or raw.get("cell_id") != cell_id
         or raw.get("agent_protocol_sha256") != agent_protocol_sha256
@@ -79,6 +79,7 @@ def validate_launch_binding(
         or session.get("ended_at") is not None
         or session.get("termination_reason") is not None
         or session.get("usage") is not None
+        or session.get("activity") is not None
         or raw.get("attestation_sha256") is not None
     ):
         raise LaunchBindingError("agent session is not an open launch binding")

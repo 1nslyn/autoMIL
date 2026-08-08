@@ -39,6 +39,7 @@ def _setup_project(tmp_path: Path, protected: list[str]) -> tuple[Path, Path]:
     cfg_path = adir / "config.yaml"
     cfg = yaml.safe_load(cfg_path.read_text()) or {}
     cfg.setdefault("registry", {})["protected"] = protected
+    cfg.setdefault("cap", {})["mode"] = "wall_clock"
     cfg_path.write_text(yaml.safe_dump(cfg))
     return tmp_path, adir
 

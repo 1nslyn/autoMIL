@@ -33,10 +33,12 @@ def _init_minimal_project(tmp_path: Path) -> Path:
         "backend:\n  name: local\nfiles:\n  editable: [train.py]\n  readonly: []\n"
         "registry:\n  protected: []\n  editable: [train.py]\n  identity_constraints: []\n"
         "data:\n  features_dir: ''\n  splits_dir: ''\n  metadata: ''\n"
-        "encoders: {}\n"
+        "project:\n  name: test_project\n"
+        "task:\n  name: test_task\n"
+        "encoders:\n  primary: test_encoder\n"
         "metrics:\n  composite: {formula: 'val_auc'}\n  required: [val_auc]\n"
         "training: {}\n"
-        "cap:\n  budget_seconds: 21600\n  safety_buffer_seconds: 1800\n"
+        "cap:\n  budget: 6h\n  safety_buffer: 30m\n  mode: wall_clock\n"
         "run:\n  mil_model: test_model\n"  # D-12: required for submit
     )
     return tmp_path

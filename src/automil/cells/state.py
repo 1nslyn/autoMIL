@@ -67,9 +67,9 @@ class Cell:
     NOT relative.  Written ONCE at cell creation; never updated."""
 
     budget_seconds: int
-    """Consumer-supplied wall-clock budget.  Framework fallback: 21600 (6h),
-    Leo's autoMIL-paper campaign default across CCRCC/CLWD/future datasets.
-    A different consumer (sklearn-iris, external lab) sets their own value."""
+    """Consumer-supplied time budget. The generic framework fallback is 21600
+    seconds (6h); publication campaigns and other consumers pin their own
+    values."""
 
     safety_buffer_seconds: int
     """Consumer-supplied pre-termination warning window.  Framework fallback: 1800 (30 min).
@@ -79,30 +79,14 @@ class Cell:
     status: CellStatus
     """Current cap lifecycle state (D-110)."""
 
-    # --- Activity-gated budget fields (P2.2) ----------------------------------
-    # All default-valued so cells written before this feature deserialize
-    # unchanged. The dataclass default for ``mode`` is the LEGACY "wall_clock"
-    # so a pre-existing cell keeps its original continuous-clock semantics;
-    # newly-opened cells receive ``mode`` from cap.mode (default "agent_active").
+    mode: str = "agent_active"
+    """Time source for the safety cap.
 
-    mode: str = "wall_clock"
-    """Billing mode. ``"agent_active"``: bill only while the agent is acting —
-    ``consumed_active_seconds`` is accrued by the daemon each tick while the
-    agent acted within ``idle_grace_seconds``. ``"wall_clock"``: legacy
-    continuous ``now - started_at``."""
-
-    idle_grace_seconds: int = 300
-    """``agent_active`` only — the largest gap (s) since the last agent action
-    that still counts as 'actively working'. Beyond it the budget clock pauses."""
-
-    consumed_active_seconds: float = 0.0
-    """``agent_active`` accumulator — total billed agent-active seconds. Advanced
-    by the daemon (never by an agent-reported counter, so not a sandbagging
-    vector)."""
-
-    last_tick_at: float | None = None
-    """``agent_active`` bookkeeping — wall-clock of the last daemon tick that
-    evaluated this cell. ``None`` is treated as ``started_at`` on the first tick."""
+    ``agent_active`` is derived from Claude Code's native cumulative active-time
+    metric, stored in the session-bound activity journal. ``wall_clock`` is the
+    continuous interval since ``started_at``. Neither mode stores a mutable time
+    accumulator in the Cell; the journal or timestamp remains authoritative.
+    """
 
     # --- Eval-count budget axis (H-2) -----------------------------------------
     # ORTHOGONAL to the time cap, not a third mode: ``mode`` still selects how
@@ -181,24 +165,27 @@ def normalize_mil_model(raw: str) -> str:
     return " ".join(normalized.split())
 
 
-def consumed_seconds(cell: Cell, now: float | None = None) -> float:
-    """Return the effective consumed budget seconds for the cell (mode-aware).
+def consumed_seconds(
+    cell: Cell,
+    now: float | None = None,
+    *,
+    agent_active_seconds: float | None = None,
+) -> float:
+    """Return consumed cap seconds from the cell's authoritative time source.
 
-    ``wall_clock`` (legacy, D-111): computed ``now - started_at`` — never
-    accumulated, restart-safe via the persisted ``started_at``.
-
-    ``agent_active`` (P2.2): the daemon-maintained ``consumed_active_seconds``
-    accumulator, which advances only while the agent is acting. This is a
-    deliberate, narrowly-scoped reversal of the old "never accumulate" rule:
-    the counter is driven by harness-observed agent actions (tool-use hooks),
-    NOT an agent-reported value, so it is not the sandbagging vector D-111
-    guarded against — the agent cannot pad it without doing real work, nor
-    suppress it while producing nodes.
+    Wall-clock cells derive time from their immutable creation timestamp.
+    Agent-active cells require the caller to supply the replayed activity-journal
+    total; silently substituting zero would turn missing telemetry into unlimited
+    budget.
     """
     if cell.mode == "wall_clock":
         n = now if now is not None else time.time()
-        return n - cell.started_at
-    return cell.consumed_active_seconds
+        return max(0.0, n - cell.started_at)
+    if cell.mode != "agent_active":
+        raise ValueError(f"unknown cell billing mode: {cell.mode!r}")
+    if agent_active_seconds is None:
+        raise ValueError("agent_active cells require an activity-journal total")
+    return max(0.0, float(agent_active_seconds))
 
 
 def write_cell(cell: Cell, cells_dir: Path) -> None:
@@ -232,15 +219,10 @@ def read_cell(path: Path) -> Cell:
     Re-hydrates ``CellStatus`` from its string value so the returned ``Cell``
     is fully typed — ``cell.status == CellStatus.ACTIVE``, not ``"active"``.
 
-    Backward-compat shim (D-15 / RESEARCH.md Pitfall 4): old cells/*.json have
-    ``"parent_id"``; new cells have ``"mil_model"``. This shim maps the legacy
-    key so existing cells load without TypeError. Ships with the rename so that
-    Plan 05's ``automil cells migrate`` can read old cells to re-key them.
+    The persisted schema is exact. Obsolete cell layouts are rejected instead
+    of silently rewritten because budget identity and time provenance must not
+    change during deserialization.
     """
     data = json.loads(path.read_text())
-    # Backward-compat: old cells/*.json have "parent_id"; new cells have "mil_model".
-    # This shim must ship with the rename so existing cells load without TypeError.
-    if "parent_id" in data and "mil_model" not in data:
-        data["mil_model"] = data.pop("parent_id")
     data["status"] = CellStatus(data["status"])
     return Cell(**data)

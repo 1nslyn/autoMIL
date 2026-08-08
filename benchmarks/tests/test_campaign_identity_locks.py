@@ -13,7 +13,6 @@ from pathlib import Path
 import yaml
 
 from autobench.campaign import (
-    CELL_TIME_CONTAINMENT,
     EXPECTED_ALLOWED_OVERRIDE_OPTIONS,
     EXPECTED_IDENTITY_LOCKED_HPARAMS,
     PROTOCOL,
@@ -78,11 +77,12 @@ def test_capacity_knobs_stay_mechanically_tunable_in_free_mode():
         )
 
 
-def test_protocol_declares_the_time_containment():
-    assert PROTOCOL["cell_time_budget"]["budget"] == CELL_TIME_CONTAINMENT
-    assert PROTOCOL["cell_time_budget"]["role"] == (
-        "failure-containment-not-search-budget"
-    )
+def test_protocol_declares_the_identity_locks():
+    # (The A10 7d time-containment assertion was superseded by the native
+    # active-time protocol: PROTOCOL.discovery_agent_active_budget is the
+    # metered 12h axis; there is no separate cell_time_budget block.)
+    assert "cell_time_budget" not in PROTOCOL
+    assert PROTOCOL["discovery_agent_active_budget"] == "12h"
     assert list(PROTOCOL["identity_locked_hparams"]) == list(
         EXPECTED_IDENTITY_LOCKED_HPARAMS
     )

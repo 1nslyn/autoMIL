@@ -116,14 +116,12 @@ baseline:
   composite: 0.0                 # your starting performance
 
 cap:
-  # cap is consumer-supplied — 6h is just the autoMIL-paper default, not
+  # cap is consumer-supplied — 6h is the generic framework fallback, not
   # special. Durations accept 6h / 30m / 90s / 2d (or a bare number = seconds).
-  # Change anytime with `automil budget set 6h`. See note below on precedence.
+  # Change with `uv run automil budget set 6h`. See note below on precedence.
   budget: 6h                     # agent-active working budget
   safety_buffer: 30m             # refuse-new buffer; must be < budget
   mode: agent_active             # bill only while the agent is working (see below)
-  idle_grace_seconds: 300        # agent_active: gap after the last action that
-                                 # still counts as "working" before the clock pauses
 
 backend:
   name: "local"                  # "local" | "slurm" | "ray"
@@ -147,28 +145,29 @@ A few notes on each:
   reproduces the standard composites exactly; `trust_reported` opts out.
   Arithmetic expressions are rejected by `automil check`.
 - **`cap.budget` / `cap.safety_buffer`** are consumer-supplied durations
-  (`6h`, `30m`, `90s`, `2d`, or a bare number of seconds; the legacy
-  `cap.budget_seconds` integer keys still work). The framework provides the
+  (`6h`, `30m`, `90s`, `2d`, or a bare number of seconds). The framework provides the
   per-cell cap *mechanism*: at `T - safety_buffer` the cell enters
   `refusing-new` (no new submits accepted into this cell); at `T` the cell
   enters `terminating` and SIGTERM is sent to running experiments. The
-  precedence chain is `CLI flag > cap.<key> duration > legacy
-  cap.<key>_seconds > framework fallback (6h / 30m)`. Set it the easy way with
-  `automil budget set 6h` (or `automil budget show` to inspect), or override
+  precedence chain is `CLI flag > cap.<key> duration > framework fallback
+  (6h / 30m)`. Set it with `uv run automil budget set 6h` (or
+  `uv run automil budget show` to inspect), or override
   per-cell via `automil submit --budget-seconds N` (D-134; honored ONLY on the
   submit that creates the cell — later submits joining the same cell log INFO
   and keep the established value, preventing sandbagging).
 - **`cap.mode`** chooses how the budget clock is metered:
-  - **`agent_active`** (default) bills only the time the agent is *actually
-    working*. A Claude Code `PostToolUse` hook (installed by `automil init`)
-    stamps `automil/.last_action_at` on every tool call; the orchestrator
-    advances the budget only while that marker is fresher than
-    `cap.idle_grace_seconds`. Because the agent is quiescent while waiting on
-    experiments, GPU/wait time does **not** count — you get more proposing time
-    per budget. The counter is driven by harness-observed actions, not an
-    agent-reported value, so it can't be padded without doing real work.
-  - **`wall_clock`** is the legacy continuous clock (counts GPU + idle time
-    since cell creation). Use it to reproduce pre-activity-gated behavior.
+  - **`agent_active`** bills time under the supported Claude runtime observer
+    contract: Claude Code's native cumulative `claude_code.active_time.total`
+    metric, summed across its `cli` and `user` series. Claude excludes idle time.
+    `automil init` enables Claude's localhost Prometheus endpoint; the
+    orchestrator scrapes its cumulative counter every scheduling cycle.
+    Synchronous `SessionStart` and `SessionEnd` hooks bind the runtime session
+    to the budget cell and capture the final counter. There is no idle timeout,
+    heartbeat, or tick-based time estimate; replay after a daemon restart yields
+    the same total. `Monitor` remains the event-driven way to wait for
+    experiments, but it is not the budget clock.
+  - **`wall_clock`** is continuous time since cell creation and includes GPU and
+    idle time. Use it for runtimes without the synchronous hook contract.
 - **`backend.name`**, `local` works on any machine. `slurm` requires
   `uv sync --extra slurm` and valid SLURM directives (`backend.slurm.directives.partition`,
   `account`, `cpus_per_task`, `mem_gb`). `ray` requires `uv sync --extra ray`

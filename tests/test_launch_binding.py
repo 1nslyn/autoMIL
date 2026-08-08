@@ -31,7 +31,7 @@ def _open_binding() -> dict:
         "bound_at": "2026-08-04T00:00:01+00:00",
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "campaign_id": CAMPAIGN_ID,
         "cell_id": CELL_ID,
         "agent_protocol_sha256": PROTOCOL_SHA256,
@@ -43,6 +43,7 @@ def _open_binding() -> dict:
             "ended_at": None,
             "termination_reason": None,
             "usage": None,
+            "activity": None,
         },
         "binding_sha256": _sha256(binding),
         "attestation_sha256": None,

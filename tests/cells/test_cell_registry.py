@@ -12,7 +12,13 @@ from pathlib import Path
 import pytest
 
 from automil.cells.state import Cell, CellStatus, make_cell_id, write_cell
-from automil.cells.registry import get_or_create_cell, get_cell, list_cells, is_refusing_new
+from automil.cells.registry import (
+    get_or_create_cell,
+    get_cell,
+    is_refusing_new,
+    list_cells,
+    scan_cells,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +165,45 @@ def test_list_cells_skips_malformed_files(fake_automil_dir, caplog):
                for record in caplog.records), (
         "Expected a WARNING log about the malformed cell file"
     )
+
+
+def test_scan_cells_reports_obsolete_schema_without_hiding_valid_cells(fake_automil_dir):
+    """An obsolete pre-PR journal is a typed per-file error, not a registry abort."""
+    valid_cell = get_or_create_cell("ccrcc", "uni-v2", "node_0042", 21600, 1800)
+    obsolete_path = fake_automil_dir / "cells" / "obsolete.json"
+    obsolete_path.write_text(json.dumps({
+        "cell_id": "obsolete",
+        "dataset": "ccrcc",
+        "encoder": "uni-v2",
+        "mil_model": "clam",
+        "started_at": 1.0,
+        "budget_seconds": 21600,
+        "safety_buffer_seconds": 1800,
+        "status": "active",
+        "mode": "agent_active",
+        "idle_grace_seconds": 600,
+    }))
+
+    scan = scan_cells()
+
+    assert [cell.cell_id for cell in scan.cells] == [valid_cell.cell_id]
+    assert len(scan.errors) == 1
+    assert scan.errors[0].path == obsolete_path
+    assert "obsolete" in scan.errors[0].message.lower()
+    assert "idle_grace_seconds" in scan.errors[0].message
+
+
+def test_list_cells_skips_obsolete_schema_instead_of_raising_type_error(fake_automil_dir):
+    """The daemon-compatible list API must reject old fields without killing a tick."""
+    valid_cell = get_or_create_cell("ccrcc", "uni-v2", "node_0042", 21600, 1800)
+    obsolete_path = fake_automil_dir / "cells" / "old.json"
+    payload = json.loads(
+        (fake_automil_dir / "cells" / f"{valid_cell.cell_id}.json").read_text()
+    )
+    payload["consumed_active_seconds"] = 12.0
+    obsolete_path.write_text(json.dumps(payload))
+
+    assert [cell.cell_id for cell in list_cells()] == [valid_cell.cell_id]
 
 
 @pytest.mark.parametrize(

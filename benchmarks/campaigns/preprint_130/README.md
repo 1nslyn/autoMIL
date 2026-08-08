@@ -1,11 +1,12 @@
 # Preprint 130-cell campaign operations
 
 This directory contains the immutable manifest and the operator entry points for
-the full `automil-preprint-130-v4` campaign. The controller enforces the frozen
+the full `automil-preprint-130-v5` campaign. The controller enforces the frozen
 protocol independently for every cell:
 
 - native five-fold baseline on folds `0,1,2,3,4`;
-- exactly 60 charged discovery attempts on validation folds `0,1,2`;
+- exactly 30 charged discovery attempts on validation folds `0,1,2`, with a
+  12-hour agent-active safety cap per cell;
 - promotion of at most 10 unique complete candidates on folds `3,4`;
 - winner selection by the equal-weight mean of validation folds `0` through `4`;
 - one campaign-wide freeze of all 130 validation winners before any held-out
@@ -81,7 +82,7 @@ uv run python benchmarks/scripts/campaign_stage.py status \
 
 ## 3. Establish the native incumbent
 
-The baseline is outside the 60 agentic attempts. The safe operator runs the
+The baseline is outside the 30 agentic attempts. The safe operator runs the
 manifest-locked five-fold command in a temporary worktree, keeps validation
 evidence public, stores held-out folds in
 the sealed archive, and registers the discovery root:
@@ -102,32 +103,50 @@ Git commit, diff, and command provenance do not enter this decision.
 
 ## 4. Run discovery
 
-Fill `agent_session.template.json` with the runtime session identifier and a
-timezone-aware start time, then bind it before the first proposal. The command
-fails if the native baseline is not yet registered (Section 3), if any
-discovery spec already exists, or if the attempt budget has been consumed.
-After those pristine-state checks, the controller records its own
-`bound_at`; every charged proposal must carry a timezone-aware `submitted_at`
-no earlier than that controller timestamp minus the declared 120-second
-clock-skew tolerance (`PROTOCOL.submit_clock_skew_tolerance_seconds`); beyond
-that the freeze fails closed.
-
-```bash
-uv run python benchmarks/scripts/campaign_stage.py open-agent-session \
-  --cell-root "$CAMPAIGN_CELL_ROOT" \
-  --agent-session /path/to/agent_session_start.json
-```
-
-Start the scheduler for the selected cell:
+Start the scheduler for the selected cell from the repository root:
 
 ```bash
 uv run automil --project "$CAMPAIGN_CELL_ROOT" check
 uv run automil --project "$CAMPAIGN_CELL_ROOT" orchestrator start
 ```
 
-Run one fresh coding-agent session with no cross-cell memory against this
-project and have it follow the autoMIL
-experiment loop. The enforced policy permits source-level train-only policy
+Each materialized cell contains the exact Claude native-active-time observer
+configuration. Start the orchestrator before Claude so it can scrape Claude's
+documented localhost Prometheus endpoint. Only one formal discovery Claude
+session may run on a host at once (port 9464); parallelize cells across hosts,
+not sessions on one host. Start one fresh coding-agent session with its working
+directory set to the cell root and no cross-cell memory. Its startup hook must
+be the first journal event; running the binding command from an unrelated shell
+fails closed.
+
+```bash
+export REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$CAMPAIGN_CELL_ROOT"
+claude
+```
+
+After the first orchestrator scrape of the native active-time counter, fill
+`agent_session.template.json` with the runtime session identifier and a
+timezone-aware start time, then bind it before the first proposal:
+
+```bash
+uv run python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" \
+  open-agent-session --cell-root "$PWD" \
+  --agent-session /path/to/agent_session_start.json
+```
+
+The controller verifies the hook-recorded and metered session, binds its
+immutable digest to the journal, and opens the 12-hour/30-launch budget cell
+restart-safely. It fails if the native baseline is not yet registered
+(Section 3), if any discovery spec already exists, or if the attempt budget
+has been consumed. Every charged proposal must carry a timezone-aware
+`submitted_at` no earlier than the controller's `bound_at` minus the declared
+120-second clock-skew tolerance
+(`PROTOCOL.submit_clock_skew_tolerance_seconds`); beyond that the freeze
+fails closed.
+
+Have this session follow the autoMIL experiment loop. The enforced policy
+permits source-level train-only policy
 implementations under that cell's `automil/variants/_policies/` directory; it
 does not reduce the campaign to a fixed hyperparameter menu. Submit and launch
 both revalidate the declared cell identity, protocol version, command, budget,
@@ -138,18 +157,25 @@ Monitor without exposing held-out values:
 ```bash
 uv run automil --project "$CAMPAIGN_CELL_ROOT" status
 uv run automil --project "$CAMPAIGN_CELL_ROOT" rank
-uv run python benchmarks/scripts/campaign_stage.py status \
-  --cell-root "$CAMPAIGN_CELL_ROOT"
+uv run python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" status \
+  --cell-root "$PWD"
 ```
 
-Do not freeze early. When the stage ledger reports exactly 60 charged attempts,
+Do not freeze early. When the stage ledger reports exactly 30 charged attempts,
 freeze the complete unique candidates and select up to 10 by the locked
 validation ordering:
 
 ```bash
-uv run python benchmarks/scripts/campaign_stage.py freeze-discovery \
-  --cell-root "$CAMPAIGN_CELL_ROOT"
+uv run python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" \
+  freeze-discovery --cell-root "$PWD"
 ```
+
+Immediately after discovery freezes, end this coding-agent session. The
+synchronous `SessionEnd` hook closes the exact activity interval. Do not keep
+the agent alive through promotion: promotion has no proposals and uses its own
+wall-clock controller. Preserve the runtime's end timestamp and usage in a
+filled `agent_session_end.template.json`; it will be attested after the winner
+freezes.
 
 ## 5. Run exact promotion
 
@@ -176,12 +202,14 @@ The winner record is immutable. `advance` may perform the next safe transition
 through selection, but it intentionally stops at `winner-frozen` and never
 reveals held-out data.
 
-After the winner freezes, fill `agent_session_end.template.json` from the runtime
-usage record and finalize the same pre-bound session. Exact, estimated, and
+After the winner freezes, finalize the already-ended, pre-bound discovery
+session with the saved `agent_session_end.template.json`. Exact, estimated, and
 unavailable usage are represented explicitly; unavailable token/cost fields
-must be null and carry a reason. Finalization verifies that no proposal
-timestamp falls after the session's end (the start bound was already checked
-at freeze, with the declared clock-skew tolerance).
+must be null and carry a reason. Finalization verifies that all 30 proposal
+timestamps fall inside this session interval and that the journal contains one
+matching startup, binding, native active-time sample, and `SessionEnd`. Wait for
+Claude to exit and flush its final metric export before finalizing; a premature
+attempt fails closed and can be retried.
 
 ```bash
 uv run python benchmarks/scripts/campaign_stage.py finalize-agent-session \
@@ -192,7 +220,9 @@ uv run python benchmarks/scripts/campaign_stage.py finalize-agent-session \
 Repeat Sections 3–5 for every manifest cell, using a distinct fresh runtime
 session identifier each time. Session opening rejects an identifier already
 reserved by a sibling cell, and the global freeze rechecks uniqueness across
-all 130 attestations. No cell may be certified early.
+all 130 attestations. Automatic compaction keeps the same metered session;
+`/clear` and resumed sessions are not accepted for the formal one-session cell.
+No cell may be certified early.
 
 ## 6. Freeze all selections, then certify
 

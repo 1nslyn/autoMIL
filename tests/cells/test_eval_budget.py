@@ -16,14 +16,12 @@ tests pin the second, orthogonal axis:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from automil.cells.cap import evals_exhausted, next_status, remaining_evals
 from automil.cells.capconfig import resolve_cap_config
-from automil.cells.migrate import migrate_cells
 from automil.cells.registry import blocks_new_work, is_refusing_new
 from automil.cells.state import Cell, CellStatus, read_cell, write_cell
 from tests.cells.conftest import make_cell
@@ -39,7 +37,7 @@ _PLENTY_OF_TIME = dict(started_at=FAKE_NOW - 60, budget_seconds=BUDGET,
 
 
 # ---------------------------------------------------------------------------
-# Persisted schema + backward compatibility
+# Persisted schema
 # ---------------------------------------------------------------------------
 
 
@@ -49,40 +47,6 @@ def test_new_cell_defaults_to_no_eval_cap():
     assert cell.eval_budget is None
     assert cell.consumed_evals == 0
     assert cell.completed_evals == 0
-
-
-def test_read_cell_backward_compatible_with_pre_h2_json(cells_dir: Path):
-    """An existing cells/<id>.json (written before H-2) still deserialises.
-
-    This is the exact key set a P2.2-era cell has on disk. If the new fields
-    were not default-valued, every already-open cell would raise TypeError on
-    the first daemon tick after upgrade.
-    """
-    legacy = {
-        "cell_id": "legacy0000000001",
-        "dataset": "ccrcc",
-        "encoder": "uni-v2",
-        "mil_model": "clam sb",
-        "started_at": FAKE_NOW - 3600,
-        "budget_seconds": BUDGET,
-        "safety_buffer_seconds": BUFFER,
-        "status": "active",
-        "mode": "agent_active",
-        "idle_grace_seconds": 300,
-        "consumed_active_seconds": 1234.5,
-        "last_tick_at": FAKE_NOW - 5,
-    }
-    path = cells_dir / "legacy0000000001.json"
-    path.write_text(json.dumps(legacy, indent=2))
-
-    cell = read_cell(path)
-
-    assert cell.eval_budget is None, "legacy cells must stay uncapped on the eval axis"
-    assert cell.consumed_evals == 0
-    assert cell.completed_evals == 0
-    # Pre-existing fields survive untouched.
-    assert cell.consumed_active_seconds == 1234.5
-    assert cell.status is CellStatus.ACTIVE
 
 
 def test_write_then_read_round_trips_eval_fields(cells_dir: Path):
@@ -282,28 +246,3 @@ def test_eval_budget_rejects_non_positive(bad):
 def test_eval_budget_rejects_non_integer(bad):
     with pytest.raises(ValueError, match="eval_budget"):
         resolve_cap_config({"cap": {"eval_budget": bad}})
-
-
-# ---------------------------------------------------------------------------
-# Merge safety: re-keying cells must not reset spent evaluations
-# ---------------------------------------------------------------------------
-
-
-def test_migrate_merge_sums_eval_counters(cells_dir: Path):
-    """Merging two cells sums the eval counters — a merge is not a budget reset."""
-    from automil.cells.state import make_cell_id, normalize_mil_model
-
-    target_id = make_cell_id("ds", "enc", normalize_mil_model("clam_sb"))
-    write_cell(make_cell(cell_id=target_id, dataset="ds", encoder="enc",
-                         mil_model="clam sb", eval_budget=40,
-                         consumed_evals=6, completed_evals=4), cells_dir)
-    write_cell(make_cell(cell_id="oldkey0000000001", dataset="ds", encoder="enc",
-                         mil_model="node_0007", eval_budget=40,
-                         consumed_evals=9, completed_evals=7), cells_dir)
-
-    summaries = migrate_cells(cells_dir, "clam_sb")
-
-    assert any(s["action"] == "merge" for s in summaries), summaries
-    merged = read_cell(cells_dir / f"{target_id}.json")
-    assert merged.consumed_evals == 15, "spent evaluations must survive a re-key"
-    assert merged.completed_evals == 11

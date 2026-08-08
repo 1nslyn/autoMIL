@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from automil.cli import main
@@ -32,6 +33,13 @@ def _init_git_repo(path: Path):
     )
 
 
+def _use_wall_clock(path: Path) -> None:
+    config_path = path / "automil" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text()) or {}
+    config.setdefault("cap", {})["mode"] = "wall_clock"
+    config_path.write_text(yaml.safe_dump(config))
+
+
 class TestEndToEnd:
     def test_init_submit_flow(self, tmp_path, monkeypatch):
         """Full flow: init in existing repo, submit experiment, check archive."""
@@ -43,6 +51,7 @@ class TestEndToEnd:
         # Init autoMIL overlay
         result = runner.invoke(main, ["init"])
         assert result.exit_code == 0, result.output
+        _use_wall_clock(tmp_path)
 
         # Verify automil subdirectory
         adir = tmp_path / "automil"
@@ -100,6 +109,7 @@ class TestEndToEnd:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         for i in range(3):
             (tmp_path / "model.py").write_text(f"print('experiment {i}')\n")
@@ -125,6 +135,7 @@ class TestEndToEnd:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         # Create a graph with a root node
         from automil.graph import ExperimentGraph
@@ -157,6 +168,7 @@ class TestEndToEnd:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         # Create and commit a file, then delete it
         (tmp_path / "old_module.py").write_text("# to be deleted\n")
@@ -188,6 +200,7 @@ class TestEndToEnd:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         # Submit an existing unchanged file - auto-detect finds nothing
         result = runner.invoke(
@@ -203,6 +216,7 @@ class TestEndToEnd:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         from automil.graph import ExperimentGraph
         graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
@@ -231,6 +245,7 @@ class TestEndToEnd:
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
 
         result = runner.invoke(main, ["start-loop"])
         assert result.exit_code == 0

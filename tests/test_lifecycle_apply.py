@@ -27,7 +27,12 @@ def _setup(tmp_path: Path) -> Path:
     os.chdir(tmp_path)
     from automil.cli import main
     CliRunner().invoke(main, ["init"])
-    return tmp_path / "automil"
+    adir = tmp_path / "automil"
+    config_path = adir / "config.yaml"
+    config = yaml.safe_load(config_path.read_text()) or {}
+    config.setdefault("cap", {})["mode"] = "wall_clock"
+    config_path.write_text(yaml.safe_dump(config))
+    return adir
 
 
 def _write_graph(adir: Path, nodes: dict):

@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -20,8 +21,13 @@ import yaml
 from click.testing import CliRunner
 
 from automil.cli import main
+from automil.cells.activity import (
+    ActivityObservation,
+    ingest_prometheus_metrics,
+    read_activity_report,
+    record_hook_event,
+)
 from automil.cells.state import Cell, CellStatus, make_cell_id, write_cell
-import time
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +67,7 @@ def _setup_project(tmp_path: Path, monkeypatch) -> tuple[CliRunner, Path]:
     # M-14: task participates in cell identity — pin it so the ids stay
     # deterministic (otherwise the init template's task name leaks in).
     cfg["task"] = {**(cfg.get("task") or {}), "name": "test_task"}
+    cfg.setdefault("cap", {})["mode"] = "wall_clock"
     config_path.write_text(yaml.safe_dump(cfg))
 
     return runner, adir
@@ -166,6 +173,7 @@ class TestSubmitCellLayer:
             budget_seconds=21600,
             safety_buffer_seconds=1800,
             status=CellStatus.REFUSING_NEW,
+            mode="wall_clock",
         )
         cells_dir = _cells_dir(adir)
         cells_dir.mkdir(parents=True, exist_ok=True)
@@ -307,3 +315,196 @@ class TestSubmitCellLayer:
         assert "must be > 0" in r2.output, (
             f"Expected 'must be > 0' in output; got: {r2.output}"
         )
+
+    def test_existing_wall_clock_cell_ignores_config_switch_to_agent_active(
+        self, tmp_path, monkeypatch,
+    ):
+        """Persisted mode governs an existing cell; no activity journal is consulted."""
+        runner, adir = _setup_project(tmp_path, monkeypatch)
+        _make_model_file(tmp_path)
+        assert _submit_node(runner, "node_0001").exit_code == 0
+
+        cfg_path = adir / "config.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text()) or {}
+        cfg.setdefault("cap", {})["mode"] = "agent_active"
+        cfg_path.write_text(yaml.safe_dump(cfg))
+        _make_model_file(tmp_path, "print('v2')\n")
+
+        result = _submit_node(runner, "node_0002")
+
+        assert result.exit_code == 0, result.output
+        assert _read_cell_json(adir, _cell_id_for())["mode"] == "wall_clock"
+
+    def test_existing_agent_active_cell_ignores_config_switch_to_wall_clock_and_fails_cleanly(
+        self, tmp_path, monkeypatch,
+    ):
+        """Mode drift cannot bypass missing activity evidence or leak a ValueError traceback."""
+        runner, adir = _setup_project(tmp_path, monkeypatch)
+        _make_model_file(tmp_path)
+        cell_id = _cell_id_for()
+        write_cell(
+            Cell(
+                cell_id=cell_id,
+                dataset="test_ds",
+                encoder="test_enc",
+                mil_model="root",
+                started_at=time.time(),
+                budget_seconds=21600,
+                safety_buffer_seconds=1800,
+                status=CellStatus.ACTIVE,
+                mode="agent_active",
+            ),
+            _cells_dir(adir),
+        )
+        # The current config says wall_clock, but must not override persisted evidence.
+        cfg_path = adir / "config.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text()) or {}
+        cfg.setdefault("cap", {})["mode"] = "wall_clock"
+        cfg_path.write_text(yaml.safe_dump(cfg))
+
+        result = _submit_node(runner, "node_0001")
+
+        assert result.exit_code != 0
+        assert "agent_active accounting" in result.output.lower()
+        assert "traceback" not in result.output.lower()
+        assert not isinstance(result.exception, ValueError)
+
+    def test_submit_reports_invalid_target_cell_schema_as_click_error(
+        self, tmp_path, monkeypatch,
+    ):
+        """An obsolete target journal refuses submission without a bare TypeError."""
+        runner, adir = _setup_project(tmp_path, monkeypatch)
+        _make_model_file(tmp_path)
+        cell_id = _cell_id_for()
+        cells_dir = _cells_dir(adir)
+        write_cell(
+            Cell(
+                cell_id=cell_id,
+                dataset="test_ds",
+                encoder="test_enc",
+                mil_model="root",
+                started_at=time.time(),
+                budget_seconds=21600,
+                safety_buffer_seconds=1800,
+                status=CellStatus.ACTIVE,
+                mode="wall_clock",
+            ),
+            cells_dir,
+        )
+        path = cells_dir / f"{cell_id}.json"
+        payload = json.loads(path.read_text())
+        payload["idle_grace_seconds"] = 60
+        path.write_text(json.dumps(payload))
+
+        result = _submit_node(runner, "node_0001")
+
+        assert result.exit_code != 0
+        assert "obsolete cell schema" in result.output.lower()
+        assert "idle_grace_seconds" in result.output
+        assert not isinstance(result.exception, TypeError)
+
+    def test_first_agent_active_submit_binds_one_healthy_project_session(
+        self, tmp_path, monkeypatch,
+    ):
+        """SessionStart is project-local until submit resolves the final cell identity."""
+        runner, adir = _setup_project(tmp_path, monkeypatch)
+        cfg_path = adir / "config.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text()) or {}
+        cfg.setdefault("cap", {})["mode"] = "agent_active"
+        cfg_path.write_text(yaml.safe_dump(cfg))
+        _make_model_file(tmp_path)
+        session_id = "session-project-local"
+        record_hook_event(
+            adir,
+            None,
+            {
+                "hook_event_name": "SessionStart",
+                "session_id": session_id,
+                "source": "startup",
+            },
+            observed_at=1.0,
+        )
+        ingest_prometheus_metrics(
+            adir,
+            (
+                "claude_code_active_time_total"
+                f'{{session_id="{session_id}",type="cli"}} 12\n'
+            ),
+            observed_at=2.0,
+        )
+        monkeypatch.setattr(
+            "automil.activity_metrics.observe_activity_metrics",
+            lambda *_args, **_kwargs: ActivityObservation(
+                available=True,
+                sessions=(session_id,),
+                observed_at=3.0,
+            ),
+            raising=False,
+        )
+
+        result = _submit_node(runner, "node_0001")
+
+        assert result.exit_code == 0, result.output
+        report = read_activity_report(adir, _cell_id_for())
+        assert report.sessions == (session_id,)
+        assert report.open_sessions == (session_id,)
+        assert report.active_seconds == 12.0
+
+    def test_existing_agent_active_cell_cannot_claim_a_new_unbound_session(
+        self, tmp_path, monkeypatch,
+    ):
+        """A new runtime session cannot reset or reopen an already-persisted cell."""
+        runner, adir = _setup_project(tmp_path, monkeypatch)
+        cfg_path = adir / "config.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text()) or {}
+        cfg.setdefault("cap", {})["mode"] = "agent_active"
+        cfg_path.write_text(yaml.safe_dump(cfg))
+        _make_model_file(tmp_path)
+        cell_id = _cell_id_for()
+        write_cell(
+            Cell(
+                cell_id=cell_id,
+                dataset="test_ds",
+                encoder="test_enc",
+                mil_model="root",
+                started_at=time.time(),
+                budget_seconds=21600,
+                safety_buffer_seconds=1800,
+                status=CellStatus.ACTIVE,
+                mode="agent_active",
+            ),
+            _cells_dir(adir),
+        )
+        session_id = "replacement-session"
+        record_hook_event(
+            adir,
+            None,
+            {
+                "hook_event_name": "SessionStart",
+                "session_id": session_id,
+                "source": "startup",
+            },
+            observed_at=1.0,
+        )
+        ingest_prometheus_metrics(
+            adir,
+            (
+                "claude_code_active_time_total"
+                f'{{session_id="{session_id}",type="cli"}} 1\n'
+            ),
+            observed_at=2.0,
+        )
+        monkeypatch.setattr(
+            "automil.activity_metrics.observe_activity_metrics",
+            lambda *_args, **_kwargs: ActivityObservation(
+                available=True,
+                sessions=(session_id,),
+                observed_at=3.0,
+            ),
+        )
+
+        result = _submit_node(runner, "node_0001")
+
+        assert result.exit_code != 0
+        assert "bound open session" in result.output
+        assert read_activity_report(adir, cell_id).sessions == ()
