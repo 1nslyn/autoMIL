@@ -71,6 +71,10 @@ Run `automil check` to verify everything is configured correctly.
 
 **Prerequisites:** `automil orchestrator start`
 
+> The current loop shape (Research → Diagnose → Plan → Execute), mode rules,
+> and budget rules are defined by the `/automil` skill; this file records
+> project-specific facts only.
+
 **LOOP FOREVER:**
 
 1. Run `automil reconcile` to sync graph with orchestrator state
@@ -79,7 +83,8 @@ Run `automil check` to verify everything is configured correctly.
 4. For each selected proposal:
    a. Edit project files to implement the idea
    b. Run `automil submit --node <id> --desc "..." --files <changed files>`
-   c. Restore working tree: `git checkout -- <files>` for modified files
+   c. Clean up only the changes created for that proposal. Do not use
+      destructive restore commands that may discard unrelated local work.
 5. Wait for completion notifications in `automil/orchestrator/completed/`
 6. Read results, update graph via `automil reconcile`
 7. Update `automil/learnings.md` with insights

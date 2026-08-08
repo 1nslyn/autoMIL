@@ -28,7 +28,7 @@ src/automil/agent_assets/
 │   └── hooks/on_stop.sh        # stop-prevention hook (Claude-specific)
 ├── codex/
 │   ├── README.md               # CLI-fallback trajectory capture (Codex hook API is unstable as of v1.0)
-│   └── skills/automil-setup/   # empty-frontmatter overlay for Codex plain-markdown rendering
+│   └── skills/automil-setup/   # retained acceptance artifact; no code path consumes it (see its header)
 ├── opencode/
 │   └── plugins/automil-trajectory.ts   # TypeScript plugin for trajectory capture
 └── deepseek/
@@ -36,8 +36,9 @@ src/automil/agent_assets/
 ```
 
 `automil init --runtime <r>` resolves the merge at install time. The
-canonical text lives once; runtime overlays only touch the parts that
-differ (e.g. Codex needs an empty-frontmatter rendering of `automil-setup/SKILL.md`
+canonical text lives once; no runtime skill overlay currently exists, so the
+merge is the shared content verbatim (a Codex skill merge, if one existed,
+would need an empty-frontmatter rendering of `automil-setup/SKILL.md`
 because plain-markdown renderers reject the frontmatter).
 
 ## Supported Runtimes
@@ -45,8 +46,8 @@ because plain-markdown renderers reject the frontmatter).
 | Runtime | Status | Setup | What ships |
 |---------|--------|-------|------------|
 | **Claude Code** | First-class | `automil init --runtime claude` | `_shared/` skills merged into `.claude/skills/automil/` and `.claude/skills/automil-setup/`; `on_stop.sh` hook installed under `.claude/hooks/` to prevent the agent from stopping mid-loop |
-| **Codex** | First-class (CLI fallback for trajectory) | `automil init --runtime codex` | `_shared/` skills merged into `.codex/skills/`; empty-frontmatter overlay applied; trajectory recorded via `automil trajectory record` invoked from agent task instructions (Codex hook API is not yet stable) |
-| **OpenCode** | First-class | `automil init --runtime opencode` | `_shared/` skills merged into `.opencode/skills/`; TypeScript plugin `automil-trajectory.ts` installed under `.opencode/plugins/` for automatic trajectory capture |
+| **Codex** | First-class (CLI fallback for trajectory) | `automil init --runtime codex` | writes `.codex/instructions.md` from the shared AGENTS.md (no skill merge); trajectory recorded via `automil trajectory record` invoked from agent task instructions (Codex hook API is not yet stable) |
+| **OpenCode** | First-class | `automil init --runtime opencode` | writes `.opencode/AGENTS.md` from the shared AGENTS.md (no skill merge); TypeScript plugin `automil-trajectory.ts` installed under `.opencode/plugins/` for automatic trajectory capture |
 | **DeepSeek** | First-class via routing | `automil init --runtime deepseek-via-opencode` or `deepseek-via-codex` | DeepSeek is a model, not a runtime. Choose a host runtime (opencode preferred); `AUTOMIL_RUNTIME=deepseek-via-<host>` tags trajectories correctly. See `agent_assets/deepseek/README.md` |
 | **Cursor / Aider / Windsurf / others** | Compatible | Manual | Point the agent at `automil/program.md` and the [training-script contract](training-script-contract.md). Any agent that can read files, edit code, and run shell commands works via the file + CLI surface |
 
@@ -78,8 +79,9 @@ automil show-skill --runtime codex --asset AGENTS
 ```
 
 `--asset` selects between `SKILL` (default) and `AGENTS`. The output is
-the fully merged content (canonical `_shared/` text + per-runtime
-overlay applied), useful for verifying what the agent will actually see.
+the canonical `_shared/` text (no runtime skill overlay currently exists,
+so this is the shared content verbatim), useful for verifying what the
+agent will actually see.
 
 ## Trajectory Capture
 

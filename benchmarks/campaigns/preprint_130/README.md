@@ -68,7 +68,7 @@ declared campaign inputs.
 split/seed policy, or training protocol changes. Documentation, CI, Git history,
 and other execution-irrelevant repository changes do not bump it.
 
-Campaign schema v4 is a prelaunch reset: no v3 runtime was materialized, so no
+Campaign schema v5 is a prelaunch reset: no v4 runtime was materialized, so no
 runtime-state migration is defined. Historical result archives must be
 explicitly re-attested under the six-field identity before reuse.
 
@@ -125,6 +125,12 @@ cd "$CAMPAIGN_CELL_ROOT"
 claude
 ```
 
+Launch the runtime with its web research tools enabled (the skill's RESEARCH
+step delegates WebSearch and WebFetch subagents), identically for all 130
+cells; a cell run without network access is a protocol deviation to record in
+that cell's disclosure. Research and diagnosis are ordinary metered
+agent-active work.
+
 After the first orchestrator scrape of the native active-time counter, fill
 `agent_session.template.json` with the runtime session identifier and a
 timezone-aware start time, then bind it before the first proposal:
@@ -161,7 +167,10 @@ uv run python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" status \
   --cell-root "$PWD"
 ```
 
-Do not freeze early. When the stage ledger reports exactly 30 charged attempts,
+Do not freeze early. If the 12-hour agent-active budget exhausts below 30
+charged attempts, the freeze fails closed by design: report the cell as
+blocked rather than working around it; no path reopens a closed cell.
+When the stage ledger reports exactly 30 charged attempts,
 freeze the complete unique candidates and select up to 10 by the locked
 validation ordering:
 
@@ -209,7 +218,12 @@ must be null and carry a reason. Finalization verifies that all 30 proposal
 timestamps fall inside this session interval and that the journal contains one
 matching startup, binding, native active-time sample, and `SessionEnd`. Wait for
 Claude to exit and flush its final metric export before finalizing; a premature
-attempt fails closed and can be retried.
+attempt fails closed and can be retried. If the runtime died without a durable
+`SessionEnd`, close the activity interval from the last durable sample with
+`uv run automil activity close --session <session-id> --attest "..."` (it
+refuses while the exporter still serves the session) and record the
+attestation in the cell's disclosure; the full procedure is in
+`docs/tutorials/run_agentic_campaign.md`.
 
 ```bash
 uv run python benchmarks/scripts/campaign_stage.py finalize-agent-session \
@@ -243,6 +257,13 @@ native baseline, emits paired fold deltas, and writes a hashed
 `campaign_certification.json` index. The ordinary `status` output reports only
 bundle identity and timestamps, never held-out metric values.
 
+Before `certify-all`, audit each cell's archived agent-session trajectory for
+held-out-label retrieval (the cohorts are public; for example GDC
+clinical-data downloads) and record the outcome in the campaign disclosure.
+Formal sessions run with shell and web research access, so the val-firewall's
+anti-accident posture is completed by this audit-trail check, not by an OS
+boundary.
+
 Each freeze entry binds the winner kind, candidate, promotion node (when
 searched), baseline candidate, and the canonical cell-local path plus SHA-256
 of all five sealed winner and baseline fold files. Certification and reporting
@@ -271,7 +292,9 @@ promotion artifacts remain in their respective `automil/orchestrator/archive/`
 directories; the native baseline is imported into `baseline/archive/`; the
 certified winner bundle is recorded by the stage ledger. Re-running a completed
 transition is either idempotent or fails closed on declared-identity or artifact
-integrity drift.
+integrity drift. A declared cell spec that becomes unreadable is held at
+admission (HOLD) and recovers automatically when the file reads again; it is
+never cancelled.
 
 Operate all 130 roots with an external scheduler if desired, but invoke these
 same per-cell commands and preserve the one-GPU-per-training-process contract.

@@ -28,6 +28,14 @@ scientific act — an undeclared lock is indistinguishable from an oversight.
 Enforcement lives in ``hparams.apply_overrides``: a request for an undeclared knob
 raises rather than being silently dropped, which is the H-3 failure mode this
 whole line of work exists to remove.
+
+**Relation to campaign identity locks (A4).** This module is mode-independent
+plumbing: free mode legitimately tunes capacity knobs declared here (``model_size``,
+``M``/``L``, ``mDim``/``numLayer_Res``, ``hidden_dim``). The architecture-preserving
+campaign locks those same names one layer up, in the hash-locked
+``registry.identity_locked_hparams`` block of each cell config (audited against
+``EXPECTED_IDENTITY_LOCKED_HPARAMS`` in ``autobench.campaign``); the campaign's
+tunable set is this module's ``tunable`` minus that lock list.
 """
 from __future__ import annotations
 

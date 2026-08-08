@@ -419,4 +419,4 @@ See [`examples/`](../examples/) for reference configurations:
 - [Training-Script Contract](training-script-contract.md), the seam between framework and consumer
 - [Agent Compatibility](agent-compatibility.md), per-runtime setup, overlay merge model
 - [Implementation Report](implementation-report.md), v1.0 architecture and design decisions
-- [CHANGELOG](../CHANGELOG.md), v1.0 milestone release notes (BREAKING migration paths)
+- [CHANGELOG](../CHANGELOG.md), release notes through the Unreleased preprint-campaign integration

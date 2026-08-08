@@ -67,11 +67,11 @@ uv run automil viz start
 
 | File | Lines | Role |
 |------|-------|------|
-| `src/automil/graph.py` | ~1090 | Experiment tree, scoring, reconciliation |
-| `src/automil/backends/_orchestrator_daemon.py` | ~2090 | GPU scheduler daemon (thin entrypoint: `orchestrator.py`) |
+| `src/automil/graph.py` | ~1460 | Experiment tree, scoring, reconciliation |
+| `src/automil/backends/_orchestrator_daemon.py` | ~3260 | GPU scheduler daemon (thin entrypoint: `orchestrator.py`) |
 | `src/automil/cli/` | package, ~30 commands | Click CLI (one module per command + `lifecycle/`) |
-| `src/automil/runner.py` | ~160 | Git worktree overlay |
-| `src/automil/viz/server.py` | ~440 | SSE dashboard server |
+| `src/automil/runner.py` | ~270 | Git worktree overlay |
+| `src/automil/viz/server.py` | ~510 | SSE dashboard server |
 | `src/automil/viz/static/app.js` | ~670 | 3D force graph frontend |
 
 ## Testing

@@ -24,9 +24,13 @@ SHARED_SKILLS = REPO_ROOT / "src" / "automil" / "agent_assets" / "_shared" / "sk
 AGENT_ASSETS = REPO_ROOT / "src" / "automil" / "agent_assets"
 
 #: (checked-in copy dir, runtime whose overlay applies to that dir)
+#: Experiment-project copies are live harness surfaces too: Claude Code
+#: registers them as directory-scoped skills, so a stale copy silently
+#: shadows the root skill for any session working under that directory.
 COPY_DIRS = (
     (REPO_ROOT / ".claude" / "skills", "claude"),
     (REPO_ROOT / ".agents" / "skills", "claude"),
+    (REPO_ROOT / "benchmarks" / "experiments" / "ccrcc" / ".claude" / "skills", "claude"),
 )
 SKILLS = ("automil", "automil-setup")
 
@@ -37,7 +41,9 @@ def _canonical_render(runtime: str, skill: str) -> str:
     return merge_skill(runtime, shared, overlay if overlay.exists() else None)
 
 
-@pytest.mark.parametrize("copy_dir,runtime", COPY_DIRS, ids=[".claude", ".agents"])
+@pytest.mark.parametrize(
+    "copy_dir,runtime", COPY_DIRS, ids=[".claude", ".agents", "ccrcc"]
+)
 @pytest.mark.parametrize("skill", SKILLS)
 def test_checked_in_copy_matches_canonical_render(copy_dir, runtime, skill):
     copy_path = copy_dir / skill / "SKILL.md"
