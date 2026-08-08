@@ -1269,8 +1269,15 @@ class ExperimentOrchestrator:
 
     # --- Cell cap enforcement at the launch path (CAP-1 / H-2) ---
 
+    # Sentinel: the spec declares a cell whose file is currently missing or
+    # unreadable. Distinct from None (no declared cell) because the two have
+    # opposite admission outcomes: no-cell specs launch uncapped by design,
+    # unreadable-cell specs are HELD — never launched unmetered, never
+    # canceled by a possibly transient read failure.
+    _CELL_UNREADABLE = object()
+
     def _cell_for_spec(self, spec: dict, *, warn: bool = True):
-        """Return the Cell this spec is billed to, or None if it has no identity.
+        """Return the spec's Cell, None (no identity), or ``_CELL_UNREADABLE``.
 
         Resolves ``cells/`` from ``self.automil_dir`` rather than through
         ``cells.get_cell`` — the registry's cwd-walking ``_find_automil_dir()``
@@ -1290,20 +1297,20 @@ class ExperimentOrchestrator:
             if warn:
                 logger.error(
                     "Spec %s references cell %s which has no cells/<id>.json; "
-                    "the launch will be refused.",
+                    "the launch is held until the cell file is readable.",
                     spec.get("id"), str(cell_id)[:8],
                 )
-            return None
+            return self._CELL_UNREADABLE
         try:
             return read_cell(path)
         except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
             if warn:
                 logger.error(
-                    "Could not read cell %s for spec %s (%s); the launch will "
-                    "be refused.",
+                    "Could not read cell %s for spec %s (%s); the launch is "
+                    "held until the cell file is readable.",
                     str(cell_id)[:8], spec.get("id"), exc,
                 )
-            return None
+            return self._CELL_UNREADABLE
 
     def _observe_activity_for_tick(self):
         """Return one shared native-meter observation for this daemon tick.
@@ -1378,7 +1385,21 @@ class ExperimentOrchestrator:
         if not cell_id:
             return _CellAdmission.ALLOW
         cell = self._cell_for_spec(spec, warn=False)
-        if cell is None or blocks_new_work(cell):
+        if cell is self._CELL_UNREADABLE:
+            # Fail closed without destruction: a declared-but-unreadable cell
+            # blocks the launch but keeps queue and graph state intact. A
+            # transient read error (fd pressure, filesystem blip) recovers on
+            # a later tick; refusal here would cancel the node irreversibly.
+            reason = "declared cell file is missing or unreadable"
+            previous = self._activity_health_by_cell.get(str(cell_id))
+            if previous != reason:
+                logger.warning(
+                    "Holding new work for cell %s: %s.",
+                    str(cell_id)[:8], reason,
+                )
+                self._activity_health_by_cell[str(cell_id)] = reason
+            return _CellAdmission.HOLD_TELEMETRY
+        if blocks_new_work(cell):
             return _CellAdmission.REFUSE_CAP
         if cell.mode != "agent_active":
             return _CellAdmission.ALLOW
@@ -1432,8 +1453,10 @@ class ExperimentOrchestrator:
 
         Specs with no ``metadata.cell_id`` remain valid because ``Backend.submit``
         is a first-class non-cell submission path. A spec that *declares* a cell
-        but references missing or malformed state is refused: silently launching
-        it unmetered would turn accounting corruption into unlimited budget.
+        but references missing or malformed state is HELD by ``_cell_admission``,
+        not refused: it never launches unmetered, and it is never canceled by a
+        possibly transient read failure either — refusal is irreversible and
+        must be reserved for a readable cell that has genuinely closed.
 
         This method is called on every poll for every pending spec, so it stays
         silent unless it actually refuses.
@@ -1446,14 +1469,15 @@ class ExperimentOrchestrator:
         if not cell_id:
             return False
         cell = self._cell_for_spec(spec, warn=False)
-        if cell is None:
-            logger.error(
-                "Refusing to launch %s: declared cell %s is missing or invalid.",
-                node_id, str(cell_id)[:8],
-            )
-        elif not blocks_new_work(cell):
+        if cell is None or cell is self._CELL_UNREADABLE:
+            # Held by _cell_admission, never refused: refusal cancels the node
+            # irreversibly, and a missing/unreadable cell file may be a
+            # transient condition. (None is unreachable here — no-cell specs
+            # never route to refusal — but is treated identically for safety.)
             return False
-        elif (
+        if not blocks_new_work(cell):
+            return False
+        if (
             node_id in cell.billed_node_ids
             and cell.status not in (CellStatus.TERMINATING, CellStatus.FINALIZED)
         ):
@@ -1471,15 +1495,14 @@ class ExperimentOrchestrator:
                 node_id, cell.status.value, cell.cell_id[:8],
             )
             return False
-        else:
-            logger.warning(
-                "Refusing to launch %s: cell %s is %s "
-                "(consumed_evals=%d/%s). Dequeuing the spec and cancelling "
-                "the node — a closed cell never re-opens.",
-                node_id, cell.cell_id[:8], cell.status.value,
-                cell.consumed_evals,
-                cell.eval_budget if cell.eval_budget is not None else "-",
-            )
+        logger.warning(
+            "Refusing to launch %s: cell %s is %s "
+            "(consumed_evals=%d/%s). Dequeuing the spec and cancelling "
+            "the node — a closed cell never re-opens.",
+            node_id, cell.cell_id[:8], cell.status.value,
+            cell.consumed_evals,
+            cell.eval_budget if cell.eval_budget is not None else "-",
+        )
 
         src_file = spec.get("_file")
         if src_file and Path(src_file).exists():
@@ -1554,7 +1577,8 @@ class ExperimentOrchestrator:
                 spec.get("id"),
             )
             return
-        if self._cell_for_spec(spec, warn=True) is None:
+        cell = self._cell_for_spec(spec, warn=True)
+        if cell is None or cell is self._CELL_UNREADABLE:
             return  # unresolvable cell — already reported by _cell_for_spec
         self._bump_cell_counters(spec, consumed_delta=1)
 
@@ -1587,7 +1611,7 @@ class ExperimentOrchestrator:
         from automil.cells import write_cell
 
         cell = self._cell_for_spec(spec, warn=False)
-        if cell is None:
+        if cell is None or cell is self._CELL_UNREADABLE:
             return
         node_id = str(spec.get("id") or "")
         billed = list(cell.billed_node_ids)

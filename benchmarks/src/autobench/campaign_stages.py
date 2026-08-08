@@ -53,6 +53,7 @@ from autobench.campaign import (
     DATASETS,
     DISCOVERY_ATTEMPTS,
     PROMOTION_CANDIDATES,
+    PROMOTION_WALL_CLOCK_CONTAINMENT,
     PROTOCOL,
     PROTOCOL_VERSION,
     STAGE_FOLDS,
@@ -1298,6 +1299,11 @@ def _materialize_promotion_unlocked(
         config.setdefault("run", {})["command"] = cell["commands"]["promotion"]
         config["run"]["mil_model"] = cell["model"]
         config.setdefault("cap", {})["eval_budget"] = len(candidates)
+        # The deep-copied discovery config carries the 12h agent-active
+        # budget; promotion has no agent, so that number would be a wall-clock
+        # kill switch mid-evaluation. Containment-size the time wall instead.
+        config["cap"]["budget"] = PROMOTION_WALL_CLOCK_CONTAINMENT
+        config["cap"]["mode"] = "wall_clock"
         config["training"] = {"fold_count": len(STAGE_FOLDS["promotion"])}
         config.setdefault("campaign", {})["stage"] = "promotion"
         temporary_adir.mkdir(parents=True)

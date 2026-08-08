@@ -124,12 +124,20 @@ def resolve_cap_config(
     if not isinstance(cap, dict):
         raise ValueError("cap must be a mapping")
     obsolete = sorted(
-        key for key in ("budget_seconds", "safety_buffer_seconds") if key in cap
+        key
+        for key in (
+            "budget_seconds",
+            "safety_buffer_seconds",
+            "idle_grace",
+            "idle_grace_seconds",
+        )
+        if key in cap
     )
     if obsolete:
         raise ValueError(
             f"obsolete cap key(s) {obsolete}; use cap.budget and "
-            "cap.safety_buffer durations"
+            "cap.safety_buffer durations (idle-grace billing no longer "
+            "exists under native active-time metering)"
         )
 
     budget = _resolve_seconds(cap, "budget", DEFAULT_BUDGET_SECONDS, budget_override)

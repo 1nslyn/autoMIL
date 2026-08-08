@@ -552,16 +552,19 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             ) from exc
         if assessment.complete:
             raise click.ClickException(
-                "agent_active accounting has no open session; start a fresh "
-                "project-local Claude session before submitting new work"
+                "this cell's bound session has ended and agent_active cells "
+                "are single-session: a new Claude session cannot rebind an "
+                "existing cell. Continue in the original session, or use "
+                "cap.mode: wall_clock for multi-session work"
             )
         if (
             len(_activity_report.sessions) != 1
             or len(_activity_report.open_sessions) != 1
         ):
             raise click.ClickException(
-                "agent_active accounting requires exactly one bound open session; "
-                "start a fresh project-local Claude session for this cell"
+                "agent_active accounting requires exactly one bound open "
+                "session; this cell accepts work only from its one bound "
+                "session (a new session cannot rebind an existing cell)"
             )
         if not assessment.admissible:
             raise click.ClickException(

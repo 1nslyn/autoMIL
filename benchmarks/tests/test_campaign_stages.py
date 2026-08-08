@@ -16,6 +16,7 @@ import autobench.campaign_stages as campaign_stages
 from automil.admissibility import load_candidate_policy
 from automil.cells.activity import (
     ACTIVITY_SAMPLES_FILENAME,
+    finalize_session_end,
     ingest_prometheus_metrics,
     read_activity_report,
     record_hook_event,
@@ -786,7 +787,13 @@ def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell
     )
     assert budget.eval_budget == 10
     assert budget.consumed_evals == 0
+    # The deep-copied discovery config carried the 12h agent-active budget;
+    # promotion has no agent, so its time wall is pure runaway containment.
+    assert budget.mode == "wall_clock"
+    assert budget.budget_seconds == 7 * 24 * 3600
     config = yaml.safe_load((promotion / "config.yaml").read_text())
+    assert config["cap"]["budget"] == "7d"
+    assert config["cap"]["mode"] == "wall_clock"
     assert config["run"]["command"] == cell["commands"]["promotion"]
     assert config["training"]["fold_count"] == 2
     assert config["campaign"]["stage"] == "promotion"
@@ -1390,19 +1397,14 @@ def _record_session_end(
     report = read_activity_report(adir, cell_id)
     if report.complete:
         return
-    observed_at = datetime.now(timezone.utc).timestamp()
-    ingest_prometheus_metrics(
+    # Model the real hook: one atomic scrape-and-finalize under the activity
+    # lock (an unchanged counter value no longer advances the stored sample,
+    # so the expectation must be computed with the ingest, not after it).
+    finalize_session_end(
         adir,
+        {"hook_event_name": "SessionEnd", "session_id": session_id},
         "claude_code_active_time_total"
         f'{{session_id="{session_id}",type="cli"}} 1.0\n',
-        observed_at=observed_at,
-    )
-    record_hook_event(
-        adir,
-        cell_id,
-        {"hook_event_name": "SessionEnd", "session_id": session_id},
-        observed_at=observed_at,
-        final_sample_observed_at=observed_at,
     )
 
 

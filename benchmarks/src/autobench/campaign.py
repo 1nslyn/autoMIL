@@ -56,6 +56,12 @@ AGENT_TIME_ACCOUNTING = {
     "observer": "localhost Prometheus scrape",
     "session_binding": "synchronous SessionStart/SessionEnd hooks",
 }
+# Promotion runs with no coding agent in the loop, so its wall-clock cap is
+# pure runaway containment, never a search budget: the eval axis (exact frozen
+# candidate count) is the only binding limit. Sized far above the worst case
+# (10 candidates x 2 folds x the 6h attempt timeout ~= 5d serial) so the cap
+# can only ever catch a hung job, not kill legitimate in-flight promotion.
+PROMOTION_WALL_CLOCK_CONTAINMENT = "7d"
 PROMOTION_CANDIDATES = 10
 ATTEMPT_OUTCOME_CLASSES = (
     "completed", "budget-killed", "timeout", "oom", "cancelled",
@@ -153,6 +159,7 @@ PROTOCOL = {
     "discovery_agent_active_budget": DISCOVERY_AGENT_ACTIVE_BUDGET,
     "agent_time_accounting": AGENT_TIME_ACCOUNTING,
     "promotion_candidates": PROMOTION_CANDIDATES,
+    "promotion_wall_clock_containment": PROMOTION_WALL_CLOCK_CONTAINMENT,
     "attempt_outcome_classes": list(ATTEMPT_OUTCOME_CLASSES),
     "frozen_winners": 1,
     "stage_folds": {key: list(value) for key, value in STAGE_FOLDS.items()},

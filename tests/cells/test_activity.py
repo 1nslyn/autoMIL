@@ -119,7 +119,9 @@ def test_session_end_requires_a_persisted_final_sample(tmp_path):
     with pytest.raises(ActivityError, match="stale"):
         _record(tmp_path, "SessionEnd", 4.0)
 
-    ingest_prometheus_metrics(tmp_path, _metrics(cli=7), observed_at=4.0)
+    # An unchanged counter no longer advances observed_at; the value must move
+    # for the stored sample to carry the new timestamp the end will attest.
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=8), observed_at=4.0)
     _record(tmp_path, "SessionEnd", 4.0)
 
     assert read_activity_report(tmp_path, "cell-1").complete is True
@@ -215,7 +217,7 @@ def test_activity_assessment_distinguishes_live_complete_and_degraded(tmp_path):
     assert foreign.health is ActivityHealth.DEGRADED
     assert "does not match" in foreign.reason
 
-    ingest_prometheus_metrics(tmp_path, _metrics(cli=7), observed_at=4.0)
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=8), observed_at=4.0)
     _record(tmp_path, "SessionEnd", 4.0)
     ended = assess_activity(
         read_activity_report(tmp_path, "cell-1"),

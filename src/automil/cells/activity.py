@@ -54,6 +54,11 @@ _EVENT_KEYS = {
         {"event", "cell_id", "session_id", "binding_sha256", "observed_at"}
     ),
 }
+# Optional per-kind fields: present only on operator-attested closes, so the
+# ledger distinguishes them from native hook finalizations.
+_OPTIONAL_EVENT_KEYS = {
+    "session_end": frozenset({"finalized_by", "attestation"}),
+}
 
 
 class ActivityError(ValueError):
@@ -183,6 +188,115 @@ def record_hook_event(
     _append_event(Path(automil_dir), event)
 
 
+def finalize_session_end(
+    automil_dir: Path | str,
+    payload: Mapping[str, Any],
+    exposition: str,
+) -> None:
+    """Atomically ingest the final scrape and record SessionEnd under one lock.
+
+    The observe-then-record two-step is racy: a concurrent scrape landing
+    between the steps used to rewrite the stored sample's ``observed_at`` and
+    permanently strand the session open ("final active-time sample is stale")
+    once the exporter exited with the runtime. Holding the activity lock
+    across the final ingest and the journal append makes the recorded
+    expectation and the stored sample the same write.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise ActivityError("hook payload must be an object")
+    hook_name = _identifier(payload.get("hook_event_name"), "hook_event_name")
+    if hook_name != "SessionEnd":
+        raise ActivityError("finalize_session_end handles only SessionEnd")
+    session_id = _identifier(payload.get("session_id"), "session_id")
+    incoming = _parse_active_samples(exposition)
+    if tuple(sorted(incoming)) != (session_id,):
+        raise ActivityError(
+            "cannot read this session's final Claude active-time metric "
+            "before SessionEnd"
+        )
+    active_seconds = incoming[session_id]
+    root = Path(automil_dir)
+    with _activity_lock(root, exclusive=True):
+        timestamp = _timestamp(time.time())
+        replay = _read_journal_unlocked(root)
+        session = replay.sessions.get(session_id)
+        if session is None:
+            raise ActivityError(f"unmatched session_end for session {session_id!r}")
+        if session.ended_at is not None:
+            raise ActivityError(
+                f"conflicting duplicate session_end for {session_id!r}"
+            )
+        samples = _read_samples_unlocked(root)
+        prior = samples.get(session_id)
+        if prior is not None and active_seconds < prior["active_seconds"]:
+            raise ActivityError(
+                f"active-time regression for session {session_id!r}"
+            )
+        if prior is None or active_seconds != prior["active_seconds"]:
+            samples[session_id] = {
+                "active_seconds": active_seconds,
+                "observed_at": timestamp,
+            }
+            _write_samples_atomic(root, samples)
+        event = _event(
+            "session_end",
+            None,
+            session_id,
+            timestamp,
+            final_sample_observed_at=samples[session_id]["observed_at"],
+        )
+        _append_event_unlocked(root, event)
+
+
+def close_dead_session(
+    automil_dir: Path | str,
+    session_id: str,
+    attestation: str,
+) -> float:
+    """Operator-attested SessionEnd for a runtime that died without its hook.
+
+    A session whose process was killed before the SessionEnd hook could run is
+    otherwise unfinalizable: the hook path requires a live scrape of a now-dead
+    exporter. This is the supported recovery — it requires an open journaled
+    session with a durable final sample, promotes that stored sample to the
+    attested final observation, and records ``finalized_by``/``attestation``
+    in the journal so the ledger distinguishes an operator close from a native
+    hook. The caller must first verify the exporter no longer serves this
+    session; a live session ends through its own hook. Returns the attested
+    final cumulative active seconds.
+    """
+
+    sid = _identifier(session_id, "session_id")
+    text = attestation.strip() if isinstance(attestation, str) else ""
+    if not text:
+        raise ActivityError("operator close requires a non-empty attestation")
+    root = Path(automil_dir)
+    with _activity_lock(root, exclusive=True):
+        replay = _read_journal_unlocked(root)
+        session = replay.sessions.get(sid)
+        if session is None:
+            raise ActivityError(f"unmatched session_end for session {sid!r}")
+        if session.ended_at is not None:
+            raise ActivityError(f"session {sid!r} already ended")
+        prior = _read_samples_unlocked(root).get(sid)
+        if prior is None:
+            raise ActivityError(
+                f"session {sid!r} has no durable active-time sample to attest"
+            )
+        event = _event(
+            "session_end",
+            None,
+            sid,
+            _timestamp(time.time()),
+            final_sample_observed_at=prior["observed_at"],
+            finalized_by="operator-close",
+            attestation=text,
+        )
+        _append_event_unlocked(root, event)
+        return float(prior["active_seconds"])
+
+
 def bind_activity_session(
     automil_dir: Path | str,
     cell_id: str,
@@ -257,12 +371,15 @@ def ingest_prometheus_metrics(
                         f"active-time changed for ended session {session_id!r}"
                     )
                 continue
-            next_sample = {
-                "active_seconds": active_seconds,
-                "observed_at": timestamp,
-            }
-            if prior != next_sample:
-                samples[session_id] = next_sample
+            # Advance only when the cumulative value moves: rewriting
+            # observed_at for an unchanged counter churned the samples file
+            # every poll and let any concurrent equal-value scrape invalidate
+            # a SessionEnd's just-recorded final-sample expectation.
+            if prior is None or active_seconds != prior["active_seconds"]:
+                samples[session_id] = {
+                    "active_seconds": active_seconds,
+                    "observed_at": timestamp,
+                }
                 advanced += 1
         if advanced:
             _write_samples_atomic(root, samples)
@@ -611,33 +728,37 @@ def _activity_lock(automil_dir: Path, *, exclusive: bool) -> Iterator[None]:
 
 
 def _append_event(automil_dir: Path, event: dict[str, Any]) -> None:
+    with _activity_lock(automil_dir, exclusive=True):
+        _append_event_unlocked(automil_dir, event)
+
+
+def _append_event_unlocked(automil_dir: Path, event: dict[str, Any]) -> None:
     path = automil_dir / ACTIVITY_JOURNAL_FILENAME
     try:
-        with _activity_lock(automil_dir, exclusive=True):
-            replay = _read_journal_unlocked(automil_dir)
-            if not _apply_event(replay, event):
-                return
-            if event["event"] == "session_end":
-                sample = _read_samples_unlocked(automil_dir).get(event["session_id"])
-                if sample is None:
-                    raise ActivityError(
-                        f"session {event['session_id']!r} has no final "
-                        "active-time sample"
-                    )
-                if sample["observed_at"] != event["final_sample_observed_at"]:
-                    raise ActivityError(
-                        f"session {event['session_id']!r} final active-time "
-                        "sample is stale"
-                    )
-                if sample["observed_at"] > event["observed_at"]:
-                    raise ActivityError(
-                        f"final active-time sample for session "
-                        f"{event['session_id']!r} is newer than SessionEnd"
-                    )
-            with path.open("ab") as journal:
-                journal.write(_canonical_line(event))
-                journal.flush()
-                os.fsync(journal.fileno())
+        replay = _read_journal_unlocked(automil_dir)
+        if not _apply_event(replay, event):
+            return
+        if event["event"] == "session_end":
+            sample = _read_samples_unlocked(automil_dir).get(event["session_id"])
+            if sample is None:
+                raise ActivityError(
+                    f"session {event['session_id']!r} has no final "
+                    "active-time sample"
+                )
+            if sample["observed_at"] != event["final_sample_observed_at"]:
+                raise ActivityError(
+                    f"session {event['session_id']!r} final active-time "
+                    "sample is stale"
+                )
+            if sample["observed_at"] > event["observed_at"]:
+                raise ActivityError(
+                    f"final active-time sample for session "
+                    f"{event['session_id']!r} is newer than SessionEnd"
+                )
+        with path.open("ab") as journal:
+            journal.write(_canonical_line(event))
+            journal.flush()
+            os.fsync(journal.fileno())
     except ActivityError:
         raise
     except (OSError, UnicodeError) as exc:
@@ -684,7 +805,9 @@ def _validate_journal_event(raw: object) -> dict[str, Any]:
     kind = raw.get("event")
     if kind not in _EVENT_KEYS:
         raise ActivityError(f"unknown journal event {kind!r}")
-    if frozenset(raw) != _EVENT_KEYS[kind]:
+    required = _EVENT_KEYS[kind]
+    allowed = required | _OPTIONAL_EVENT_KEYS.get(kind, frozenset())
+    if not (required <= frozenset(raw) <= allowed):
         raise ActivityError(f"invalid fields for {kind!r}")
     event = _event(
         kind,
@@ -703,6 +826,18 @@ def _validate_journal_event(raw: object) -> dict[str, Any]:
         )
         if event["final_sample_observed_at"] > event["observed_at"]:
             raise ActivityError("final active-time sample is newer than SessionEnd")
+        if "finalized_by" in raw or "attestation" in raw:
+            if raw.get("finalized_by") != "operator-close":
+                raise ActivityError("invalid finalized_by for session_end")
+            attestation = raw.get("attestation")
+            if (
+                not isinstance(attestation, str)
+                or not attestation
+                or attestation.strip() != attestation
+            ):
+                raise ActivityError("operator close requires a non-empty attestation")
+            event["finalized_by"] = "operator-close"
+            event["attestation"] = attestation
     return event
 
 

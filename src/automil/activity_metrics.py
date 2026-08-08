@@ -26,6 +26,27 @@ _NO_PROXY_HANDLER = ProxyHandler({})
 _DIRECT_OPENER = build_opener(_NO_PROXY_HANDLER, _NoRedirects())
 
 
+def fetch_activity_exposition(
+    *,
+    timeout: float = 1.0,
+    open_url: Callable[..., BinaryIO] | None = None,
+) -> str:
+    """Fetch the raw Prometheus exposition text, or raise ``ActivityError``."""
+
+    opener = _DIRECT_OPENER.open if open_url is None else open_url
+    try:
+        with opener(ACTIVITY_METRICS_URL, timeout=timeout) as response:
+            payload = response.read(_MAX_PAYLOAD_BYTES + 1)
+    except OSError as exc:
+        raise ActivityError(f"Claude metrics endpoint unavailable: {exc}") from exc
+    if len(payload) > _MAX_PAYLOAD_BYTES:
+        raise ActivityError("Claude metrics payload is too large")
+    try:
+        return payload.decode("utf-8")
+    except UnicodeError as exc:
+        raise ActivityError("Claude metrics payload is not UTF-8") from exc
+
+
 def observe_activity_metrics(
     automil_dir: Path | str,
     *,
@@ -36,26 +57,10 @@ def observe_activity_metrics(
     """Fetch, validate, and persist one live loopback observation."""
 
     timestamp = time.time() if observed_at is None else observed_at
-    opener = _DIRECT_OPENER.open if open_url is None else open_url
     try:
-        with opener(ACTIVITY_METRICS_URL, timeout=timeout) as response:
-            payload = response.read(_MAX_PAYLOAD_BYTES + 1)
-    except OSError as exc:
-        return ActivityObservation(
-            available=False, observed_at=timestamp, error=str(exc),
-        )
-    try:
-        if len(payload) > _MAX_PAYLOAD_BYTES:
-            raise ActivityError("Claude metrics payload is too large")
-        exposition = payload.decode("utf-8")
+        exposition = fetch_activity_exposition(timeout=timeout, open_url=open_url)
         sessions = ingest_prometheus_metrics(
             automil_dir, exposition, observed_at=timestamp
-        )
-    except UnicodeError:
-        return ActivityObservation(
-            available=False,
-            observed_at=timestamp,
-            error="Claude metrics payload is not UTF-8",
         )
     except ActivityError as exc:
         # Invalid live telemetry is an admission-health failure, not a daemon
@@ -81,4 +86,8 @@ def refresh_activity_metrics(
     return observation.sessions if observation.available else None
 
 
-__all__ = ["observe_activity_metrics", "refresh_activity_metrics"]
+__all__ = [
+    "fetch_activity_exposition",
+    "observe_activity_metrics",
+    "refresh_activity_metrics",
+]

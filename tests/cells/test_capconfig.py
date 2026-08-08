@@ -57,6 +57,12 @@ class TestResolveCapConfig:
         with pytest.raises(ValueError, match="obsolete cap key"):
             resolve_cap_config(cfg)
 
+    @pytest.mark.parametrize("key", ["idle_grace", "idle_grace_seconds"])
+    def test_obsolete_idle_grace_keys_are_rejected_not_ignored(self, key):
+        """A removed billing knob must fail loudly, not become a silent no-op."""
+        with pytest.raises(ValueError, match="obsolete cap key"):
+            resolve_cap_config({"cap": {key: 300}})
+
     def test_cli_override_wins_over_config(self):
         cfg = {"cap": {"budget": "6h"}}
         cap = resolve_cap_config(cfg, budget_override=42, buffer_override=7)

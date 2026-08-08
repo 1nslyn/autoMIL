@@ -422,3 +422,62 @@ def test_final_attempt_retry_is_not_cap_refused(tmp_path):
     spec2 = json.loads((orch.archive_dir / "node_0002" / "spec.json").read_text())
     assert (spec2.get("metadata") or {}).get("cap_refused") is True
     assert _read_cell(orch).consumed_evals == 3
+
+
+# ---------------------------------------------------------------------------
+# unreadable declared cells — held, never canceled
+# ---------------------------------------------------------------------------
+
+
+def test_unreadable_declared_cell_holds_the_spec_instead_of_cancelling(tmp_path):
+    """A transient read failure must not irreversibly destroy queued work.
+
+    Refusal unlinks the queue spec and cancels the graph node; a missing or
+    unreadable cell file can be a transient condition (fd pressure, filesystem
+    blip), so the spec is HELD — fail-closed without destruction — and admission
+    recovers on a later tick once the cell file is readable again.
+    """
+    orch = _make_orch(tmp_path)
+    _seed_graph(orch, "node_0001")
+    spec = _spec("node_0001")
+    qfile = orch.queue_dir / "node_0001.json"
+    qfile.write_text(json.dumps(spec))
+    spec["_file"] = str(qfile)
+
+    # No cells/<id>.json at all: held.
+    assert orch._block_cell_spec(spec) is True
+    assert qfile.exists(), "held spec must stay queued"
+
+    # Corrupt cell file: held, not canceled.
+    cells_dir = orch.automil_dir / "cells"
+    cells_dir.mkdir(parents=True, exist_ok=True)
+    (cells_dir / f"{CELL_ID}.json").write_text("{broken")
+    assert orch._block_cell_spec(spec) is True
+    assert qfile.exists(), "held spec must stay queued"
+    graph = ExperimentGraph(path=orch.automil_dir / "graph.json")
+    assert graph.nodes["node_0001"]["status"] == "running", (
+        "a held node must not be canceled"
+    )
+
+    # The cell file becomes readable: admission recovers without operator help.
+    _write_cell(orch.automil_dir)
+    assert orch._block_cell_spec(spec) is False
+    assert qfile.exists()
+
+
+def test_pre_native_metering_cell_layout_is_rejected_not_reinterpreted(tmp_path):
+    """A mode-less legacy cell file must fail loudly, not default to agent_active."""
+    path = tmp_path / "legacy.json"
+    payload = {
+        "cell_id": CELL_ID, "dataset": "ds", "encoder": "enc",
+        "mil_model": "clam sb", "started_at": 1.0, "budget_seconds": 21600,
+        "safety_buffer_seconds": 1800, "status": "active",
+    }
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="obsolete cell layout"):
+        read_cell(path)
+
+    payload["mode"] = "wall_clock"
+    path.write_text(json.dumps(payload))
+    assert read_cell(path).mode == "wall_clock"

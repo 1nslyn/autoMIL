@@ -54,7 +54,11 @@ during search — stop and tell Leo.
 **2. Exactly 30 launched attempts per cell, 12h agent-active.**
 Crashes, OOMs, timeouts and budget-kills all consume the budget. That is
 deliberate: equal effort means an equal cap on *launched attempts*, not on
-successes. `freeze-discovery` refuses to run at 29 or 31.
+successes. `freeze-discovery` refuses to run at 29 or 31. If the 12h
+agent-active budget exhausts before attempt 30, the refusal is one-way and
+the freeze fails closed below 30 — that is the declared posture, sized to be
+a tail event (typical per-attempt activity puts 30 attempts at 1.5–5h);
+report it, do not work around it.
 
 **3. Train-only edits.**
 The agent may change declared config values and files under
@@ -221,6 +225,24 @@ until the exclusive bound discovery session has both `SessionEnd` and its
 durable final active-time sample. Do not bypass that refusal or leave Claude
 open while continuing the controller.
 
+**Dead-session recovery.** If the Claude process died without running its
+SessionEnd hook (crash, OOM-kill, power loss), the session cannot finalize
+itself — the hook path needs a live scrape of a now-dead exporter. The
+supported recovery is an operator-attested close from the last durable
+sample:
+
+```bash
+uv run --project "$REPO_ROOT" automil --project "$CELL" activity close \
+  --session <session-id> --attest "runtime died before SessionEnd: <cause>"
+```
+
+It refuses while the exporter still serves the session (a live session must
+exit normally), records `finalized_by: operator-close` plus your attestation
+in the journal, and unblocks freeze/promotion/finalize. Disclose the closure
+in `termination_reason` at step 4h. Never start a replacement session for the
+cell — a new session cannot rebind, and the one-session-per-cell census is
+load-bearing.
+
 ### 4f. Promotion on folds 3 and 4
 
 ```bash
@@ -295,6 +317,7 @@ obstacle — **do not work around it.**
 | `native baseline is already running` | A lock is held | Wait; check for an orphaned process before retrying |
 | `open the campaign agent session before the first submit` | Step 4c was skipped | Open the session, then restart the agent |
 | `SessionEnd ... required before promotion or winner selection` | Claude is still open or its final native sample was not saved | Exit Claude normally; verify the SessionEnd hook succeeded; do not hand-edit the journal |
+| Claude died and cannot re-exit (no SessionEnd recorded) | The runtime was killed before its hook ran | `automil activity close --session <id> --attest "<cause>"` (see 4e); disclose in `termination_reason` |
 | attempts ≠ 30 at freeze | Budget not exhausted, or over-run | Report it — do not hand-edit state |
 | `agent session finalization is immutable` | Already finalized with different content | Stop; tell Leo |
 | candidate marked `inadmissible` | The agent touched a protected path | Expected and healthy. It is archived as a violation and does not enter the leaderboard |

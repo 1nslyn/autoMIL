@@ -5027,6 +5027,7 @@
       "hidden_dim"
     ],
     "promotion_candidates": 10,
+    "promotion_wall_clock_containment": "7d",
     "protocol_version": "preprint-v2",
     "seed": 42,
     "split_folds": 5,

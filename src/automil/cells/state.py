@@ -224,5 +224,12 @@ def read_cell(path: Path) -> Cell:
     change during deserialization.
     """
     data = json.loads(path.read_text())
+    if "mode" not in data:
+        # A pre-native-metering cell file would otherwise inherit the dataclass
+        # default and be silently reinterpreted as agent_active — rewriting its
+        # billing provenance. Obsolete layouts are rejected, never coerced.
+        raise ValueError(
+            f"{path.name}: obsolete cell layout without an explicit 'mode'"
+        )
     data["status"] = CellStatus(data["status"])
     return Cell(**data)

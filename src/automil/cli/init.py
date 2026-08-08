@@ -64,7 +64,23 @@ def _register_claude_hooks(
     env = settings.setdefault("env", {})
     if not isinstance(env, dict):
         raise click.ClickException(f"{settings_path}: env must be an object")
-    env.update(claude_activity_environment())
+    required_env = claude_activity_environment()
+    preserved = {
+        key: env[key]
+        for key in required_env
+        if key in env and env[key] != required_env[key]
+    }
+    for key, value in required_env.items():
+        env.setdefault(key, value)
+    if preserved:
+        click.echo(
+            "warning: keeping existing telemetry env "
+            + ", ".join(f"{k}={v!r}" for k, v in sorted(preserved.items()))
+            + "; native active-time metering requires "
+            + ", ".join(f"{k}={v}" for k, v in sorted(required_env.items()))
+            + " — agent_active cells hold admission until the exporter matches",
+            err=True,
+        )
 
     # Remove every obsolete on_tool.sh registration and normalize any prior
     # activity-ingest registration to the exact event/matcher matrix below.

@@ -368,8 +368,13 @@ def test_spec_without_cell_id_still_launches_but_is_reported(tmp_path, caplog):
     )
 
 
-def test_spec_referencing_an_unknown_cell_is_refused(tmp_path, caplog):
-    """A declared but unresolved cell fails closed before process launch."""
+def test_spec_referencing_an_unknown_cell_is_held_not_cancelled(tmp_path, caplog):
+    """A declared but unresolved cell fails closed WITHOUT destroying the spec.
+
+    It never launches unmetered, but it is held rather than refused: a missing
+    or unreadable cell file may be transient, and refusal would irreversibly
+    unlink the queue spec and cancel the node.
+    """
     orch = _make_orch(tmp_path)
     (orch.automil_dir / "cells").mkdir(parents=True, exist_ok=True)
     _seed_graph(orch)
@@ -382,7 +387,9 @@ def test_spec_referencing_an_unknown_cell_is_refused(tmp_path, caplog):
             orch._launch(spec, gpu_id=0)
 
     assert len(_FakePopen.calls) == 0
-    assert not (orch.queue_dir / f"{NODE_ID}.json").exists()
+    assert (orch.queue_dir / f"{NODE_ID}.json").exists(), (
+        "a held spec must stay queued for a later tick"
+    )
     assert any("doesnotexist0001"[:8] in r.getMessage() for r in caplog.records), (
         f"expected a warning naming the unknown cell; got "
         f"{[r.getMessage() for r in caplog.records]}"

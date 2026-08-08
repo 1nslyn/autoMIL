@@ -108,6 +108,13 @@ def test_activity_ingest_real_cli_accepts_claude_payloads(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "automil.activity_metrics.observe_activity_metrics", observe
     )
+    # SessionEnd now scrapes and finalizes atomically from the raw exposition.
+    monkeypatch.setattr(
+        "automil.activity_metrics.fetch_activity_exposition",
+        lambda **_: (
+            'claude_code_active_time_total{session_id="session-123",type="cli"} 7\n'
+        ),
+    )
     config = _config(task={"name": "tcga_luad"})
     _write_config(tmp_path, config)
     monkeypatch.chdir(tmp_path)
@@ -189,11 +196,13 @@ def test_session_end_requires_its_final_native_metric(tmp_path, monkeypatch):
             "source": "startup",
         },
     )
+    from automil.cells.activity import ActivityError
+
+    def _dead_endpoint(**_kwargs):
+        raise ActivityError("Claude metrics endpoint unavailable: connection refused")
+
     monkeypatch.setattr(
-        "automil.activity_metrics.observe_activity_metrics",
-        lambda *_: ActivityObservation(
-            available=False, error="connection refused"
-        ),
+        "automil.activity_metrics.fetch_activity_exposition", _dead_endpoint
     )
     payload = {
         "hook_event_name": "SessionEnd",
@@ -213,3 +222,76 @@ def test_session_end_requires_its_final_native_metric(tmp_path, monkeypatch):
         .splitlines()
     ]
     assert [record["event"] for record in records] == ["session_open"]
+
+
+def test_activity_close_finalizes_dead_session_and_refuses_live_one(
+    tmp_path, monkeypatch,
+):
+    """Operator escape hatch: a runtime killed before its SessionEnd hook."""
+    from automil.cells.activity import ingest_prometheus_metrics, record_hook_event
+
+    config = _config()
+    _write_config(tmp_path, config)
+    monkeypatch.chdir(tmp_path)
+    automil_dir = tmp_path / "automil"
+    record_hook_event(
+        automil_dir,
+        None,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-123",
+            "source": "startup",
+        },
+    )
+    ingest_prometheus_metrics(
+        automil_dir,
+        'claude_code_active_time_total{session_id="session-123",type="cli"} 42\n',
+    )
+
+    # While the exporter still serves this session, close refuses.
+    monkeypatch.setattr(
+        "automil.activity_metrics.observe_activity_metrics",
+        lambda *_a, **_k: ActivityObservation(
+            available=True, sessions=("session-123",), observed_at=1.0
+        ),
+    )
+    refused = CliRunner().invoke(
+        main,
+        ["activity", "close", "--session", "session-123", "--attest", "test"],
+    )
+    assert refused.exit_code != 0
+    assert "still exporting" in refused.output
+
+    # Exporter dead (process gone): the durable sample becomes the attested end.
+    monkeypatch.setattr(
+        "automil.activity_metrics.observe_activity_metrics",
+        lambda *_a, **_k: ActivityObservation(
+            available=False, error="connection refused"
+        ),
+    )
+    closed = CliRunner().invoke(
+        main,
+        [
+            "activity", "close",
+            "--session", "session-123",
+            "--attest", "runtime OOM-killed before SessionEnd",
+        ],
+    )
+    assert closed.exit_code == 0, closed.output
+    assert "42.0 active seconds" in closed.output
+
+    records = [
+        json.loads(line)
+        for line in (automil_dir / ".activity.jsonl").read_text().splitlines()
+    ]
+    assert [record["event"] for record in records] == ["session_open", "session_end"]
+    assert records[1]["finalized_by"] == "operator-close"
+    assert records[1]["attestation"] == "runtime OOM-killed before SessionEnd"
+
+    # A second close cannot double-end the session.
+    again = CliRunner().invoke(
+        main,
+        ["activity", "close", "--session", "session-123", "--attest", "again"],
+    )
+    assert again.exit_code != 0
+    assert "already ended" in again.output
