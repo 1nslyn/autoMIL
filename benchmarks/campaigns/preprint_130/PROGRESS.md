@@ -16,7 +16,8 @@ per-cell row here, it belongs in the Sheet.
 
 ## Stage codes (used in the Sheet)
 
-A cell moves left to right and never skips:
+A cell moves left to right; the one legal skip is a zero-eligible-candidate
+freeze, which jumps from `F` past `P` (baseline wins by default):
 
 | Code | Stage | Done when |
 |---|---|---|
@@ -27,7 +28,7 @@ A cell moves left to right and never skips:
 | `F` | discovery frozen | 30 attempts charged, top-10 frozen |
 | `P` | promotion done | frozen top-10 evaluated on folds 3/4 |
 | `W` | winner selected | one winner frozen on five-fold validation mean |
-| `C` | certified | held-out unsealed once for that winner |
+| `C` | certified | held-out unsealed once, winner paired with its native baseline |
 | `X` | blocked | put the reason in `Blocker / notes` |
 
 > **No test metric goes in the Sheet, ever.** Certification writes results into

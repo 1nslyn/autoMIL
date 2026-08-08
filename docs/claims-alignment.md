@@ -312,6 +312,22 @@ waits.
 | `flock` around shared-`benchmark_dir` prep (`prepare_all`) | Kills the concurrent-prep race class permanently (C-l) | Touches the protected prep path; the runbook prep-once rule covers the preprint |
 | Live runtime-session evidence per submit (C-i mechanical half) | Detectable session resumption in the census | Attestation + runbook disclosure suffice for the preprint threat model |
 
+**Post-integration residuals (2026-08-08, from the #39 adversarial review;
+accepted, not blocking).** (a) `task.name` is hard-required by cell identity —
+adding it to an older config re-keys the budget cell; upgrade edge, document
+on the next breaking release. (b) One corrupt journal line or orphaned sample
+degrades activity reads project-wide — now non-destructive (daemon holds, CLI
+shows DEGRADED) but with no repair command. (c) Port 9464 single-tenancy is
+documented for the campaign only; the generic degradation message doesn't name
+port collision as a cause. (d) Generic (non-campaign) projects support at most
+one agent-active cell, bound to its first session — stated in refusals, not in
+the tutorial docs. (e) Per-tick journal replays are O(specs×cells) — bounded
+by the tiny lifecycle-only journal. (f) `budget show` duplicates `cell`'s
+registry-error epilogue. (g) A moved-value scrape can still lose a clock-skew
+race and degrade one observation (self-heals next tick). (h) The Gate 1
+real-GPU canary should name the exporter label contract
+(`type∈{cli,user}` + session id) as an explicit checklist item.
+
 ## 8. Paper-side checklist (no code; carry into the manuscript)
 
 - Scope C2/C3 as lift-over-default + rank response; no AutoML-superiority

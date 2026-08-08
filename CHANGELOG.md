@@ -8,6 +8,22 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Preprint campaign integration (#39 + #40 + #41).** Native Claude
+  active-time metering (30 charged attempts + 12h agent-active, protocol
+  `preprint-v2`, manifest `automil-preprint-130-v5`) merged with the
+  claims–mechanism alignment fixes (A1–A9, B1–B8, C-\*; A10 superseded by
+  the re-sized protocol) and the campaign operator runbook. Post-merge
+  hardening from the adversarial review: atomic SessionEnd finalization
+  (closes the observe-then-record TOCTOU), `automil activity close`
+  operator recovery for runtimes that die without their hook, promotion's
+  time wall re-declared as 7d pure containment (`PROTOCOL.
+  promotion_wall_clock_containment`), declared-but-unreadable cell specs
+  held instead of irreversibly cancelled, obsolete `idle_grace*` cap keys
+  rejected, mode-less legacy cell layouts rejected, `init` preserves
+  conflicting user telemetry env, single-session refusals state the real
+  contract, runbook + claims-alignment audit reconciled to the merged
+  protocol.
+
 - **Preprint dataset roster pivot.** Dropped TCGA-SKCM (NRAS), TCGA-BLCA
   (PIK3CA), and TCGA-COAD (BRAF); added CPTAC-GBM (TP53, binary),
   CPTAC-PDAC (immune_class, 3-class), and TCGA-HNSC (tumor grade, 3-class).

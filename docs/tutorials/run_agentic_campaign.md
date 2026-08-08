@@ -47,9 +47,10 @@ error is much easier to read when you know what it is protecting.
 
 **1. Validation only. You never see test.**
 Test metrics are written straight into a sealed archive and are not visible to
-you or to the agent during search. They are unsealed once, at the very end, for
-the frozen winner only. If you ever find yourself looking at a test number
-during search — stop and tell Leo.
+you or to the agent during search. They are unsealed once, at the very end,
+for each frozen winner paired with its native baseline — nothing else is ever
+revealed. If you ever find yourself looking at a test number during search —
+stop and tell Leo.
 
 **2. Exactly 30 launched attempts per cell, 12h agent-active.**
 Crashes, OOMs, timeouts and budget-kills all consume the budget. That is
@@ -107,9 +108,12 @@ git checkout main && git pull --ff-only
 uv sync --all-packages
 ```
 
-Make sure your dataset root is in `benchmarks/.env`. The campaign reads it and
-propagates the values into the detached training worktree, which cannot see your
-shell environment.
+Make sure your dataset root is in `benchmarks/.env`. Orchestrator-run
+discovery training executes in a detached worktree with a whitelisted
+environment — it cannot see your shell, and `benchmarks/.env` is how values
+reach it. `run-baseline` is different: it inherits your full shell environment
+and applies `.env` only as a fallback (shell values win), so keep the two
+consistent.
 
 > `benchmarks/.env` is gitignored and **absent inside worktrees**. If it is
 > missing entirely, `run-baseline` will not fail fast — it fails later, inside
@@ -144,8 +148,10 @@ This is your main instrument. It reports the phase, attempts charged against the
 budget, promoted candidates, and the winner — **validation only**. It will never
 print a held-out value. Run it between every step.
 
-The phase order never skips:
-`discovery → promotion-ready → promotion → selection-ready → winner-frozen`.
+The phase order is
+`discovery → promotion-ready → promotion → selection-ready → winner-frozen`,
+with one legal skip: a zero-eligible-candidate discovery freeze goes straight
+to `selection-ready` (no promotion) and the native baseline wins by default.
 
 ### 4b. Run the native baseline
 
@@ -243,6 +249,15 @@ in `termination_reason` at step 4h. Never start a replacement session for the
 cell — a new session cannot rebind, and the one-session-per-cell census is
 load-bearing.
 
+If the runtime died **before `open-agent-session` completed** (pre-bind), the
+journal's exclusivity check will refuse any replacement session for that cell
+root, and `activity close` may refuse too — a session that died instantly has
+no durable sample to attest. Nothing has been charged at that point: no
+attempts, no bound session evidence. The declared recovery is to
+re-materialize that cell's root from the frozen manifest (the materialization
+audit re-verifies the protocol) and open a fresh session. After the first
+submit this reset is forbidden — recover with `activity close` instead.
+
 ### 4f. Promotion on folds 3 and 4
 
 ```bash
@@ -336,8 +351,9 @@ Two standing rules:
 - **A null result is a fine result.** We are measuring whether equal-effort
   recipe search moves the cross-method ranking. Stability and null are
   publishable outcomes. Nobody should be tuning toward a preferred answer.
-- **GBM survival is our declared low-signal region** — 9 of its 13 survival
-  cells sit at or near chance on validation. Run it like everything else.
+- **GBM survival is our declared low-signal region** (operator experience from
+  pre-campaign runs; no in-repo artifact pins a count). Run it like everything
+  else.
 - **`kappa` is not comparable across arms** (only nnMIL emits it), and
   `sensitivity`/`specificity` are undefined for the 3-class tasks. Do not build
   any cross-arm comparison on those.
