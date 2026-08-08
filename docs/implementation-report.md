@@ -6,6 +6,11 @@
 **Plans executed:** 92
 **Requirements delivered:** 69 (100% v1 coverage across CLN/REG/BCK/TRJ/MRT/CAP/GTE/CLI/STP/DEC)
 
+> **Point-in-time record.** This documents the v1.0 refactor and has been only
+> selectively touched up since; line counts, command counts, and per-phase
+> numbers are v1.0-era. Current mechanisms and counts live in `CLAUDE.md`,
+> `docs/training-script-contract.md`, and `CHANGELOG.md`.
+
 ## Goal
 
 Build a standalone, open-source framework that enables any coding agent to
@@ -43,7 +48,7 @@ Coding Agent (Claude Code / Codex / OpenCode / DeepSeek-via-X)
     │  edits any file in the project, runs CLI
     ▼
 automil CLI  ─►  Variant Registry (Phase 1) + Experiment Graph
-    │              with Pareto-dominance keep/discard
+    │              with composite-dominance keep/discard (Ladder margin)
     │
     │  snapshots changed files; validates against
     │  registry.protected globs and the variant validator chain
@@ -57,7 +62,7 @@ Backend ABC  ─►  LocalBackend / SLURMBackend / RayBackend
 Isolated Execution  ─►  result.json (JSON-Schema validated at ingest)
     │                    + trajectory.jsonl (OpenTelemetry gen_ai.* + redaction)
     │
-    │  Pareto dominance / UCB ranking; cell budget tracking;
+    │  composite dominance / UCB ranking; cell budget tracking;
     │  generalization gate (paired Wilcoxon + bootstrap CI)
     ▼
 3D Dashboard (live SSE)
@@ -71,7 +76,7 @@ Isolated Execution  ─►  result.json (JSON-Schema validated at ingest)
 
 | Module | LOC | Role |
 |--------|----:|------|
-| `graph.py` | 833 | Experiment tree, UCB ranking, Pareto-dominance keep/discard, dict-spread metrics storage (D-200) |
+| `graph.py` | 833 | Experiment tree, UCB ranking, composite-dominance keep/discard, dict-spread metrics storage (D-200) |
 | `backends/_orchestrator_daemon.py` | 1595 | GPU scheduler daemon: best-fit bin packing, OOM detection, crash recovery, per-backend `running/` namespacing, JSON-Schema ingest validation |
 | `backends/base.py` | 232 | `Backend` ABC: `submit`, `poll`, `list_running`, `cancel`, `log_iter`, `healthcheck`; `JobState` enum; frozen `JobHandle` / `JobSpec` / `HealthReport` dataclasses |
 | `backends/local.py` | 620 | LocalBackend: subprocess + process-group SIGTERM; CUDA / ROCm / CPU healthcheck via `nvidia-smi` / `rocm-smi` / fallback |
@@ -126,7 +131,7 @@ automil/
 | **Pluggable backends as opt-in extras** | 6 | `uv sync` (no extras) keeps submitit and ray uninstalled. Per-backend `running/` namespacing prevents cross-backend corruption (D-168). |
 | **Hardware autodetect at init time, not runtime** | 7 | `LocalBackend.healthcheck()` reports detected hardware; `automil init` stamps detected GPU count, VRAM (`numpy.quantile(.95)` of empirical `vram_gb` when ≥10 rows), and concurrency defaults. Detect-and-warn pattern; never decides for the user. |
 | **Framework purity: zero `autobench` references in `src/automil/`** | 8 | autoMIL is generic; autobench is one consumer. `tests/test_framework_purity.py` enforces a grep gate with a 5-entry content-anchor allowlist. |
-| **Composite-only Pareto, dict-spread metrics storage** | 8 | The framework no longer hardcodes the autobench 4-key composite recipe. `node["metrics"] = dict(metrics)`; consumer-supplied scalar `composite` is the single field used for ranking. |
+| **Composite-only dominance, dict-spread metrics storage** | 8 | The framework no longer hardcodes the autobench 4-key composite recipe. `node["metrics"] = dict(metrics)`; the scalar `composite` is the single field used for ranking (since CR-1b it is recomputed at ingest from the validation `metrics` block, not trusted as supplied). |
 | **`env.required` mandatory; no auto-injection** | 8 | `automil check` fails with `Missing required env var: <name>` BEFORE submit. `AUTOBENCH_ROOT` auto-injection removed; consumers declare what they need under `env.passthrough`. |
 
 ### Key innovation: git worktree overlay
@@ -153,8 +158,9 @@ exploitation (build on best results) with exploration (try under-explored
 branches). The agent uses `automil rank` to pick diverse experiments
 across branches.
 
-Keep/discard is computed by the framework via Pareto dominance over the
-consumer-supplied `composite` scalar; metrics are stored generically as
+Keep/discard is computed by the framework via composite dominance gated by
+the Ladder keep-margin, over a `composite` the framework recomputes at
+ingest (CR-1b); metrics are stored generically as
 `node["metrics"] = dict(metrics)` so the framework imposes no hardcoded
 key set.
 
@@ -178,7 +184,7 @@ training preserves completed-fold work; budget-killed runs reconcile to
 ### Generalization gate (Phase 5)
 
 Stage A is exploration: the search agent submits to live cells, scoring
-against UCB / Pareto. Promising nodes are nominated as candidates
+against UCB / composite dominance. Promising nodes are nominated as candidates
 (`automil nominate`); manual nomination is the v1.0 default to keep the
 gate honest. Stage B is generalization: a pre-registered held-out manifest
 (`gate_manifest.json`, git-committed BEFORE search starts via

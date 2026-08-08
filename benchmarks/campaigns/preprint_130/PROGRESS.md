@@ -24,12 +24,12 @@ freeze, which jumps from `F` past `P` (baseline wins by default):
 | `.` | not started | — |
 | `M` | materialized | the cell has its own isolated `automil/` root |
 | `B` | baseline done | native-recipe five-fold result archived |
-| `D` | discovery running | agent session open, ≤30 attempts charged |
+| `D` | discovery running | agent session open, ≤30 attempts charged, ≤12h agent-active |
 | `F` | discovery frozen | 30 attempts charged, top-10 frozen |
 | `P` | promotion done | frozen top-10 evaluated on folds 3/4 |
 | `W` | winner selected | one winner frozen on five-fold validation mean |
 | `C` | certified | held-out unsealed once, winner paired with its native baseline |
-| `X` | blocked | put the reason in `Blocker / notes` |
+| `X` | blocked | put the reason in `Blocker / notes`; includes 12h exhaustion below 30 attempts (freeze fails closed) |
 
 > **No test metric goes in the Sheet, ever.** Certification writes results into
 > the campaign archive. If you are about to paste a test number into a

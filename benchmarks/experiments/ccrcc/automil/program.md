@@ -86,6 +86,10 @@ Run `automil check` to verify everything is configured correctly.
 
 **Prerequisites:** `automil orchestrator start`
 
+> The current loop shape (Research → Diagnose → Plan → Execute), mode rules,
+> and budget rules are defined by the `/automil` skill; this file records
+> project-specific facts only.
+
 **LOOP FOREVER:**
 
 1. Run `automil reconcile` to sync graph with orchestrator state

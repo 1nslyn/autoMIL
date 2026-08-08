@@ -126,7 +126,12 @@ source; then `uv run automil reconcile`.
       `step()`) and stopping policies driven by the supplied validation
       metrics. They do NOT support SAM-class two-pass optimizers (no closure
       re-evaluates the loss), loss shaping, sampling changes, or ensembling —
-      don't spend attempts discovering that. Keep module scope declarative:
+      don't spend attempts discovering that. The stopping seam receives the
+      per-epoch validation metrics on every arm, so a stopping policy doubles
+      as a diagnostic probe: print the epoch-by-epoch validation trajectory it
+      observes to stdout and read it back from that run's archived `run.log` —
+      when the training script itself prints no per-epoch lines, this is the
+      only way to see the learning curve. Keep module scope declarative:
       only import `automil.registry`, `__future__`, `typing`,
       or `collections.abc` at top level; import numerical libraries inside the
       policy methods that use them.
@@ -152,6 +157,14 @@ source; then `uv run automil reconcile`.
    `uv run automil cell status` before each batch, and never spend one on a
    duplicate, an unverified guess, or a submission you have not sanity-checked
    locally (imports, config validity). A wasted attempt cannot be recovered.
+
+   When an external freeze census governs the cell (the frozen preprint
+   protocol freezes discovery only after the entire eval budget is consumed),
+   the budget is also a floor: spend every attempt — late budget goes to the
+   strongest remaining hypotheses, never banked — and never exit the runtime
+   session while unspent attempts remain. The cell is bound to this session
+   and a replacement session cannot inherit the binding, so stranded budget
+   leaves the cell permanently unable to freeze.
 
 5. **WAIT** on Monitor completion events (do **not** poll). Agent-active time is
    Claude Code's native cumulative active-time metric (CLI + user active

@@ -15,7 +15,7 @@ confounded by uneven per-cell tuning effort.
 
 The preprint roster is a 5-cohort slate (3 TCGA + 2 CPTAC), each pinned to one
 classification task plus an overall-survival (OS) task, run across 4 MIL
-aggregators (`clam_mb`, `simple_mil`, `ab_mil`, `dtfd_mil`) plus a TITAN
+aggregators (`clam_mb`, `simple_mil`, `abmil`, `dtfd_mil`) plus a TITAN
 slide-encoder arm. The roster spans binary mutation tasks and multi-class
 (3-way) tasks across two data sources (TCGA + CPTAC):
 
@@ -33,7 +33,7 @@ Additional non-slate cohorts also ship configs: **Ovarian** (BRCA/HRD,
 (`datasets/cptac/`, a feasibility anchor, not part of the roster).
 `datasets/templates/` holds the `tcga_`, `cptac_`, and `placeholder` templates
 for adding your own. The full Phase-2 (journal) scope is the 16 TCGA + 10
-CPTAC inventory — see [`../paper/`](../paper/).
+CPTAC inventory (the journal-phase blocks in `.env.example`).
 
 ## Setup
 

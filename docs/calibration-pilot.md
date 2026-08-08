@@ -80,12 +80,12 @@ Commit with message: `gate: lock K=<N> from the calibration pilot`
 
 ## Procedure checklist (step-by-step)
 
-1. **Pick fresh cells.** Run `automil cell list` — choose 3 CCRCC + 2 CLWD where
+1. **Pick fresh cells.** Run `uv run automil cell list` — choose 3 CCRCC + 2 CLWD where
    `status=active` AND `consumed_seconds` is low (well below the 6h cap). Note cell_ids.
    Avoid cells where the agent has already submitted experiments (D-150 / Pitfall 1).
 
 2. **Confirm node_0176 portability.** If REG-08 (Phase 1) has shipped, use
-   `automil apply node_0176`. Otherwise, manually identify node_0176's overlay files
+   `uv run automil apply node_0176`. Otherwise, manually identify node_0176's overlay files
    (clam_mb model edits + ce_smooth loss + sam_lookahead policy) and copy them.
 
 3. **Register the manifest.** For node_0176's parent, declare all 5 fresh cells as held-out:

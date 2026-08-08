@@ -71,69 +71,144 @@ All file paths in `files.editable`, `uv run automil submit --files`, and `run.co
 are relative to the **git repo root**, not to where automil/ lives. The
 orchestrator creates worktrees from the git root, so overlay paths must match.
 
-## Two standing directives (do not drop these between sessions)
+## The loop is Research → Diagnose → Plan → Execute
 
-1. **Saturate every GPU — submit experiments until the VRAM bin-packer
-   can't fit another one, not until each GPU has one run.** The
-   orchestrator's whole purpose is parallel bin-packing. Before every
-   batch, measure the actual peak VRAM of a typical run (see
-   `automil/orchestrator/archive/<node>/result.json → peak_vram_mb`)
-   and set `orchestrator.max_concurrent_per_gpu` and
-   `orchestrator.default_vram_estimate_gb` in `config.yaml` so that a
-   realistic number of workers fit per card with the safety margin.
-   Config hot-reloads live — no daemon restart needed. Then check
-   `automil/orchestrator/gpu_state.json` → `schedulable_free_gb` and
-   `running` per GPU. If `running` has fewer workers than the cap
-   allows while the queue is non-empty and `schedulable_free_gb` is
-   large, the loop is running serially and that is a framework bug,
-   not a safety feature. Propose and submit more specs until the cap
-   binds.
+Read `registry.mode` before proposing. In `free` mode, the loop explores
+architecture and recipe and keeps the structural portfolio gate. In
+`architecture-preserving` mode, the published model is fixed: explore declared
+scalars plus executable train-only optimizer/update, scheduler, and stopping
+policies, never architecture, data/sampling, or ensemble proposals.
+Never propose a scalar named in `registry.identity_locked_hparams`; those keys
+can erase the arm's defining mechanism and are rejected at submit and launch.
+`automil portfolio` enforces the configured mode.
 
-2. **Before every new experiment batch, read recent literature.** Do
-   not only hill-climb on hyperparameters. Delegate a short research
-   sub-agent (WebSearch + WebFetch) for the most recent (current year
-   and prior year) methods relevant to the project's model class and
-   bottleneck, pick 1–2 tractable drop-ins that fit the existing
-   pipeline (no full rewrites, no data-format changes), and queue
-   those alongside the usual hyperparameter sweeps. Aim for a
-   portfolio: half regularization / hyperparameter tweaks, half
-   structurally novel ideas from the literature. Log the paper title
-   and arXiv ID in `automil/learnings.md` whenever you try something
-   from a paper, so future sessions don't re-try it blind.
+First, every session/restart: read `automil/config.yaml`, `automil/graph.json`,
+`automil/learnings.md`, `automil/plan.md`, and the training + `files.editable`
+source; then `uv run automil reconcile`.
 
-## Run
+**LOOP FOREVER — one batch =**
 
-1. Read `automil/config.yaml`, `automil/graph.json`, `automil/learnings.md`
-2. Read the training script and key source files from `files.editable`
-3. Run `uv run automil reconcile` to sync graph state
+1. **RESEARCH.** Delegate a short research sub-agent (WebSearch + WebFetch) for
+   current-year and prior-year methods relevant to this model class and the
+   current bottleneck. Pick 1–2 tractable drop-ins that fit the existing
+   pipeline (no full rewrites, no data-format changes). Log title + arXiv id in
+   `learnings.md` for anything you try, so future sessions don't re-try it blind.
 
-Then follow Phase 2 in `automil/program.md`:
+2. **DIAGNOSE.** Read `graph.json` + recent `archive/<node>/result.json` +
+   `learnings.md` and name the **one primary failure mode** of the current best —
+   overfit · underfit · attention-collapse · poor calibration · class-imbalance ·
+   data/feature bottleneck — with evidence. This is what the batch attacks. Never
+   propose from "which knob is untried"; propose from "what is actually limiting
+   the model".
 
-**LOOP FOREVER:**
+3. **PLAN.** Rewrite `automil/plan.md`: the diagnosis, then a table of this
+   batch's proposals — each with `kind`, parent, and *hypothesis → expected
+   mechanism*. Queue each with
+   `uv run automil propose --parent <id> --kind <k> --desc "..."`
+   (kinds: `architecture` · `regularization` · `hp` · `data` · `ensemble`).
+   Then run `uv run automil portfolio`. In `free` mode, aim ≥50% structural
+   (architecture/ensemble) and rebalance if it reports BELOW TARGET. In
+   `architecture-preserving` mode, use only `regularization` or `hp`;
+   `architecture`, `data`, and `ensemble` are forbidden. A batch may be
+   HP-only if that is what the diagnosis supports, but actively consider the
+   broader executable train-only recipe surface instead of enumerating knobs.
 
-1. `uv run automil reconcile`
-2. `uv run automil rank` to get top proposals. If none, brainstorm new ones.
-3. Read `automil/learnings.md` to avoid repeating failures.
-4. For each proposal:
-   a. Edit project files to implement the idea
-   b. `uv run automil submit --node <id> --desc "..." --files <changed files>`
-   c. Restore working tree: `git checkout -- <files>`
-5. Wait for Monitor completion events (do **not** poll) — the watcher
-   streams `Completed node_...` lines as they arrive
-6. `uv run automil reconcile` to update graph
-7. Update `automil/learnings.md`
-8. If improved: commit winning changes
-9. If no proposals: brainstorm, `uv run automil propose`
-10. Repeat
+4. **EXECUTE.** `uv run automil rank`, then implement and submit — **prefer the
+   variant-registry path**:
+   a. In architecture-preserving mode, add a registered `PolicyVariant` at
+      `automil/variants/_policies/<name>.py`, then submit it explicitly with
+      `--files automil/variants/_policies/<name>.py --override
+      "--policy-variant <name>"`. The protected consumer loop supplies only
+      optimizer/scheduler/stopping seams; model, defining loss, measurement,
+      and held-out outputs are unavailable through this interface. What the
+      seams genuinely support: single-point optimizer wrappers (Lookahead,
+      gradient clipping, per-group LR, custom LR schedules inside a wrapped
+      `step()`) and stopping policies driven by the supplied validation
+      metrics. They do NOT support SAM-class two-pass optimizers (no closure
+      re-evaluates the loss), loss shaping, sampling changes, or ensembling —
+      don't spend attempts discovering that. The stopping seam receives the
+      per-epoch validation metrics on every arm, so a stopping policy doubles
+      as a diagnostic probe: print the epoch-by-epoch validation trajectory it
+      observes to stdout and read it back from that run's archived `run.log` —
+      when the training script itself prints no per-epoch lines, this is the
+      only way to see the learning curve. Keep module scope declarative:
+      only import `automil.registry`, `__future__`, `typing`,
+      or `collections.abc` at top level; import numerical libraries inside the
+      policy methods that use them.
+   b. In free mode, model/loss/policy variants may use their registered kind
+      directory and normal selection lifecycle.
+   c. Free-mode edit: edit project files, then
+      `uv run automil submit --node <id> --desc "..." --mil-model <model> --files <changed files>`,
+      then **selectively** restore ONLY those files:
+      `git restore --source=HEAD -- <each-file>`. Never bulk-restore
+      (`git checkout .`, `git restore .`, `git stash -k`) — it discards unrelated work.
+
+   **Saturate every GPU** — submit until the VRAM bin-packer can't fit another
+   run, not until each GPU has one. Measure a typical run's `peak_vram_mb`
+   (`archive/<node>/result.json`) and set `orchestrator.max_concurrent_per_gpu`
+   + `orchestrator.default_vram_estimate_gb` in `config.yaml` (hot-reloads live).
+   Check `orchestrator/gpu_state.json` → `schedulable_free_gb` / `running`; if
+   workers < cap while the queue is non-empty and free VRAM is large, the loop is
+   running serially — submit more specs until the cap binds.
+
+   **Attempts are the budget.** When the cell declares `cap.eval_budget`,
+   every **launched** attempt is charged — crashes, timeouts, and budget-kills
+   included; only submit-time refusals are free. Check remaining attempts with
+   `uv run automil cell status` before each batch, and never spend one on a
+   duplicate, an unverified guess, or a submission you have not sanity-checked
+   locally (imports, config validity). A wasted attempt cannot be recovered.
+
+   When an external freeze census governs the cell (the frozen preprint
+   protocol freezes discovery only after the entire eval budget is consumed),
+   the budget is also a floor: spend every attempt — late budget goes to the
+   strongest remaining hypotheses, never banked — and never exit the runtime
+   session while unspent attempts remain. The cell is bound to this session
+   and a replacement session cannot inherit the binding, so stranded budget
+   leaves the cell permanently unable to freeze.
+
+5. **WAIT** on Monitor completion events (do **not** poll). Agent-active time is
+   Claude Code's native cumulative active-time metric (CLI + user active
+   seconds; idle excluded). Monitor is the event-driven wait mechanism, not the
+   budget clock. Research or diagnosis performed while a batch trains remains
+   active work and is therefore billed normally.
+
+6. **RECONCILE + LEARN.** `uv run automil reconcile`; read results; update
+   `learnings.md` (what worked / failed / near-miss, with paper ids). Commit
+   winning changes. Then loop back to RESEARCH for the next batch.
+
+## The val-firewall — select on validation, never test
+
+Every `result.json` `metrics` block is **validation-only**, and `composite` is
+computed from it — that is the sole selection signal. Any test metrics the
+consumer emits are sealed into a `held_out` block that the orchestrator
+quarantines under `archive/<node>/certify/`; they are never surfaced to you
+during search. Do **not** try to read, reconstruct, or optimize against test.
+When the whole search is finished, reveal the held-out number exactly once:
+
+```bash
+uv run automil certify        # honest held-out test for the val-selected winner
+```
+
+The val→test gap is the honest cost of search; reporting the certified number
+(not a test-selected one) is what keeps the comparison trustworthy.
 
 ## Rules
 
 - NEVER STOP while `.automil_active` exists
+- Every batch: DIAGNOSE a failure mode and rewrite `automil/plan.md` BEFORE proposing
+- Always pass `--kind` to `automil propose` and run `automil portfolio`
+  before execution. Free mode requires its structural quota; architecture-
+  preserving mode forbids architecture/ensemble and has no structural quota.
+- In architecture-preserving mode, edit only `files.editable`; never attempt
+  to bypass admissibility with explicit `--files`, raw identity overrides, or
+  a model/loss variant.
+- NEVER read or optimize against test: `metrics`/`composite` are validation-only and test is sealed (val-firewall). Reveal held-out test once at the very end with `uv run automil certify`, never inside the loop
 - Use `uv run automil submit` for every experiment (not manual runs)
 - Use `uv run automil rank` to pick experiments (not random)
-- Update `automil/learnings.md` after every result
+- Update `automil/learnings.md` after every result (paper title + arXiv id when from a paper)
 - Commit winning experiments to git
 - File paths in submit --files must be relative to git repo root
+- Restore selectively after submit; never bulk-restore the working tree
 
 ## Stopping
 
