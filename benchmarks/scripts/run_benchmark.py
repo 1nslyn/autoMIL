@@ -193,17 +193,13 @@ def _train_config_from_args(args: argparse.Namespace) -> TrainConfig:
     return TrainConfig(**explicit)
 
 
-def main() -> None:
-    args = parse_args()
+def _benchmark_config_from_args(args, ds) -> BenchmarkConfig:
+    """Resolve rosters from CLI/dataset config and build the BenchmarkConfig.
 
-    # Load dataset configuration
-    ds = load_dataset_config(args.dataset)
-    registries = build_registries(ds)
-    print(f"Loaded dataset config: {ds.name} ({ds.description})")
-    print(f"  Tasks: {list(ds.tasks.keys())}")
-    print(f"  Strategies: {list(ds.split_strategies.keys())}")
-    print(f"  Encoders: {list(ds.encoder_dims.keys())}")
-
+    DATA-ID: this path (unlike ``BenchmarkConfig.from_dataset_config``) used to
+    omit ``dataset=ds.name``, so every static-grid result was written with
+    ``dataset: ""`` and failed the campaign audits.
+    """
     # Resolve defaults from dataset config
     encoders = args.encoders or list(ds.encoder_dims.keys())
     models = args.models or ds.clam_models
@@ -248,7 +244,11 @@ def main() -> None:
 
     wandb_project = args.wandb_project or f"{ds.name}-benchmark"
 
-    cfg = BenchmarkConfig(
+    return BenchmarkConfig(
+        # DATA-ID: stamp dataset identity so every downstream artifact
+        # (config.json, summary.json, fingerprints) records which cohort
+        # produced it. `""` here fails the preprint campaign audits.
+        dataset=ds.name,
         benchmark_dir=args.benchmark_dir or ds.benchmark_dir,
         mapping_csv=args.mapping_csv or ds.mapping_csv,
         features_base_dir=args.features_base_dir or ds.features_base_dir,
@@ -267,6 +267,20 @@ def main() -> None:
         dtfd_model_types=dtfd_models,
         abmil_model_types=abmil_models,
     )
+
+
+def main() -> None:
+    args = parse_args()
+
+    # Load dataset configuration
+    ds = load_dataset_config(args.dataset)
+    registries = build_registries(ds)
+    print(f"Loaded dataset config: {ds.name} ({ds.description})")
+    print(f"  Tasks: {list(ds.tasks.keys())}")
+    print(f"  Strategies: {list(ds.split_strategies.keys())}")
+    print(f"  Encoders: {list(ds.encoder_dims.keys())}")
+
+    cfg = _benchmark_config_from_args(args, ds)
 
     if args.prep_only:
         from autobench.pipeline.prepare import prepare_all
