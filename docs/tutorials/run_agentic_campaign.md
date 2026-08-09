@@ -140,15 +140,22 @@ condition — never bypass it.
 
 - `~/.claude/CLAUDE.md` does not exist, and no `CLAUDE.local.md` or
   `.claude/CLAUDE.md` sits on any directory between the cell root and `/`.
+- No **unpinned plain `CLAUDE.md`** sits on that same walk either. Only the
+  repository `CLAUDE.md` is pinned, so a stray `~/CLAUDE.md`, or one in the
+  directory holding your clone, refuses the launch — this catches people out
+  more often than the `.local` variants do.
 - `~/.claude/plugins` is absent or empty. On a shared machine this is a
   coordination step, not a private one: plugins installed for somebody else's
   project still load into your session.
 - None of these are set in your shell: `ANTHROPIC_MODEL`,
   `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`,
   `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_EFFORT_LEVEL`.
-- The repository `CLAUDE.md` is byte-identical to the hash pinned in the
-  protocol. Do not edit it during the campaign.
-- `claude --version` reports exactly the protocol's `runtime_version`. Pin that
+- The repository `CLAUDE.md` still hashes to the value pinned in the protocol
+  (SHA-256 over the decoded text, so newline style is normalised first). Do not
+  edit it during the campaign.
+- The **first token** of `claude --version` equals the protocol's
+  `runtime_version` — the pin is the bare version, `2.1.226`, not the whole
+  line the CLI prints. Pin that
   version and **turn the CLI autoupdater off on the host** — the launcher sets
   `DISABLE_AUTOUPDATER=1` for the session it starts, which cannot protect you
   from a binary that drifted between cells.
@@ -440,9 +447,11 @@ Two standing rules:
   init` inside a cell root.
 - **`--output-root` must be inside the git repository.** A throwaway root for
   rehearsal has to be something like `benchmarks/campaigns/preprint_130/runtime-canary/`;
-  an external path is rejected. Note that `freeze-selections` and `report` read
-  the real `runtime/` unconditionally, so a throwaway root can never reach the
-  endgame commands.
+  an external path is rejected. A throwaway root is safe to rehearse in: every
+  command including `freeze-selections`, `certify-all` and `report` honours
+  `--output-root`, and what stops a rehearsal from ever producing a publication
+  artifact is the census — the selection freeze requires exactly 130 manifest
+  cells and fails closed below that.
 - **Timing anchors in this repository are H100-based.** On any other
   accelerator, re-derive attempt wall-clock from your own canary before
   planning a schedule — the 360-minute attempt timeout is the constraint that
