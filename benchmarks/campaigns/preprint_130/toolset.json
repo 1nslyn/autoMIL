@@ -6,7 +6,7 @@
     "--dangerously-skip-permissions",
     "--setting-sources", "project",
     "--strict-mcp-config",
-    "--disallowedTools", "Skill,SlashCommand"
+    "--disallowedTools", "Skill"
   ],
   "launcher_env": {
     "DISABLE_AUTOUPDATER": "1"
@@ -32,11 +32,11 @@
   "session_settings": "The cell's .claude/settings.json is exactly automil's claude_activity_settings(port) for the cell's declared activity.exporter_port: the OTEL prometheus-export env (CLAUDE_CODE_ENABLE_TELEMETRY, OTEL_METRICS_EXPORTER=prometheus, OTEL_METRICS_INCLUDE_SESSION_ID, OTEL_EXPORTER_PROMETHEUS_PORT=<cell port>) plus the SessionStart(startup)/SessionEnd hooks running `uv run automil activity ingest`. Every cell exports on its own dedicated port, so concurrent cells on one host never share an endpoint. The launcher refuses any drift and adds nothing to it.",
   "tools": {
     "builtin": "The pinned runtime version's default built-in toolset (file read/search/edit, shell, WebSearch/WebFetch, subagents, task tracking, background monitors), with no additions.",
-    "disabled": ["Skill", "SlashCommand"],
+    "disabled": ["Skill"],
     "mcp": "None: --strict-mcp-config with no --mcp-config loads zero MCP servers regardless of user or project configuration.",
     "web": "WebSearch and WebFetch enabled and auto-approved under bypassPermissions; identical for all 130 cells per the campaign network policy.",
-    "instruction_surface": "The cell root CLAUDE.md is rendered byte-exact from agent_protocol.proposal_policy_content by the launcher. Ancestor memory files on the path to the repo root are pinned by hash in ancestor_memory and frozen for the campaign; user-level memory and plugins must be absent on the host. Repository skills are invocation-blocked via --disallowedTools, so their listing text is context, not policy.",
+    "instruction_surface": "The cell root CLAUDE.md is rendered byte-exact from agent_protocol.proposal_policy_content by the launcher. Ancestor memory files on the path to the repo root are pinned by hash in ancestor_memory and frozen for the campaign; user-level memory and plugins must be absent on the host. Repository skills are invocation-blocked via --disallowedTools, so their listing text is context, not policy. That block is load-bearing rather than incidental: the cell agent drives the loop from the rendered CLAUDE.md and the automil CLI directly, and must never pick up the repository's own automil skill, whose text is not frozen and would otherwise compete with the policy. Slash commands are a separate surface and are NOT covered by it — measured on the pinned runtime, a project .claude/commands/ entry still reaches context under --disallowedTools Skill, and no deny-rule name blocks it (SlashCommand is not a known tool there). What bounds that surface is its emptiness, not a flag: the repository ships no .claude/commands/, and a materialized cell root contains only .claude/settings.json. Adding a command file anywhere on a cell session's project path during the campaign is a protocol deviation to record in that cell's disclosure.",
     "launcher_derived_env": "The launcher additionally exports REPO_ROOT=<repository root> (host-local, used by the policy's command forms) and applies launcher_env verbatim.",
-    "validation": "The exact flag set above is exercised against the pinned runtime_version by the Gate-1 real-GPU canary before any formal cell launches; a flag the pinned CLI rejects must be fixed here and the protocol rebuilt BEFORE materialization."
+    "validation": "The exact flag set above is exercised against the pinned runtime_version by the Gate-1 real-GPU canary before any formal cell launches; a flag the pinned CLI rejects must be fixed here and the protocol rebuilt BEFORE materialization. Exit status alone is not sufficient evidence: an unrecognised --disallowedTools name does not fail the launch, it emits `Permission deny rule \"<name>\" matches no known tool` on stderr and proceeds with that rule silently inert, so the operator-run Gate-1 canary carries an explicit stderr check in its PROGRESS.md checklist. The zero-GPU campaign_manifest.py canary cannot substitute for it: that one materializes and audits roots and never execs the runtime, so it exercises no flag at all."
   }
 }

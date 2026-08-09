@@ -52,6 +52,12 @@ freeze, which jumps from `F` past `P` (baseline wins by default):
 One real-GPU end-to-end cell per regime. **No formal cell launches until all ten
 pass.** Check archive, firewall, budget counts, timing and reproducibility each time.
 
+Also, once, on the first regime: **read the launched session's stderr** and
+confirm it carries no `Permission deny rule "<name>" matches no known tool`
+warning. An unrecognised deny-rule name does not fail the launch — it warns and
+proceeds with the rule inert — so nothing upstream catches it. The zero-GPU
+`campaign_manifest.py canary` never execs the runtime and cannot substitute.
+
 | Arm | Classification | Survival |
 |---|:--:|:--:|
 | clam | ⬜ | ⬜ |
@@ -64,7 +70,7 @@ pass.** Check archive, firewall, budget counts, timing and reproducibility each 
 
 | Item | Status | Notes |
 |---|---|---|
-| `agent_protocol.json` generated + hash-verified | ⬜ | sources + builder landed (`proposal_policy.md`, `toolset.json`, `campaign_agent_protocol.py build/verify`); still blocked on the immutable model ID from a throwaway session |
+| `agent_protocol.json` generated + hash-verified | ✅ | built and committed from the two sources, pinned to `claude-opus-5[1m]` / Claude Code `2.1.226` from a throwaway session; `agent_protocol_sha256` `d8d86c22…`, re-verified in CI on every push. Rebuilding requires deleting the file first — it is frozen once. The pinned model ID is what `/status` reports but is not date-anchored; note that in the disclosure |
 | Per-cell agent launcher (one fresh session, locked tool surface) | ✅ | `campaign_launch.py` — protocol-derived flags + instruction render, pinned CLI/memory surface, per-cell exporter-port exclusivity, fail-closed preflight; first real-CLI exercise happens in the Gate-1 canary |
 | Allocation request (~8,000 GPU-h) | ⬜ | re-derive from canary timings first |
 
@@ -103,6 +109,7 @@ One line per week. Keeps a history the Sheet does not.
 | Week of | Certified | Note |
 |---|--:|---|
 | 2026-08-06 | 0 | Campaign not launched. Baseline reruns queued; canary and agent protocol outstanding. |
+| 2026-08-09 | 0 | Campaign not launched. Agent protocol built, verified and committed; Gate-1 canary outstanding. |
 
 ## Open issues
 

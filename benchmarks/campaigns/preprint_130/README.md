@@ -64,6 +64,17 @@ mismatches are rejected. The locked file therefore archives the resolvable
 coding-agent policy before any search starts; it is not an optimization
 result. `agent_protocol.template.json` stays as the schema reference.
 
+`agent_protocol.json` is **already built and committed** for this campaign, and
+CI re-runs `verify` on every push so it cannot drift from its two sources. Run
+`verify` alone to confirm your checkout; you do not need `build`. `build` is
+frozen-once — it refuses to overwrite an existing protocol whose content would
+differ, and `--runtime-version` must match the CLI on *your* launch host, so
+running it on a host with a different `claude --version` is how operators
+usually hit that refusal. Rebuilding is deliberate and rare (a changed source
+payload, or a re-pinned identity, before anything is materialized): delete
+`agent_protocol.json`, run `build`, then `verify`. Never rebuild after
+materialization — the runtime copy is what all 130 cells hash-lock.
+
 ```bash
 uv run python benchmarks/scripts/campaign_manifest.py materialize \
   --agent-protocol benchmarks/campaigns/preprint_130/agent_protocol.json
