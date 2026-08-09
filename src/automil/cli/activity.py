@@ -26,6 +26,7 @@ def ingest() -> None:
         raise click.ClickException("hook payload must be one JSON object")
 
     automil_dir = _find_automil_dir()
+    from automil.activity_hooks import activity_metrics_url, project_exporter_port
     from automil.activity_metrics import (
         fetch_activity_exposition,
         observe_activity_metrics,
@@ -43,12 +44,18 @@ def ingest() -> None:
             # race to any concurrent scrape and stranded the session open
             # forever once the exporter died with the runtime.
             try:
-                exposition = fetch_activity_exposition()
+                exposition = fetch_activity_exposition(
+                    url=activity_metrics_url(project_exporter_port(automil_dir))
+                )
             except ActivityError as exc:
                 raise ActivityError(
                     "cannot read this session's final Claude active-time "
                     f"metric before SessionEnd: {exc}"
                 ) from exc
+            except ValueError as exc:
+                # A malformed activity.exporter_port declaration, surfaced
+                # with the config path rather than as an endpoint failure.
+                raise ActivityError(str(exc)) from exc
             finalize_session_end(automil_dir, payload, exposition)
         else:
             # Hooks identify the runtime session, not a mutable config-derived
@@ -78,6 +85,7 @@ def close(session_id: str, attest: str) -> None:
     """
 
     automil_dir = _find_automil_dir()
+    from automil.activity_hooks import activity_metrics_url, project_exporter_port
     from automil.activity_metrics import fetch_activity_exposition
     from automil.cells.activity import (
         ActivityError,
@@ -86,11 +94,15 @@ def close(session_id: str, attest: str) -> None:
     )
 
     try:
+        try:
+            _metrics_url = activity_metrics_url(project_exporter_port(automil_dir))
+        except ValueError as exc:
+            raise ActivityError(str(exc)) from exc
         # Liveness guard independent of journal-ingest validity: refuse
         # whenever the endpoint answers and the target session is present,
         # even if an unrelated session would make a full observation invalid.
         try:
-            exposition = fetch_activity_exposition()
+            exposition = fetch_activity_exposition(url=_metrics_url)
         except ActivityError:
             exposition = None  # endpoint dead — the case close exists for
         if exposition is not None and session_id in parse_active_sessions(

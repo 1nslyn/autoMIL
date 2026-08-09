@@ -56,7 +56,31 @@ def test_canonical_claude_observer_uses_native_metric_and_session_hooks():
         "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
         "OTEL_METRICS_EXPORTER": "prometheus",
         "OTEL_METRICS_INCLUDE_SESSION_ID": "true",
+        "OTEL_EXPORTER_PROMETHEUS_PORT": "9464",
     }
+    assert (
+        claude_activity_environment(9581)["OTEL_EXPORTER_PROMETHEUS_PORT"]
+        == "9581"
+    )
+
+
+def test_project_exporter_port_resolves_declared_or_default(tmp_path):
+    from automil.activity_hooks import project_exporter_port
+
+    adir = tmp_path / "automil"
+    adir.mkdir()
+    # No config means no declaration: the default, not an error.
+    assert project_exporter_port(adir) == 9464
+    (adir / "config.yaml").write_text("project:\n  name: x\n")
+    assert project_exporter_port(adir) == 9464
+    (adir / "config.yaml").write_text("activity:\n  exporter_port: 9581\n")
+    assert project_exporter_port(adir) == 9581
+    (adir / "config.yaml").write_text("activity:\n  exporter_port: eighty\n")
+    with pytest.raises(ValueError, match="exporter_port must be an integer"):
+        project_exporter_port(adir)
+    (adir / "config.yaml").write_text("activity:\n  exporter_port: 80\n")
+    with pytest.raises(ValueError, match="exporter_port must be an integer"):
+        project_exporter_port(adir)
 
 
 def test_resolve_cell_identity_uses_only_current_schema():

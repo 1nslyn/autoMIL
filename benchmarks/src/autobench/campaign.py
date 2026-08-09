@@ -20,7 +20,10 @@ from typing import Any, Mapping
 
 import yaml
 
-from automil.activity_hooks import claude_activity_settings
+from automil.activity_hooks import (
+    ACTIVITY_METRICS_PORT,
+    claude_activity_settings,
+)
 from automil.cells.state import make_cell_id, normalize_mil_model
 
 SCHEMA_VERSION = 5
@@ -716,8 +719,13 @@ def materialize_discovery_cells(
                 pass
             raise
     written: list[Path] = []
-    activity_settings = claude_activity_settings()
-    for cell in manifest["cells"]:
+    for cell_index, cell in enumerate(manifest["cells"]):
+        # One deterministic exporter port per manifest row, so any number of
+        # cells can meter concurrently on one host without contending for a
+        # single endpoint. The port is part of the audited cell config and
+        # of the settings the runtime is started with.
+        exporter_port = ACTIVITY_METRICS_PORT + cell_index
+        activity_settings = claude_activity_settings(exporter_port)
         cell_root = output_root / cell["cell_id"]
         adir = cell_root / "automil"
         template_path = repo_root / cell["policy_template"]
@@ -767,6 +775,7 @@ def materialize_discovery_cells(
         ]
         config["cap"]["mode"] = "agent_active"
         config["cap"]["eval_budget"] = PROTOCOL["discovery_attempts"]
+        config["activity"] = {"exporter_port": exporter_port}
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
         config.setdefault("orchestrator", {})["default_timeout_min"] = (
             ATTEMPT_TIMEOUT_MIN
@@ -899,6 +908,10 @@ def audit_materialized_campaign(
         raise CampaignManifestError("cannot read locked campaign agent protocol") from exc
     agent_protocol_sha256 = content_sha256(agent_protocol)
     by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
+    port_by_id = {
+        cell["cell_id"]: ACTIVITY_METRICS_PORT + index
+        for index, cell in enumerate(manifest["cells"])
+    }
     seen: set[str] = set()
     regimes: dict[tuple[str, str], str] = {}
     manifest_hash = file_sha256(manifest_path)
@@ -928,8 +941,10 @@ def audit_materialized_campaign(
             raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
         if campaign.get("agent_protocol_sha256") != agent_protocol_sha256:
             raise CampaignManifestError(f"{cell_id}: agent protocol binding drift")
-        if settings != claude_activity_settings():
+        if settings != claude_activity_settings(port_by_id[cell_id]):
             raise CampaignManifestError(f"{cell_id}: activity observer contract drift")
+        if (config.get("activity") or {}).get("exporter_port") != port_by_id[cell_id]:
+            raise CampaignManifestError(f"{cell_id}: activity exporter port drift")
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
         if (config.get("cap") or {}).get(

@@ -266,6 +266,20 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]
+        index = roots.index(root)
+        assert config["activity"] == {"exporter_port": 9464 + index}
+        settings = json.loads((root.parent / ".claude/settings.json").read_text())
+        assert settings["env"]["OTEL_EXPORTER_PROMETHEUS_PORT"] == str(9464 + index)
+
+    # Every cell exports on its own deterministic port, so any number of
+    # cells can meter concurrently on one host.
+    ports = [
+        yaml.safe_load((root / "config.yaml").read_text())["activity"][
+            "exporter_port"
+        ]
+        for root in roots
+    ]
+    assert ports == [9464 + index for index in range(130)]
 
 
 def test_materializer_rejects_unresolvable_agent_policy_hashes(tmp_path):

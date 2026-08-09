@@ -8,6 +8,19 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **One-session-per-host limit removed.** Activity metering is now
+  multiplexed per project instead of pinned to one host-wide endpoint:
+  every project declares `activity.exporter_port` in `config.yaml`
+  (default 9464; campaign materialization assigns a deterministic
+  per-manifest-row port), the written Claude settings carry
+  `OTEL_EXPORTER_PROMETHEUS_PORT`, and every consumer — runtime hooks,
+  orchestrator scrape, operator `activity close`, `automil check`, the
+  campaign audit, and the launcher port probe — resolves the same
+  declared port. Concurrent cell orchestrators on one host partition
+  GPUs with the host-local `AUTOMIL_VISIBLE_GPUS` env (malformed values
+  refuse daemon startup). Discovery therefore parallelizes per cell on
+  a single station, bounded by GPUs, not by a per-host session limit.
+
 - **Frozen agent protocol sources + per-cell launcher (Gate 2).** The
   campaign's coding-agent policy is now buildable and executable instead of
   a template: `proposal_policy.md` (the exact per-cell instruction text,

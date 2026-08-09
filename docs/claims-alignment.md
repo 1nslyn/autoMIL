@@ -317,9 +317,12 @@ accepted, not blocking).** (a) `task.name` is hard-required by cell identity —
 adding it to an older config re-keys the budget cell; upgrade edge, document
 on the next breaking release. (b) One corrupt journal line or orphaned sample
 degrades activity reads project-wide — now non-destructive (daemon holds, CLI
-shows DEGRADED) but with no repair command. (c) Port 9464 single-tenancy is
-documented for the campaign only; the generic degradation message doesn't name
-port collision as a cause. (d) Generic (non-campaign) projects support at most
+shows DEGRADED) but with no repair command. (c) Resolved 2026-08-09: exporter
+single-tenancy is now per cell, not per host — every project declares
+`activity.exporter_port` (campaign cells get a deterministic per-row port)
+and all consumers resolve it, so concurrent sessions on one host no longer
+contend; the generic degradation message still doesn't name port collision
+as a cause. (d) Generic (non-campaign) projects support at most
 one agent-active cell, bound to its first session — stated in refusals, not in
 the tutorial docs. (e) Per-tick journal replays are O(specs×cells) — bounded
 by the tiny lifecycle-only journal. (f) `budget show` duplicates `cell`'s

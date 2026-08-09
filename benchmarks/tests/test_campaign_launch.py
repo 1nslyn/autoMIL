@@ -296,11 +296,41 @@ def test_preflight_requires_a_running_orchestrator(launch_host):
 
 
 def test_preflight_rejects_a_busy_exporter_port(launch_host, monkeypatch):
-    monkeypatch.setattr(
-        "autobench.campaign_launch._port_in_use", lambda port: True,
-    )
-    with pytest.raises(CampaignLaunchError, match="only one formal"):
+    probed: list[int] = []
+
+    def fake_in_use(port):
+        probed.append(port)
+        return True
+
+    monkeypatch.setattr("autobench.campaign_launch._port_in_use", fake_in_use)
+    with pytest.raises(CampaignLaunchError, match="already serving"):
         _preflight(launch_host, probe_port=True)
+    assert probed == [9464]
+
+
+def test_preflight_resolves_the_cell_declared_exporter_port(
+    launch_host, monkeypatch,
+):
+    adir = launch_host["cell_root"] / "automil"
+    (adir / "config.yaml").write_text(
+        "project:\n  name: dataset\nactivity:\n  exporter_port: 9581\n"
+    )
+    with pytest.raises(CampaignLaunchError, match="declared exporter port 9581"):
+        _preflight(launch_host)
+    settings = launch_host["cell_root"] / ".claude" / "settings.json"
+    settings.write_text(
+        json.dumps(claude_activity_settings(9581), indent=2, sort_keys=True)
+        + "\n"
+    )
+    probed: list[int] = []
+
+    def fake_in_use(port):
+        probed.append(port)
+        return False
+
+    monkeypatch.setattr("autobench.campaign_launch._port_in_use", fake_in_use)
+    assert _preflight(launch_host, probe_port=True)
+    assert probed == [9581]
 
 
 def test_preflight_rejects_a_cell_outside_the_repository(launch_host, tmp_path):

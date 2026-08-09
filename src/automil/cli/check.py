@@ -283,6 +283,7 @@ def check():
             if cap.mode == "agent_active":
                 from automil.activity_hooks import (  # noqa: PLC0415
                     missing_claude_activity_hooks,
+                    project_exporter_port,
                 )
 
                 # Campaign cells intentionally live inside the controller's
@@ -301,14 +302,22 @@ def check():
                         "--no-healthcheck`, or choose cap.mode: wall_clock."
                     )
                 else:
-                    missing_hooks = missing_claude_activity_hooks(settings)
-                    if missing_hooks:
-                        issues.append(
-                            "cap.mode=agent_active is missing observer setting(s): "
-                            f"{', '.join(missing_hooks)}. Run `uv run "
-                            "automil init --update --runtime claude "
-                            "--no-healthcheck`."
+                    try:
+                        exporter_port = project_exporter_port(adir)
+                    except ValueError as exc:
+                        exporter_port = None
+                        issues.append(f"activity config invalid: {exc}")
+                    if exporter_port is not None:
+                        missing_hooks = missing_claude_activity_hooks(
+                            settings, port=exporter_port,
                         )
+                        if missing_hooks:
+                            issues.append(
+                                "cap.mode=agent_active is missing observer "
+                                f"setting(s): {', '.join(missing_hooks)}. Run "
+                                "`uv run automil init --update --runtime claude "
+                                "--no-healthcheck`."
+                            )
         except ValueError as exc:
             issues.append(f"cap config invalid: {exc}")
 

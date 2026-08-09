@@ -50,6 +50,15 @@ def _register_claude_hooks(
     settings_path = project_claude / "settings.json"
     stop_cmd = f"bash {project_root / '.claude' / 'hooks' / 'on_stop.sh'}"
     activity_hooks = claude_activity_hooks()
+    from automil.activity_hooks import (  # noqa: PLC0415
+        ACTIVITY_METRICS_PORT,
+        project_exporter_port,
+    )
+
+    try:
+        exporter_port = project_exporter_port(project_root / "automil")
+    except ValueError:
+        exporter_port = ACTIVITY_METRICS_PORT
 
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
@@ -64,7 +73,7 @@ def _register_claude_hooks(
     env = settings.setdefault("env", {})
     if not isinstance(env, dict):
         raise click.ClickException(f"{settings_path}: env must be an object")
-    required_env = claude_activity_environment()
+    required_env = claude_activity_environment(exporter_port)
     preserved = {
         key: env[key]
         for key in required_env

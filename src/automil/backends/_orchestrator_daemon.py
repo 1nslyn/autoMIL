@@ -278,11 +278,44 @@ class _NodeHandle:
 # ---------------------------------------------------------------------------
 # GPU monitoring
 # ---------------------------------------------------------------------------
+def visible_gpu_ids() -> frozenset[int] | None:
+    """Parse the operator's host-local GPU partition, or None for all GPUs.
+
+    ``AUTOMIL_VISIBLE_GPUS`` restricts this daemon to a comma-separated set
+    of physical GPU indexes so several projects can schedule concurrently on
+    one host without double-booking VRAM. It is runtime host configuration,
+    deliberately outside any frozen project config. A malformed value raises
+    rather than silently scheduling on every GPU.
+    """
+    raw = os.environ.get("AUTOMIL_VISIBLE_GPUS", "").strip()
+    if not raw:
+        return None
+    ids: set[int] = set()
+    for token in raw.split(","):
+        token = token.strip()
+        if not token.isdigit():
+            raise ValueError(
+                f"AUTOMIL_VISIBLE_GPUS must be comma-separated GPU indexes; "
+                f"got {raw!r}"
+            )
+        ids.add(int(token))
+    return frozenset(ids)
+
+
+def _filter_visible(gpus: list[GPUInfo]) -> list[GPUInfo]:
+    visible = visible_gpu_ids()
+    if visible is None:
+        return gpus
+    return [gpu for gpu in gpus if gpu.index in visible]
+
+
 def query_gpus() -> list[GPUInfo]:
     """Query nvidia-smi for GPU state.
 
     Uses the path resolved at module import (NVIDIA_SMI_PATH) to defend
-    against PATH-shim spoofing on shared hosts (CLN-05).
+    against PATH-shim spoofing on shared hosts (CLN-05). Results are
+    restricted to the operator's ``AUTOMIL_VISIBLE_GPUS`` partition when
+    one is declared.
     """
     try:
         result = subprocess.run(
@@ -305,7 +338,7 @@ def query_gpus() -> list[GPUInfo]:
                     free_mb=int(parts[2]),
                     utilization=int(parts[3]),
                 ))
-        return gpus
+        return _filter_visible(gpus)
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
         logger.warning(f"nvidia-smi failed: {e}")
         return []
@@ -374,7 +407,7 @@ def query_rocm_gpus() -> list[GPUInfo]:
         if not devices:
             raise ValueError("no complete device records")
         devices.sort(key=lambda device: device.index)
-        return devices
+        return _filter_visible(devices)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError,
             json.JSONDecodeError, TypeError, ValueError) as exc:
         logger.warning("rocm-smi failed: %s", exc)
@@ -3053,6 +3086,14 @@ class ExperimentOrchestrator:
 
     def cmd_start(self):
         """Start the orchestrator daemon."""
+        # A malformed GPU partition must refuse startup, never silently
+        # schedule on every GPU of a shared host.
+        partition = visible_gpu_ids()
+        if partition is not None:
+            print(
+                "GPU partition (AUTOMIL_VISIBLE_GPUS): "
+                + ",".join(str(index) for index in sorted(partition))
+            )
         if self.pid_file.exists():
             loaded = _load_pid_file(self.pid_file)
             if loaded and _is_pid_alive_with_starttime(loaded["pid"], loaded["starttime_ticks"]):
