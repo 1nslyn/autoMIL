@@ -33,8 +33,9 @@ autoMIL: F2-readiness framework refactor.
   session as a pure executor of the locked protocol — protocol-derived
   `claude` flags, byte-exact `CLAUDE.md` instruction render, pinned CLI
   version, frozen repository-memory surface, no user memory/plugins, cell
-  settings drift refusal, port-9464 host exclusivity, running-orchestrator
-  and fresh-cell preconditions, all fail-closed.
+  settings drift refusal, exporter-port exclusivity (per cell since the
+  entry above), running-orchestrator and fresh-cell preconditions, all
+  fail-closed.
 
 - **Preprint campaign integration (#39 + #40 + #41).** Native Claude
   active-time metering (30 charged attempts + 12h agent-active, protocol

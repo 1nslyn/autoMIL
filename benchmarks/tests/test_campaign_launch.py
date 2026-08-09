@@ -333,6 +333,15 @@ def test_preflight_resolves_the_cell_declared_exporter_port(
     assert probed == [9581]
 
 
+def test_preflight_rejects_an_invalid_activity_declaration(launch_host):
+    adir = launch_host["cell_root"] / "automil"
+    (adir / "config.yaml").write_text(
+        "project:\n  name: dataset\nactivity:\n  exporter_port: eighty\n"
+    )
+    with pytest.raises(CampaignLaunchError, match="exporter_port must be"):
+        _preflight(launch_host)
+
+
 def test_preflight_rejects_a_cell_outside_the_repository(launch_host, tmp_path):
     with pytest.raises(CampaignLaunchError, match="not inside the repository"):
         preflight(

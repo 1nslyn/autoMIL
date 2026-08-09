@@ -23,6 +23,7 @@ from autobench.campaign import (
     PROTOCOL,
     PROTOCOL_VERSION,
     CampaignManifestError,
+    audit_materialized_campaign,
     build_preprint_manifest,
     content_sha256,
     file_sha256,
@@ -323,6 +324,27 @@ def test_materializer_rejects_drift_in_frozen_agent_axes(
             fake_repo / "benchmarks/campaigns/preprint_130/runtime",
             fake_repo,
             agent_protocol={**AGENT_PROTOCOL, **override},
+        )
+
+
+def test_audit_rejects_a_tampered_exporter_port(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, agent_protocol=AGENT_PROTOCOL,
+    )
+
+    config_path = roots[3] / "config.yaml"
+    config = yaml.safe_load(config_path.read_text())
+    config["activity"]["exporter_port"] = 9464
+    config_path.write_text(yaml.safe_dump(config))
+
+    with pytest.raises(CampaignManifestError, match="activity exporter port drift"):
+        audit_materialized_campaign(
+            roots=roots, manifest_path=manifest_path, repo_root=fake_repo,
         )
 
 

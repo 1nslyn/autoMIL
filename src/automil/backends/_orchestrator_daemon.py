@@ -88,6 +88,7 @@ _SPEC_ENV_BLOCKED: frozenset[str] = frozenset({
     "AUTOMIL_GPU",
     "AUTOMIL_NODE_ID",
     "AUTOMIL_RESULTS_DIR",
+    "CUDA_DEVICE_ORDER",
     "CUDA_VISIBLE_DEVICES",
     "GPU_DEVICE_ORDINAL",
     "HIP_VISIBLE_DEVICES",
@@ -293,7 +294,7 @@ def visible_gpu_ids() -> frozenset[int] | None:
     ids: set[int] = set()
     for token in raw.split(","):
         token = token.strip()
-        if not token.isdigit():
+        if not token.isdecimal():
             raise ValueError(
                 f"AUTOMIL_VISIBLE_GPUS must be comma-separated GPU indexes; "
                 f"got {raw!r}"
@@ -302,21 +303,24 @@ def visible_gpu_ids() -> frozenset[int] | None:
     return frozenset(ids)
 
 
-def _filter_visible(gpus: list[GPUInfo]) -> list[GPUInfo]:
-    visible = visible_gpu_ids()
+def _apply_partition(
+    gpus: list[GPUInfo], visible: frozenset[int] | None,
+) -> list[GPUInfo]:
     if visible is None:
         return gpus
     return [gpu for gpu in gpus if gpu.index in visible]
 
 
-def query_gpus() -> list[GPUInfo]:
+def query_gpus(*, apply_partition: bool = True) -> list[GPUInfo]:
     """Query nvidia-smi for GPU state.
 
     Uses the path resolved at module import (NVIDIA_SMI_PATH) to defend
     against PATH-shim spoofing on shared hosts (CLN-05). Results are
     restricted to the operator's ``AUTOMIL_VISIBLE_GPUS`` partition when
-    one is declared.
+    one is declared; a malformed partition raises here, outside the smi
+    error handling, so it can never be misreported as an smi failure.
     """
+    visible = visible_gpu_ids() if apply_partition else None
     try:
         result = subprocess.run(
             [
@@ -338,7 +342,7 @@ def query_gpus() -> list[GPUInfo]:
                     free_mb=int(parts[2]),
                     utilization=int(parts[3]),
                 ))
-        return _filter_visible(gpus)
+        return _apply_partition(gpus, visible)
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
         logger.warning(f"nvidia-smi failed: {e}")
         return []
@@ -352,6 +356,7 @@ def query_rocm_gpus() -> list[GPUInfo]:
     record rejects the whole snapshot: partial telemetry must never become
     permission to launch on an unverified device.
     """
+    visible = visible_gpu_ids()
     try:
         result = subprocess.run(
             [ROCM_SMI_PATH, "--showmeminfo", "vram", "--json"],
@@ -407,7 +412,7 @@ def query_rocm_gpus() -> list[GPUInfo]:
         if not devices:
             raise ValueError("no complete device records")
         devices.sort(key=lambda device: device.index)
-        return _filter_visible(devices)
+        return _apply_partition(devices, visible)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError,
             json.JSONDecodeError, TypeError, ValueError) as exc:
         logger.warning("rocm-smi failed: %s", exc)
@@ -705,13 +710,25 @@ class ExperimentOrchestrator:
             if configured_gpu_count > 0 and configured_min_vram_gb > 0:
                 live_rocm = query_rocm_gpus()
                 live_indices = [device.index for device in live_rocm]
-                expected_indices = list(range(configured_gpu_count))
+                # A declared host partition restricts which of the configured
+                # devices this daemon owns; the live (already filtered) view
+                # must then equal exactly the partition members that exist
+                # under the configured count, not the full range.
+                _partition = visible_gpu_ids()
+                if _partition is None:
+                    expected_indices = list(range(configured_gpu_count))
+                else:
+                    expected_indices = sorted(
+                        index for index in _partition
+                        if index < configured_gpu_count
+                    )
                 live_min_vram_gb = min(
                     (device.total_mb / 1024 for device in live_rocm),
                     default=0.0,
                 )
                 if (
-                    live_indices == expected_indices
+                    expected_indices
+                    and live_indices == expected_indices
                     and live_min_vram_gb >= configured_min_vram_gb
                 ):
                     for device_index in live_indices:
@@ -742,10 +759,25 @@ class ExperimentOrchestrator:
             if self.gpu_allocations and not self._accelerator:
                 self._accelerator = "cuda"
             if not self.gpu_allocations:
-                logger.warning(
-                    "No CUDA GPUs detected for a GPU-targeted configuration; "
-                    "queued jobs will remain pending"
+                _partition = visible_gpu_ids()
+                _detected = (
+                    query_gpus(apply_partition=False)
+                    if _partition is not None else []
                 )
+                if _detected:
+                    logger.warning(
+                        "AUTOMIL_VISIBLE_GPUS=%s selects none of the %d "
+                        "detected GPU(s) (indexes %s); queued jobs will "
+                        "remain pending",
+                        ",".join(str(i) for i in sorted(_partition)),
+                        len(_detected),
+                        [gpu.index for gpu in _detected],
+                    )
+                else:
+                    logger.warning(
+                        "No CUDA GPUs detected for a GPU-targeted "
+                        "configuration; queued jobs will remain pending"
+                    )
         else:
             logger.warning(
                 "Unsupported hardware.accelerator %r; queued jobs will remain pending",
@@ -1204,6 +1236,10 @@ class ExperimentOrchestrator:
             env["GPU_DEVICE_ORDINAL"] = "0"
         elif accelerator == "cuda":
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            # gpu_id is an nvidia-smi (PCI-order) index; pin CUDA's
+            # enumeration to the same order so disjoint host partitions can
+            # never land two jobs on one physical device.
+            env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
             env["HIP_VISIBLE_DEVICES"] = ""
             env["ROCR_VISIBLE_DEVICES"] = ""
             env["GPU_DEVICE_ORDINAL"] = ""
@@ -3087,13 +3123,22 @@ class ExperimentOrchestrator:
     def cmd_start(self):
         """Start the orchestrator daemon."""
         # A malformed GPU partition must refuse startup, never silently
-        # schedule on every GPU of a shared host.
+        # schedule on every GPU of a shared host — and a well-formed
+        # partition that selects no schedulable device must refuse rather
+        # than daemonize into a permanently idle scheduler.
         partition = visible_gpu_ids()
         if partition is not None:
             print(
                 "GPU partition (AUTOMIL_VISIBLE_GPUS): "
                 + ",".join(str(index) for index in sorted(partition))
             )
+            if not self._cpu_only and not self.gpu_allocations:
+                raise ValueError(
+                    "AUTOMIL_VISIBLE_GPUS="
+                    + ",".join(str(index) for index in sorted(partition))
+                    + " selects no schedulable GPU on this host; fix the "
+                    "partition before starting the orchestrator"
+                )
         if self.pid_file.exists():
             loaded = _load_pid_file(self.pid_file)
             if loaded and _is_pid_alive_with_starttime(loaded["pid"], loaded["starttime_ticks"]):
