@@ -8,6 +8,21 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Frozen agent protocol sources + per-cell launcher (Gate 2).** The
+  campaign's coding-agent policy is now buildable and executable instead of
+  a template: `proposal_policy.md` (the exact per-cell instruction text,
+  publication-specific — no free-mode, no in-cell certify) and
+  `toolset.json` (machine-readable locked tool surface) are committed
+  sources; `campaign_agent_protocol.py build/verify` assembles and checks
+  the publication `agent_protocol.json` (model/runtime identities pinned
+  from a real throwaway session, ancestor-memory hashes auto-refreshed);
+  `campaign_launch.py` + `autobench.campaign_launch` launch the formal
+  session as a pure executor of the locked protocol — protocol-derived
+  `claude` flags, byte-exact `CLAUDE.md` instruction render, pinned CLI
+  version, frozen repository-memory surface, no user memory/plugins, cell
+  settings drift refusal, port-9464 host exclusivity, running-orchestrator
+  and fresh-cell preconditions, all fail-closed.
+
 - **Preprint campaign integration (#39 + #40 + #41).** Native Claude
   active-time metering (30 charged attempts + 12h agent-active, protocol
   `preprint-v2`, manifest `automil-preprint-130-v5`) merged with the

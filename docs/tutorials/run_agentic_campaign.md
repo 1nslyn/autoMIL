@@ -168,7 +168,12 @@ baseline is already registered it re-verifies and returns — safe to re-run.
 
 Start the cell orchestrator first so it can scrape Claude's localhost
 Prometheus endpoint. Only one formal discovery Claude session may run on a host
-at once (port 9464). Then start one fresh Claude session in the cell root. After
+at once (port 9464). Then start the formal session **through the campaign
+launcher, never a bare `claude`** — it re-verifies the locked protocol on this
+host (pinned CLI version, frozen memory surface, untouched activity settings,
+port exclusivity, running orchestrator, no prior session evidence), renders
+the frozen instruction text into the cell root as `CLAUDE.md`, and execs the
+pinned runtime with its working directory at the cell root. After
 the first orchestrator scrape, copy `agent_session.template.json`, fill
 in a globally unique `session_id` and timezone-aware ISO-8601 `started_at`, and
 run this command from inside that same Claude session:
@@ -176,13 +181,16 @@ run this command from inside that same Claude session:
 ```bash
 uv run --project "$REPO_ROOT" automil --project "$CELL" check
 uv run --project "$REPO_ROOT" automil --project "$CELL" orchestrator start
-cd "$CELL"
-claude
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_launch.py" launch --cell-root "$CELL"
 
 # Inside that Claude session, after the first metric export:
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" open-agent-session \
   --cell-root "$PWD" --agent-session /abs/path/agent_session_start.json
 ```
+
+`preflight` and `launch-command` print the same derivation without starting
+anything, and a `campaign-launch refusal` is fail-closed information: fix the
+named precondition, never bypass it.
 
 This binds the hook-recorded, natively metered session to the cell. Every later
 `automil submit` is stamped with it, and submit **refuses** if the session was
@@ -329,6 +337,7 @@ obstacle — **do not work around it.**
 | Message shape | What it means | Do |
 |---|---|---|
 | `manifest differs...` | Your checkout drifted from the frozen roster | `git pull --ff-only`; do not regenerate the manifest |
+| `campaign-launch refusal: ...` | A launch precondition does not hold (CLI version, memory surface, port, prior session evidence, orchestrator) | Fix exactly what it names; never start the session with a bare `claude` |
 | `native baseline is already running` | A lock is held | Wait; check for an orphaned process before retrying |
 | `open the campaign agent session before the first submit` | Step 4c was skipped | Open the session, then restart the agent |
 | `SessionEnd ... required before promotion or winner selection` | Claude is still open or its final native sample was not saved | Exit Claude normally; verify the SessionEnd hook succeeded; do not hand-edit the journal |

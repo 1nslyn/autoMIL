@@ -285,6 +285,46 @@ def validate_agent_protocol(
     return json.loads(json.dumps(raw))
 
 
+def build_agent_protocol(
+    *,
+    proposal_policy: str,
+    toolset: str,
+    model: str,
+    model_version: str,
+    runtime_version: str,
+    provider: str = "Anthropic",
+    runtime: str = "Claude Code",
+) -> dict[str, Any]:
+    """Assemble the publication agent protocol from its source payloads.
+
+    The two content payloads are embedded verbatim and hashed here, so the
+    caller can never produce a content/hash mismatch; everything else is
+    either a campaign constant or an identity string the operator must pin.
+    The result is returned only if it passes ``validate_agent_protocol``.
+    """
+    raw = {
+        "schema_version": 2,
+        "campaign_id": CAMPAIGN_ID,
+        "purpose": "publication",
+        "provider": provider,
+        "runtime": runtime,
+        "runtime_version": runtime_version,
+        "model": model,
+        "model_version": model_version,
+        "effort": "high",
+        "network_access": "enabled",
+        "fallback_model": None,
+        "max_sessions_per_cell": 1,
+        "proposal_policy_content": proposal_policy,
+        "proposal_policy_sha256": hashlib.sha256(
+            proposal_policy.encode()
+        ).hexdigest(),
+        "toolset_content": toolset,
+        "toolset_sha256": hashlib.sha256(toolset.encode()).hexdigest(),
+    }
+    return validate_agent_protocol(raw)
+
+
 def _canonical_bytes(value: object) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
