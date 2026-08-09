@@ -48,6 +48,7 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen --all-packages
       - run: uv run --package autobench pytest benchmarks/tests/ -q
+      - run: uv run --package autobench python benchmarks/scripts/campaign_agent_protocol.py verify
       - run: uv run --package autobench python benchmarks/scripts/campaign_manifest.py check
       - run: uv run --package autobench python benchmarks/scripts/campaign_manifest.py canary
 

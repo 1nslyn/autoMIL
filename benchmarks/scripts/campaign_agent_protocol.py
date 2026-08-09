@@ -102,7 +102,13 @@ def main(argv: list[str] | None = None) -> None:
             toolset_data = json.loads(toolset_text)
         except json.JSONDecodeError as exc:
             raise SystemExit(f"toolset source {toolset_path} is not JSON: {exc}")
+        # Refresh the pinned ancestor hashes in memory only. The rewrite of the
+        # toolset source is deferred until the frozen-once check below has
+        # passed: a refusal must not leave a modified frozen source behind next
+        # to a protocol that no longer embeds it, which would fail `verify` and
+        # every cell's launch preflight with an instruction-surface drift.
         memory = toolset_data.get("ancestor_memory")
+        refreshed_toolset_text = None
         if isinstance(memory, dict):
             refreshed = {}
             for relative in memory:
@@ -117,8 +123,7 @@ def main(argv: list[str] | None = None) -> None:
                 toolset_text = (
                     json.dumps(toolset_data, indent=2, ensure_ascii=False) + "\n"
                 )
-                toolset_path.write_text(toolset_text)
-                print(f"refreshed ancestor_memory hashes in {toolset_path}")
+                refreshed_toolset_text = toolset_text
         protocol = build_agent_protocol(
             proposal_policy=_read_source(policy_path, "proposal policy"),
             toolset=toolset_text,
@@ -133,6 +138,9 @@ def main(argv: list[str] | None = None) -> None:
                 "campaign protocol is frozen once — delete it explicitly if "
                 "it was never materialized"
             )
+        if refreshed_toolset_text is not None:
+            toolset_path.write_text(refreshed_toolset_text)
+            print(f"refreshed ancestor_memory hashes in {toolset_path}")
         output_path.write_text(serialized)
         print(f"wrote {output_path}")
         print(f"agent_protocol_sha256 {content_sha256(protocol)}")
