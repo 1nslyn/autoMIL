@@ -90,6 +90,13 @@ def main(argv: list[str] | None = None) -> None:
                 f"({args.model_version!r}); aliases like 'opus' are not "
                 "publication evidence"
             )
+        if len(args.runtime_version.split()) != 1:
+            parser.error(
+                "--runtime-version must be the bare version token "
+                f"({args.runtime_version!r} looks like a full version line); "
+                "the launcher compares it against the first token of "
+                "claude --version"
+            )
         toolset_text = _read_source(toolset_path, "toolset")
         try:
             toolset_data = json.loads(toolset_text)

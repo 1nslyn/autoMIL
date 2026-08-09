@@ -119,10 +119,12 @@ def parse_toolset(protocol: Mapping[str, Any]) -> dict[str, Any]:
             "claude_flags do not realize the declared permission_mode"
         )
     forbidden = ("--resume", "--continue", "-c", "-r", "--fallback-model")
-    if any(flag in toolset["claude_flags"] for flag in forbidden):
-        raise CampaignLaunchError(
-            "claude_flags contain a resume or fallback flag the protocol forbids"
-        )
+    for flag in toolset["claude_flags"]:
+        if flag in forbidden or flag.startswith(tuple(f"{name}=" for name in forbidden)):
+            raise CampaignLaunchError(
+                "claude_flags contain a resume or fallback flag the "
+                "protocol forbids"
+            )
     return toolset
 
 
@@ -170,15 +172,27 @@ def _check_memory_surface(
                 f"frozen protocol pinned {sha} — the repository instruction "
                 "files are frozen for the campaign"
             )
-    directory = cell_root.parent
+    # The runtime reads memory files from the cwd upward to the filesystem
+    # root, not stopping at the repository, so the whole path must be clean:
+    # nothing unpinned, and no local/scoped variants anywhere on it.
+    directory = cell_root
     while True:
-        candidate = directory / AGENT_INSTRUCTION_FILE
-        if candidate.is_file() and candidate.resolve() not in pinned:
-            raise CampaignLaunchError(
-                f"unpinned {AGENT_INSTRUCTION_FILE} on the memory path: "
-                f"{candidate}"
-            )
-        if directory == repo_root or directory == directory.parent:
+        if directory != cell_root:
+            candidate = directory / AGENT_INSTRUCTION_FILE
+            if candidate.is_file() and candidate.resolve() not in pinned:
+                raise CampaignLaunchError(
+                    f"unpinned {AGENT_INSTRUCTION_FILE} on the memory path: "
+                    f"{candidate}"
+                )
+        for variant in (
+            directory / "CLAUDE.local.md",
+            directory / ".claude" / AGENT_INSTRUCTION_FILE,
+        ):
+            if variant.is_file():
+                raise CampaignLaunchError(
+                    f"unpinned memory variant on the memory path: {variant}"
+                )
+        if directory == directory.parent:
             break
         directory = directory.parent
     if toolset["user_memory_absent"]:

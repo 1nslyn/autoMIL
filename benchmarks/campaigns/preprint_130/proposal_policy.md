@@ -21,7 +21,8 @@ be byte-pristine. Until the operator confirms the session is bound:
 
 - Do not create or edit ANY file — in particular `automil/plan.md`,
   `automil/learnings.md`, and anything under `automil/variants/` (a
-  pre-bind edit permanently prevents this cell from opening).
+  pre-bind edit to those files blocks `open-agent-session`; only a
+  byte-exact restoration recovers the cell).
 - Do not run `automil submit`, `propose`, or `reconcile`.
 - You may read files and run `uv run --project "$REPO_ROOT" automil status`.
 
@@ -39,8 +40,9 @@ encoder, splits, seed, fold count, metrics, and all measurement code. The
 protected path list and the identity-locked hyperparameter names are
 declared in `automil/config.yaml` (`registry.protected`,
 `registry.identity_locked_hparams`). `seed` and `model_type` are never
-overridable anywhere. `automil/config.yaml` itself is hash-bound to the
-campaign manifest: never edit it.
+overridable anywhere. Never edit `automil/config.yaml`: its campaign
+identity is revalidated against the frozen manifest at submit and launch,
+and any boundary drift fails the campaign audit.
 
 Open to you — the entire legal action surface:
 
@@ -149,9 +151,11 @@ policy variant can only adapt what is handed to it:
   discovering this.
 - `should_stop(*, default, epoch, metrics) -> bool` — live on every arm,
   receives per-epoch **validation** metrics, must return a plain bool.
-  It doubles as your only learning-curve probe: print the epoch-by-epoch
-  validation trajectory it observes to stdout and read it back from that
-  run's archived `run.log` — the training scripts print no per-epoch lines.
+  It doubles as a learning-curve probe: print the epoch-by-epoch validation
+  trajectory it observes to stdout and read it back from that run's
+  archived `run.log`. On abmil, dtfd, and titan the trainers print no
+  per-epoch lines, so this probe is the only learning curve; clam and
+  nnmil also print their own per-epoch lines to the same log.
 - `step(loss, opt)` — invoked by **no** shipped trainer. Dead code here.
 - SAM-class two-pass optimizers are out of reach through this seam (no
   closure re-evaluates the loss). Loss shaping, sampling changes, and
@@ -161,7 +165,10 @@ Module rules (statically enforced before launch): top-level imports only
 `automil.registry`, `__future__`, `typing`, `collections.abc` — numerical
 imports go inside methods; exactly one `@register`-decorated class per
 file, a direct `PolicyVariant` subclass; module-level assignments must be
-immutable literals; no top-level I/O. Minimal legal shape:
+immutable literals; no top-level I/O. The filename must not start with
+`_` (underscore-prefixed files are skipped by the variant scanner, so the
+attempt would launch and fail as unregistered — a charged waste). Minimal
+legal shape:
 
 ```python
 from automil.registry import PolicyVariant, VariantSpec, register

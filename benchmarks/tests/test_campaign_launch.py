@@ -226,6 +226,36 @@ def test_preflight_rejects_unpinned_memory_on_the_path(launch_host):
         _preflight(launch_host)
 
 
+def test_preflight_rejects_memory_above_the_repository(launch_host):
+    above = launch_host["repo_root"].parent / "CLAUDE.md"
+    above.write_text("memory above the repo still loads\n")
+    try:
+        with pytest.raises(CampaignLaunchError, match="unpinned CLAUDE.md"):
+            _preflight(launch_host)
+    finally:
+        above.unlink()
+
+
+def test_preflight_rejects_memory_variants_on_the_path(launch_host):
+    local = launch_host["repo_root"] / "CLAUDE.local.md"
+    local.write_text("local memory\n")
+    with pytest.raises(CampaignLaunchError, match="memory variant"):
+        _preflight(launch_host)
+    local.unlink()
+    scoped = launch_host["cell_root"] / ".claude" / "CLAUDE.md"
+    scoped.write_text("scoped memory\n")
+    with pytest.raises(CampaignLaunchError, match="memory variant"):
+        _preflight(launch_host)
+
+
+def test_preflight_requires_the_locked_protocol(launch_host):
+    from autobench.campaign import AGENT_PROTOCOL_FILE as protocol_file
+
+    (launch_host["cell_root"].parent / protocol_file).unlink()
+    with pytest.raises(CampaignLaunchError, match="cannot verify locked"):
+        _preflight(launch_host)
+
+
 def test_preflight_rejects_user_memory_and_plugins(launch_host):
     user_claude = launch_host["home"] / ".claude"
     user_claude.mkdir()
@@ -312,6 +342,14 @@ def _protocol_with_toolset(host, mutate):
             "resume or fallback",
         ),
         (
+            lambda d: d.__setitem__(
+                "claude_flags",
+                ["--dangerously-skip-permissions", "--fallback-model=sonnet"],
+            ),
+            "resume or fallback",
+        ),
+        (lambda d: d.__setitem__("surprise", True), "not exact"),
+        (
             lambda d: d.__setitem__("claude_flags", ["--effort", "high"]),
             "permission_mode",
         ),
@@ -376,6 +414,15 @@ def test_builder_script_rejects_alias_model_versions(tmp_path):
             "--output", str(tmp_path / "agent_protocol.json"),
             "--model-version", "opus",
             "--runtime-version", RUNTIME_VERSION,
+        ])
+    with pytest.raises(SystemExit):
+        script.main([
+            "build",
+            "--policy", str(POLICY_SOURCE),
+            "--toolset", str(TOOLSET_SOURCE),
+            "--output", str(tmp_path / "agent_protocol.json"),
+            "--model-version", MODEL_VERSION,
+            "--runtime-version", "2.1.220 (Claude Code)",
         ])
 
 
