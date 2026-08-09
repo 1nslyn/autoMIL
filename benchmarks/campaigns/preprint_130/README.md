@@ -124,13 +124,18 @@ uv run automil --project "$CAMPAIGN_CELL_ROOT" orchestrator start
 ```
 
 Each materialized cell contains the exact Claude native-active-time observer
-configuration. Start the orchestrator before Claude so it can scrape Claude's
-documented localhost Prometheus endpoint. Only one formal discovery Claude
-session may run on a host at once (port 9464); parallelize cells across hosts,
-not sessions on one host. Start one fresh coding-agent session with its working
-directory set to the cell root and no cross-cell memory. Its startup hook must
-be the first journal event; running the binding command from an unrelated shell
-fails closed.
+configuration, including its own dedicated exporter port
+(`activity.exporter_port`, assigned deterministically per manifest row), so
+any number of cells can meter concurrently on one host without contending
+for one endpoint. Start each cell's orchestrator before its Claude session
+so it can scrape that cell's localhost Prometheus endpoint. When running
+several cells on one host, give each cell orchestrator a disjoint GPU
+partition via `AUTOMIL_VISIBLE_GPUS` (for example `AUTOMIL_VISIBLE_GPUS=0,1`
+in one tmux session and `2,3` in another) — a malformed value refuses
+startup rather than scheduling on every GPU. Start one fresh coding-agent
+session per cell with its working directory set to the cell root and no
+cross-cell memory. Its startup hook must be the first journal event;
+running the binding command from an unrelated shell fails closed.
 
 ```bash
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -141,8 +146,8 @@ uv run python benchmarks/scripts/campaign_launch.py launch \
 The launcher is the executor of the locked protocol, never a second copy of
 it: it verifies the pinned CLI version, the frozen memory surface (repository
 `CLAUDE.md` hash, no user-level memory or plugins), the untouched activity
-settings, port-9464 host exclusivity, a running cell orchestrator, and the
-absence of any prior session evidence; then it renders
+settings, this cell's exporter port being free, a running cell orchestrator,
+and the absence of any prior session evidence; then it renders
 `proposal_policy_content` byte-exact into the cell root as `CLAUDE.md` and
 execs the pinned runtime with its working directory at the cell root. Use
 `preflight` or `launch-command` to inspect the same derivation without

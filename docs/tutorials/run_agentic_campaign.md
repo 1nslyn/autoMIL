@@ -166,14 +166,17 @@ baseline is already registered it re-verifies and returns — safe to re-run.
 
 ### 4c. Start metering, then open the agent session
 
-Start the cell orchestrator first so it can scrape Claude's localhost
-Prometheus endpoint. Only one formal discovery Claude session may run on a host
-at once (port 9464). Then start the formal session **through the campaign
+Start the cell orchestrator first so it can scrape this cell's localhost
+Prometheus endpoint — every cell declares its own exporter port
+(`activity.exporter_port`), so several cells can run concurrently on one
+host. When you do run cells in parallel, give each orchestrator a disjoint
+GPU partition (`AUTOMIL_VISIBLE_GPUS=0,1` in one tmux session, `2,3` in
+another). Then start the formal session **through the campaign
 launcher, never a bare `claude`** — it re-verifies the locked protocol on this
 host (pinned CLI version, frozen memory surface, untouched activity settings,
-port exclusivity, running orchestrator, no prior session evidence), renders
-the frozen instruction text into the cell root as `CLAUDE.md`, and execs the
-pinned runtime with its working directory at the cell root. After
+this cell's port being free, running orchestrator, no prior session evidence),
+renders the frozen instruction text into the cell root as `CLAUDE.md`, and
+execs the pinned runtime with its working directory at the cell root. After
 the first orchestrator scrape, copy `agent_session.template.json`, fill
 in a globally unique `session_id` and timezone-aware ISO-8601 `started_at`, and
 run this command from inside that same Claude session:

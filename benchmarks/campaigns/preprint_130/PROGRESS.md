@@ -65,7 +65,7 @@ pass.** Check archive, firewall, budget counts, timing and reproducibility each 
 | Item | Status | Notes |
 |---|---|---|
 | `agent_protocol.json` generated + hash-verified | ⬜ | sources + builder landed (`proposal_policy.md`, `toolset.json`, `campaign_agent_protocol.py build/verify`); still blocked on the immutable model ID from a throwaway session |
-| Per-cell agent launcher (one fresh session, locked tool surface) | ✅ | `campaign_launch.py` — protocol-derived flags + instruction render, pinned CLI/memory surface, port-9464 exclusivity, fail-closed preflight; first real-CLI exercise happens in the Gate-1 canary |
+| Per-cell agent launcher (one fresh session, locked tool surface) | ✅ | `campaign_launch.py` — protocol-derived flags + instruction render, pinned CLI/memory surface, per-cell exporter-port exclusivity, fail-closed preflight; first real-CLI exercise happens in the Gate-1 canary |
 | Allocation request (~8,000 GPU-h) | ⬜ | re-derive from canary timings first |
 
 ---

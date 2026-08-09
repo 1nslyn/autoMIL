@@ -50,6 +50,17 @@ def _register_claude_hooks(
     settings_path = project_claude / "settings.json"
     stop_cmd = f"bash {project_root / '.claude' / 'hooks' / 'on_stop.sh'}"
     activity_hooks = claude_activity_hooks()
+    from automil.activity_hooks import (  # noqa: PLC0415
+        project_exporter_port,
+    )
+
+    try:
+        exporter_port = project_exporter_port(project_root / "automil")
+    except ValueError as exc:
+        # A declared-but-invalid port must not silently become the default:
+        # every other consumer refuses it, and settings written here would
+        # disagree with them.
+        raise click.ClickException(str(exc)) from exc
 
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
@@ -64,14 +75,23 @@ def _register_claude_hooks(
     env = settings.setdefault("env", {})
     if not isinstance(env, dict):
         raise click.ClickException(f"{settings_path}: env must be an object")
-    required_env = claude_activity_environment()
+    required_env = claude_activity_environment(exporter_port)
+    # The exporter port is autoMIL-owned and derived from config.yaml, so
+    # --update normalizes it (otherwise a port change could never be
+    # repaired by the very command `automil check` prescribes). The other
+    # telemetry keys may be genuinely user-owned and are only defaulted.
+    _OWNED_ENV = ("OTEL_EXPORTER_PROMETHEUS_PORT",)
     preserved = {
         key: env[key]
         for key in required_env
         if key in env and env[key] != required_env[key]
+        and key not in _OWNED_ENV
     }
     for key, value in required_env.items():
-        env.setdefault(key, value)
+        if key in _OWNED_ENV:
+            env[key] = value
+        else:
+            env.setdefault(key, value)
     if preserved:
         click.echo(
             "warning: keeping existing telemetry env "

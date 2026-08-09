@@ -86,6 +86,48 @@ def test_invalid_live_metric_becomes_degraded_observation(tmp_path):
     assert read_activity_report(tmp_path, "cell-1").active_seconds == 0.0
 
 
+def test_observe_scrapes_the_project_declared_exporter_port(tmp_path):
+    (tmp_path / "config.yaml").write_text("activity:\n  exporter_port: 9581\n")
+    record_hook_event(
+        tmp_path,
+        "cell-1",
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-1",
+            "source": "startup",
+        },
+        observed_at=1.0,
+    )
+    scraped: list[str] = []
+
+    def capture(url, timeout):
+        scraped.append(url)
+        return _Response(
+            'claude_code_active_time_total'
+            '{session_id="session-1",type="cli"} 10\n'.encode()
+        )
+
+    observation = activity_metrics.observe_activity_metrics(
+        tmp_path, open_url=capture, observed_at=2.0,
+    )
+
+    assert observation.available is True
+    assert scraped == ["http://127.0.0.1:9581/metrics"]
+
+
+def test_invalid_declared_port_degrades_instead_of_crashing_the_tick(tmp_path):
+    (tmp_path / "config.yaml").write_text("activity:\n  exporter_port: 80\n")
+
+    observation = activity_metrics.observe_activity_metrics(
+        tmp_path,
+        open_url=lambda url, timeout: _Response(b""),
+        observed_at=2.0,
+    )
+
+    assert observation.available is False
+    assert "exporter_port must be an integer" in observation.error
+
+
 def test_direct_loopback_opener_disables_proxies_and_redirects():
     handlers = activity_metrics._DIRECT_OPENER.handlers
 

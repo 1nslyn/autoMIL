@@ -23,6 +23,7 @@ from autobench.campaign import (
     PROTOCOL,
     PROTOCOL_VERSION,
     CampaignManifestError,
+    audit_materialized_campaign,
     build_preprint_manifest,
     content_sha256,
     file_sha256,
@@ -266,6 +267,20 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]
+        index = roots.index(root)
+        assert config["activity"] == {"exporter_port": 9464 + index}
+        settings = json.loads((root.parent / ".claude/settings.json").read_text())
+        assert settings["env"]["OTEL_EXPORTER_PROMETHEUS_PORT"] == str(9464 + index)
+
+    # Every cell exports on its own deterministic port, so any number of
+    # cells can meter concurrently on one host.
+    ports = [
+        yaml.safe_load((root / "config.yaml").read_text())["activity"][
+            "exporter_port"
+        ]
+        for root in roots
+    ]
+    assert ports == [9464 + index for index in range(130)]
 
 
 def test_materializer_rejects_unresolvable_agent_policy_hashes(tmp_path):
@@ -309,6 +324,27 @@ def test_materializer_rejects_drift_in_frozen_agent_axes(
             fake_repo / "benchmarks/campaigns/preprint_130/runtime",
             fake_repo,
             agent_protocol={**AGENT_PROTOCOL, **override},
+        )
+
+
+def test_audit_rejects_a_tampered_exporter_port(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, agent_protocol=AGENT_PROTOCOL,
+    )
+
+    config_path = roots[3] / "config.yaml"
+    config = yaml.safe_load(config_path.read_text())
+    config["activity"]["exporter_port"] = 9464
+    config_path.write_text(yaml.safe_dump(config))
+
+    with pytest.raises(CampaignManifestError, match="activity exporter port drift"):
+        audit_materialized_campaign(
+            roots=roots, manifest_path=manifest_path, repo_root=fake_repo,
         )
 
 

@@ -19,7 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from automil.activity_hooks import claude_activity_settings
+from automil.activity_hooks import (
+    claude_activity_settings,
+    project_exporter_port,
+)
 
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
@@ -28,7 +31,6 @@ from autobench.campaign import (
 )
 
 AGENT_INSTRUCTION_FILE = "CLAUDE.md"
-ACTIVITY_EXPORTER_PORT = 9464
 TOOLSET_SCHEMA_VERSION = 1
 _TOOLSET_KEYS = {
     "schema_version", "permission_mode", "claude_flags", "launcher_env",
@@ -268,6 +270,10 @@ def preflight(
     protocol, protocol_sha = load_locked_protocol(cell_root.parent)
     toolset = parse_toolset(protocol)
 
+    try:
+        exporter_port = project_exporter_port(adir)
+    except ValueError as exc:
+        raise CampaignLaunchError(str(exc)) from exc
     settings_path = cell_root / ".claude" / "settings.json"
     try:
         settings = json.loads(settings_path.read_text())
@@ -275,10 +281,11 @@ def preflight(
         raise CampaignLaunchError(
             f"cannot read {settings_path}: {exc}"
         ) from exc
-    if settings != claude_activity_settings():
+    if settings != claude_activity_settings(exporter_port):
         raise CampaignLaunchError(
-            f"{settings_path} drifted from the activity observer contract; "
-            "re-materialize the cell instead of editing settings"
+            f"{settings_path} drifted from the activity observer contract "
+            f"(declared exporter port {exporter_port}); re-materialize the "
+            "cell instead of editing settings"
         )
 
     observed_version = _claude_cli_version(claude_bin)
@@ -300,11 +307,11 @@ def preflight(
     _check_prior_session_evidence(cell_root)
     if require_orchestrator:
         _check_orchestrator_running(cell_root)
-    if probe_port and _port_in_use(ACTIVITY_EXPORTER_PORT):
+    if probe_port and _port_in_use(exporter_port):
         raise CampaignLaunchError(
-            f"port {ACTIVITY_EXPORTER_PORT} is already serving: another "
-            "session is exporting on this host, and only one formal "
-            "discovery session may run per host"
+            f"this cell's activity exporter port {exporter_port} is already "
+            "serving: another session is exporting on it — every concurrent "
+            "cell on a host must declare a distinct activity.exporter_port"
         )
 
     instruction_path = cell_root / AGENT_INSTRUCTION_FILE

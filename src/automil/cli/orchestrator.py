@@ -17,10 +17,15 @@ def orchestrator_group():
 def orch_start():
     """Start the orchestrator daemon."""
     from automil.orchestrator import ExperimentOrchestrator
-    orch = ExperimentOrchestrator(
-        project_root=_find_git_root(), automil_dir=_find_automil_dir(),
-    )
-    orch.cmd_start()
+    try:
+        orch = ExperimentOrchestrator(
+            project_root=_find_git_root(), automil_dir=_find_automil_dir(),
+        )
+        orch.cmd_start()
+    except ValueError as exc:
+        # e.g. a malformed or empty AUTOMIL_VISIBLE_GPUS partition — a
+        # refusal, not a traceback.
+        raise click.ClickException(str(exc)) from exc
 
 
 @orchestrator_group.command("stop")

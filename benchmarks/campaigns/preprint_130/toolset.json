@@ -29,7 +29,7 @@
   "resume_previous_session": false,
   "cross_cell_memory": false,
   "network_access": true,
-  "session_settings": "The cell's .claude/settings.json is exactly automil's claude_activity_settings(): the OTEL prometheus-export env (CLAUDE_CODE_ENABLE_TELEMETRY, OTEL_METRICS_EXPORTER=prometheus, OTEL_METRICS_INCLUDE_SESSION_ID) plus the SessionStart(startup)/SessionEnd hooks running `uv run automil activity ingest`. The launcher refuses any drift and adds nothing to it.",
+  "session_settings": "The cell's .claude/settings.json is exactly automil's claude_activity_settings(port) for the cell's declared activity.exporter_port: the OTEL prometheus-export env (CLAUDE_CODE_ENABLE_TELEMETRY, OTEL_METRICS_EXPORTER=prometheus, OTEL_METRICS_INCLUDE_SESSION_ID, OTEL_EXPORTER_PROMETHEUS_PORT=<cell port>) plus the SessionStart(startup)/SessionEnd hooks running `uv run automil activity ingest`. Every cell exports on its own dedicated port, so concurrent cells on one host never share an endpoint. The launcher refuses any drift and adds nothing to it.",
   "tools": {
     "builtin": "The pinned runtime version's default built-in toolset (file read/search/edit, shell, WebSearch/WebFetch, subagents, task tracking, background monitors), with no additions.",
     "disabled": ["Skill", "SlashCommand"],

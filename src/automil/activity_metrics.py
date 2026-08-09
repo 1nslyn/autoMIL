@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import BinaryIO
 from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
 
-from automil.activity_hooks import ACTIVITY_METRICS_URL
+from automil.activity_hooks import (
+    ACTIVITY_METRICS_URL,
+    activity_metrics_url,
+    project_exporter_port,
+)
 from automil.cells.activity import (
     ActivityError,
     ActivityObservation,
@@ -28,6 +32,7 @@ _DIRECT_OPENER = build_opener(_NO_PROXY_HANDLER, _NoRedirects())
 
 def fetch_activity_exposition(
     *,
+    url: str = ACTIVITY_METRICS_URL,
     timeout: float = 1.0,
     open_url: Callable[..., BinaryIO] | None = None,
 ) -> str:
@@ -35,7 +40,7 @@ def fetch_activity_exposition(
 
     opener = _DIRECT_OPENER.open if open_url is None else open_url
     try:
-        with opener(ACTIVITY_METRICS_URL, timeout=timeout) as response:
+        with opener(url, timeout=timeout) as response:
             payload = response.read(_MAX_PAYLOAD_BYTES + 1)
     except OSError as exc:
         raise ActivityError(f"Claude metrics endpoint unavailable: {exc}") from exc
@@ -58,7 +63,13 @@ def observe_activity_metrics(
 
     timestamp = time.time() if observed_at is None else observed_at
     try:
-        exposition = fetch_activity_exposition(timeout=timeout, open_url=open_url)
+        try:
+            url = activity_metrics_url(project_exporter_port(automil_dir))
+        except ValueError as exc:
+            raise ActivityError(str(exc)) from exc
+        exposition = fetch_activity_exposition(
+            url=url, timeout=timeout, open_url=open_url
+        )
         sessions = ingest_prometheus_metrics(
             automil_dir, exposition, observed_at=timestamp
         )
