@@ -103,15 +103,20 @@ proposal:
 
 - Hyperparameter-only:
   `uv run --project "$REPO_ROOT" automil submit --node <id> --desc "..." --override "--hparams '{\"lr\": 5e-5}'"`
-- Policy variant: write `automil/variants/_policies/<name>.py`, then
-  `uv run --project "$REPO_ROOT" automil submit --node <id> --desc "..." --files automil/variants/_policies/<name>.py --override "--policy-variant <name>"`
+- Policy variant: write `automil/variants/_policies/<name>.py` (that path
+  is relative to this cell root), then submit it under its
+  **git-root-relative** path — every `--files` path is resolved from the
+  repository root, never from your working directory. The exact allowed
+  pattern is declared in `automil/config.yaml` `files.editable`; it has the
+  shape `benchmarks/campaigns/preprint_130/runtime/<cell-id>/automil/variants/_policies/*.py`,
+  where `<cell-id>` is this cell's directory name (also recorded in
+  `automil/campaign_cell.json`):
+  `uv run --project "$REPO_ROOT" automil submit --node <id> --desc "..." --files benchmarks/campaigns/preprint_130/runtime/<cell-id>/automil/variants/_policies/<name>.py --override "--policy-variant <name>"`
   (a policy file without an explicit `--policy-variant` is refused as a
   no-op; the two channels compose in one `--override` string).
 
-File paths in `--files` are relative to the git repo root when absolute
-context is ambiguous — from this cell root, the `automil/variants/...` form
-above is correct. Never restore or revert files after submit; your only
-editable path is inside `automil/` and the overlay is copied at submit time.
+Never restore or revert files after submit; your only editable path is
+inside this cell's `automil/` and the overlay is copied at submit time.
 
 **WAIT.** Drive the loop from completion events, never polling. Immediately
 after the first submit, start a persistent Monitor on the orchestrator log:

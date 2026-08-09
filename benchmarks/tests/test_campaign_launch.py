@@ -144,6 +144,8 @@ def test_committed_policy_carries_the_load_bearing_rules():
         "automil certify",
         "--include-held-out",
         "variants/_policies",
+        "git-root-relative",
+        "runtime/<cell-id>/automil/variants/_policies",
         "wrap_scheduler",
         "only on the DTFD arm",
         "never end the session while unspent attempts remain",
