@@ -1,14 +1,19 @@
-# Running your cells of the 130-cell agentic campaign (fir HPC)
+# Running your cells of the 130-cell agentic campaign
 
 This is the successor to
 [`run_preprint_benchmark.md`](run_preprint_benchmark.md). That one told you how
 to run the **static baseline grid**. This one tells you how to run the
 **agentic campaign** — the actual experiment the preprint is about.
 
-It is a different kind of work. In the baseline you ran three `sbatch` commands
-and waited. Here you drive a staged, fail-closed controller one cell at a time,
-and a coding agent does the research inside a budget you are responsible for not
+It is a different kind of work. In the baseline you queued a few batch jobs and
+waited. Here you drive a staged, fail-closed controller one cell at a time, and
+a coding agent does the research inside a budget you are responsible for not
 breaking.
+
+The campaign is host-agnostic: a cell's identity is
+`dataset + task + encoder + arm + seed + protocol_version`, never a machine or a
+git commit. It runs anywhere §3 passes — a single multi-GPU workstation is the
+common case, and no scheduler is required.
 
 > **Read §1 before you touch anything.** The protocol rules are not style
 > preferences — if you break one, that cell's data cannot go in the paper.
@@ -21,7 +26,8 @@ breaking.
 is the single source of truth for launch gates. **Nobody runs a formal cell
 until every item in its Gates section is green**, including exact 130/130
 manifest coverage, the ten-regime real-GPU canary, the locked agent protocol,
-and the approved allocation. Until then, use only a throwaway cell root.
+and the compute plan derived from that canary's timings. Until then, use only a
+throwaway cell root.
 
 Tracking lives in two places, and they are not interchangeable:
 
@@ -101,12 +107,72 @@ tcga_luad__kras__uni_v2__clam__s42__preprint-v2
 
 ## 3. Setup, once
 
+Do all of this on the machine that will actually run your cells. Steps 3a–3c
+are what the launcher checks; skipping one does not degrade gracefully, it
+refuses to launch.
+
+### 3a. Repository and environment
+
 ```bash
-ssh <you>@fir.alliancecan.ca      # login2 / login3 if /home misbehaves
-cd ~/scratch/autoMIL
-git checkout main && git pull --ff-only
+git clone https://github.com/leoyin1127/autoMIL.git   # a full clone, not an export:
+cd autoMIL                                            # baselines and the orchestrator
+git checkout main && git pull --ff-only               # both run in git worktrees
 uv sync --all-packages
 ```
+
+Confirm the environment before trusting it:
+
+```bash
+nvidia-smi                                            # the orchestrator bin-packs on it
+uv run python -c "import torch; print(torch.cuda.is_available())"
+uv run pytest tests/ -q                               # two separate invocations,
+uv run pytest benchmarks/tests/ -q                    # from the repository root
+```
+
+`tmux` must be installed: the orchestrator runs in the **foreground**, and both
+it and the formal session have to survive an SSH disconnect.
+
+### 3b. Host hygiene the launcher enforces
+
+The formal session's instruction surface must be exactly the frozen protocol,
+so `campaign_launch.py` fails closed on any of the following. Fix the named
+condition — never bypass it.
+
+- `~/.claude/CLAUDE.md` does not exist, and no `CLAUDE.local.md` or
+  `.claude/CLAUDE.md` sits on any directory between the cell root and `/`.
+- No **unpinned plain `CLAUDE.md`** sits on that same walk either. Only the
+  repository `CLAUDE.md` is pinned, so a stray `~/CLAUDE.md`, or one in the
+  directory holding your clone, refuses the launch — this catches people out
+  more often than the `.local` variants do.
+- `~/.claude/plugins` is absent or empty. On a shared machine this is a
+  coordination step, not a private one: plugins installed for somebody else's
+  project still load into your session.
+- None of these are set in your shell: `ANTHROPIC_MODEL`,
+  `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`,
+  `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_EFFORT_LEVEL`.
+- The repository `CLAUDE.md` still hashes to the value pinned in the protocol
+  (SHA-256 over the decoded text, so newline style is normalised first). Do not
+  edit it during the campaign.
+- The **first token** of `claude --version` equals the protocol's
+  `runtime_version` — the pin is the bare version, `2.1.226`, not the whole
+  line the CLI prints. Pin that
+  version and **turn the CLI autoupdater off on the host** — the launcher sets
+  `DISABLE_AUTOUPDATER=1` for the session it starts, which cannot protect you
+  from a binary that drifted between cells.
+
+### 3c. Ports and GPUs
+
+Each cell meters on its own Prometheus port, assigned deterministically as
+`9464 + <manifest row>`, so concurrent cells never contend for one endpoint.
+Check that `9464–9593` is free (`ss -ltn`); `8421` is the optional viz server.
+When several cells share a host, give each cell's orchestrator a disjoint GPU
+partition — `AUTOMIL_VISIBLE_GPUS=0,1` in one tmux window, `2,3` in another. A
+malformed value refuses startup rather than quietly scheduling on every GPU.
+
+Concurrency is bounded by GPUs, not by hosts: budget at least one GPU per
+parallel cell, plus its orchestrator/session pair.
+
+### 3d. Dataset roots
 
 Make sure your dataset root is in `benchmarks/.env`. Orchestrator-run
 discovery training executes in a detached worktree with a whitelisted
@@ -374,6 +440,22 @@ Two standing rules:
 - **There is no aggregate 130-cell status command yet.** Loop `status` over the
   cell roots, and keep the tracker Sheet current — right now it is the only
   cross-cell view we have.
+- **`automil check` reports four must-fix issues on a freshly materialized
+  cell** — the `orchestrator/{queue,running,archive,completed}` directories,
+  with an unhelpful "run `automil init`". Ignore it and start the orchestrator:
+  `orchestrator start` creates those directories itself. Do not run `automil
+  init` inside a cell root.
+- **`--output-root` must be inside the git repository.** A throwaway root for
+  rehearsal has to be something like `benchmarks/campaigns/preprint_130/runtime-canary/`;
+  an external path is rejected. A throwaway root is safe to rehearse in: every
+  command including `freeze-selections`, `certify-all` and `report` honours
+  `--output-root`, and what stops a rehearsal from ever producing a publication
+  artifact is the census — the selection freeze requires exactly 130 manifest
+  cells and fails closed below that.
+- **Timing anchors in this repository are H100-based.** On any other
+  accelerator, re-derive attempt wall-clock from your own canary before
+  planning a schedule — the 360-minute attempt timeout is the constraint that
+  bites first on slower cards.
 
 ---
 
