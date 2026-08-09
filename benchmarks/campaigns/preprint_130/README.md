@@ -44,16 +44,29 @@ to the detached training worktree.
 
 ## 2. Materialize the campaign once
 
-Copy `agent_protocol.template.json`, fill the immutable provider/runtime/model
-versions, embed the exact proposal instructions and tool schema, and record the
-SHA-256 of each embedded string. Materialization recomputes both hashes;
-placeholder, `unknown`, or content/hash mismatches are rejected. The locked
-file therefore archives the resolvable coding-agent policy before any search
-starts; it is not an optimization result.
+The protocol's two content payloads are committed sources in this directory:
+`proposal_policy.md` — the exact instruction text every cell session receives
+— and `toolset.json` — the machine-readable tool surface the launcher
+enforces. Build the publication protocol from them once, pinning the
+immutable identities observed in a real runtime session:
+
+```bash
+uv run python benchmarks/scripts/campaign_agent_protocol.py build \
+  --model-version <immutable model ID from a throwaway session> \
+  --runtime-version <exact `claude --version`>
+uv run python benchmarks/scripts/campaign_agent_protocol.py verify
+```
+
+Take the model ID from a throwaway session, never a formal cell session: the
+protocol must be locked before the first formal session exists. Materialization
+recomputes both content hashes; placeholder, `unknown`, or content/hash
+mismatches are rejected. The locked file therefore archives the resolvable
+coding-agent policy before any search starts; it is not an optimization
+result. `agent_protocol.template.json` stays as the schema reference.
 
 ```bash
 uv run python benchmarks/scripts/campaign_manifest.py materialize \
-  --agent-protocol /path/to/agent_protocol.json
+  --agent-protocol benchmarks/campaigns/preprint_130/agent_protocol.json
 ```
 
 This creates one restart-safe project under
@@ -121,15 +134,26 @@ fails closed.
 
 ```bash
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
-cd "$CAMPAIGN_CELL_ROOT"
-claude
+uv run python benchmarks/scripts/campaign_launch.py launch \
+  --cell-root "$CAMPAIGN_CELL_ROOT"
 ```
 
-Launch the runtime with its web research tools enabled (the skill's RESEARCH
-step delegates WebSearch and WebFetch subagents), identically for all 130
-cells; a cell run without network access is a protocol deviation to record in
-that cell's disclosure. Research and diagnosis are ordinary metered
-agent-active work.
+The launcher is the executor of the locked protocol, never a second copy of
+it: it verifies the pinned CLI version, the frozen memory surface (repository
+`CLAUDE.md` hash, no user-level memory or plugins), the untouched activity
+settings, port-9464 host exclusivity, a running cell orchestrator, and the
+absence of any prior session evidence; then it renders
+`proposal_policy_content` byte-exact into the cell root as `CLAUDE.md` and
+execs the pinned runtime with its working directory at the cell root. Use
+`preflight` or `launch-command` to inspect the same derivation without
+starting anything. A `campaign-launch refusal` is fail-closed information —
+fix the named precondition, never bypass it. A bare `claude` in the cell root
+is not a formal session: it would run an unpinned, unarchived surface.
+
+Web research tools stay enabled (the frozen policy's RESEARCH step delegates
+WebSearch and WebFetch subagents), identically for all 130 cells; a cell run
+without network access is a protocol deviation to record in that cell's
+disclosure. Research and diagnosis are ordinary metered agent-active work.
 
 After the first orchestrator scrape of the native active-time counter, fill
 `agent_session.template.json` with the runtime session identifier and a
