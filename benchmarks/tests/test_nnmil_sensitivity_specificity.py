@@ -20,7 +20,8 @@ agree only when every class is present in every fold.
 """
 from __future__ import annotations
 
-import inspect
+import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -222,13 +223,42 @@ class TestInstall:
 def test_vendored_nnmil_is_not_modified():
     """The whole point: nnMIL's own source gains nothing.
 
-    If someone later 'simplifies' this by editing lib/nnMIL, this fails.
+    Asks git whether the vendored tree is dirty, rather than grepping one
+    function body for three substrings. The grep version passed against two
+    real violations demonstrated in review -- sensitivity computed inline in
+    ``classification_trainer.py``, and a new helper added to ``utils.py``
+    outside ``get_eval_metrics`` -- i.e. it did not detect the exact
+    "simplify by editing lib/" move it exists to forbid. It also missed any
+    rename (``tpr``/``tnr`` for the checked words).
+
+    Uncommitted AND committed edits both count: comparing against the merge-base
+    with the default branch catches a change that was committed on this branch.
     """
-    utils = _vendored_utils()
-    source = inspect.getsource(utils.get_eval_metrics)
-    assert "sensitivity" not in source
-    assert "specificity" not in source
-    assert "autobench" not in source
+    repo = Path(__file__).resolve().parents[2]
+    vendored = "benchmarks/lib/nnMIL"
+
+    def _git(*args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True,
+        )
+
+    if _git("rev-parse", "--git-dir").returncode != 0:
+        pytest.skip("not a git checkout")
+
+    dirty = _git("status", "--porcelain", "--", vendored).stdout.strip()
+    assert not dirty, (
+        f"benchmarks/lib/nnMIL has uncommitted changes:\n{dirty}\n"
+        "This must stay an add-on: the mechanism belongs in "
+        "autobench/pipeline/nnmil/metrics_addon.py, not in vendored code."
+    )
+
+    base = _git("merge-base", "HEAD", "origin/main").stdout.strip()
+    if base:
+        committed = _git("diff", "--stat", base, "HEAD", "--", vendored).stdout.strip()
+        assert not committed, (
+            f"benchmarks/lib/nnMIL was edited in a commit on this branch:\n"
+            f"{committed}\nKeep the mechanism consumer-side."
+        )
 
 
 # --- end of the chain: the normalized metric dict -----------------------------
@@ -258,3 +288,67 @@ class TestNormalization:
 
         assert np.isnan(out["sensitivity"])
         assert np.isnan(out["specificity"])
+
+
+class TestReviewFindings:
+    """Regressions for the PR-49 review findings."""
+
+    def test_multiclass_does_not_also_emit_phantom_binary_nans(self):
+        """A real macro_recall must not ship beside a NaN `sensitivity`.
+
+        Defaulting unconditionally opened a new cross-arm asymmetry on 3-class
+        (no sibling arm emits sensitivity there) and made a NaN indistinguishable
+        from "the add-on failed" — a diagnostic lying about its own health.
+        """
+        from autobench.pipeline.nnmil.evaluate import normalize_nnmil_metrics
+
+        out = normalize_nnmil_metrics(
+            {
+                "test_test/bacc": 0.70,
+                "test_test/macro_recall": 0.61,
+                "test_test/macro_specificity_ovr": 0.80,
+            },
+            split="test",
+        )
+
+        assert out["macro_recall"] == 0.61
+        assert "sensitivity" not in out
+        assert "specificity" not in out
+
+    def test_binary_still_gets_the_nan_fallback_when_the_addon_is_absent(self):
+        from autobench.pipeline.nnmil.evaluate import normalize_nnmil_metrics
+
+        out = normalize_nnmil_metrics({"test_test/bacc": 0.70}, split="test")
+
+        assert np.isnan(out["sensitivity"])
+        assert np.isnan(out["specificity"])
+
+    def test_positional_call_shapes_still_get_the_metrics(self):
+        """nnMIL calls all-keyword today; positional must not silently disable."""
+        wrapped = with_sensitivity_specificity(_fake_get_eval_metrics)
+        y_true, y_pred = np.array([0, 0, 1, 1]), np.array([0, 1, 1, 1])
+
+        out = wrapped(y_true, y_pred, None, [0, 1], True, "val")
+
+        assert out["val/sensitivity"] == 1.0
+        assert out["val/specificity"] == 0.5
+
+    def test_a_non_mapping_return_is_contained(self):
+        """The merge sits inside the try, so this cannot escape the wrapper."""
+        wrapped = with_sensitivity_specificity(lambda **kw: None)
+        out = wrapped(targets_all=np.array([0, 1]), preds_all=np.array([0, 1]),
+                      unique_classes=[0, 1], prefix="val")
+        assert out is None
+
+    def test_the_except_branch_is_actually_exercised(self):
+        """Not just the early return — force a raise inside the try."""
+        wrapped = with_sensitivity_specificity(_fake_get_eval_metrics)
+
+        out = wrapped(targets_all=np.array([0, 0, 1]), preds_all=np.array([0, 1]),
+                      unique_classes=[0, 1], prefix="val")
+
+        assert out == {"val/acc": 0.75, "val/bacc": 0.70}   # nnMIL's own, intact
+
+    def test_wrapper_keeps_the_wrapped_identity(self):
+        wrapped = with_sensitivity_specificity(_fake_get_eval_metrics)
+        assert wrapped.__name__ == "_fake_get_eval_metrics"

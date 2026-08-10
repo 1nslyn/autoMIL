@@ -42,6 +42,7 @@ unchanged and the caller degrades to the pre-existing NaN behaviour.
 """
 from __future__ import annotations
 
+import functools
 import logging
 from typing import Callable
 
@@ -56,19 +57,40 @@ _WRAPPED_FLAG = "_autobench_sensitivity_specificity"
 def with_sensitivity_specificity(get_eval_metrics: Callable) -> Callable:
     """Wrap nnMIL's ``get_eval_metrics`` so its result also carries the two metrics.
 
-    Returns a callable with the same signature and the same return type. The
-    wrapped function's own output is never mutated -- a new dict is built -- so a
-    caller holding a reference to the original mapping is unaffected.
+    Returns the same return type, and carries the wrapped function's identity via
+    ``functools.wraps`` so ``inspect`` still reports nnMIL's own name and source
+    rather than this shim. The wrapped function's own output is never mutated --
+    a new dict is built -- so a caller holding a reference to the original
+    mapping is unaffected.
+
+    Positional fallbacks cover every argument this needs, not just the first two.
+    nnMIL calls with all-keyword arguments today; if upstream ever switches to
+    positional, a keyword-only lookup would silently disable the add-on and send
+    the arm back to NaN with no diagnostic -- the exact hole this module exists
+    to close. Indices follow ``get_eval_metrics(targets_all, preds_all,
+    probs_all, unique_classes, get_report, prefix, roc_kwargs)``.
     """
 
+    def _arg(kwargs: dict, args: tuple, name: str, index: int, default=None):
+        if name in kwargs:
+            return kwargs[name]
+        return args[index] if len(args) > index else default
+
+    @functools.wraps(get_eval_metrics)
     def _wrapper(*args, **kwargs):
         metrics = get_eval_metrics(*args, **kwargs)
         try:
-            targets = kwargs.get("targets_all", args[0] if args else None)
-            preds = kwargs.get("preds_all", args[1] if len(args) > 1 else None)
-            unique_classes = kwargs.get("unique_classes")
-            prefix = kwargs.get("prefix", "")
-            if targets is None or preds is None or not unique_classes:
+            targets = _arg(kwargs, args, "targets_all", 0)
+            preds = _arg(kwargs, args, "preds_all", 1)
+            unique_classes = _arg(kwargs, args, "unique_classes", 3)
+            prefix = _arg(kwargs, args, "prefix", 5, "")
+            if targets is None or preds is None or unique_classes is None \
+                    or len(unique_classes) == 0:
+                logger.warning(
+                    "sensitivity/specificity add-on had no targets/preds/classes "
+                    "to work from; nnMIL's own metrics are unaffected, but this "
+                    "arm will report null for the pair",
+                )
                 return metrics
             # Returns DIFFERENT keys per task shape -- sensitivity/specificity
             # for binary, macro_recall/macro_specificity_ovr for multi-class --
@@ -77,16 +99,19 @@ def with_sensitivity_specificity(get_eval_metrics: Callable) -> Callable:
             # never has to know which shape it is in and cannot drift from the
             # shared definition.
             computed = sensitivity_specificity(targets, preds, len(unique_classes))
+            # Inside the try, deliberately: a wrapped callable that returned a
+            # non-mapping would otherwise raise HERE, past the guard, breaking
+            # the containment this module promises.
+            return {
+                **metrics,
+                **{f"{prefix}/{name}": value for name, value in computed.items()},
+            }
         except Exception as exc:      # diagnostics must not break evaluation
             logger.warning(
                 "sensitivity/specificity add-on skipped for this split (%s); "
                 "nnMIL's own metrics are unaffected", exc,
             )
             return metrics
-        return {
-            **metrics,
-            **{f"{prefix}/{name}": value for name, value in computed.items()},
-        }
 
     setattr(_wrapper, _WRAPPED_FLAG, True)
     return _wrapper
