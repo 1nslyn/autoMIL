@@ -115,12 +115,28 @@ def normalize_nnmil_metrics(
             result[_NNMIL_TO_SHARED[suffix]] = float(value)
 
     # nnMIL silently skips auroc when only one class is present in a fold;
-    # default all expected metrics to NaN so downstream CI code sees a
-    # consistent key set across folds.
+    # default the mapped metrics to NaN so downstream CI code sees a consistent
+    # key set across folds.
     result.setdefault("auc_roc", float("nan"))
     result.setdefault("accuracy", float("nan"))
     result.setdefault("balanced_accuracy", float("nan"))
     result.setdefault("f1", float("nan"))
+
+    # sensitivity/specificity are a different case, and the "skipped this fold"
+    # framing above does not apply: nnMIL's trainer never emits them at all.
+    # ``get_eval_metrics`` (lib/nnMIL/utilities/utils.py:72-78) returns only
+    # acc / bacc / kappa / nw_kappa / weighted_f1 / loss / auroc. It does build a
+    # ``classification_report`` internally, which holds per-class recall, but
+    # keeps it — and the raw predictions — to itself, so this consumer-side
+    # wrapper has nothing to compute a confusion matrix from. So these are NaN
+    # on EVERY nnMIL run, binary included; they are not a multi-class artifact.
+    #
+    # Left as-is on the same L-10 grounds as the AUC asymmetry above: recovering
+    # them means patching the vendored trainer or restructuring this module to
+    # receive raw predictions, which is disproportionate for a diagnostic that
+    # never enters `metrics`, the composite, or selection. They serialize as
+    # JSON null (automil.runtime_helpers.json_safe) and no longer take the run
+    # down with them, which was the actual defect.
     result.setdefault("sensitivity", float("nan"))
     result.setdefault("specificity", float("nan"))
 

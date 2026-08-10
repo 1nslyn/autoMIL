@@ -178,3 +178,47 @@ def test_metrics_dict_with_mixed_keys_across_folds(tmp_path: Path) -> None:
     assert result["metrics"]["val_auc"] == pytest.approx(0.82, rel=1e-6)
     # extra: mean of 1 value (only fold_0 has it)
     assert result["metrics"]["extra"] == pytest.approx(1.0, rel=1e-6)
+
+
+def test_null_composite_fold_is_skipped_not_counted_as_zero(tmp_path: Path) -> None:
+    """A fold whose composite was unestimable serializes as ``null`` (never NaN).
+
+    ``float(None)`` raises TypeError, and this aggregator runs inside the SIGTERM
+    handler — an uncaught raise there loses the whole partial flush. Counting it
+    as ``0.0`` would be just as wrong: the aggregator's stated contract is to
+    distinguish missing data from zero-valued data (Pitfall 4).
+    """
+    _write_fold(tmp_path, 0, composite=0.80)
+    _write_fold(tmp_path, 1, composite=0.84)
+    (tmp_path / "fold_2_result.json").write_text(json.dumps({
+        "fold_index": 2,
+        "fold_count": 5,
+        "status": "completed",
+        "metrics": {"val_auc": None, "val_bacc": None},
+        "composite": None,
+        "elapsed_seconds": 90,
+        "peak_vram_mb": 3000,
+    }))
+
+    result = aggregate_folds(tmp_path, expected_fold_count=5)
+
+    assert result["status"] == "partial"
+    assert result["partial_folds"] == 2          # not 3 — the null fold is not evidence
+    assert result["composite"] == pytest.approx(0.82, rel=1e-6)
+    assert result["metrics"]["val_auc"] == pytest.approx(0.82, rel=1e-6)
+    # elapsed/vram are still accounted: the fold DID consume resources
+    assert result["elapsed_seconds"] == 290
+
+
+def test_non_finite_composite_fold_is_skipped(tmp_path: Path) -> None:
+    """Defence in depth: a NaN that reached disk some other way must not average in."""
+    _write_fold(tmp_path, 0, composite=0.80)
+    (tmp_path / "fold_1_result.json").write_text(
+        '{"fold_index": 1, "fold_count": 5, "status": "completed", '
+        '"metrics": {}, "composite": NaN, "elapsed_seconds": 10, "peak_vram_mb": 1}'
+    )
+
+    result = aggregate_folds(tmp_path, expected_fold_count=5)
+
+    assert result["partial_folds"] == 1
+    assert result["composite"] == pytest.approx(0.80, rel=1e-6)

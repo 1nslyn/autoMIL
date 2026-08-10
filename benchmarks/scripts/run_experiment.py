@@ -210,6 +210,20 @@ def _per_fold_composites(per_fold_val: list, is_survival: bool) -> list[float]:
     return out
 
 
+def _finite_or_none(value: object) -> float | None:
+    """Return ``value`` as a finite float, or ``None`` when it is not estimable.
+
+    ``None`` serializes as JSON ``null``; a NaN would serialize as a bare ``NaN``
+    token, which makes result.json invalid JSON and gets the whole file rejected
+    at ingestion (see ``automil.runtime_helpers.json_safe``). Every number that
+    can legitimately be unestimable passes through here on its way to disk.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
+
+
 def _validation_fold_evidence(summary: dict) -> list[dict]:
     """Return the fold-indexed, validation-only evidence used by campaigns.
 
@@ -227,27 +241,25 @@ def _validation_fold_evidence(summary: dict) -> list[dict]:
     evidence: list[dict] = []
     for fold_index, raw_metrics in zip(indices, per_fold):
         metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        # Non-finite fold values are nulled here, not passed through raw: this
+        # block ships in the AGENT-FACING copy of result.json, so a NaN AUC from
+        # a fold that happened to miss a class would get the file rejected at
+        # ingestion and the node recorded as a crash.
         if is_survival:
-            value = metrics.get("c_index")
+            value = _finite_or_none(metrics.get("c_index"))
             public_metrics = {"val_c_index": value}
             values = (value,)
         else:
-            auc = metrics.get("auc_roc")
-            bacc = metrics.get("balanced_accuracy")
+            auc = _finite_or_none(metrics.get("auc_roc"))
+            bacc = _finite_or_none(metrics.get("balanced_accuracy"))
             public_metrics = {"val_auc": auc, "val_bacc": bacc}
             values = (auc, bacc)
-        finite = all(
-            not isinstance(value, bool)
-            and isinstance(value, (int, float))
-            and math.isfinite(float(value))
-            for value in values
-        )
+        finite = all(value is not None for value in values)
         evidence.append({
             "fold_index": fold_index,
             "metrics": public_metrics,
             "composite": (
-                sum(float(value) for value in values) / len(values)
-                if finite else None
+                sum(values) / len(values) if finite else None
             ),
         })
     return evidence
@@ -274,41 +286,53 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     except Exception:
         pass
 
+    # An unestimable metric is DROPPED from its block rather than written as NaN.
+    # `metrics` and `held_out` are schema-constrained to numbers, and CR-1b
+    # recomputes the composite as the mean of `metrics` — so the composite below
+    # is likewise the mean of what survived, keeping reported and recomputed in
+    # agreement. Which names went missing is reported via `unestimable`.
     if "c_index" in test:
-        test_ci = test.get("c_index", {}).get("mean", 0.0)
+        test_ci = _finite_or_none(test.get("c_index", {}).get("mean"))
         # The campaign ranks discovery, promotion, and the final winner by the
         # equal-weight mean of the same fold composites. Keep the graph-facing
         # result on that exact scale as well; ``val_pooled`` remains a useful
         # sealed diagnostic but must not silently change the search estimand.
         fold_values = [
-            float(fold["composite"])
-            for fold in validation_folds
-            if isinstance(fold.get("composite"), (int, float))
-            and not isinstance(fold.get("composite"), bool)
-            and math.isfinite(float(fold["composite"]))
+            value
+            for value in (
+                _finite_or_none(fold.get("composite")) for fold in validation_folds
+            )
+            if value is not None
         ]
-        fallback = val.get("c_index", {}).get("mean", 0.0)
         val_ci = (
             math.fsum(fold_values) / len(fold_values)
-            if fold_values else fallback
+            if fold_values
+            else _finite_or_none(val.get("c_index", {}).get("mean"))
         )
-        composite = val_ci
-        metrics = {"val_c_index": val_ci}
-        held_out = {"test_c_index": round(test_ci, 4)}
+        metrics = {"val_c_index": val_ci} if val_ci is not None else {}
+        held_out = {"test_c_index": round(test_ci, 4)} if test_ci is not None else {}
+        unestimable = [] if val_ci is not None else ["val_c_index"]
+        composite = val_ci if val_ci is not None else 0.0
     else:
-        test_auc = test.get("auc_roc", {}).get("mean", 0.0)
-        test_bacc = test.get("balanced_accuracy", {}).get("mean", 0.0)
-        val_auc = val.get("auc_roc", {}).get("mean", 0.0)
-        val_bacc = val.get("balanced_accuracy", {}).get("mean", 0.0)
-        composite = (val_auc + val_bacc) / 2
+        candidates = {
+            "val_auc": _finite_or_none(val.get("auc_roc", {}).get("mean")),
+            "val_bacc": _finite_or_none(val.get("balanced_accuracy", {}).get("mean")),
+        }
+        held_out_candidates = {
+            "test_auc": _finite_or_none(test.get("auc_roc", {}).get("mean")),
+            "test_bacc": _finite_or_none(test.get("balanced_accuracy", {}).get("mean")),
+        }
         metrics = {
-            "val_auc": round(val_auc, 4),
-            "val_bacc": round(val_bacc, 4),
+            name: round(value, 4)
+            for name, value in candidates.items() if value is not None
         }
         held_out = {
-            "test_auc": round(test_auc, 4),
-            "test_bacc": round(test_bacc, 4),
+            name: round(value, 4)
+            for name, value in held_out_candidates.items() if value is not None
         }
+        unestimable = [name for name, value in candidates.items() if value is None]
+        estimable = [value for value in candidates.values() if value is not None]
+        composite = math.fsum(estimable) / len(estimable) if estimable else 0.0
 
     # A stage is complete only when every fold it declared has a finite
     # selection composite.  The old global ``>= 2`` threshold let a 2/3-fold
@@ -341,6 +365,11 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
         if declared_coverage_valid and n_valid_folds == required_folds
         else "partial"
     )
+    # A selection signal missing a component is not a completed run. Say so as a
+    # quarantined `partial` with a readable cause (D-01), rather than letting a
+    # NaN reach disk and get the node written off as a phantom crash.
+    if unestimable:
+        status = "partial"
 
     # CR-4: measure the noise the Ladder keep-margin is supposed to exceed.
     # `composite_se` is TOP-LEVEL, deliberately: CR-1b recomputes the composite as
@@ -353,7 +382,7 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
 
     # ``metrics`` is agent-facing (val only); ``held_out`` (test) + ``summary``
     # are sealed into certify.json by terminal_writer — never seen during search.
-    return {
+    result = {
         "status": status,
         "metrics": metrics,
         "held_out": held_out,
@@ -366,6 +395,13 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
         "validation_folds": validation_folds,
         "summary": summary,
     }
+    if unestimable:
+        result["error"] = (
+            "composite is incomplete: no fold produced a finite "
+            f"{', '.join(unestimable)}. Reported composite is the mean of the "
+            f"{len(metrics)} metric(s) that were estimable."
+        )
+    return result
 
 
 def main() -> None:
