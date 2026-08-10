@@ -135,8 +135,6 @@ def run_dtfd_experiment(
                 embed_dim=exp_cfg.embed_dim, nll_bins=exp_cfg.task.nll_bins,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
                 policy_runtime=fold_policy_runtime,
-                ordinal=exp_cfg.task.ordinal,
-                fold_dir=fold_dir,
             )
             elapsed_seconds = int(raw.get("elapsed_seconds", 0) or 0)
         else:
@@ -149,6 +147,8 @@ def run_dtfd_experiment(
                 embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
                 policy_runtime=fold_policy_runtime,
+                ordinal=exp_cfg.task.ordinal,
+                fold_dir=fold_dir,
             )
             elapsed_seconds = int(time.time() - start)
 

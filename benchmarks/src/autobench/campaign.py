@@ -756,10 +756,23 @@ def materialize_discovery_cells(
                 "track": ["val_c_index"],
             }
         else:
+            # The agent reads this and hill-climbs on it, so it must match what
+            # run_experiment.py actually computes. Ordinal tasks add qwk, and a
+            # stale 2-term string here would tell the agent to optimise a
+            # different function than the one it is scored on.
+            # Read from the dataset YAML this cell is already hash-locked to,
+            # so the declared objective cannot drift from the task definition.
+            import yaml as _yaml
+            _tasks = (_yaml.safe_load(dataset_path.read_text()) or {}).get("tasks") or {}
+            ordinal = bool((_tasks.get(cell["task"]) or {}).get("ordinal", False))
+            track = ["val_auc", "val_bacc"] + (["val_qwk"] if ordinal else [])
             config["metrics"] = {
                 "primary": "composite",
-                "composite_formula": "(val_auc + val_bacc) / 2",
-                "track": ["val_auc", "val_bacc"],
+                "composite_formula": (
+                    "(val_auc + val_bacc + val_qwk) / 3" if ordinal
+                    else "(val_auc + val_bacc) / 2"
+                ),
+                "track": track,
             }
         adir_rel = adir.relative_to(repo_root).as_posix()
         config["files"] = {

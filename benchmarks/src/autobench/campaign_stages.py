@@ -413,7 +413,16 @@ def _validation_folds(
             raise CampaignStageError(
                 f"fold {fold_index} metrics are not validation-only unit-interval values"
             )
-        if set(metrics) == {"val_auc", "val_bacc"}:
+        # Ordinal tasks (TCGA-HNSC grade) carry a third component. Locked as its
+        # own exact key set rather than relaxed to "any subset", so a fold that
+        # merely LOST a component still fails closed.
+        if set(metrics) == {"val_auc", "val_bacc", "val_qwk"}:
+            expected_composite = (
+                float(metrics["val_auc"])
+                + float(metrics["val_bacc"])
+                + float(metrics["val_qwk"])
+            ) / 3
+        elif set(metrics) == {"val_auc", "val_bacc"}:
             expected_composite = (
                 float(metrics["val_auc"]) + float(metrics["val_bacc"])
             ) / 2
