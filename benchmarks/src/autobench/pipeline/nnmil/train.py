@@ -135,13 +135,13 @@ def train_nnmil_fold(
     val_raw = trainer.evaluate("val")
     val_metrics = normalize_nnmil_metrics(val_raw, split="val", task_type=task_type)
 
-    elapsed_seconds = time.perf_counter() - _timer_start
-
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "fold": fold,
-        "elapsed_seconds": elapsed_seconds,
+        # FOLD-TIMING CONTRACT: covers the whole fold, both evaluations
+        # included, so the number is comparable across arms and task types.
+        "elapsed_seconds": time.perf_counter() - _timer_start,
     }
 
     with open(metrics_path, "w") as f:

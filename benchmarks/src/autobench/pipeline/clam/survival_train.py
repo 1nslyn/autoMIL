@@ -13,6 +13,7 @@ import json
 import os
 import random
 import sys
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -154,6 +155,11 @@ def train_survival_fold(
         with open(metrics_path) as f:
             return json.load(f)
 
+    # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore and final
+    # scoring included, so the number is comparable across arms and task types.
+    # This arm reported no elapsed_seconds at all, so every CLAM survival fold
+    # (and therefore every CLAM survival cell's elapsed_seconds_total) read 0.
+    start = time.time()
     _seed(exp_cfg.train.seed)
     loss_type = exp_cfg.survival_loss or "cox"
     is_nll = loss_type == "nllsurv"
@@ -280,11 +286,14 @@ def train_survival_fold(
     # the POOLED cross-fold validation set. The per-fold c-index below stays for
     # reporting; the pooled value is what the selection composite uses.
     _val_records = _risk_records(val)
+    test_metrics = {"c_index": _c_index(test)}
+    val_metrics = {"c_index": _c_index_from(_val_records)}
     fold_result = {
-        "test_metrics": {"c_index": _c_index(test)},
-        "val_metrics": {"c_index": _c_index_from(_val_records)},
+        "test_metrics": test_metrics,
+        "val_metrics": val_metrics,
         "val_records": _val_records,
         "fold": fold,
+        "elapsed_seconds": time.time() - start,
     }
     with open(metrics_path, "w") as f:
         json.dump(fold_result, f, indent=2)

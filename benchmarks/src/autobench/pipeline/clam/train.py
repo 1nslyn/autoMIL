@@ -209,8 +209,6 @@ def train_fold(
     else:
         val_metrics = {"auc_roc": val_auc, "accuracy": val_acc}
 
-    elapsed_seconds = time.perf_counter() - _timer_start
-
     # --- Log final metrics to wandb ---
     if wb_run is not None:
         import wandb
@@ -235,7 +233,10 @@ def train_fold(
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "fold": fold,
-        "elapsed_seconds": elapsed_seconds,
+        # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation and
+        # prediction writing included, so the number is comparable across arms
+        # and task types.
+        "elapsed_seconds": time.perf_counter() - _timer_start,
     }
     with open(metrics_path, "w") as f:
         json.dump(fold_result, f, indent=2)

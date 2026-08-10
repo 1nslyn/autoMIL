@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 
 import torch
 
@@ -136,12 +135,10 @@ def run_dtfd_experiment(
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
                 policy_runtime=fold_policy_runtime,
             )
-            elapsed_seconds = int(raw.get("elapsed_seconds", 0) or 0)
         else:
             train_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "train")
             val_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "val")
             test_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "test")
-            start = time.time()
             raw = train_dtfd_fold(
                 train_slides, val_slides, test_slides,
                 embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
@@ -150,7 +147,6 @@ def run_dtfd_experiment(
                 ordinal=exp_cfg.task.ordinal,
                 fold_dir=fold_dir,
             )
-            elapsed_seconds = int(time.time() - start)
 
         result = {
             "test_metrics": raw["test_metrics"],
@@ -158,7 +154,9 @@ def run_dtfd_experiment(
             # CR-3: carry the val risk records through for pooled concordance.
             **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
             "fold": fold,
-            "elapsed_seconds": elapsed_seconds,
+            # Both branches now report their own span (FOLD-TIMING CONTRACT);
+            # the runner no longer times one of them itself.
+            "elapsed_seconds": int(raw.get("elapsed_seconds", 0) or 0),
         }
         with open(metrics_path, "w") as f:
             json.dump(result, f, indent=2)

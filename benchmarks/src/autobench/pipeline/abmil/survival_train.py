@@ -232,7 +232,6 @@ def train_abmil_survival_fold(
                     metrics={"val_loss": v_loss, "val_c_index": v_cidx},
                 ):
                     break
-        elapsed_seconds = time.time() - start
 
         # Restore the best (val-loss) checkpoint from disk before scoring: the
         # in-memory best_model_state is a shallow copy aliasing the live params,
@@ -248,11 +247,18 @@ def train_abmil_survival_fold(
         _val_records = _risk_records(val_samples) if val_samples else {
             "risks": [], "statuses": [], "times": [], "patient_ids": []
         }
+        test_metrics = {
+            "c_index": _c_index(test_samples) if test_samples else float("nan")
+        }
+        val_metrics = {"c_index": _c_index_from(_val_records)}
         return {
-            "test_metrics": {"c_index": _c_index(test_samples) if test_samples else float("nan")},
-            "val_metrics": {"c_index": _c_index_from(_val_records)},
+            "test_metrics": test_metrics,
+            "val_metrics": val_metrics,
             "val_records": _val_records,
-            "elapsed_seconds": elapsed_seconds,
+            # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore
+            # and final scoring included, so the number is comparable across
+            # arms and task types.
+            "elapsed_seconds": time.time() - start,
         }
     finally:
         torch.set_grad_enabled(grad_was_enabled)

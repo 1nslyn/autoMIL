@@ -271,6 +271,11 @@ def train_dtfd_survival_fold(
     """
     grad_was_enabled = torch.is_grad_enabled()
     torch.set_grad_enabled(True)
+    # FOLD-TIMING CONTRACT: elapsed_seconds covers everything this trainer does
+    # for the fold, so the number is comparable across arms and task types.
+    # Starting it at the epoch loop hid cfg.validate (which stats every training
+    # bag) and the final re-read of every val/test bag from disk.
+    start = time.time()
     try:
         _seed_everything(seed)
         py_rng = random.Random(seed)
@@ -285,16 +290,20 @@ def train_dtfd_survival_fold(
             [s.time for s in train_samples], [s.status for s in train_samples], nll_bins,
         )
 
-        opt0 = torch.optim.Adam(bundle.tier1_parameters(), lr=cfg.lr, weight_decay=cfg.wd)
-        opt1 = torch.optim.Adam(bundle.att_cls.parameters(), lr=cfg.lr, weight_decay=cfg.wd)
+        raw0 = torch.optim.Adam(bundle.tier1_parameters(), lr=cfg.lr, weight_decay=cfg.wd)
+        raw1 = torch.optim.Adam(bundle.att_cls.parameters(), lr=cfg.lr, weight_decay=cfg.wd)
         policy_runtime = policy_runtime or PolicyRuntime()
-        opt0 = policy_runtime.wrap_optimizer(opt0, role="tier1")
-        opt1 = policy_runtime.wrap_optimizer(opt1, role="tier2")
+        opt0 = policy_runtime.wrap_optimizer(raw0, role="tier1")
+        opt1 = policy_runtime.wrap_optimizer(raw1, role="tier2")
+        # A policy may legitimately return a duck-typed wrapper, which no torch
+        # LR scheduler will accept; scheduler_target resolves what to attach to.
         sched0 = torch.optim.lr_scheduler.MultiStepLR(
-            opt0, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
+            policy_runtime.scheduler_target(opt0, raw0, role="tier1"),
+            [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio,
         )
         sched1 = torch.optim.lr_scheduler.MultiStepLR(
-            opt1, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
+            policy_runtime.scheduler_target(opt1, raw1, role="tier2"),
+            [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio,
         )
         sched0 = policy_runtime.wrap_scheduler(sched0, role="tier1")
         sched1 = policy_runtime.wrap_scheduler(sched1, role="tier2")
@@ -334,7 +343,6 @@ def train_dtfd_survival_fold(
                     metrics={"val_loss": v_loss, "val_c_index": v_cidx},
                 ):
                     break
-        elapsed_seconds = time.time() - start
 
         if best_snap is not None:
             _restore(bundle, best_snap)
@@ -345,14 +353,16 @@ def train_dtfd_survival_fold(
             _risk_records(bundle, val_samples, cfg, device, seed) if val_samples
             else {"risks": [], "statuses": [], "times": [], "patient_ids": []}
         )
+        test_metrics = {
+            "c_index": _c_index(bundle, test_samples, cfg, device, seed)
+            if test_samples else float("nan"),
+        }
+        val_metrics = {"c_index": _c_index_from(_val_records)}
         return {
-            "test_metrics": {
-                "c_index": _c_index(bundle, test_samples, cfg, device, seed)
-                if test_samples else float("nan"),
-            },
-            "val_metrics": {"c_index": _c_index_from(_val_records)},
+            "test_metrics": test_metrics,
+            "val_metrics": val_metrics,
             "val_records": _val_records,
-            "elapsed_seconds": elapsed_seconds,
+            "elapsed_seconds": time.time() - start,
         }
     finally:
         torch.set_grad_enabled(grad_was_enabled)
