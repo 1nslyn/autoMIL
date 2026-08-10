@@ -89,12 +89,14 @@ def sensitivity_specificity(
         Macro-averaged one-vs-rest. See :func:`_macro_sensitivity_specificity`
         for why these carry their own names.
 
-    Public because the nnMIL arm needs it too: nnMIL's trainer emits neither
-    metric, so that arm reported nothing while every other arm reported both.
-    ``pipeline/nnmil/metrics_addon.py`` closes the gap by calling THIS function
-    rather than restating the formula, which makes the arms identical by
-    construction -- a stronger guarantee than the AUC situation (L-10), where two
-    separate formulas merely agree in the common case.
+    Public so the nnMIL arm can share it. nnMIL's trainer emits neither metric,
+    so that arm reports nothing while every other arm reports both; the consumer-
+    side add-on that closes that gap calls THIS function rather than restating
+    the formula, which makes the arms identical by construction -- a stronger
+    guarantee than the AUC situation (L-10), where two separate formulas merely
+    agree in the common case. Until that add-on lands, nnMIL still reports null
+    for the pair (see nnmil/evaluate.py), so a multi-class cross-arm table has
+    the macro pair on four arms and neither name on nnMIL.
     """
     if n_classes == 2:
         cm = confusion_matrix(y_true, y_pred, labels=[0, 1])

@@ -342,6 +342,11 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
         # KEEP_CLASS, but nothing stops it being a PARENT, and terminal_writer
         # gates a child against `parent["composite"]` with no partial check --
         # so a half-scale bar silently decided a completed child's keep/discard.
+        # NOTE this does not close that leak, it only stops feeding it a
+        # wrong-scale number: the parent bar becomes the 0.0 sentinel, which
+        # auto-keeps every child. That is no worse than before (such a node was
+        # a crash at composite 0.0), but the real fix is a parent-status gate in
+        # terminal_writer/graph, which is deliberately out of scope here.
         # If a cell genuinely cannot estimate AUC, the honest fix is to declare a
         # bacc-only metric set for that cell up front, so every node in it is on
         # one scale.
@@ -413,10 +418,20 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
         "summary": summary,
     }
     if unestimable:
+        # Describes the all-or-nothing rule above. An earlier draft said the
+        # composite was "the mean of the N metric(s) that were estimable",
+        # which was left over from the partial-mean semantics this replaced:
+        # `metrics` is now always {} here, so N was always 0, and the composite
+        # is a sentinel rather than any mean. The trigger is the pooled
+        # cross-fold mean being non-finite -- which happens only when NO fold
+        # was estimable, since compute_confidence_intervals already drops
+        # non-finite folds per metric. This string is agent-facing (`error` is
+        # not in _SEALED_RESULT_KEYS), so it has to be true.
         result["error"] = (
-            "composite is incomplete: no fold produced a finite "
-            f"{', '.join(unestimable)}. Reported composite is the mean of the "
-            f"{len(metrics)} metric(s) that were estimable."
+            f"composite not reported: {', '.join(unestimable)} was unestimable "
+            "across every fold, and the composite is only defined over its full "
+            "declared metric set. composite=0.0 is a sentinel, not a score; the "
+            "node is quarantined as partial."
         )
     return result
 
@@ -664,7 +679,10 @@ def main() -> None:
     reported = "  ".join(
         f"{name}={value:.4f}" for name, value in sorted(result["metrics"].items())
     )
-    print(f"  {reported}  composite={result['composite']:.4f}".lstrip())
+    summary_line = f"composite={result['composite']:.4f}"
+    if reported:
+        summary_line = f"{reported}  {summary_line}"
+    print(f"  {summary_line}")
     if result.get("error"):
         print(f"  {result['error']}")
     print(f"  result.json written to {os.path.abspath('result.json')}")

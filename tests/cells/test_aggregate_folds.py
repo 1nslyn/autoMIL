@@ -257,3 +257,66 @@ def test_null_composite_fold_contributes_no_metrics_either(tmp_path: Path) -> No
     assert not composite_disagrees(result["composite"], recomputed)
     # the dropped fold still ran, so its resource usage is accounted
     assert result["elapsed_seconds"] == 340
+
+
+def test_a_key_missing_from_any_fold_is_dropped_not_averaged_unevenly(tmp_path: Path) -> None:
+    """`composite` and every reported mean must share ONE denominator.
+
+    Dropping a fold whole when its COMPOSITE is null was not enough: a fold can
+    carry a finite composite and still be missing an individual metric, since
+    _write_fold_result_json nulls each independently and the training-script
+    contract makes `metrics` keys optional while `composite` is required.
+
+    On the val side that re-opened the CR-1b divergence (false VAL-FIREWALL
+    ERROR, and the mixed-denominator recompute becoming authoritative). On the
+    test side it is worse: nothing recomputes `held_out`, so a test_auc averaged
+    over 2 folds sat beside a test_bacc averaged over 3 under `status:
+    completed` — and that block is what gets sealed into certify.json.
+    """
+    from automil.scoring import composite_disagrees, recompute_composite
+
+    for i in range(2):
+        (tmp_path / f"fold_{i}_result.json").write_text(json.dumps({
+            "fold_index": i, "fold_count": 3, "status": "completed",
+            "metrics": {"val_auc": 0.80, "val_bacc": 0.70},
+            "held_out": {"test_auc": 0.70, "test_bacc": 0.60},
+            "composite": 0.75, "elapsed_seconds": 100, "peak_vram_mb": 4000,
+        }))
+    # Finite composite, but this fold's test split missed a class.
+    (tmp_path / "fold_2_result.json").write_text(json.dumps({
+        "fold_index": 2, "fold_count": 3, "status": "completed",
+        "metrics": {"val_auc": 0.80, "val_bacc": 0.70},
+        "held_out": {"test_auc": None, "test_bacc": 0.60},
+        "composite": 0.75, "elapsed_seconds": 100, "peak_vram_mb": 4000,
+    }))
+
+    result = aggregate_folds(tmp_path, expected_fold_count=3)
+
+    # The fold with the null test_auc contributes nothing at all, so composite
+    # and every reported mean describe the same 2 folds.
+    assert result["status"] == "partial"
+    assert result["partial_folds"] == 2
+    assert result["held_out"] == {"test_auc": pytest.approx(0.70),
+                                  "test_bacc": pytest.approx(0.60)}
+    assert not composite_disagrees(
+        result["composite"], recompute_composite(result["metrics"]),
+    )
+
+
+def test_val_side_uneven_coverage_cannot_trip_the_firewall_alarm(tmp_path: Path) -> None:
+    """The CR-1b invariant, on the shape that produced a false test-leak alarm."""
+    from automil.scoring import composite_disagrees, recompute_composite
+
+    specs = [(0.75, 0.80, 0.70), (0.65, 0.70, 0.60), (0.70, 0.80, None)]
+    for i, (comp, auc, bacc) in enumerate(specs):
+        (tmp_path / f"fold_{i}_result.json").write_text(json.dumps({
+            "fold_index": i, "fold_count": 3, "status": "completed",
+            "metrics": {"val_auc": auc, "val_bacc": bacc},
+            "composite": comp, "elapsed_seconds": 10, "peak_vram_mb": 100,
+        }))
+
+    result = aggregate_folds(tmp_path, expected_fold_count=3)
+
+    assert result["partial_folds"] == 2     # the null-bacc fold drops whole
+    recomputed = recompute_composite(result["metrics"])
+    assert recomputed is None or not composite_disagrees(result["composite"], recomputed)
