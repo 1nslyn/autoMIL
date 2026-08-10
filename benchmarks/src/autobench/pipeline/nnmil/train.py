@@ -104,6 +104,17 @@ def train_nnmil_fold(
         )
     else:
         from autobench.pipeline.nnmil._imports import ClassificationTrainer
+        from autobench.pipeline.nnmil.metrics_addon import (
+            install_sensitivity_specificity,
+        )
+
+        # nnMIL emits no sensitivity/specificity of its own; this add-on supplies
+        # them from the targets/preds its metric call already receives, using the
+        # same formula as every other arm. Installed here rather than at import
+        # time so the side effect is visible at the call site, and idempotent so
+        # the per-fold loop re-entering costs nothing. Classification only —
+        # the survival trainers have no confusion matrix.
+        install_sensitivity_specificity()
         trainer = ClassificationTrainer(**common, **extra_kwargs)
 
     trainer.policy_runtime = policy_runtime or PolicyRuntime()
