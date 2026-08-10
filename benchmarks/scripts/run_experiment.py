@@ -298,7 +298,8 @@ def summary_to_result_json(
 
     The composite is the VALIDATION selection signal (autoMIL keep/discard and
     UCB select on it): survival summaries (``c_index`` entry) use the validation
-    concordance index; classification uses ``(val_auc + val_bacc) / 2``. Test
+    concordance index; classification uses ``(val_auc + val_bacc) / 2``, or
+    ``(val_auc + val_bacc + val_qwk) / 3`` on ordinal tasks. Test
     metrics stay in ``metrics`` for now (quarantined in a later step) and are
     never the selection signal.
     """
