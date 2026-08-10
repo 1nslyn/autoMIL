@@ -70,6 +70,10 @@ _NNMIL_TO_SHARED: dict[str, str] = {
     "macro_specificity_ovr": "macro_specificity_ovr",
 }
 
+#: The multi-class half of that pair. Their presence means the add-on ran on a
+#: multi-class task, so the binary names must NOT also be defaulted in.
+_MACRO_KEYS = frozenset({"macro_recall", "macro_specificity_ovr"})
+
 # Survival trainers return flat keys like ``test_c_index`` (no "/" separator),
 # so they need their own prefix-stripping path.
 _NNMIL_SURVIVAL_TO_SHARED: dict[str, str] = {
@@ -151,7 +155,15 @@ def normalize_nnmil_metrics(
     # setdefaults stay as the fallback for a path where the add-on was not
     # installed (the vendored tree missing, or the seam having moved): the arm
     # degrades to null rather than failing the run.
-    result.setdefault("sensitivity", float("nan"))
-    result.setdefault("specificity", float("nan"))
+    #
+    # Skipped when the macro pair is present, i.e. a multi-class task where the
+    # add-on DID run. Defaulting unconditionally emitted a NaN `sensitivity`
+    # alongside a real `macro_recall`, which (a) no sibling arm emits on
+    # multi-class -- closing an asymmetry on binary while opening a new one on
+    # 3-class -- and (b) made a NaN there indistinguishable from "the add-on
+    # failed", so the diagnostic lied about its own health.
+    if not _MACRO_KEYS & result.keys():
+        result.setdefault("sensitivity", float("nan"))
+        result.setdefault("specificity", float("nan"))
 
     return result
