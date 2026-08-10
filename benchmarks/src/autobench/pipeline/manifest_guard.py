@@ -34,10 +34,12 @@ hashing becomes material, but is not the default.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import tempfile
+import warnings
 
 __all__ = [
     "FINGERPRINT_FILENAME",
@@ -165,4 +167,21 @@ def check_manifest_fingerprint(
                 f"  rm -rf {os.path.join(os.path.dirname(dataset_csv_dir), 'splits')}"
             )
 
-    _write_atomic(path, current)
+    try:
+        _write_atomic(path, current)
+    except OSError as exc:
+        if exc.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+            raise
+        # M-10b: shared campaign prep trees are deliberately read-only for
+        # everyone but their owner (preprint-130 `legacy_policy: "read-only"`),
+        # and their derived CSVs/splits cannot be rebuilt from this account
+        # either -- so the staleness this stamp exists to catch cannot be
+        # introduced here. Warn loudly instead of killing the whole cohort
+        # before training starts.
+        warnings.warn(
+            f"cannot stamp manifest fingerprint in read-only prep dir "
+            f"{dataset_csv_dir} ({exc}); manifest-staleness protection is "
+            f"unavailable for this benchmark_dir until its owner stamps it",
+            RuntimeWarning,
+            stacklevel=2,
+        )
