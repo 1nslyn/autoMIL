@@ -27,6 +27,7 @@ from autobench.pipeline.config import (  # noqa: E402
     ExperimentConfig,
     Framework,
     ModelConfig,
+    TaskConfig,
     TrainConfig,
     build_registries,
 )
@@ -400,3 +401,230 @@ def test_dtfd_survival_fold_defaults_policy_runtime(tmp_path):
     assert "c_index" in result["val_metrics"]
     # No test split: the trainer reports an unestimable c-index, not a crash.
     assert math.isnan(result["test_metrics"]["c_index"])
+
+
+# ---------------------------------------------------------------------------
+# Survival THROUGH THE RUNNER — the call path a campaign cell actually takes
+# ---------------------------------------------------------------------------
+#
+# The two tests above call ``train_dtfd_survival_fold`` directly, which pins the
+# trainer but NOT the hand-off that broke: it was ``runner.py`` supplying a
+# keyword the trainer never declared. A direct call cannot reproduce that, and
+# neither can a static check — this repo has been bitten before by wiring that
+# satisfies a grep or ``py_compile`` and dies at launch. These tests execute
+# ``run_dtfd_experiment`` itself on the survival branch, so the runner's own
+# survival-only code (loss-suffixed plan leaf, ``load_dtfd_survival_split``, the
+# cox guard, the pooled val block) runs rather than merely parsing.
+
+
+def _survival_task_cfg(name="os", nll_bins=4):
+    """A survival TaskConfig shaped exactly as ``build_registries`` emits one."""
+    return TaskConfig(
+        name=name,
+        label_col=None,
+        label_dict=None,
+        task_type="survival",
+        event_col="status",
+        time_col="time",
+        survival_losses=["nllsurv"],
+        nll_bins=nll_bins,
+    )
+
+
+def _survival_exp_cfg(task="os", encoder="conch_v15", n_folds=2, survival_loss="nllsurv"):
+    return ExperimentConfig(
+        task=_survival_task_cfg(task),
+        encoder_key=encoder,
+        embed_dim=EMB,
+        model=ModelConfig(model_type="dtfd_mil"),
+        train=TrainConfig(seed=42),
+        n_folds=n_folds,
+        framework=Framework.DTFD,
+        strategy="standard",
+        survival_loss=survival_loss,
+    )
+
+
+def _build_survival_fixture(
+    root, task="os", strategy="standard", encoder="conch_v15", n_folds=2,
+    n_slides=12, survival_loss="nllsurv", suffix_plan_leaf=True,
+):
+    """On-disk artifacts ``run_dtfd_experiment`` reads for a SURVIVAL cell.
+
+    Mirrors ``_build_benchmark_fixture`` but writes the survival task CSV
+    (``status``/``time``/``case_id``, per ``load_dtfd_survival_split``) and puts
+    the nnMIL plan under the ``_{survival_loss}``-suffixed leaf that
+    ``_resolve_h5_dir`` builds for survival. ``suffix_plan_leaf=False`` writes it
+    at the classification leaf instead, so a test can prove the suffix is live.
+    """
+    import pandas as pd
+
+    rng = np.random.default_rng(23)
+    h5_dir = os.path.join(root, "features", f"features_{encoder}")
+    os.makedirs(h5_dir, exist_ok=True)
+
+    slide_ids = [f"s{i}" for i in range(n_slides)]
+    # Status alternates so every split carries both events and censored cases;
+    # the bag mean tracks status, giving concordance a signal to find.
+    statuses = {sid: (i % 2) for i, sid in enumerate(slide_ids)}
+    for sid in slide_ids:
+        _write_h5_bag(os.path.join(h5_dir, f"{sid}.h5"), rng, statuses[sid])
+
+    csv_dir = os.path.join(root, "dataset_csv")
+    os.makedirs(csv_dir, exist_ok=True)
+    pd.DataFrame({
+        "slide_id": slide_ids,
+        "case_id": slide_ids,
+        "status": [statuses[sid] for sid in slide_ids],
+        "time": [10.0 + 5.0 * (i % 4) for i in range(n_slides)],
+    }).to_csv(os.path.join(csv_dir, f"{task}.csv"), index=False)
+
+    splits_dir = os.path.join(root, "splits", strategy, task)
+    os.makedirs(splits_dir, exist_ok=True)
+    for fold in range(n_folds):
+        test_ids = [slide_ids[fold * 2], slide_ids[fold * 2 + 1]]
+        val_ids = [slide_ids[(fold * 2 + 2) % n_slides], slide_ids[(fold * 2 + 3) % n_slides]]
+        train_ids = [s for s in slide_ids if s not in test_ids and s not in val_ids]
+        pd.DataFrame({
+            "train": train_ids,
+            "val": val_ids + [None] * (len(train_ids) - len(val_ids)),
+            "test": test_ids + [None] * (len(train_ids) - len(test_ids)),
+        }).to_csv(os.path.join(splits_dir, f"splits_{fold}.csv"), index=False)
+
+    leaf = f"{task}_{encoder}_{survival_loss}" if suffix_plan_leaf else f"{task}_{encoder}"
+    plan_dir = os.path.join(root, "nnmil", strategy, leaf)
+    os.makedirs(plan_dir, exist_ok=True)
+    with open(os.path.join(plan_dir, "dataset_plan.json"), "w") as f:
+        json.dump({"feature_dir": h5_dir}, f)
+
+    return h5_dir
+
+
+class TestRunnerSurvival:
+    def test_run_dtfd_experiment_survival_end_to_end(self, tmp_path):
+        """The whole survival cell runs: runner -> trainer -> summary on disk.
+
+        This is the test that would have caught the shipped defect. The runner
+        passed ``policy_runtime=`` to ``train_dtfd_survival_fold``, which never
+        declared it, so every ``os`` cell raised ``TypeError`` before its first
+        epoch — and dropping the keyword would only have traded that for an
+        ``UnboundLocalError`` inside the trainer. Both failures happen here, at
+        the real call site, not in a signature comparison.
+        """
+        _build_survival_fixture(str(tmp_path), n_folds=2)
+        exp = _survival_exp_cfg(n_folds=2)
+
+        summary = run_dtfd_experiment(exp, str(tmp_path), device="cpu", cfg=_smoke_cfg())
+
+        assert summary["framework"] == "dtfd"
+        assert summary["survival_loss"] == "nllsurv"
+        assert summary["n_folds"] == 2
+        assert len(summary["per_fold_test"]) == 2
+
+        # Survival reports concordance, never the classification key set.
+        for block in (*summary["per_fold_test"], *summary["per_fold_val"]):
+            assert set(block) == {"c_index"}
+        assert "c_index" in summary["test"]
+        assert "c_index" in summary["val"]
+
+        # CR-3: val_pooled is populated for survival (it is {} for
+        # classification), which only happens if val_records survived the
+        # trainer -> runner hand-off intact.
+        assert "c_index" in summary["val_pooled"], (
+            "val_pooled empty: the runner did not receive per-fold val_records"
+        )
+
+        summary_path = os.path.join(
+            str(tmp_path), "results", exp.results_subdir, "summary.json"
+        )
+        assert os.path.exists(summary_path)
+        assert json.loads(open(summary_path).read())["experiment_id"] == exp.experiment_id
+
+        for fold in range(2):
+            fm = json.loads(open(os.path.join(
+                str(tmp_path), "results", exp.results_subdir,
+                f"fold_{fold}", "metrics.json",
+            )).read())
+            assert set(fm["test_metrics"]) == {"c_index"}
+            assert len(fm["val_records"]["risks"]) == 2  # two val slides per fold
+
+    def test_survival_runner_policy_runtime_reaches_both_tiers(self, tmp_path, monkeypatch):
+        """The runner's PolicyRuntime is used by the trainer, not just accepted.
+
+        Removing ``policy_runtime=`` from the call site would make the runner
+        run green again while every policy silently stopped applying — the
+        "wired but inert" failure this arm already shipped once. Spy on the real
+        ``PolicyRuntime`` (delegating to the original, so the trainer genuinely
+        runs) and require both DTFD tiers to be wrapped by the object the runner
+        constructed.
+        """
+        # Identity matters, not just that *a* runtime was used: the trainer
+        # falls back to ``policy_runtime or PolicyRuntime()``, so a runner that
+        # stopped passing the argument would still wrap both tiers — with its
+        # own default object, every configured policy silently gone. Track the
+        # runtimes the RUNNER produced and require the trainer to have used one.
+        from_runner: list[int] = []
+        seen: list[tuple[str, int]] = []
+        original_from_experiment = PolicyRuntime.from_experiment.__func__
+        original_for_fold = PolicyRuntime.for_fold
+        original_wrap = PolicyRuntime.wrap_optimizer
+
+        def _spy_from_experiment(cls, *args, **kwargs):
+            runtime = original_from_experiment(cls, *args, **kwargs)
+            from_runner.append(id(runtime))
+            return runtime
+
+        def _spy_for_fold(self):
+            runtime = original_for_fold(self)
+            if id(self) in from_runner:
+                from_runner.append(id(runtime))
+            return runtime
+
+        def _spy_wrap(self, optimizer, *, role="main"):
+            seen.append((role, id(self)))
+            return original_wrap(self, optimizer, role=role)
+
+        monkeypatch.setattr(
+            PolicyRuntime, "from_experiment", classmethod(_spy_from_experiment)
+        )
+        monkeypatch.setattr(PolicyRuntime, "for_fold", _spy_for_fold)
+        monkeypatch.setattr(PolicyRuntime, "wrap_optimizer", _spy_wrap)
+
+        _build_survival_fixture(str(tmp_path), n_folds=1)
+        exp = _survival_exp_cfg(n_folds=1)
+
+        summary = run_dtfd_experiment(exp, str(tmp_path), device="cpu", cfg=_smoke_cfg())
+
+        assert len(summary["per_fold_val"]) == 1
+        assert {role for role, _ in seen} == {"tier1", "tier2"}, (
+            "the survival trainer did not wrap both DTFD tiers; roles were "
+            f"{[role for role, _ in seen]}"
+        )
+        orphans = [role for role, runtime_id in seen if runtime_id not in from_runner]
+        assert not orphans, (
+            "the survival trainer wrapped "
+            f"{orphans} with a PolicyRuntime the runner never handed it — the "
+            "runner is no longer threading policy_runtime, so every configured "
+            "policy is silently inert on this path"
+        )
+
+    def test_survival_runner_resolves_loss_suffixed_plan(self, tmp_path):
+        """Survival must read the ``_{survival_loss}`` plan leaf, not the bare one.
+
+        nnMIL writes a separate plan per survival loss (bin counts differ), so
+        silently falling back to the classification leaf would train on the
+        wrong bags. Only the unsuffixed plan exists here.
+        """
+        _build_survival_fixture(str(tmp_path), n_folds=1, suffix_plan_leaf=False)
+        exp = _survival_exp_cfg(n_folds=1)
+
+        with pytest.raises(FileNotFoundError, match="plan not found"):
+            run_dtfd_experiment(exp, str(tmp_path), device="cpu", cfg=_smoke_cfg())
+
+    def test_survival_runner_rejects_cox(self, tmp_path):
+        """cox has no within-slide risk set; the runner must refuse it up front."""
+        _build_survival_fixture(str(tmp_path), n_folds=1, survival_loss="cox")
+        exp = _survival_exp_cfg(n_folds=1, survival_loss="cox")
+
+        with pytest.raises(ValueError, match="does not support cox"):
+            run_dtfd_experiment(exp, str(tmp_path), device="cpu", cfg=_smoke_cfg())

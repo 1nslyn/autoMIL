@@ -15,15 +15,10 @@ from __future__ import annotations
 
 import ast
 import inspect
-import os
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(__file__))
-
-from autobench import BENCHMARKS_ROOT  # noqa: E402
+from autobench import BENCHMARKS_ROOT
 
 #: ``runner module path`` -> ``{called name: dotted import of the callee}``.
 #: Only fold trainers are listed: they are the boundary where a runner hands a
@@ -34,6 +29,27 @@ _CALL_SITES = {
         "train_dtfd_survival_fold": (
             "autobench.pipeline.dtfd.survival_train:train_dtfd_survival_fold"
         ),
+    },
+    "autobench/pipeline/clam/runner.py": {
+        "train_fold": "autobench.pipeline.clam.train:train_fold",
+        "train_survival_fold": (
+            "autobench.pipeline.clam.survival_train:train_survival_fold"
+        ),
+    },
+    "autobench/pipeline/abmil/runner.py": {
+        "train_abmil_fold": "autobench.pipeline.abmil.train:train_abmil_fold",
+        "train_abmil_survival_fold": (
+            "autobench.pipeline.abmil.survival_train:train_abmil_survival_fold"
+        ),
+    },
+    "autobench/pipeline/titan/runner.py": {
+        "train_titan_fold": "autobench.pipeline.titan.train:train_titan_fold",
+        "train_titan_survival_fold": (
+            "autobench.pipeline.titan.survival_train:train_titan_survival_fold"
+        ),
+    },
+    "autobench/pipeline/nnmil/runner.py": {
+        "train_nnmil_fold": "autobench.pipeline.nnmil.train:train_nnmil_fold",
     },
 }
 
@@ -122,19 +138,32 @@ def _walk_own_scope(function: ast.AST):
     while stack:
         node = stack.pop()
         yield node
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        # `class` bodies and comprehensions are separate scopes in Python 3, so
+        # what they bind is not visible here — same reason nested defs stop us.
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                             ast.ClassDef, ast.ListComp, ast.SetComp,
+                             ast.DictComp, ast.GeneratorExp)):
             continue
         stack.extend(ast.iter_child_nodes(node))
 
 
-def _self_referential_first_assignments(function: ast.AST) -> list[tuple[str, int]]:
-    """``name = <expr reading name>`` where that assignment is the first bind.
+def _defaulted_self_reference(function: ast.AST) -> list[tuple[str, int]]:
+    """Find ``name = name or <default>`` / ``name = name if <c> else <d>``.
 
-    The right-hand side evaluates before the target binds, so reading a name
-    there is an ``UnboundLocalError`` unless the name arrived as a parameter
-    (or was bound earlier in the body). This is the exact shape of the DTFD
-    defect: ``policy_runtime = policy_runtime or PolicyRuntime()`` inside a
-    function that never declared ``policy_runtime``.
+    This is deliberately narrow. It is not a general ``UnboundLocalError``
+    analyzer — writing one correctly needs control-flow order, and the naive
+    version produces false positives that would block contributors on
+    perfectly good code (a recursive ``f = lambda: f()``, a ``match`` capture
+    pattern, an augmented assignment after a conditional bind).
+
+    What it does catch is the one idiom this codebase uses everywhere and the
+    exact shape of the DTFD defect: a function that fills in a default for an
+    argument it forgot to declare. ``policy_runtime = policy_runtime or
+    PolicyRuntime()`` reads the name on the right-hand side, which evaluates
+    *before* the target binds — an ``UnboundLocalError`` unless the name is a
+    parameter. Out of scope by design: order-dependent cases such as
+    ``total = total + 1`` placed before ``total = 0``, and rebinding after
+    ``del``.
     """
     args = getattr(function, "args", None)
     declared = set()
@@ -148,13 +177,11 @@ def _self_referential_first_assignments(function: ast.AST) -> list[tuple[str, in
         if isinstance(statement, (ast.Global, ast.Nonlocal)):
             declared.update(statement.names)
 
-    # Every *other* way a local name can come into existence. A self-referential
-    # assignment is only a defect when it is the name's sole binding site — a
-    # ``for embeddings, ... in loader:`` loop makes the ``embeddings =
-    # embeddings.to(device)`` inside it perfectly safe. Checking "is there any
-    # other binder" needs no execution-order model, which ``ast.walk`` (breadth
-    # first) could not give us anyway.
-    self_assign_targets: dict[str, int] = {}
+    # A defaulting self-reference is only a defect when nothing *else* binds the
+    # name — `for embeddings, ... in loader:` makes an `embeddings = embeddings
+    # or x` inside it safe. "Is there any other binder" needs no execution-order
+    # model, which `ast.walk` (breadth first) could not give us anyway.
+    suspects: dict[str, int] = {}
     other_binders: set[str] = set(declared)
 
     def _names(target: ast.AST) -> set[str]:
@@ -163,10 +190,22 @@ def _self_referential_first_assignments(function: ast.AST) -> list[tuple[str, in
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
         }
 
+    def _defaulting_reads(value: ast.AST) -> set[str]:
+        """Names read as the left operand of ``or``, or as an ``IfExp`` branch.
+
+        Only these positions; a name buried in a call argument or a lambda body
+        is not this idiom and is left alone.
+        """
+        if isinstance(value, ast.BoolOp) and isinstance(value.op, ast.Or):
+            operands = value.values
+        elif isinstance(value, ast.IfExp):
+            operands = [value.test, value.body, value.orelse]
+        else:
+            return set()
+        return {n.id for n in operands if isinstance(n, ast.Name)}
+
     for node in _walk_own_scope(function):
         if isinstance(node, (ast.For, ast.AsyncFor)):
-            other_binders |= _names(node.target)
-        elif isinstance(node, ast.comprehension):
             other_binders |= _names(node.target)
         elif isinstance(node, ast.withitem) and node.optional_vars is not None:
             other_binders |= _names(node.optional_vars)
@@ -181,27 +220,28 @@ def _self_referential_first_assignments(function: ast.AST) -> list[tuple[str, in
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if node is not function:
                 other_binders.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            other_binders.add(node.name)          # `case [a]:` / `case [*rest]:`
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            other_binders.add(node.rest)          # `case {**rest}:`
         elif isinstance(node, ast.Assign):
-            read = {
-                n.id for n in ast.walk(node.value)
-                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-            }
+            read = _defaulting_reads(node.value)
             for target in node.targets:
                 for name in _names(target):
                     if name in read:
-                        self_assign_targets.setdefault(name, node.lineno)
+                        suspects.setdefault(name, node.lineno)
                     else:
                         other_binders.add(name)
 
     return sorted(
         (name, lineno)
-        for name, lineno in self_assign_targets.items()
+        for name, lineno in suspects.items()
         if name not in other_binders
     )
 
 
-def test_no_function_reads_a_name_it_never_bound() -> None:
-    """Catches the second half of the DTFD defect, generalized.
+def test_no_function_defaults_an_argument_it_never_declared() -> None:
+    """Catches the second half of the DTFD defect.
 
     Had the call site simply dropped the bad keyword, the ``TypeError`` would
     have become an ``UnboundLocalError`` from the trainer's own
@@ -209,20 +249,56 @@ def test_no_function_reads_a_name_it_never_bound() -> None:
     return while this holds.
     """
     offenders: list[str] = []
-    pipeline = BENCHMARKS_ROOT / "src" / "autobench" / "pipeline"
-    for path in sorted(pipeline.rglob("*.py")):
+    for path in sorted((BENCHMARKS_ROOT / "src" / "autobench").rglob("*.py")):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            for name, lineno in _self_referential_first_assignments(node):
+            for name, lineno in _defaulted_self_reference(node):
                 rel = path.relative_to(BENCHMARKS_ROOT / "src")
-                offenders.append(f"{rel}:{lineno} {node.name}() reads `{name}`")
+                offenders.append(f"{rel}:{lineno} {node.name}() defaults `{name}`")
 
     assert not offenders, (
-        "these assignments read a name on the right-hand side before anything "
-        f"binds it (UnboundLocalError at runtime): {offenders}"
+        "these assignments read a name on the right-hand side of its own "
+        f"default before anything binds it (UnboundLocalError): {offenders}"
     )
+
+
+@pytest.mark.parametrize("label,source,flagged", [
+    ("the DTFD defect itself",
+     "def f():\n    policy_runtime = policy_runtime or Policy()\n", True),
+    ("conditional-expression form",
+     "def f():\n    x = x if x is not None else 1\n", True),
+    ("declared as a parameter",
+     "def f(policy_runtime=None):\n    policy_runtime = policy_runtime or Policy()\n", False),
+    ("bound earlier in the body",
+     "def f():\n    x = compute()\n    x = x or 1\n", False),
+    ("loop target binds it",
+     "def f(rows):\n    for x in rows:\n        x = x or 1\n", False),
+    ("nested function has its own parameter",
+     "def f():\n    def g(m=None):\n        m = m or 1\n", False),
+    ("recursive lambda is not this idiom",
+     "def f():\n    fact = lambda n: 1 if n < 2 else n * fact(n - 1)\n", False),
+    ("match capture pattern binds it",
+     "def f(v):\n    match v:\n        case [a]:\n            a = a or 1\n", False),
+    ("match mapping rest binds it",
+     "def f(v):\n    match v:\n        case {**rest}:\n            rest = rest or {}\n", False),
+    ("class body is a separate scope",
+     "def f():\n    class C:\n        z = 1\n    z = z or 2\n", True),
+    ("comprehension target is a separate scope",
+     "def f(items):\n    xs = [y for y in items]\n    y = y or 1\n", True),
+    ("walrus binds it",
+     "def f(g):\n    if (x := g()):\n        x = x or 1\n", False),
+])
+def test_defaulted_self_reference_classification(label, source, flagged) -> None:
+    """Pin the detector's boundaries — false positives block contributors."""
+    found = [
+        hit
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef)
+        for hit in _defaulted_self_reference(node)
+    ]
+    assert bool(found) is flagged, f"{label}: expected flagged={flagged}, got {found}"
 
 
 def test_no_dead_policy_runtime_parameters() -> None:
@@ -232,7 +308,7 @@ def test_no_dead_policy_runtime_parameters() -> None:
     honoured here" at every call site. Keep the parameter list honest.
     """
     offenders: list[str] = []
-    for path in sorted((BENCHMARKS_ROOT / "src" / "autobench" / "pipeline").rglob("*.py")):
+    for path in sorted((BENCHMARKS_ROOT / "src" / "autobench").rglob("*.py")):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
