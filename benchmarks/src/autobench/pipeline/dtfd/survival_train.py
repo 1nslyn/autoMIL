@@ -217,7 +217,6 @@ def _risk_records(
     cfg: DTFDConfig,
     device: torch.device,
     seed: int,
-    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Per-slide risk scores (CR-3: pooled across folds by the runner)."""
     bundle.eval()
@@ -263,6 +262,7 @@ def train_dtfd_survival_fold(
     cfg: DTFDConfig,
     device: torch.device,
     seed: int,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> dict:
     """Train one DTFD-MIL survival (nllsurv) fold; return shared-schema c-index metrics.
 

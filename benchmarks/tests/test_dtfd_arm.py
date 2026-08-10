@@ -12,6 +12,7 @@ Covers, on tiny CPU fixtures (design spec §6, §10):
 """
 
 import json
+import math
 import os
 import sys
 
@@ -36,10 +37,17 @@ from autobench.pipeline.dtfd._imports import (  # noqa: E402
     DimReduction,
 )
 from autobench.pipeline.dtfd.config import DTFDConfig  # noqa: E402
-from autobench.pipeline.dtfd.dataset import DTFDSlide  # noqa: E402
+from autobench.pipeline.dtfd.dataset import (  # noqa: E402
+    DTFDSlide,
+    DTFDSurvivalSlide,
+)
 from autobench.pipeline.dtfd.model import build_dtfd_bundle  # noqa: E402
 from autobench.pipeline.dtfd.runner import run_dtfd_experiment  # noqa: E402
+from autobench.pipeline.dtfd.survival_train import (  # noqa: E402
+    train_dtfd_survival_fold,
+)
 from autobench.pipeline.dtfd.train import train_dtfd_fold  # noqa: E402
+from autobench.pipeline.policy_dispatch import PolicyRuntime  # noqa: E402
 from autobench.pipeline.orchestrator import _run_single_experiment_dispatch  # noqa: E402
 from _helpers import make_test_ds  # noqa: E402
 
@@ -311,3 +319,84 @@ class TestLoadSplitIdsPreservesUuid:
         csv = tmp_path / "splits_0.csv"
         csv.write_text("train,val,test\n1234.0,5678.0,9012.0\n")
         assert _load_split_ids(str(csv), "train") == ["1234"]
+
+
+# ---------------------------------------------------------------------------
+# Survival (nllsurv) — the path that shipped broken
+# ---------------------------------------------------------------------------
+
+
+def _make_survival_slide(tmpdir, rng, sid, status, time_val, sep=3.0):
+    """One survival bag on disk; risk signal correlates with the event status."""
+    path = os.path.join(tmpdir, f"{sid}.h5")
+    _write_h5_bag(path, rng, status, sep=sep)
+    return DTFDSurvivalSlide(
+        slide_id=sid, h5_path=path, status=status, time=time_val, patient_id=sid,
+    )
+
+
+def _survival_split(tmpdir, rng, prefix, n_slides):
+    return [
+        _make_survival_slide(
+            tmpdir, rng, f"{prefix}{i}", status=i % 2, time_val=10.0 + 5.0 * (i % 4),
+        )
+        for i in range(n_slides)
+    ]
+
+
+def test_dtfd_survival_fold_runs_end_to_end(tmp_path):
+    """DTFD survival trains a fold and returns the shared c-index schema.
+
+    Regression test for a defect that made this path unreachable: the runner
+    passed ``policy_runtime=`` to a trainer that never declared it, so every
+    survival cell died with ``TypeError`` before its first epoch. No test
+    exercised survival, so five datasets' ``os`` cells were only ever filled by
+    an older code version.
+    """
+    rng = np.random.default_rng(11)
+    bags = tmp_path / "bags"
+    bags.mkdir()
+    train = _survival_split(str(bags), rng, "tr", 12)
+    val = _survival_split(str(bags), rng, "va", 6)
+    test = _survival_split(str(bags), rng, "te", 6)
+
+    result = train_dtfd_survival_fold(
+        train, val, test,
+        embed_dim=EMB, nll_bins=4, cfg=_smoke_cfg(),
+        device=torch.device("cpu"), seed=0,
+        policy_runtime=PolicyRuntime(),
+    )
+
+    assert set(result) == {
+        "test_metrics", "val_metrics", "val_records", "elapsed_seconds",
+    }
+    assert "c_index" in result["test_metrics"]
+    assert "c_index" in result["val_metrics"]
+    # CR-3: val risk records must carry one entry per val slide for pooling.
+    records = result["val_records"]
+    assert len(records["risks"]) == len(val)
+    assert len(records["patient_ids"]) == len(val)
+    assert result["elapsed_seconds"] > 0
+
+
+def test_dtfd_survival_fold_defaults_policy_runtime(tmp_path):
+    """Omitting ``policy_runtime`` must not raise ``UnboundLocalError``.
+
+    The body does ``policy_runtime = policy_runtime or PolicyRuntime()``, which
+    only works because the name is a parameter. Calling without it is the exact
+    shape that would regress if the parameter were dropped again.
+    """
+    rng = np.random.default_rng(12)
+    bags = tmp_path / "bags"
+    bags.mkdir()
+    train = _survival_split(str(bags), rng, "tr", 8)
+    val = _survival_split(str(bags), rng, "va", 4)
+
+    result = train_dtfd_survival_fold(
+        train, val, [],
+        embed_dim=EMB, nll_bins=4, cfg=_smoke_cfg(),
+        device=torch.device("cpu"), seed=0,
+    )
+    assert "c_index" in result["val_metrics"]
+    # No test split: the trainer reports an unestimable c-index, not a crash.
+    assert math.isnan(result["test_metrics"]["c_index"])
