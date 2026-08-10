@@ -53,7 +53,26 @@ _NNMIL_TO_SHARED: dict[str, str] = {
     "auroc": "auc_roc",
     "weighted_f1": "f1",
     "kappa": "kappa",
+    # Not produced by nnMIL itself — supplied by pipeline/nnmil/metrics_addon.py,
+    # which wraps the trainer's get_eval_metrics binding without touching lib/.
+    # Absent when the add-on is not installed, and the setdefault below then
+    # restores the previous NaN behaviour.
+    #
+    # Binary and multi-class carry DIFFERENT names because they are not on the
+    # same scale (see evaluate.sensitivity_specificity): a binary specificity is
+    # positive-class-only, while macro_specificity_ovr is inflated by the large
+    # one-vs-rest negative set, and macro_recall is numerically identical to
+    # balanced_accuracy. Both name pairs are mapped so this arm matches whichever
+    # shape the task has.
+    "sensitivity": "sensitivity",
+    "specificity": "specificity",
+    "macro_recall": "macro_recall",
+    "macro_specificity_ovr": "macro_specificity_ovr",
 }
+
+#: The multi-class half of that pair. Their presence means the add-on ran on a
+#: multi-class task, so the binary names must NOT also be defaulted in.
+_MACRO_KEYS = frozenset({"macro_recall", "macro_specificity_ovr"})
 
 # Survival trainers return flat keys like ``test_c_index`` (no "/" separator),
 # so they need their own prefix-stripping path.
@@ -125,19 +144,26 @@ def normalize_nnmil_metrics(
     # sensitivity/specificity are a different case, and the "skipped this fold"
     # framing above does not apply: nnMIL's trainer never emits them at all.
     # ``get_eval_metrics`` (lib/nnMIL/utilities/utils.py:72-78) returns only
-    # acc / bacc / kappa / nw_kappa / weighted_f1 / loss / auroc. It does build a
-    # ``classification_report`` internally, which holds per-class recall, but
-    # keeps it — and the raw predictions — to itself, so this consumer-side
-    # wrapper has nothing to compute a confusion matrix from. So these are NaN
-    # on EVERY nnMIL run, binary included; they are not a multi-class artifact.
+    # acc / bacc / kappa / nw_kappa / weighted_f1 / loss / auroc, so before the
+    # add-on these were NaN on EVERY nnMIL run, binary included -- not a
+    # multi-class artifact, and a hole in the results table on one arm only.
     #
-    # Left as-is on the same L-10 grounds as the AUC asymmetry above: recovering
-    # them means patching the vendored trainer or restructuring this module to
-    # receive raw predictions, which is disproportionate for a diagnostic that
-    # never enters `metrics`, the composite, or selection. They serialize as
-    # JSON null (automil.runtime_helpers.json_safe) and no longer take the run
-    # down with them, which was the actual defect.
-    result.setdefault("sensitivity", float("nan"))
-    result.setdefault("specificity", float("nan"))
+    # ``pipeline/nnmil/metrics_addon.py`` now supplies them by wrapping the
+    # trainer's ``get_eval_metrics`` binding -- an add-on, with no edit to
+    # lib/nnMIL -- and computing them with the SAME
+    # ``evaluate.sensitivity_specificity`` every other arm uses. These
+    # setdefaults stay as the fallback for a path where the add-on was not
+    # installed (the vendored tree missing, or the seam having moved): the arm
+    # degrades to null rather than failing the run.
+    #
+    # Skipped when the macro pair is present, i.e. a multi-class task where the
+    # add-on DID run. Defaulting unconditionally emitted a NaN `sensitivity`
+    # alongside a real `macro_recall`, which (a) no sibling arm emits on
+    # multi-class -- closing an asymmetry on binary while opening a new one on
+    # 3-class -- and (b) made a NaN there indistinguishable from "the add-on
+    # failed", so the diagnostic lied about its own health.
+    if not _MACRO_KEYS & result.keys():
+        result.setdefault("sensitivity", float("nan"))
+        result.setdefault("specificity", float("nan"))
 
     return result
