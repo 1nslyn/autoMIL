@@ -23,6 +23,7 @@ import os
 
 import copy
 import random
+import time
 
 import numpy as np
 import torch
@@ -179,6 +180,11 @@ def train_dtfd_fold(
     """
     grad_was_enabled = torch.is_grad_enabled()
     torch.set_grad_enabled(True)
+    # FOLD-TIMING CONTRACT: every fold trainer reports elapsed_seconds over its
+    # whole body, so the number is comparable across arms and task types. This
+    # one used to be timed by the runner instead — same span, but a second
+    # mechanism that drifted from its survival sibling's.
+    start = time.time()
     try:
         _seed_everything(seed)
         py_rng = random.Random(seed)
@@ -190,16 +196,20 @@ def train_dtfd_fold(
         bundle = build_dtfd_bundle(embed_dim, num_classes, cfg).to(device)
         ce_cri = torch.nn.CrossEntropyLoss(reduction="none").to(device)
 
-        opt0 = torch.optim.Adam(bundle.tier1_parameters(), lr=cfg.lr, weight_decay=cfg.wd)
-        opt1 = torch.optim.Adam(bundle.att_cls.parameters(), lr=cfg.lr, weight_decay=cfg.wd)
+        raw0 = torch.optim.Adam(bundle.tier1_parameters(), lr=cfg.lr, weight_decay=cfg.wd)
+        raw1 = torch.optim.Adam(bundle.att_cls.parameters(), lr=cfg.lr, weight_decay=cfg.wd)
         policy_runtime = policy_runtime or PolicyRuntime()
-        opt0 = policy_runtime.wrap_optimizer(opt0, role="tier1")
-        opt1 = policy_runtime.wrap_optimizer(opt1, role="tier2")
+        opt0 = policy_runtime.wrap_optimizer(raw0, role="tier1")
+        opt1 = policy_runtime.wrap_optimizer(raw1, role="tier2")
+        # A policy may legitimately return a duck-typed wrapper, which no torch
+        # LR scheduler will accept; scheduler_target resolves what to attach to.
         sched0 = torch.optim.lr_scheduler.MultiStepLR(
-            opt0, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
+            policy_runtime.scheduler_target(opt0, raw0, role="tier1"),
+            [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio,
         )
         sched1 = torch.optim.lr_scheduler.MultiStepLR(
-            opt1, [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio
+            policy_runtime.scheduler_target(opt1, raw1, role="tier2"),
+            [cfg.lr_decay_step], gamma=cfg.lr_decay_ratio,
         )
         sched0 = policy_runtime.wrap_scheduler(sched0, role="tier1")
         sched1 = policy_runtime.wrap_scheduler(sched1, role="tier2")
@@ -245,7 +255,11 @@ def train_dtfd_fold(
             if val_slides else {}
         )
 
-        result: dict = {"test_metrics": test_metrics, "val_metrics": val_metrics}
+        result: dict = {
+            "test_metrics": test_metrics,
+            "val_metrics": val_metrics,
+            "elapsed_seconds": time.time() - start,
+        }
         if return_history:
             result["epoch_tier2_loss"] = history
         return result

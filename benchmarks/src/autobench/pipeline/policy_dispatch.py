@@ -234,6 +234,46 @@ class PolicyRuntime:
                 )
         return wrapped
 
+    def scheduler_target(
+        self, wrapped: Any, original: Any, *, role: str = "main",
+    ) -> Any:
+        """The optimizer a ``torch`` LR scheduler must attach to.
+
+        ``PolicyVariant.wrap_optimizer`` is documented to "wrap (or replace)"
+        the optimizer, and wrapping is the point of the seam — Lookahead,
+        gradient clipping, a custom schedule inside ``step()``. But
+        ``LRScheduler.__init__`` does a strict ``isinstance(..., Optimizer)``
+        check, so handing it a duck-typed wrapper raises
+        ``TypeError: X is not an Optimizer`` from deep inside torch, naming
+        nothing useful.
+
+        Both intents are legitimate and need different answers:
+
+        * **replaced** with a different real ``Optimizer`` — schedule that one.
+        * **wrapped** around the original — schedule the *original*. A wrapper
+          delegates to the optimizer it holds and shares its ``param_groups``,
+          which is the only state a scheduler mutates, so the schedule still
+          reaches the wrapper. This is how torch's own ecosystem attaches
+          schedulers to wrapped optimizers.
+
+        Raises:
+            TypeError: neither object is a real ``Optimizer``, so no scheduler
+                can be built — reported here, naming the policy and role,
+                rather than as an opaque failure inside torch.
+        """
+        import torch
+
+        if isinstance(wrapped, torch.optim.Optimizer):
+            return wrapped
+        if isinstance(original, torch.optim.Optimizer):
+            return original
+        raise TypeError(
+            f"policy {self.name!r} returned an optimizer for role {role!r} that "
+            f"no LR scheduler can attach to: neither the wrapped object "
+            f"({type(wrapped).__name__}) nor the original "
+            f"({type(original).__name__}) is a torch.optim.Optimizer."
+        )
+
     def wrap_scheduler(self, scheduler: Any, *, role: str = "main") -> Any:
         policy = self._resolved_policy()
         if policy is None:

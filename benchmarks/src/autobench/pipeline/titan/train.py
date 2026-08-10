@@ -163,8 +163,6 @@ def train_titan_fold(
         ):
             break
 
-    elapsed = time.time() - start
-
     model.load_state_dict(best_state)
     test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
                              predictions_path=os.path.join(fold_dir, "predictions.csv"))
@@ -175,7 +173,9 @@ def train_titan_fold(
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "fold": fold,
-        "elapsed_seconds": elapsed,
+        # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation
+        # included, so the number is comparable across arms and task types.
+        "elapsed_seconds": time.time() - start,
     }
 
     with open(metrics_path, "w") as f:

@@ -164,7 +164,6 @@ def train_abmil_fold(
                     default_stop, epoch=_epoch, metrics={"val_auc": cur},
                 ):
                     break
-        elapsed_seconds = time.time() - start
 
         if best_snap is not None:
             model.load_state_dict(best_snap)
@@ -181,7 +180,9 @@ def train_abmil_fold(
         return {
             "test_metrics": test_metrics,
             "val_metrics": val_metrics,
-            "elapsed_seconds": elapsed_seconds,
+            # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation
+            # included, so the number is comparable across arms and task types.
+            "elapsed_seconds": time.time() - start,
         }
     finally:
         torch.set_grad_enabled(grad_was_enabled)

@@ -238,7 +238,6 @@ def train_titan_survival_fold(
             metrics={"val_loss": v_loss, "val_c_index": v_cidx},
         ):
             break
-    elapsed = time.time() - start
 
     # Restore the best (val-loss) checkpoint from disk before scoring: the
     # in-memory best_model_state is a shallow copy aliasing the live params,
@@ -249,13 +248,19 @@ def train_titan_survival_fold(
     elif getattr(early_stopping, "best_model_state", None) is not None:
         model.load_state_dict(early_stopping.best_model_state)
 
+    test_metrics = {"c_index": _c_index(test_loader)}
+    val_metrics = {"c_index": _c_index(val_loader)}
+    # CR-3: pooled cross-fold val concordance is computed by the runner.
+    val_records = _risk_records(val_loader)
     fold_result = {
-        "test_metrics": {"c_index": _c_index(test_loader)},
-        "val_metrics": {"c_index": _c_index(val_loader)},
-        # CR-3: pooled cross-fold val concordance is computed by the runner.
-        "val_records": _risk_records(val_loader),
+        "test_metrics": test_metrics,
+        "val_metrics": val_metrics,
+        "val_records": val_records,
         "fold": fold,
-        "elapsed_seconds": elapsed,
+        # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore and
+        # final scoring included, so the number is comparable across arms and
+        # task types.
+        "elapsed_seconds": time.time() - start,
     }
 
     with open(metrics_path, "w") as f:
