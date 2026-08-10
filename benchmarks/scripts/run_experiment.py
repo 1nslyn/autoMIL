@@ -178,7 +178,41 @@ def _parse_folds(raw: str | None, n_folds: int) -> tuple[int, ...] | None:
     return values
 
 
-def _per_fold_composites(per_fold_val: list, is_survival: bool) -> list[float]:
+#: The composite's component metrics, in ONE place. Three call sites previously
+#: hard-coded ("auc_roc", "balanced_accuracy") independently -- the reported
+#: composite, its per-fold recomputation for composite_se, and the per-fold
+#: evidence the campaign aggregates. Adding qwk to only the first left
+#: composite_se measuring a different quantity than it gates, and left the
+#: campaign's stage gates and FINAL WINNER selecting on the old 2-term formula
+#: while the in-search Ladder used the 3-term one. Two estimands for one node.
+def _composite_components(is_survival: bool, ordinal: bool):
+    """(summary_key, public_name) pairs that make up the composite."""
+    if is_survival:
+        return (("c_index", "val_c_index"),)
+    base = (("auc_roc", "val_auc"), ("balanced_accuracy", "val_bacc"))
+    return base + ((("qwk", "val_qwk"),) if ordinal else ())
+
+
+def _component_value(raw, name: str):
+    """Finite float for a component, with the selection clamp applied to qwk.
+
+    qwk is [-1, 1] while every campaign consumer requires composites in [0, 1]
+    (campaign_stages.py:395). Clamped HERE, at every site that builds a
+    composite, so the per-fold and aggregate views cannot disagree. Clamping
+    per fold does bias the fold mean upward relative to clamping only the
+    aggregate -- but it only bites on folds with no ordinal signal at all, and a
+    per-fold/aggregate mismatch would corrupt composite_se, which is the number
+    the Ladder keep-margin is derived from.
+    """
+    value = _finite_or_none(raw)
+    if value is None:
+        return None
+    return max(0.0, value) if name == "val_qwk" else value
+
+
+def _per_fold_composites(
+    per_fold_val: list, is_survival: bool, ordinal: bool = False,
+) -> list[float]:
     """The composite recomputed per fold — the input to its cross-fold SE (CR-4).
 
     The composite reported at the top of ``summary_to_result_json`` is a mean of
@@ -195,14 +229,10 @@ def _per_fold_composites(per_fold_val: list, is_survival: bool) -> list[float]:
     for fm in per_fold_val or []:
         if not isinstance(fm, dict):
             continue
-        keys = ("c_index",) if is_survival else ("auc_roc", "balanced_accuracy")
         vals = []
-        for k in keys:
-            v = fm.get(k)
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
-                break
-            f = float(v)
-            if not math.isfinite(f):
+        for key, name in _composite_components(is_survival, ordinal):
+            f = _component_value(fm.get(key), name)
+            if f is None:
                 break
             vals.append(f)
         else:
@@ -224,7 +254,7 @@ def _finite_or_none(value: object) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def _validation_fold_evidence(summary: dict) -> list[dict]:
+def _validation_fold_evidence(summary: dict, ordinal: bool = False) -> list[dict]:
     """Return the fold-indexed, validation-only evidence used by campaigns.
 
     The raw per-fold artifacts are born-sealed because each file also contains
@@ -245,15 +275,11 @@ def _validation_fold_evidence(summary: dict) -> list[dict]:
         # block ships in the AGENT-FACING copy of result.json, so a NaN AUC from
         # a fold that happened to miss a class would get the file rejected at
         # ingestion and the node recorded as a crash.
-        if is_survival:
-            value = _finite_or_none(metrics.get("c_index"))
-            public_metrics = {"val_c_index": value}
-            values = (value,)
-        else:
-            auc = _finite_or_none(metrics.get("auc_roc"))
-            bacc = _finite_or_none(metrics.get("balanced_accuracy"))
-            public_metrics = {"val_auc": auc, "val_bacc": bacc}
-            values = (auc, bacc)
+        components = _composite_components(is_survival, ordinal)
+        public_metrics = {
+            name: _component_value(metrics.get(key), name) for key, name in components
+        }
+        values = tuple(public_metrics.values())
         finite = all(value is not None for value in values)
         evidence.append({
             "fold_index": fold_index,
@@ -265,18 +291,22 @@ def _validation_fold_evidence(summary: dict) -> list[dict]:
     return evidence
 
 
-def summary_to_result_json(summary: dict, elapsed: float) -> dict:
+def summary_to_result_json(
+    summary: dict, elapsed: float, ordinal: bool = False,
+) -> dict:
     """Convert autobench summary dict to autoMIL result.json format.
 
     The composite is the VALIDATION selection signal (autoMIL keep/discard and
     UCB select on it): survival summaries (``c_index`` entry) use the validation
-    concordance index; classification uses ``(val_auc + val_bacc) / 2``. Test
+    concordance index; classification uses ``(val_auc + val_bacc) / 2``, or
+    ``(val_auc + val_bacc + val_qwk) / 3`` on ordinal tasks. Test
     metrics stay in ``metrics`` for now (quarantined in a later step) and are
     never the selection signal.
     """
     test = summary.get("test", {})
     val = summary.get("val", {})
-    validation_folds = _validation_fold_evidence(summary)
+    validation_folds = _validation_fold_evidence(summary, ordinal)
+    per_fold_val_raw = summary.get("per_fold_val", []) or []
 
     # Try to get peak VRAM
     peak_vram_mb = 0
@@ -314,10 +344,48 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
         unestimable = [] if val_ci is not None else ["val_c_index"]
         composite = val_ci if val_ci is not None else 0.0
     else:
+        # Keyed on the DECLARED `ordinal` flag, never on whether `qwk` happens
+        # to be present. Sniffing the data silently produced a 2-term composite
+        # marked `completed` whenever qwk was missing for an unrelated reason --
+        # an arm that failed to thread the flag, or a resume from folds computed
+        # before qwk existed -- and nothing downstream could tell the two apart.
+        # Declared-but-missing must fail loudly as unestimable instead.
+        # qwk's cross-fold mean is recomputed from the PER-FOLD clamped values,
+        # not taken from val["qwk"]["mean"]. Those are different functions:
+        # max(0, mean(qwk)) != mean(max(0, qwk)) whenever folds have mixed signs.
+        # Taking the pre-computed mean made result["composite"] (which drives the
+        # Ladder and UCB) disagree with mean(validation_folds[*].composite)
+        # (which is what campaign_stages selects the FINAL WINNER on) by up to
+        # 0.022 -- reintroducing the exact two-estimands split this change exists
+        # to close, precisely in the near-chance regime qwk is there to resolve.
+        def _component_mean(key: str, name: str):
+            if name != "val_qwk":
+                return _component_value(val.get(key, {}).get("mean"), name)
+            clamped = [
+                _component_value(fm.get(key), name)
+                for fm in (per_fold_val_raw or [])
+                if isinstance(fm, dict)
+            ]
+            clamped = [v for v in clamped if v is not None]
+            return math.fsum(clamped) / len(clamped) if clamped else None
+
         candidates = {
-            "val_auc": _finite_or_none(val.get("auc_roc", {}).get("mean")),
-            "val_bacc": _finite_or_none(val.get("balanced_accuracy", {}).get("mean")),
+            name: _component_mean(key, name)
+            for key, name in _composite_components(False, ordinal)
         }
+        # ORDINAL tasks -- TCGA-HNSC grade (g1<g2<g3) only -- add QWK to
+        # the selection signal. It is the only component that uses the ordering:
+        # auc and bacc both score a g1->g3 error exactly like a g1->g2 one, and on
+        # a 3-class fold that is most of the information in the confusion matrix.
+        #
+        # Clamped at 0 because kappa is defined on [-1, 1] while the campaign's
+        # fold-composite validator requires [0, 1] (campaign_stages.py:395), and
+        # because for SELECTION purposes every below-chance model is equally
+        # useless -- the ordering among them is not worth preserving. The raw,
+        # unclamped value stays available in the sealed `summary` block and is
+        # recomputable from predictions.csv. Clamping is deliberately done HERE,
+        # as selection policy, not inside evaluate.quadratic_weighted_kappa, which
+        # reports the honest measurement.
         held_out_candidates = {
             "test_auc": _finite_or_none(test.get("auc_roc", {}).get("mean")),
             "test_bacc": _finite_or_none(test.get("balanced_accuracy", {}).get("mean")),
@@ -363,7 +431,7 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
     per_fold_val = summary.get("per_fold_val", []) or []
     n_folds_total = summary.get("n_folds", len(per_fold_val))
     valid_fold_composites = _per_fold_composites(
-        per_fold_val, is_survival="c_index" in test,
+        per_fold_val, is_survival="c_index" in test, ordinal=ordinal,
     )
     n_valid_folds = len(valid_fold_composites)
     selected = summary.get("fold_indices")
@@ -402,11 +470,47 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
 
     composite_se = cross_fold_se(valid_fold_composites)
 
+    # AGENT-VISIBLE DIAGNOSTICS, deliberately OUTSIDE `metrics`.
+    #
+    # CR-1b recomputes the composite as the mean of every value in `metrics`, so
+    # anything added there becomes part of the selection signal. These are not
+    # selection signals -- they are how the agent tells apart failures that the
+    # composite reports identically. `diagnostics` is not in
+    # terminal_writer's sealed set ("held_out", "summary"), so unlike those it
+    # survives into the agent-facing archive/<node>/result.json.
+    #
+    # Why sensitivity/specificity specifically: bacc = (sens + spec)/2, so bacc
+    # keeps their SUM and discards the SPLIT -- and the split is where the real
+    # difference lives. Measured across this benchmark's binary folds, the median
+    # |sens - spec| is 0.32-0.65 depending on task, and models with the SAME bacc
+    # sit at opposite operating points (luad/kras: bacc 0.540 with sens 0.15 /
+    # spec 0.93, vs bacc 0.541 with sens 0.88 / spec 0.20). AUC does not cover
+    # this either -- it is threshold-free, so it says nothing about where the
+    # operating point landed. An agent seeing only bacc 0.54 concludes "this
+    # recipe is near chance, abandon it", when the recipe may be fine and merely
+    # collapsed onto the majority class (kras is 37:63), which is a much cheaper
+    # fix: class weights, balanced sampling, threshold.
+    #
+    # Information-theoretically this is ONE new degree of freedom, not two:
+    # given accuracy and the fold's class counts, sens and spec are exactly
+    # recoverable from bacc. Exposing them directly rather than accuracy is a
+    # readability choice -- the agent should not have to redo that algebra.
+    diagnostics = {
+        name: round(value, 4)
+        for name, value in (
+            ("val_sensitivity", _finite_or_none(val.get("sensitivity", {}).get("mean"))),
+            ("val_specificity", _finite_or_none(val.get("specificity", {}).get("mean"))),
+            ("val_accuracy", _finite_or_none(val.get("accuracy", {}).get("mean"))),
+        )
+        if value is not None
+    }
+
     # ``metrics`` is agent-facing (val only); ``held_out`` (test) + ``summary``
     # are sealed into certify.json by terminal_writer — never seen during search.
     result = {
         "status": status,
         "metrics": metrics,
+        "diagnostics": diagnostics,
         "held_out": held_out,
         "composite": composite if "c_index" in test else round(composite, 4),
         "composite_se": composite_se,
@@ -660,7 +764,7 @@ def main() -> None:
     # for the entire run, in a directory with no access control of its own —
     # readable by anything that can read the project tree, including the agent
     # driving the search, without waiting for `automil certify`.
-    result = summary_to_result_json(summary, elapsed)
+    result = summary_to_result_json(summary, elapsed, exp_cfg.task.ordinal)
     from automil.runtime_helpers import write_result_json
 
     write_result_json(result)

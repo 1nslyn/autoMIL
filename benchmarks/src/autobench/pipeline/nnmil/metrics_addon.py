@@ -44,14 +44,25 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 from typing import Callable
 
-from autobench.pipeline.evaluate import sensitivity_specificity
+from autobench.pipeline.evaluate import (
+    quadratic_weighted_kappa,
+    sensitivity_specificity,
+    write_predictions_csv,
+)
 
 logger = logging.getLogger(__name__)
 
 #: Marker attribute so a second install is a no-op rather than a double wrap.
 _WRAPPED_FLAG = "_autobench_sensitivity_specificity"
+
+#: Per-fold context read by the wrapper AT CALL TIME, not captured at wrap time.
+#: install() is idempotent, so a closure over fold_dir would freeze the first
+#: fold's directory and every later fold would overwrite fold 0's predictions.
+#: The binding is installed once; only this dict moves.
+_CONTEXT: dict = {"ordinal": False, "fold_dir": None}
 
 
 def with_sensitivity_specificity(get_eval_metrics: Callable) -> Callable:
@@ -83,6 +94,7 @@ def with_sensitivity_specificity(get_eval_metrics: Callable) -> Callable:
             targets = _arg(kwargs, args, "targets_all", 0)
             preds = _arg(kwargs, args, "preds_all", 1)
             unique_classes = _arg(kwargs, args, "unique_classes", 3)
+            probs = _arg(kwargs, args, "probs_all", 2)
             prefix = _arg(kwargs, args, "prefix", 5, "")
             if targets is None or preds is None or unique_classes is None \
                     or len(unique_classes) == 0:
@@ -99,6 +111,26 @@ def with_sensitivity_specificity(get_eval_metrics: Callable) -> Callable:
             # never has to know which shape it is in and cannot drift from the
             # shared definition.
             computed = sensitivity_specificity(targets, preds, len(unique_classes))
+            if _CONTEXT["ordinal"]:
+                computed["qwk"] = quadratic_weighted_kappa(
+                    targets, preds, len(unique_classes),
+                )
+            # Same predictions.csv every other arm writes, so this benchmark has
+            # ONE per-slide format rather than nnMIL's differently-named
+            # results_<model>.csv. Written from the autobench side because
+            # benchmarks/lib/nnMIL stays untouched; this call is the only place
+            # outside the vendored trainer that sees the raw predictions.
+            #
+            # `prefix` is the split name, which is how one interception point
+            # covers both val and test. Rows are positional sample_<i>: this
+            # call does not receive slide ids (nnMIL's own CSV has them, but
+            # only for test).
+            fold_dir = _CONTEXT["fold_dir"]
+            if fold_dir and probs is not None:
+                name = "predictions.csv" if prefix == "test" else f"predictions_{prefix}.csv"
+                write_predictions_csv(
+                    os.path.join(fold_dir, name), None, targets, probs, preds,
+                )
             # Inside the try, deliberately: a wrapped callable that returned a
             # non-mapping would otherwise raise HERE, past the guard, breaking
             # the containment this module promises.
@@ -117,7 +149,9 @@ def with_sensitivity_specificity(get_eval_metrics: Callable) -> Callable:
     return _wrapper
 
 
-def install_sensitivity_specificity() -> bool:
+def install_sensitivity_specificity(
+    ordinal: bool = False, fold_dir: str | None = None,
+) -> bool:
     """Rebind the trainer module's ``get_eval_metrics`` to the wrapped version.
 
     Idempotent — a second call is a no-op. Returns True when the binding is in
@@ -125,6 +159,8 @@ def install_sensitivity_specificity() -> bool:
     vendored trainer could not be imported, which leaves the arm on its previous
     NaN behaviour rather than failing the run.
     """
+    _CONTEXT["ordinal"] = bool(ordinal)
+    _CONTEXT["fold_dir"] = fold_dir
     try:
         from autobench.pipeline.nnmil import _imports  # noqa: F401  (sys.path setup)
         from nnMIL.training.trainers import classification_trainer
@@ -143,7 +179,7 @@ def install_sensitivity_specificity() -> bool:
         )
         return False
     if getattr(current, _WRAPPED_FLAG, False):
-        return True
+        return True   # context already refreshed above; binding stays
 
     classification_trainer.get_eval_metrics = with_sensitivity_specificity(current)
     logger.info("sensitivity/specificity add-on installed for the nnMIL arm")

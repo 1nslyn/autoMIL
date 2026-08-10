@@ -19,6 +19,8 @@ Fidelity notes:
 
 from __future__ import annotations
 
+import os
+
 import copy
 import random
 
@@ -163,6 +165,8 @@ def train_dtfd_fold(
     seed: int,
     return_history: bool = False,
     policy_runtime: PolicyRuntime | None = None,
+    ordinal: bool = False,
+    fold_dir: str | None = None,
 ) -> dict:
     """Train one DTFD fold and return shared-schema test/val metrics.
 
@@ -231,11 +235,13 @@ def train_dtfd_fold(
             _restore(bundle, best_snap)
 
         test_metrics = (
-            evaluate_dtfd(bundle, test_slides, cfg, num_classes, device, seed)
+            evaluate_dtfd(bundle, test_slides, cfg, num_classes, device, seed, ordinal=ordinal,
+                          predictions_path=(os.path.join(fold_dir, "predictions.csv") if fold_dir else None))
             if test_slides else {}
         )
         val_metrics = (
-            evaluate_dtfd(bundle, val_slides, cfg, num_classes, device, seed)
+            evaluate_dtfd(bundle, val_slides, cfg, num_classes, device, seed, ordinal=ordinal,
+                          predictions_path=(os.path.join(fold_dir, "predictions_val.csv") if fold_dir else None))
             if val_slides else {}
         )
 

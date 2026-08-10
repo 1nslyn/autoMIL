@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.evaluate import compute_extended_metrics
+from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSlideDataset
@@ -34,6 +34,8 @@ def _evaluate(
     loader: DataLoader,
     device: torch.device,
     n_classes: int,
+    ordinal: bool = False,
+    predictions_path: str | None = None,
 ) -> dict[str, float]:
     """Run the probe over a split and compute the shared extended metrics."""
     model.eval()
@@ -51,7 +53,12 @@ def _evaluate(
     y_true = np.array(all_labels, dtype=int)
     y_pred = y_probs.argmax(axis=1)
 
-    return compute_extended_metrics(y_true, y_probs, y_pred, n_classes)
+    if predictions_path:
+        # TITAN's loader yields (embeddings, labels) only -- no slide ids to
+        # carry through -- so rows fall back to positional sample_<i>. Still
+        # enough for any confusion-matrix metric; just not joinable by slide.
+        write_predictions_csv(predictions_path, None, y_true, y_probs, y_pred)
+    return compute_extended_metrics(y_true, y_probs, y_pred, n_classes, ordinal=ordinal)
 
 
 def train_titan_fold(
@@ -64,6 +71,7 @@ def train_titan_fold(
     device: str = "cuda:0",
     head_cfg: TitanHeadConfig | None = None,
     policy_runtime: PolicyRuntime | None = None,
+    ordinal: bool = False,
 ) -> dict:
     """Train and evaluate one fold of a TITAN linear probe.
 
@@ -100,6 +108,7 @@ def train_titan_fold(
 
     torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
     n_classes = exp_cfg.task.n_classes
+    ordinal = exp_cfg.task.ordinal
 
     model = TitanLinearProbe(exp_cfg.embed_dim, n_classes).to(torch_device)
     optimizer = torch.optim.Adam(
@@ -131,7 +140,8 @@ def train_titan_fold(
             loss.backward()
             optimizer.step()
 
-        val_metrics = _evaluate(model, val_loader, torch_device, n_classes)
+        val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,
+                            predictions_path=os.path.join(fold_dir, "predictions_val.csv"))
         val_auc = val_metrics["auc_roc"]
         # NaN AUC (e.g. a val split missing a class) can't drive early
         # stopping -- treat it as "no improvement" rather than crashing.
@@ -156,8 +166,10 @@ def train_titan_fold(
     elapsed = time.time() - start
 
     model.load_state_dict(best_state)
-    test_metrics = _evaluate(model, test_loader, torch_device, n_classes)
-    val_metrics = _evaluate(model, val_loader, torch_device, n_classes)
+    test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
+                             predictions_path=os.path.join(fold_dir, "predictions.csv"))
+    val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,
+                            predictions_path=os.path.join(fold_dir, "predictions_val.csv"))
 
     fold_result = {
         "test_metrics": test_metrics,

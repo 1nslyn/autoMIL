@@ -114,7 +114,9 @@ def train_nnmil_fold(
         # time so the side effect is visible at the call site, and idempotent so
         # the per-fold loop re-entering costs nothing. Classification only —
         # the survival trainers have no confusion matrix.
-        install_sensitivity_specificity()
+        install_sensitivity_specificity(
+            ordinal=bool(getattr(exp_cfg.task, "ordinal", False)), fold_dir=fold_dir,
+        )
         trainer = ClassificationTrainer(**common, **extra_kwargs)
 
     trainer.policy_runtime = policy_runtime or PolicyRuntime()

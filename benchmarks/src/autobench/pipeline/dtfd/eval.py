@@ -18,7 +18,7 @@ import torch
 from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import DTFDSlide
 from autobench.pipeline.dtfd.model import DTFDBundle
-from autobench.pipeline.evaluate import compute_extended_metrics
+from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
 
 
 def _split_pseudo_bags(n_patches: int, num_group: int, rng: np.random.Generator) -> list[list[int]]:
@@ -70,6 +70,8 @@ def evaluate_dtfd(
     num_classes: int,
     device: torch.device,
     seed: int,
+    ordinal: bool = False,
+    predictions_path: str | None = None,
 ) -> dict[str, float]:
     """Evaluate a split → shared-schema metrics dict.
 
@@ -89,7 +91,13 @@ def evaluate_dtfd(
     y_probs = np.vstack(probs)                 # [num_slides, num_classes]
     y_true = np.asarray(labels, dtype=int)
     y_pred = y_probs.argmax(axis=1)
-    return compute_extended_metrics(y_true, y_probs, y_pred, num_classes)
+    if predictions_path:
+        write_predictions_csv(
+            predictions_path,
+            [getattr(sl, "slide_id", None) for sl in slides],
+            y_true, y_probs, y_pred,
+        )
+    return compute_extended_metrics(y_true, y_probs, y_pred, num_classes, ordinal=ordinal)
 
 
 def val_auc(
