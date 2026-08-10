@@ -250,3 +250,67 @@ class TestComputeConfidenceIntervals:
         ci = compute_confidence_intervals(fold_metrics)
         assert ci["auc_roc"]["mean"] == 0.85
         assert ci["auc_roc"]["ci_low"] == ci["auc_roc"]["ci_high"]
+
+
+class TestMultiClassSensitivitySpecificity:
+    """Multi-class sensitivity/specificity are macro-averaged one-vs-rest.
+
+    They used to be hardcoded ``float("nan")`` for ``n_classes != 2``. That NaN
+    rode in the ``summary`` diagnostic block of result.json, serialized as a bare
+    ``NaN`` token, and the orchestrator's ingestion parser rejected the whole
+    file — so every 3-class run (CPTAC-PDAC, TCGA-HNSC) was recorded as a crash
+    despite having a perfectly good validation composite.
+
+    The binary formula is deliberately unchanged: it reports the positive class
+    only (``pos_label=1``), and published binary numbers must not move.
+    """
+
+    def test_perfect_three_class_prediction(self):
+        y_true = np.array([0, 1, 2, 0, 1, 2])
+        y_pred = y_true.copy()
+        y_probs = np.eye(3)[y_pred]
+        m = compute_extended_metrics(y_true, y_probs, y_pred, 3)
+        assert m["sensitivity"] == 1.0
+        assert m["specificity"] == 1.0
+
+    def test_macro_average_matches_hand_computation(self):
+        # 3 classes, 2 samples each; class 1 is fully confused into class 2.
+        y_true = np.array([0, 0, 1, 1, 2, 2])
+        y_pred = np.array([0, 0, 2, 2, 2, 2])
+        y_probs = np.eye(3)[y_pred]
+        m = compute_extended_metrics(y_true, y_probs, y_pred, 3)
+        # recall:      class0 2/2, class1 0/2, class2 2/2  -> 2/3
+        assert m["sensitivity"] == pytest.approx(2 / 3)
+        # specificity: class0 TN=4 FP=0 -> 1.0
+        #              class1 TN=4 FP=0 -> 1.0
+        #              class2 TN=2 FP=2 -> 0.5
+        assert m["specificity"] == pytest.approx(5 / 6)
+
+    def test_never_nan_when_a_class_is_absent_from_the_fold(self):
+        """A small fold can miss a class entirely — that must not poison the macro."""
+        y_true = np.array([0, 0, 1, 1])
+        y_pred = np.array([0, 1, 1, 1])
+        y_probs = np.eye(3)[y_pred]
+        m = compute_extended_metrics(y_true, y_probs, y_pred, 3)
+        assert np.isfinite(m["sensitivity"])
+        assert np.isfinite(m["specificity"])
+
+    @pytest.mark.parametrize("n_classes", [3, 4, 5])
+    def test_multiclass_metrics_are_always_finite(self, n_classes):
+        """The regression guard: no multi-class shape may emit NaN here again."""
+        rng = np.random.default_rng(0)
+        y_true = rng.integers(0, n_classes, size=20)
+        y_pred = rng.integers(0, n_classes, size=20)
+        y_probs = np.eye(n_classes)[y_pred]
+        m = compute_extended_metrics(y_true, y_probs, y_pred, n_classes)
+        assert np.isfinite(m["sensitivity"])
+        assert np.isfinite(m["specificity"])
+
+    def test_binary_formula_is_unchanged(self):
+        """Binary stays positive-class-only, NOT macro-averaged."""
+        y_true = np.array([0, 0, 1, 1])
+        y_pred = np.array([0, 1, 1, 1])
+        y_probs = np.eye(2)[y_pred]
+        m = compute_extended_metrics(y_true, y_probs, y_pred, 2)
+        assert m["sensitivity"] == 1.0    # 2/2 positives recovered
+        assert m["specificity"] == 0.5    # 1/2 negatives correct (macro would be 0.75)

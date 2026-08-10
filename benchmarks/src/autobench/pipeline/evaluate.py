@@ -74,10 +74,48 @@ def compute_extended_metrics(
         metrics["sensitivity"] = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
         metrics["specificity"] = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
     else:
-        metrics["sensitivity"] = float("nan")
-        metrics["specificity"] = float("nan")
+        sens, spec = _macro_sensitivity_specificity(
+            confusion_matrix(y_true, y_pred, labels=list(range(n_classes)))
+        )
+        metrics["sensitivity"] = sens
+        metrics["specificity"] = spec
 
     return metrics
+
+
+def _macro_sensitivity_specificity(cm: np.ndarray) -> tuple[float, float]:
+    """Macro-averaged one-vs-rest sensitivity/specificity from a K x K matrix.
+
+    These were ``float("nan")`` for every multi-class task until 2026-08-10. The
+    NaN itself was contained -- these are diagnostics, never in ``metrics`` and
+    never in ``composite`` -- but it serialized into result.json as a bare ``NaN``
+    token, which the orchestrator's ingestion parser rejects outright (CR-1a).
+    Every 3-class run (CPTAC-PDAC, TCGA-HNSC) was therefore recorded as a crash
+    despite carrying a perfectly good validation composite.
+
+    A class absent from ``y_true`` has an undefined recall, and one that consumes
+    every sample has an undefined specificity. Such classes are dropped from
+    their own average rather than counted as 0.0, which would report a model as
+    worse than it is purely because a small fold missed a label. If no class is
+    defined at all (an empty split), the result is 0.0 -- matching the binary
+    branch's ``else 0.0`` convention, and never NaN again.
+
+    The binary branch above is deliberately NOT routed through here: it reports
+    the positive class alone (the clinical reading of sensitivity/specificity),
+    and every published binary number depends on that.
+    """
+    tp = np.diag(cm).astype(float)
+    fn = cm.sum(axis=1) - tp        # true class c, predicted otherwise
+    fp = cm.sum(axis=0) - tp        # predicted class c, truly otherwise
+    tn = cm.sum() - tp - fn - fp
+
+    def _macro(numerator: np.ndarray, denominator: np.ndarray) -> float:
+        defined = denominator > 0
+        if not defined.any():
+            return 0.0
+        return float(np.mean(numerator[defined] / denominator[defined]))
+
+    return _macro(tp, tp + fn), _macro(tn, tn + fp)
 
 
 def pooled_c_index(fold_records: list[dict]) -> float:

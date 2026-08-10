@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import signal
 import sys
@@ -38,6 +39,40 @@ def get_fold_count() -> int:
     return int(os.environ.get("AUTOMIL_FOLD_COUNT", "5"))
 
 
+def json_safe(value: object) -> object:
+    """Return a copy of ``value`` with every non-finite float replaced by ``None``.
+
+    ``json.dumps`` defaults to ``allow_nan=True`` and emits the bare tokens
+    ``NaN`` / ``Infinity`` / ``-Infinity``. None of the three is valid JSON
+    (RFC 8259), so the file they land in is unreadable to `jq`, serde, the viz
+    SSE stream — and to autoMIL itself: ``Runner.collect_result`` parses
+    result.json with a ``parse_constant`` hook that rejects those tokens (CR-1a),
+    and rewrites the whole node as a crash.
+
+    That guard is right about ``composite`` — a non-finite selection signal would
+    rig keep/discard — but a result also carries honestly-unestimable
+    *diagnostics*: multi-class sensitivity, a cross-fold CI over zero finite
+    folds. Those were killing valid runs. ``null`` is JSON's way of saying "no
+    value available", which is precisely what an unestimable metric is, so that
+    is what gets written.
+
+    This does not weaken CR-1a. A hand-written ``NaN`` token still fails at the
+    parse boundary, and a ``null`` where a number belongs (``composite``, any
+    ``metrics`` entry) still fails the schema's ``{"type": "number"}`` — the
+    difference is that the failure is now scoped to the field that is actually
+    broken instead of condemning the file.
+
+    Never mutates the input: containers are rebuilt, not edited in place.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    return value
+
+
 def _atomic_write_json(path: Path, payload: dict) -> None:
     """Write JSON atomically via tempfile + os.replace (CR-04 pattern).
 
@@ -47,12 +82,16 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     and a partial JSON silently falls through to log-heuristic synthesis,
     discarding every real result. Shared by register_sigterm_flush's handler
     and write_result_json so both get the same crash-safety.
+
+    Non-finite floats are written as ``null`` (see :func:`json_safe`); with them
+    gone, ``allow_nan=False`` can never fire and stands as an assertion that no
+    invalid JSON token reaches disk.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_path_str = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
         with os.fdopen(tmp_fd, "w") as fh:
-            fh.write(json.dumps(payload, indent=2) + "\n")
+            fh.write(json.dumps(json_safe(payload), indent=2, allow_nan=False) + "\n")
         os.replace(tmp_path_str, str(path))
     except Exception:
         try:

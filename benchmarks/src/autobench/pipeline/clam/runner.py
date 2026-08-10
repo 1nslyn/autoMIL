@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 
 import torch
@@ -26,9 +27,15 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
     level. However, this helper defensively unwraps both flat-float and
     {"mean": ..., "std": ...} CI-dict shapes in case the caller supplies a
     post-CI metrics dict.
+
+    An unestimable metric is written as ``null``, never NaN: a NaN token makes
+    the file invalid JSON and the aggregator that reads it back
+    (``automil.cells.reconcile.aggregate_folds``) skips a null-composite fold
+    rather than averaging a hole into the partial result.
     """
-    import json as _json
     from pathlib import Path
+
+    from automil.runtime_helpers import _atomic_write_json
 
     results_dir = os.environ.get("AUTOMIL_RESULTS_DIR")
     if not results_dir:
@@ -41,14 +48,20 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
     # 5-fold lab standard. Production paths always have the env var set.
     fold_count = int(os.environ.get("AUTOMIL_FOLD_COUNT", "5"))
 
-    def _unwrap(metric):
-        # auc_roc may be float OR {"mean": float, ...} (CI-dict shape)
+    def _unwrap(metric) -> float | None:
+        # auc_roc may be float OR {"mean": float, ...} (CI-dict shape).
+        # None means "not estimable" and is kept distinct from a real 0.0.
         if isinstance(metric, dict):
-            return float(metric.get("mean", 0.0))
-        try:
-            return float(metric or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
+            metric = metric.get("mean")
+        if isinstance(metric, bool) or not isinstance(metric, (int, float)):
+            return None
+        value = float(metric)
+        return value if math.isfinite(value) else None
+
+    def _mean(values: list[float | None]) -> float | None:
+        # A half-composite is on a different scale from every other fold, so a
+        # missing component drops the whole fold rather than shrinking the mean.
+        return None if any(v is None for v in values) else sum(values) / len(values)
 
     test_m = result.get("test_metrics", {}) or {}
     val_m = result.get("val_metrics", {}) or {}
@@ -68,7 +81,7 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
             "test_auc":  _unwrap(test_m.get("auc_roc")),
             "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
         }
-        composite = (metrics["val_auc"] + metrics["val_bacc"]) / 2.0
+        composite = _mean([metrics["val_auc"], metrics["val_bacc"]])
 
     payload = {
         "fold_index":      fold_index,
@@ -80,8 +93,9 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         "elapsed_seconds": int(result.get("elapsed_seconds", 0) or 0),
         "peak_vram_mb":    int(result.get("peak_vram_mb", 0) or 0),
     }
-    fold_path = Path(results_dir) / f"fold_{fold_index}_result.json"
-    fold_path.write_text(_json.dumps(payload, indent=2))
+    # Atomic: these files are written in exactly the window a cap-kill SIGTERM
+    # can land, and a torn one is silently dropped by the aggregator.
+    _atomic_write_json(Path(results_dir) / f"fold_{fold_index}_result.json", payload)
 
 
 def run_experiment(

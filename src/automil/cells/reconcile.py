@@ -3,10 +3,26 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _finite(value: Any) -> float | None:
+    """Return ``value`` as a finite float, or ``None`` if it is not one.
+
+    A fold whose composite was unestimable serializes as ``null``
+    (``runtime_helpers.json_safe``). ``float(None)`` raises TypeError, and this
+    aggregator runs inside the SIGTERM handler — an uncaught raise there loses
+    the entire partial flush. Coercing to 0.0 would be no better: this reader's
+    contract is to distinguish missing data from zero-valued data (Pitfall 4).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
 
 # D-06 (REC-03): canonical status enum. "crashed" was emitted pre-v1.1 — normalize on write.
 _STATUS_CANON: dict[str, str] = {
@@ -61,21 +77,31 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Skipping malformed fold file %s: %s", ff, exc)
             continue
-        composites.append(float(data.get("composite", 0.0)))
+        # An unestimable composite is `null`, and a fold that carries one is not
+        # evidence — it must not count toward partial_folds or dilute the mean.
+        # Its resource usage below still does: the fold really did run.
+        composite = _finite(data.get("composite"))
+        if composite is None:
+            logger.warning(
+                "Skipping fold with no estimable composite (%r) in %s",
+                data.get("composite"), ff,
+            )
+        else:
+            composites.append(composite)
         for k, v in data.get("metrics", {}).items():
-            try:
-                metrics_by_key.setdefault(k, []).append(float(v))
-            except (TypeError, ValueError):
+            value = _finite(v)
+            if value is None:
                 logger.warning("Skipping non-numeric metric %s=%r in %s", k, v, ff)
                 continue
+            metrics_by_key.setdefault(k, []).append(value)
         # held_out (test) aggregated in parallel but kept sealed — terminal_writer
         # routes it to certify.json, never into agent-facing artifacts (val-firewall).
         for k, v in data.get("held_out", {}).items():
-            try:
-                held_out_by_key.setdefault(k, []).append(float(v))
-            except (TypeError, ValueError):
+            value = _finite(v)
+            if value is None:
                 logger.warning("Skipping non-numeric held_out %s=%r in %s", k, v, ff)
                 continue
+            held_out_by_key.setdefault(k, []).append(value)
         elapsed_total += int(data.get("elapsed_seconds", 0) or 0)
         peak_vram = max(peak_vram, int(data.get("peak_vram_mb", 0) or 0))
 

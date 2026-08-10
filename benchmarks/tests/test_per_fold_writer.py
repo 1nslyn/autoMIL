@@ -143,17 +143,28 @@ def test_uses_automil_fold_count_env(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Test 6: missing metrics keys → zero fallback, no exception
+# Test 6: missing metrics keys → null, not zero, and no exception
 # ---------------------------------------------------------------------------
 
 def test_handles_missing_metrics_gracefully(tmp_path, monkeypatch):
+    """A metric that does not exist is ``null``, NOT 0.0 (changed 2026-08-10).
+
+    The old zero fallback is the exact anti-pattern the consuming aggregator
+    documents against — ``aggregate_folds`` "must distinguish missing data from
+    zero-valued data" (Pitfall 4). Writing 0.0 recorded a fold that produced no
+    metrics at all as a genuine zero-AUC result, which then averaged into the
+    partial composite and dragged it down as if the model had scored nothing.
+    ``null`` is skipped by the aggregator instead, which is what "we have no
+    value here" is supposed to mean.
+    """
     monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
 
     result = {"test_metrics": {}, "val_metrics": {}}
     _write_fold_result_json(0, result)  # should not raise
 
     payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-    assert payload["held_out"]["test_auc"] == pytest.approx(0.0)
-    assert payload["held_out"]["test_bacc"] == pytest.approx(0.0)
-    assert payload["metrics"]["val_auc"] == pytest.approx(0.0)
-    assert payload["metrics"]["val_bacc"] == pytest.approx(0.0)
+    assert payload["held_out"]["test_auc"] is None
+    assert payload["held_out"]["test_bacc"] is None
+    assert payload["metrics"]["val_auc"] is None
+    assert payload["metrics"]["val_bacc"] is None
+    assert payload["composite"] is None
