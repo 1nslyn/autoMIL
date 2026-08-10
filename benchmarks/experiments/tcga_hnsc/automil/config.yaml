@@ -35,8 +35,8 @@ encoders:
 
 metrics:
   primary: "composite"
-  composite_formula: "(val_auc + val_bacc) / 2"
-  track: ["val_auc", "val_bacc"]
+  composite_formula: "(val_auc + val_bacc + val_qwk) / 3"
+  track: ["val_auc", "val_bacc", "val_qwk"]
 
 # CR-4 / PRELAUNCH_REVIEW O2: the Ladder keep-margin. δ=0.0 (strict dominance) is
 # indefensible here — splits.py carves val at 12.5% of train_val, so selection

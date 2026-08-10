@@ -39,8 +39,10 @@ def compute_extended_metrics(
 ) -> dict[str, float]:
     """Compute comprehensive classification metrics for one evaluation split.
 
-    ``ordinal`` marks a task whose classes are ORDERED (TCGA-HNSC ``grade``
-    g1<g2<g3, CPTAC-PDAC ``immune_class`` low<medium<high). It adds ``qwk``,
+    ``ordinal`` marks a task whose classes are ORDERED. TCGA-HNSC ``grade``
+    (g1<g2<g3) is the only one here; CPTAC-PDAC ``immune_class`` deliberately is
+    NOT, because its upstream task definition scores it as ordinary multi-class
+    subtyping (see cptac_pdac.yaml). It adds ``qwk``,
     which is the field standard for graded pathology targets and the only
     metric here that uses the ordering at all -- every other metric treats a
     g1->g3 error exactly like a g1->g2 one. Off by default so nominal
@@ -95,8 +97,8 @@ def quadratic_weighted_kappa(
     exactly like a g1->g2 one; QWK penalises by squared distance, so confusing
     adjacent grades costs far less than confusing the extremes. It is the
     standard primary metric for graded pathology targets (ISUP/Gleason grading
-    challenges report it as such), which is why it is worth adding for
-    ``grade`` and ``immune_class`` specifically.
+    challenges report it as such, and Patho-Bench's Histologic_Grade config
+    specifies weighted_kappa), which is why it is worth adding for ``grade``.
 
     ``labels=range(n_classes)`` is passed explicitly so a fold that happens to
     miss a class still produces a K x K matrix and stays comparable across

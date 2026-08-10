@@ -305,6 +305,7 @@ def summary_to_result_json(
     test = summary.get("test", {})
     val = summary.get("val", {})
     validation_folds = _validation_fold_evidence(summary, ordinal)
+    per_fold_val_raw = summary.get("per_fold_val", []) or []
 
     # Try to get peak VRAM
     peak_vram_mb = 0
@@ -348,11 +349,30 @@ def summary_to_result_json(
         # an arm that failed to thread the flag, or a resume from folds computed
         # before qwk existed -- and nothing downstream could tell the two apart.
         # Declared-but-missing must fail loudly as unestimable instead.
+        # qwk's cross-fold mean is recomputed from the PER-FOLD clamped values,
+        # not taken from val["qwk"]["mean"]. Those are different functions:
+        # max(0, mean(qwk)) != mean(max(0, qwk)) whenever folds have mixed signs.
+        # Taking the pre-computed mean made result["composite"] (which drives the
+        # Ladder and UCB) disagree with mean(validation_folds[*].composite)
+        # (which is what campaign_stages selects the FINAL WINNER on) by up to
+        # 0.022 -- reintroducing the exact two-estimands split this change exists
+        # to close, precisely in the near-chance regime qwk is there to resolve.
+        def _component_mean(key: str, name: str):
+            if name != "val_qwk":
+                return _component_value(val.get(key, {}).get("mean"), name)
+            clamped = [
+                _component_value(fm.get(key), name)
+                for fm in (per_fold_val_raw or [])
+                if isinstance(fm, dict)
+            ]
+            clamped = [v for v in clamped if v is not None]
+            return math.fsum(clamped) / len(clamped) if clamped else None
+
         candidates = {
-            name: _component_value(val.get(key, {}).get("mean"), name)
+            name: _component_mean(key, name)
             for key, name in _composite_components(False, ordinal)
         }
-        # ORDINAL tasks (grade g1<g2<g3, immune_class low<medium<high) add QWK to
+        # ORDINAL tasks -- TCGA-HNSC grade (g1<g2<g3) only -- add QWK to
         # the selection signal. It is the only component that uses the ordering:
         # auc and bacc both score a g1->g3 error exactly like a g1->g2 one, and on
         # a 3-class fold that is most of the information in the confusion matrix.
