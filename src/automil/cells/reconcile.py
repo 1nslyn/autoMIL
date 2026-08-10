@@ -80,30 +80,59 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         # An unestimable composite is `null`, and a fold that carries one is not
         # evidence — it must not count toward partial_folds or dilute the mean.
         # Its resource usage below still does: the fold really did run.
-        composite = _finite(data.get("composite"))
-        if composite is None:
-            logger.warning(
-                "Skipping fold with no estimable composite (%r) in %s",
-                data.get("composite"), ff,
-            )
-        else:
-            composites.append(composite)
-        for k, v in data.get("metrics", {}).items():
-            value = _finite(v)
-            if value is None:
-                logger.warning("Skipping non-numeric metric %s=%r in %s", k, v, ff)
-                continue
-            metrics_by_key.setdefault(k, []).append(value)
-        # held_out (test) aggregated in parallel but kept sealed — terminal_writer
-        # routes it to certify.json, never into agent-facing artifacts (val-firewall).
-        for k, v in data.get("held_out", {}).items():
-            value = _finite(v)
-            if value is None:
-                logger.warning("Skipping non-numeric held_out %s=%r in %s", k, v, ff)
-                continue
-            held_out_by_key.setdefault(k, []).append(value)
+        # Resource usage is counted for every fold that ran, estimable or not.
         elapsed_total += int(data.get("elapsed_seconds", 0) or 0)
         peak_vram = max(peak_vram, int(data.get("peak_vram_mb", 0) or 0))
+
+        # ONE rule: a fold contributes everything or nothing. An unestimable
+        # value anywhere in it -- the composite, a `metrics` entry, a `held_out`
+        # entry -- drops the whole fold.
+        #
+        # Skipping only the offending VALUE was the subtler half of this bug.
+        # `composite` would then be averaged over N folds while a surviving
+        # sibling metric was averaged over N+1, and the two are supposed to
+        # describe the same evidence:
+        #
+        #   - on the val side CR-1b recomputes the composite from `metrics`, so
+        #     the mismatch fires terminal_writer's VAL-FIREWALL ERROR ("the
+        #     reported scalar may have been computed from test") on a benign
+        #     coverage gap -- degrading the one alarm that is supposed to mean
+        #     test leaked into selection -- and then the mixed-denominator
+        #     recompute WINS and becomes the node's authoritative composite,
+        #     its error direction set by whether the dropped folds happened to
+        #     be good or bad;
+        #   - on the test side nothing recomputes `held_out`, so a `test_auc`
+        #     averaged over 2 folds sat beside a `test_bacc` averaged over 3
+        #     under `status: completed`, and that block is what terminal_writer
+        #     seals into certify.json -- the number that goes in the table.
+        #
+        # A MISSING key is different from a null VALUE and is left alone: a
+        # sparse arm-specific diagnostic that only some folds emit is honest
+        # evidence, and dropping folds for it would discard good data.
+        offenders = [
+            f"{block}.{k}"
+            for block in ("metrics", "held_out")
+            for k, v in (data.get(block) or {}).items()
+            if _finite(v) is None
+        ]
+        composite = _finite(data.get("composite"))
+        if composite is None:
+            offenders.insert(0, f"composite={data.get('composite')!r}")
+        if offenders:
+            logger.warning(
+                "Skipping fold %s: unestimable %s (a fold contributes all of its "
+                "values or none, so every reported mean shares one denominator)",
+                ff.name, ", ".join(offenders),
+            )
+            continue
+
+        composites.append(composite)
+        for k, v in (data.get("metrics") or {}).items():
+            metrics_by_key.setdefault(k, []).append(_finite(v))
+        # held_out (test) aggregated in parallel but kept sealed — terminal_writer
+        # routes it to certify.json, never into agent-facing artifacts (val-firewall).
+        for k, v in (data.get("held_out") or {}).items():
+            held_out_by_key.setdefault(k, []).append(_finite(v))
 
     n = len(composites)
     if n == 0:
@@ -118,6 +147,10 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         "status": "completed" if n == expected_fold_count else "partial",
         "composite": sum(composites) / n,
         "composite_se": cross_fold_se(composites),
+        # Every value here came from a fold that contributed ALL of its values,
+        # so these means and `composite` share one denominator by construction.
+        # A key only SOME folds emit is still reported over the folds that had
+        # it -- sparse arm-specific diagnostics are honest evidence.
         "metrics": {k: sum(v) / len(v) for k, v in metrics_by_key.items()},
         "held_out": {k: sum(v) / len(v) for k, v in held_out_by_key.items()},
         "partial_folds": n,

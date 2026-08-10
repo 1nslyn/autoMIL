@@ -167,3 +167,44 @@ class TestNullCompositeStillFailsClosed:
             validate_result(
                 {"status": "completed", "composite": 0.8, "metrics": {"val_auc": None}}
             )
+
+
+class TestNumpyScalars:
+    """``isinstance(x, float)`` is False for np.float32 (np.float64 subclasses it).
+
+    A np.float32 NaN therefore skipped sanitization entirely and reached
+    ``json.dumps``, which raises TypeError on numpy scalars — inside the SIGTERM
+    handler, that costs the whole partial flush. The finiteness test is on
+    ``numbers.Real`` (stdlib, so no numpy dependency on the framework side).
+    """
+
+    def test_non_finite_numpy_floats_become_null(self, tmp_path):
+        np = pytest.importorskip("numpy")
+        path = tmp_path / "result.json"
+        _atomic_write_json(path, {
+            "f32": np.float32("nan"),
+            "f64": np.float64("nan"),
+            "inf32": np.float32("inf"),
+        })
+
+        assert _strict_load(path) == {"f32": None, "f64": None, "inf32": None}
+
+    def test_finite_numpy_scalars_are_serializable(self, tmp_path):
+        """The contract is that whatever json_safe returns can actually be dumped."""
+        np = pytest.importorskip("numpy")
+        path = tmp_path / "result.json"
+        _atomic_write_json(path, {
+            "f32": np.float32(0.5), "f64": np.float64(0.25), "i64": np.int64(7),
+        })
+
+        loaded = _strict_load(path)
+        assert loaded == {"f32": 0.5, "f64": 0.25, "i64": 7}
+        assert isinstance(loaded["i64"], int)
+
+    def test_bools_stay_json_booleans(self, tmp_path):
+        """bool is an Integral subclass and must not be narrowed to 1/0."""
+        path = tmp_path / "result.json"
+        _atomic_write_json(path, {"yes": True, "no": False, "one": 1})
+
+        assert '"yes": true' in path.read_text()
+        assert _strict_load(path) == {"yes": True, "no": False, "one": 1}

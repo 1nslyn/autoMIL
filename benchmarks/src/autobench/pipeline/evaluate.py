@@ -68,41 +68,95 @@ def compute_extended_metrics(
     else:
         metrics["f1"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
 
-    if n_classes == 2:
-        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-        tn, fp, fn, tp = cm.ravel()
-        metrics["sensitivity"] = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
-        metrics["specificity"] = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
-    else:
-        sens, spec = _macro_sensitivity_specificity(
-            confusion_matrix(y_true, y_pred, labels=list(range(n_classes)))
-        )
-        metrics["sensitivity"] = sens
-        metrics["specificity"] = spec
+    metrics.update(sensitivity_specificity(y_true, y_pred, n_classes))
 
     return metrics
 
 
+def sensitivity_specificity(
+    y_true: np.ndarray, y_pred: np.ndarray, n_classes: int,
+) -> dict[str, float]:
+    """The benchmark's one definition of sensitivity/specificity, by task shape.
+
+    Returns DIFFERENTLY-NAMED keys per shape, deliberately -- the binary and
+    multi-class quantities are not on the same scale and must never share a
+    table column:
+
+    ``sensitivity`` / ``specificity`` (binary only)
+        The positive class alone: the clinical reading, and what every published
+        binary number in this benchmark already means.
+    ``macro_recall`` / ``macro_specificity_ovr`` (multi-class only)
+        Macro-averaged one-vs-rest. See :func:`_macro_sensitivity_specificity`
+        for why these carry their own names.
+
+    Public so the nnMIL arm can share it. nnMIL's trainer emits neither metric,
+    so that arm reports nothing while every other arm reports both; the consumer-
+    side add-on that closes that gap calls THIS function rather than restating
+    the formula, which makes the arms identical by construction -- a stronger
+    guarantee than the AUC situation (L-10), where two separate formulas merely
+    agree in the common case. Until that add-on lands, nnMIL still reports null
+    for the pair (see nnmil/evaluate.py), so a multi-class cross-arm table has
+    the macro pair on four arms and neither name on nnMIL.
+    """
+    if n_classes == 2:
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+        tn, fp, fn, tp = cm.ravel()
+        return {
+            "sensitivity": float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0,
+            "specificity": float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0,
+        }
+    recall, spec = _macro_sensitivity_specificity(
+        confusion_matrix(y_true, y_pred, labels=list(range(n_classes)))
+    )
+    return {"macro_recall": recall, "macro_specificity_ovr": spec}
+
+
 def _macro_sensitivity_specificity(cm: np.ndarray) -> tuple[float, float]:
-    """Macro-averaged one-vs-rest sensitivity/specificity from a K x K matrix.
+    """Macro-averaged one-vs-rest recall/specificity from a K x K matrix.
+
+    NOT named sensitivity/specificity, and that is the point. Two properties,
+    both measured rather than assumed, make the multi-class quantities different
+    animals from their binary namesakes:
+
+    ``macro_recall`` IS ``balanced_accuracy``, exactly -- macro one-vs-rest
+    recall is the definition of balanced accuracy. Verified against
+    ``sklearn.balanced_accuracy_score`` at max abs difference 0.0 over 5000
+    random draws (K in 3..5), including 2880 with a class absent from y_true.
+    So it is a duplicate of a column already in every summary, and printing it
+    beside ``balanced_accuracy`` as if it were independent evidence would
+    mislead. It is kept only so the key set is uniform across task shapes.
+
+    ``macro_specificity_ovr`` is close to a rescaled accuracy
+    (``1 - (1-acc)/(K-1)`` exactly under class balance; corr 0.989 with accuracy
+    under Dirichlet(0.7) imbalance at K=3), structurally inflated toward 1 by the
+    large one-vs-rest negative set. Reported on the same axis as a binary
+    specificity it would flatter every multi-class cell.
 
     These were ``float("nan")`` for every multi-class task until 2026-08-10. The
     NaN itself was contained -- these are diagnostics, never in ``metrics`` and
     never in ``composite`` -- but it serialized into result.json as a bare ``NaN``
     token, which the orchestrator's ingestion parser rejects outright (CR-1a).
     Every 3-class run (CPTAC-PDAC, TCGA-HNSC) was therefore recorded as a crash
-    despite carrying a perfectly good validation composite.
+    despite carrying a perfectly good validation composite. Note the SERIALIZER
+    fix is what repaired that; naming these honestly is a separate concern.
 
     A class absent from ``y_true`` has an undefined recall, and one that consumes
     every sample has an undefined specificity. Such classes are dropped from
     their own average rather than counted as 0.0, which would report a model as
-    worse than it is purely because a small fold missed a label. If no class is
-    defined at all (an empty split), the result is 0.0 -- matching the binary
-    branch's ``else 0.0`` convention, and never NaN again.
+    worse than it is purely because a small fold missed a label. That matches
+    sklearn's ``balanced_accuracy_score`` exactly, and it is the defensible
+    choice -- but it is not free: on a ~10-patient validation split the absent
+    class is usually a RARE one, i.e. the one the model handles worst, so the
+    reported macro is biased upward and moves discontinuously with whether a
+    single patient landed in the split. A cross-fold mean of macro-averages over
+    different class subsets is therefore not a population quantity; report the
+    macro from a POOLED cross-fold confusion matrix (the pattern
+    :func:`pooled_c_index` already uses for CR-3) if this is ever put in a table.
 
-    The binary branch above is deliberately NOT routed through here: it reports
-    the positive class alone (the clinical reading of sensitivity/specificity),
-    and every published binary number depends on that.
+    An empty split has no defined class at all, and yields NaN -- not 0.0, which
+    would fabricate "the model got everything wrong" out of "there was no data",
+    exactly what ``scoring.cross_fold_se``'s docstring forbids. That NaN is safe
+    now: the serializer writes it as JSON ``null``.
     """
     tp = np.diag(cm).astype(float)
     fn = cm.sum(axis=1) - tp        # true class c, predicted otherwise
@@ -112,7 +166,7 @@ def _macro_sensitivity_specificity(cm: np.ndarray) -> tuple[float, float]:
     def _macro(numerator: np.ndarray, denominator: np.ndarray) -> float:
         defined = denominator > 0
         if not defined.any():
-            return 0.0
+            return float("nan")     # not estimable != scored zero
         return float(np.mean(numerator[defined] / denominator[defined]))
 
     return _macro(tp, tp + fn), _macro(tn, tn + fp)

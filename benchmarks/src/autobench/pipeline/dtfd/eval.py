@@ -74,7 +74,8 @@ def evaluate_dtfd(
     """Evaluate a split → shared-schema metrics dict.
 
     Returns exactly the keys ``compute_extended_metrics`` emits
-    (auc_roc, accuracy, balanced_accuracy, f1, sensitivity, specificity).
+    (auc_roc, accuracy, balanced_accuracy, f1, plus sensitivity/specificity
+    on binary or macro_recall/macro_specificity_ovr on multi-class).
     """
     bundle.eval()
     rng = np.random.default_rng(seed)
