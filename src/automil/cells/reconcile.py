@@ -82,12 +82,26 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         # Its resource usage below still does: the fold really did run.
         composite = _finite(data.get("composite"))
         if composite is None:
+            # Drop the fold WHOLE -- metrics and held_out too, not just the
+            # composite. Keeping its surviving metrics would leave `composite`
+            # averaged over N folds and `metrics` over N+1, and CR-1b recomputes
+            # the composite from `metrics`: the two then disagree past
+            # COMPOSITE_TOLERANCE, which fires terminal_writer's VAL-FIREWALL
+            # ERROR ("the reported scalar may have been computed from test") on a
+            # benign coverage mismatch, degrading the one alarm that is supposed
+            # to mean test leaked into selection. Worse, the mixed-denominator
+            # recompute then WINS and becomes the node's authoritative composite,
+            # with an error direction that depends on whether the dropped folds
+            # happened to be good or bad -- noise injected straight into
+            # selection. Resource usage below is still counted: the fold ran.
             logger.warning(
                 "Skipping fold with no estimable composite (%r) in %s",
                 data.get("composite"), ff,
             )
-        else:
-            composites.append(composite)
+            elapsed_total += int(data.get("elapsed_seconds", 0) or 0)
+            peak_vram = max(peak_vram, int(data.get("peak_vram_mb", 0) or 0))
+            continue
+        composites.append(composite)
         for k, v in data.get("metrics", {}).items():
             value = _finite(v)
             if value is None:

@@ -331,8 +331,25 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
             for name, value in held_out_candidates.items() if value is not None
         }
         unestimable = [name for name, value in candidates.items() if value is None]
-        estimable = [value for value in candidates.values() if value is not None]
-        composite = math.fsum(estimable) / len(estimable) if estimable else 0.0
+        # ALL-OR-NOTHING, deliberately. An earlier revision reported the mean of
+        # whichever components survived, so a node missing val_auc was scored on
+        # val_bacc alone -- a different estimand, on a different scale, from
+        # every sibling scored on (auc+bacc)/2. The composite formula is
+        # pre-registered (`meta.scoring`) and the Ladder margin is declared
+        # against it; silently swapping the estimand per node at runtime is the
+        # same class of move the val-firewall and the Ladder exist to prevent.
+        # It also leaked: `status: partial` keeps the node itself out of
+        # KEEP_CLASS, but nothing stops it being a PARENT, and terminal_writer
+        # gates a child against `parent["composite"]` with no partial check --
+        # so a half-scale bar silently decided a completed child's keep/discard.
+        # If a cell genuinely cannot estimate AUC, the honest fix is to declare a
+        # bacc-only metric set for that cell up front, so every node in it is on
+        # one scale.
+        if unestimable:
+            metrics = {}
+            composite = 0.0
+        else:
+            composite = math.fsum(candidates.values()) / len(candidates)
 
     # A stage is complete only when every fold it declared has a finite
     # selection composite.  The old global ``>= 2`` threshold let a 2/3-fold
@@ -636,13 +653,20 @@ def main() -> None:
     print(f"\nExperiment complete in {elapsed:.0f}s")
     # val-firewall: surface only the validation selection signal to stdout/run.log;
     # test lives in the sealed held_out block (result['held_out']).
-    if "val_c_index" in result["metrics"]:
-        print(f"  val_c_index={result['metrics']['val_c_index']:.4f}  "
-              f"composite={result['composite']:.4f}")
-    else:
-        print(f"  val_auc={result['metrics']['val_auc']:.4f}  "
-              f"val_bacc={result['metrics']['val_bacc']:.4f}  "
-              f"composite={result['composite']:.4f}")
+    # Format whatever `metrics` actually holds. It used to always carry both
+    # names (NaN-valued at worst, which formats fine), so indexing them was safe;
+    # an unestimable metric is now DROPPED, and `metrics` can be empty. Indexing
+    # raised KeyError here -- after result.json was already written, so the
+    # damage was not a lost result but a non-zero exit: the campaign's native
+    # baseline stage refuses to archive a result whose process exited non-zero
+    # and aborts the stage, discarding exactly the run this whole change exists
+    # to rescue.
+    reported = "  ".join(
+        f"{name}={value:.4f}" for name, value in sorted(result["metrics"].items())
+    )
+    print(f"  {reported}  composite={result['composite']:.4f}".lstrip())
+    if result.get("error"):
+        print(f"  {result['error']}")
     print(f"  result.json written to {os.path.abspath('result.json')}")
 
 

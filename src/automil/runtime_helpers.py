@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import numbers
 import os
 import signal
 import sys
@@ -62,10 +63,28 @@ def json_safe(value: object) -> object:
     difference is that the failure is now scoped to the field that is actually
     broken instead of condemning the file.
 
+    Numpy scalars are covered, via ``numbers.Real`` rather than ``float``.
+    ``np.float64`` subclasses ``float`` but ``np.float32`` does NOT, so an
+    ``isinstance(value, float)`` test silently skips a ``np.float32`` NaN and
+    lets it reach ``json.dumps``, which then raises ``TypeError`` (numpy scalars
+    are not JSON-serializable at all) — inside the SIGTERM handler, that costs
+    the whole partial flush. Finite numpy scalars are narrowed to their Python
+    equivalent for the same reason: this function's contract is that whatever it
+    returns can actually be serialized. ``bool`` is checked first because it is
+    an ``Integral`` subclass and must stay JSON ``true``/``false`` rather than
+    being narrowed to 1/0. ``numbers`` is stdlib, so this costs the framework no
+    numpy dependency.
+
     Never mutates the input: containers are rebuilt, not edited in place.
     """
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, numbers.Real):
+        if not math.isfinite(value):
+            return None
+        if isinstance(value, float):
+            return value
+        return int(value) if isinstance(value, numbers.Integral) else float(value)
     if isinstance(value, dict):
         return {k: json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

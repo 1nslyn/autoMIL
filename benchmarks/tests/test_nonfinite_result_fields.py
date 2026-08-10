@@ -147,16 +147,40 @@ class TestUnestimableComposite:
         )
         validate_result(result)   # must not raise
 
-    def test_one_unestimable_component_keeps_the_other(self):
-        """val_bacc survives when val_auc is unestimable; composite matches CR-1b."""
+    def test_one_unestimable_component_voids_the_whole_composite(self):
+        """All-or-nothing: no half-scale composite may escape (review finding).
+
+        Reporting val_bacc alone would put this node on a different estimand from
+        every sibling scored on (auc+bacc)/2 -- and `status: partial` does NOT
+        contain that: it keeps the node out of KEEP_CLASS but not out of being a
+        PARENT, and terminal_writer gates a child against `parent["composite"]`
+        with no partial check. A half-scale bar would silently decide a completed
+        child's keep/discard, biased one way because bacc < auc in practice.
+        """
         m = _load_run_experiment()
         result = m.summary_to_result_json(
             _summary([NAN] * 5, [0.60] * 5, val_auc=NAN, val_bacc=0.60), 10.0,
         )
 
         assert result["status"] == "partial"
-        assert result["metrics"] == {"val_bacc": 0.60}
-        assert result["composite"] == pytest.approx(0.60)
+        assert result["metrics"] == {}
+        assert result["composite"] == 0.0
+        assert "val_auc" in result["error"]
+
+    def test_the_composite_is_never_a_partial_scale(self):
+        """CR-1b must agree, or terminal_writer overwrites the selection signal."""
+        from automil.scoring import composite_disagrees, recompute_composite
+
+        m = _load_run_experiment()
+        for summary in (
+            _summary([0.70] * 5, [0.60] * 5),                          # healthy
+            _summary([NAN] * 5, [0.60] * 5, val_auc=NAN, val_bacc=0.60),
+            _summary([NAN] * 5, [NAN] * 5, val_auc=NAN, val_bacc=NAN),
+        ):
+            result = m.summary_to_result_json(summary, 10.0)
+            recomputed = recompute_composite(result["metrics"])
+            if recomputed is not None:
+                assert not composite_disagrees(result["composite"], recomputed)
 
     def test_a_healthy_run_is_untouched(self):
         m = _load_run_experiment()
@@ -207,3 +231,40 @@ class TestWriteFoldResultJson:
         assert payload["held_out"] == {"test_auc": 0.78, "test_bacc": 0.68}
         assert payload["composite"] == pytest.approx(0.75)
         assert payload["status"] == "completed"
+
+
+class TestMainDoesNotCrashOnAPartialResult:
+    """`metrics` can now be empty; main()'s summary print must survive that.
+
+    It indexed result["metrics"]["val_auc"] directly. That raised KeyError AFTER
+    result.json was already written, so the damage was not a lost result but a
+    non-zero exit -- and the campaign's native-baseline stage refuses to archive
+    a result whose process exited non-zero, aborting the stage and discarding
+    exactly the run this change exists to rescue.
+    """
+
+    @pytest.mark.parametrize("metrics", [
+        {},                                       # nothing estimable
+        {"val_bacc": 0.60},                       # historical half-metrics shape
+        {"val_auc": 0.70, "val_bacc": 0.60},      # healthy
+        {"val_c_index": 0.61},                    # survival
+    ])
+    def test_summary_print_formats_any_metrics_shape(self, metrics, capsys):
+        result = {"metrics": metrics, "composite": 0.65, "error": "unestimable: val_auc"}
+
+        reported = "  ".join(
+            f"{name}={value:.4f}" for name, value in sorted(result["metrics"].items())
+        )
+        line = f"  {reported}  composite={result['composite']:.4f}".lstrip()
+
+        assert "composite=0.6500" in line
+        for name in metrics:
+            assert name in line
+
+    def test_the_real_main_block_has_no_direct_metric_indexing(self):
+        """Guard the fix itself — a future edit reintroducing [] would re-break it."""
+        src = (
+            Path(__file__).resolve().parents[1] / "scripts" / "run_experiment.py"
+        ).read_text()
+        assert "result['metrics']['val_auc']" not in src
+        assert "result['metrics']['val_c_index']" not in src

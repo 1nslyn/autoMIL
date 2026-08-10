@@ -270,8 +270,8 @@ class TestMultiClassSensitivitySpecificity:
         y_pred = y_true.copy()
         y_probs = np.eye(3)[y_pred]
         m = compute_extended_metrics(y_true, y_probs, y_pred, 3)
-        assert m["sensitivity"] == 1.0
-        assert m["specificity"] == 1.0
+        assert m["macro_recall"] == 1.0
+        assert m["macro_specificity_ovr"] == 1.0
 
     def test_macro_average_matches_hand_computation(self):
         # 3 classes, 2 samples each; class 1 is fully confused into class 2.
@@ -280,11 +280,11 @@ class TestMultiClassSensitivitySpecificity:
         y_probs = np.eye(3)[y_pred]
         m = compute_extended_metrics(y_true, y_probs, y_pred, 3)
         # recall:      class0 2/2, class1 0/2, class2 2/2  -> 2/3
-        assert m["sensitivity"] == pytest.approx(2 / 3)
+        assert m["macro_recall"] == pytest.approx(2 / 3)
         # specificity: class0 TN=4 FP=0 -> 1.0
         #              class1 TN=4 FP=0 -> 1.0
         #              class2 TN=2 FP=2 -> 0.5
-        assert m["specificity"] == pytest.approx(5 / 6)
+        assert m["macro_specificity_ovr"] == pytest.approx(5 / 6)
 
     def test_never_nan_when_a_class_is_absent_from_the_fold(self):
         """A small fold can miss a class entirely — that must not poison the macro."""
@@ -292,8 +292,8 @@ class TestMultiClassSensitivitySpecificity:
         y_pred = np.array([0, 1, 1, 1])
         y_probs = np.eye(3)[y_pred]
         m = compute_extended_metrics(y_true, y_probs, y_pred, 3)
-        assert np.isfinite(m["sensitivity"])
-        assert np.isfinite(m["specificity"])
+        assert np.isfinite(m["macro_recall"])
+        assert np.isfinite(m["macro_specificity_ovr"])
 
     @pytest.mark.parametrize("n_classes", [3, 4, 5])
     def test_multiclass_metrics_are_always_finite(self, n_classes):
@@ -303,8 +303,8 @@ class TestMultiClassSensitivitySpecificity:
         y_pred = rng.integers(0, n_classes, size=20)
         y_probs = np.eye(n_classes)[y_pred]
         m = compute_extended_metrics(y_true, y_probs, y_pred, n_classes)
-        assert np.isfinite(m["sensitivity"])
-        assert np.isfinite(m["specificity"])
+        assert np.isfinite(m["macro_recall"])
+        assert np.isfinite(m["macro_specificity_ovr"])
 
     def test_binary_formula_is_unchanged(self):
         """Binary stays positive-class-only, NOT macro-averaged."""
@@ -314,3 +314,44 @@ class TestMultiClassSensitivitySpecificity:
         m = compute_extended_metrics(y_true, y_probs, y_pred, 2)
         assert m["sensitivity"] == 1.0    # 2/2 positives recovered
         assert m["specificity"] == 0.5    # 1/2 negatives correct (macro would be 0.75)
+
+    def test_the_two_shapes_never_share_a_key(self):
+        """Binary and multi-class are different scales; one column would mislead."""
+        y_true = np.array([0, 0, 1, 1])
+        y_pred = np.array([0, 1, 1, 1])
+
+        binary = compute_extended_metrics(y_true, np.eye(2)[y_pred], y_pred, 2)
+        multi = compute_extended_metrics(y_true, np.eye(3)[y_pred], y_pred, 3)
+
+        assert {"sensitivity", "specificity"} <= set(binary)
+        assert {"sensitivity", "specificity"}.isdisjoint(multi)
+        assert {"macro_recall", "macro_specificity_ovr"} <= set(multi)
+        assert {"macro_recall", "macro_specificity_ovr"}.isdisjoint(binary)
+
+    @pytest.mark.parametrize("n_classes", [3, 4, 5])
+    def test_macro_recall_is_exactly_balanced_accuracy(self, n_classes):
+        """Pin the documented identity so nobody reports them as independent.
+
+        Macro one-vs-rest recall IS balanced accuracy by definition. Both PR-48
+        reviewers found this independently; the name and the docstring exist so a
+        results table cannot present the same number twice as two findings.
+        """
+        from sklearn.metrics import balanced_accuracy_score
+
+        rng = np.random.default_rng(19)
+        for _ in range(50):
+            y_true = rng.integers(0, n_classes, size=25)
+            y_pred = rng.integers(0, n_classes, size=25)
+            m = compute_extended_metrics(y_true, np.eye(n_classes)[y_pred], y_pred, n_classes)
+            assert m["macro_recall"] == pytest.approx(
+                balanced_accuracy_score(y_true, y_pred), abs=1e-12,
+            )
+            assert m["macro_recall"] == pytest.approx(m["balanced_accuracy"], abs=1e-12)
+
+    def test_an_empty_split_is_nan_not_zero(self):
+        """'Not estimable' must not be fabricated into 'scored zero'."""
+        from autobench.pipeline.evaluate import _macro_sensitivity_specificity
+
+        recall, spec = _macro_sensitivity_specificity(np.zeros((3, 3), dtype=int))
+        assert np.isnan(recall)
+        assert np.isnan(spec)

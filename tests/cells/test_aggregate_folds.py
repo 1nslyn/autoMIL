@@ -222,3 +222,38 @@ def test_non_finite_composite_fold_is_skipped(tmp_path: Path) -> None:
 
     assert result["partial_folds"] == 1
     assert result["composite"] == pytest.approx(0.80, rel=1e-6)
+
+
+def test_null_composite_fold_contributes_no_metrics_either(tmp_path: Path) -> None:
+    """`composite` and `metrics` must describe the SAME fold set (review finding).
+
+    Keeping a dropped fold's surviving metric left `composite` averaged over N
+    folds and `metrics` over N+1. CR-1b recomputes the composite from `metrics`,
+    so the two disagreed past COMPOSITE_TOLERANCE — which fires terminal_writer's
+    VAL-FIREWALL ERROR ("may have been computed from test") on a benign coverage
+    mismatch, and then lets the mixed-denominator recompute WIN and become the
+    node's authoritative selection signal.
+    """
+    from automil.scoring import composite_disagrees, recompute_composite
+
+    for i in range(3):
+        _write_fold(tmp_path, i, composite=0.75,
+                    metrics={"val_auc": 0.80, "val_bacc": 0.70})
+    # A single-class val fold: AUC unestimable, balanced accuracy perfectly fine.
+    (tmp_path / "fold_3_result.json").write_text(json.dumps({
+        "fold_index": 3, "fold_count": 5, "status": "completed",
+        "metrics": {"val_auc": None, "val_bacc": 0.61},
+        "held_out": {"test_auc": None, "test_bacc": 0.59},
+        "composite": None, "elapsed_seconds": 40, "peak_vram_mb": 100,
+    }))
+
+    result = aggregate_folds(tmp_path, expected_fold_count=5)
+
+    assert result["partial_folds"] == 3
+    assert result["metrics"] == {"val_auc": pytest.approx(0.80),
+                                 "val_bacc": pytest.approx(0.70)}
+    assert result["held_out"] == {}  # the 3 healthy folds carried no held_out
+    recomputed = recompute_composite(result["metrics"])
+    assert not composite_disagrees(result["composite"], recomputed)
+    # the dropped fold still ran, so its resource usage is accounted
+    assert result["elapsed_seconds"] == 340
