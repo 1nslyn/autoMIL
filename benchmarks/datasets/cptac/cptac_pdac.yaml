@@ -23,6 +23,14 @@ tasks:
       1: "medium"
       2: "high"
     n_classes: 3
+    # NOT marked ordinal, deliberately. The names low/medium/high look like a
+    # rank, but the upstream task definition governs: Patho-Bench's
+    # cptac_pda/Immune_class specifies metric `bacc` and treats this as ordinary
+    # multi-class TME subtyping -- unlike its cptac_hnsc/Histologic_Grade, which
+    # specifies `weighted_kappa`. Both were read directly from the upstream
+    # configs. Marking this ordinal would put a QWK term in the composite that
+    # the source task does not use, and break comparability with Patho-Bench for
+    # the sake of an ordering inferred from label names alone.
   os:
     task_type: survival
     event_col: OS_event

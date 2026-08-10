@@ -96,6 +96,13 @@ class TaskDef:
     time_col: str | None = None
     survival_losses: list[str] = field(default_factory=lambda: ["cox"])
     nll_bins: int = 4
+    #: Classes are ORDERED, so distance between them is meaningful (grade
+    #: g1<g2<g3, immune_class low<medium<high). Enables ``qwk``, the only
+    #: metric that uses the ordering -- everything else scores a g1->g3 error
+    #: exactly like a g1->g2 one. Declared per task in the dataset YAML because
+    #: nothing in the label map itself says whether the integers are ranks or
+    #: just identifiers.
+    ordinal: bool = False
 
 
 @dataclass
@@ -212,6 +219,7 @@ def _parse_tasks(raw: dict[str, Any]) -> dict[str, TaskDef]:
                 label_col=tdef["label_col"],
                 label_map=label_map,
                 n_classes=n_classes,
+                ordinal=bool(tdef.get("ordinal", False)),
             )
     return tasks
 

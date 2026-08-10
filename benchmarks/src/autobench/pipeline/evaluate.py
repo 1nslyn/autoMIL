@@ -21,6 +21,7 @@ from sklearn.metrics import (
     accuracy_score,
     auc as sk_auc,
     balanced_accuracy_score,
+    cohen_kappa_score,
     confusion_matrix,
     f1_score,
     roc_auc_score,
@@ -34,8 +35,17 @@ def compute_extended_metrics(
     y_probs: np.ndarray,
     y_pred: np.ndarray,
     n_classes: int,
+    ordinal: bool = False,
 ) -> dict[str, float]:
-    """Compute comprehensive classification metrics for one evaluation split."""
+    """Compute comprehensive classification metrics for one evaluation split.
+
+    ``ordinal`` marks a task whose classes are ORDERED (TCGA-HNSC ``grade``
+    g1<g2<g3, CPTAC-PDAC ``immune_class`` low<medium<high). It adds ``qwk``,
+    which is the field standard for graded pathology targets and the only
+    metric here that uses the ordering at all -- every other metric treats a
+    g1->g3 error exactly like a g1->g2 one. Off by default so nominal
+    multi-class tasks are unaffected.
+    """
     metrics: dict[str, float] = {}
 
     # AUC-ROC
@@ -69,8 +79,47 @@ def compute_extended_metrics(
         metrics["f1"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
 
     metrics.update(sensitivity_specificity(y_true, y_pred, n_classes))
+    if ordinal:
+        metrics["qwk"] = quadratic_weighted_kappa(y_true, y_pred, n_classes)
 
     return metrics
+
+
+def quadratic_weighted_kappa(
+    y_true: np.ndarray, y_pred: np.ndarray, n_classes: int,
+) -> float:
+    """Cohen's kappa with quadratic weights, for ORDERED classes.
+
+    The only metric in this module that uses the class ordering. ``accuracy``,
+    ``balanced_accuracy``, ``f1`` and the macro pair all treat a g1->g3 error
+    exactly like a g1->g2 one; QWK penalises by squared distance, so confusing
+    adjacent grades costs far less than confusing the extremes. It is the
+    standard primary metric for graded pathology targets (ISUP/Gleason grading
+    challenges report it as such), which is why it is worth adding for
+    ``grade`` and ``immune_class`` specifically.
+
+    ``labels=range(n_classes)`` is passed explicitly so a fold that happens to
+    miss a class still produces a K x K matrix and stays comparable across
+    folds; without it sklearn infers labels from the data and the weighting
+    changes shape fold to fold.
+
+    Returns the RAW value, which lives in [-1, 1] and is negative when
+    agreement is worse than chance. Clamping is a selection-policy decision and
+    belongs to the caller that builds the composite (see run_experiment.py), not
+    to the measurement -- the campaign's fold-composite validator requires
+    [0, 1], but a diagnostic should still be able to say "worse than chance".
+
+    NaN when kappa is undefined (a fold where every sample, true and predicted,
+    is one single class -- zero expected disagreement). That serializes to JSON
+    ``null`` and is honest: it is not a zero.
+    """
+    try:
+        value = float(cohen_kappa_score(
+            y_true, y_pred, weights="quadratic", labels=list(range(n_classes)),
+        ))
+    except ValueError:
+        return float("nan")
+    return value
 
 
 def sensitivity_specificity(
@@ -405,3 +454,38 @@ def compute_confidence_intervals(
         }
 
     return results
+
+
+def write_predictions_csv(
+    path: str,
+    slide_ids: list,
+    y_true: np.ndarray,
+    y_probs: np.ndarray,
+    y_pred: np.ndarray,
+) -> None:
+    """Persist one split's per-slide predictions, in CLAM's existing column set.
+
+    ``slide_id, y_true, y_prob_0..y_prob_<K-1>, y_hat`` -- the format
+    ``clam/train.py`` already writes, so every arm becomes readable by the same
+    tooling. Until now only CLAM (test split) and nnMIL (its own differently
+    shaped CSV) saved anything; abmil / dtfd / titan wrote nothing but
+    ``metrics.json``, which meant a metric that was not computed at training
+    time could never be recovered without a full retrain -- no confusion matrix,
+    and not even a checkpoint to re-infer from.
+
+    Writing these makes any future confusion-matrix-derived metric (per-class
+    recall, QWK, specificity) a recomputation instead of a re-run.
+    """
+    import csv as _csv
+    import os as _os
+
+    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+    y_probs = np.atleast_2d(np.asarray(y_probs))
+    with open(path, "w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["slide_id", "y_true"]
+                   + [f"y_prob_{i}" for i in range(y_probs.shape[1])] + ["y_hat"])
+        for i in range(len(y_true)):
+            sid = slide_ids[i] if slide_ids is not None and i < len(slide_ids) else f"sample_{i}"
+            w.writerow([sid, int(y_true[i])]
+                       + [float(x) for x in y_probs[i]] + [int(y_pred[i])])

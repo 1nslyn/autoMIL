@@ -318,6 +318,22 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
             "val_auc": _finite_or_none(val.get("auc_roc", {}).get("mean")),
             "val_bacc": _finite_or_none(val.get("balanced_accuracy", {}).get("mean")),
         }
+        # ORDINAL tasks (grade g1<g2<g3, immune_class low<medium<high) add QWK to
+        # the selection signal. It is the only component that uses the ordering:
+        # auc and bacc both score a g1->g3 error exactly like a g1->g2 one, and on
+        # a 3-class fold that is most of the information in the confusion matrix.
+        #
+        # Clamped at 0 because kappa is defined on [-1, 1] while the campaign's
+        # fold-composite validator requires [0, 1] (campaign_stages.py:395), and
+        # because for SELECTION purposes every below-chance model is equally
+        # useless -- the ordering among them is not worth preserving. The raw,
+        # unclamped value stays available in the sealed `summary` block and is
+        # recomputable from predictions.csv. Clamping is deliberately done HERE,
+        # as selection policy, not inside evaluate.quadratic_weighted_kappa, which
+        # reports the honest measurement.
+        if "qwk" in val:
+            qwk = _finite_or_none(val.get("qwk", {}).get("mean"))
+            candidates["val_qwk"] = None if qwk is None else max(0.0, qwk)
         held_out_candidates = {
             "test_auc": _finite_or_none(test.get("auc_roc", {}).get("mean")),
             "test_bacc": _finite_or_none(test.get("balanced_accuracy", {}).get("mean")),
@@ -402,11 +418,47 @@ def summary_to_result_json(summary: dict, elapsed: float) -> dict:
 
     composite_se = cross_fold_se(valid_fold_composites)
 
+    # AGENT-VISIBLE DIAGNOSTICS, deliberately OUTSIDE `metrics`.
+    #
+    # CR-1b recomputes the composite as the mean of every value in `metrics`, so
+    # anything added there becomes part of the selection signal. These are not
+    # selection signals -- they are how the agent tells apart failures that the
+    # composite reports identically. `diagnostics` is not in
+    # terminal_writer's sealed set ("held_out", "summary"), so unlike those it
+    # survives into the agent-facing archive/<node>/result.json.
+    #
+    # Why sensitivity/specificity specifically: bacc = (sens + spec)/2, so bacc
+    # keeps their SUM and discards the SPLIT -- and the split is where the real
+    # difference lives. Measured across this benchmark's binary folds, the median
+    # |sens - spec| is 0.32-0.65 depending on task, and models with the SAME bacc
+    # sit at opposite operating points (luad/kras: bacc 0.540 with sens 0.15 /
+    # spec 0.93, vs bacc 0.541 with sens 0.88 / spec 0.20). AUC does not cover
+    # this either -- it is threshold-free, so it says nothing about where the
+    # operating point landed. An agent seeing only bacc 0.54 concludes "this
+    # recipe is near chance, abandon it", when the recipe may be fine and merely
+    # collapsed onto the majority class (kras is 37:63), which is a much cheaper
+    # fix: class weights, balanced sampling, threshold.
+    #
+    # Information-theoretically this is ONE new degree of freedom, not two:
+    # given accuracy and the fold's class counts, sens and spec are exactly
+    # recoverable from bacc. Exposing them directly rather than accuracy is a
+    # readability choice -- the agent should not have to redo that algebra.
+    diagnostics = {
+        name: round(value, 4)
+        for name, value in (
+            ("val_sensitivity", _finite_or_none(val.get("sensitivity", {}).get("mean"))),
+            ("val_specificity", _finite_or_none(val.get("specificity", {}).get("mean"))),
+            ("val_accuracy", _finite_or_none(val.get("accuracy", {}).get("mean"))),
+        )
+        if value is not None
+    }
+
     # ``metrics`` is agent-facing (val only); ``held_out`` (test) + ``summary``
     # are sealed into certify.json by terminal_writer — never seen during search.
     result = {
         "status": status,
         "metrics": metrics,
+        "diagnostics": diagnostics,
         "held_out": held_out,
         "composite": composite if "c_index" in test else round(composite, 4),
         "composite_se": composite_se,

@@ -22,6 +22,10 @@ tasks:
       1: "g2"
       2: "g3"
     n_classes: 3
+    # g1 < g2 < g3 is a rank, not just an id: confusing g1 with g3 is a worse
+    # error than confusing g1 with g2. Enables qwk, the only metric that scores
+    # it that way.
+    ordinal: true
   os:
     task_type: survival
     event_col: OS_event

@@ -68,6 +68,11 @@ _NNMIL_TO_SHARED: dict[str, str] = {
     "specificity": "specificity",
     "macro_recall": "macro_recall",
     "macro_specificity_ovr": "macro_specificity_ovr",
+    # Ordinal tasks only, and supplied by the same add-on using the SAME shared
+    # implementation every other arm calls -- not nnMIL's own `kappa`, which is
+    # also quadratic but infers its label set from the data rather than pinning
+    # labels=range(n_classes), so it drifts on a fold that misses a class.
+    "qwk": "qwk",
 }
 
 #: The multi-class half of that pair. Their presence means the add-on ran on a

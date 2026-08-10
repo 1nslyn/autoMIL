@@ -8,6 +8,8 @@ metric) with best-state restore -- same discipline as ``dtfd/train.py``.
 
 from __future__ import annotations
 
+import os
+
 import copy
 import random
 import time
@@ -19,7 +21,7 @@ from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSlide
 from autobench.pipeline.abmil.model import build_abmil_model
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.evaluate import compute_extended_metrics
+from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
@@ -60,8 +62,16 @@ def _evaluate(
     slides: list[ABMILSlide],
     num_classes: int,
     device: torch.device,
+    ordinal: bool = False,
+    predictions_path: str | None = None,
 ) -> dict[str, float]:
-    """Evaluate a split -> shared-schema metrics dict."""
+    """Evaluate a split -> shared-schema metrics dict.
+
+    ``predictions_path`` persists the per-slide predictions so any
+    confusion-matrix-derived metric added later is a recomputation rather than a
+    retrain. This arm previously saved nothing but metrics.json -- not even a
+    checkpoint -- so a missing metric was unrecoverable.
+    """
     model.eval()
 
     probs: list[np.ndarray] = []
@@ -76,7 +86,13 @@ def _evaluate(
     y_probs = np.vstack(probs)  # [num_slides, num_classes]
     y_true = np.asarray(labels, dtype=int)
     y_pred = y_probs.argmax(axis=1)
-    return compute_extended_metrics(y_true, y_probs, y_pred, num_classes)
+    if predictions_path:
+        write_predictions_csv(
+            predictions_path,
+            [getattr(sl, "slide_id", None) for sl in slides],
+            y_true, y_probs, y_pred,
+        )
+    return compute_extended_metrics(y_true, y_probs, y_pred, num_classes, ordinal=ordinal)
 
 
 def _val_auc(metrics: dict[str, float]) -> float:
@@ -96,6 +112,8 @@ def train_abmil_fold(
     device: torch.device,
     seed: int,
     policy_runtime: PolicyRuntime | None = None,
+    ordinal: bool = False,
+    fold_dir: str | None = None,
 ) -> dict:
     """Train one ABMIL fold and return shared-schema test/val metrics.
 
@@ -133,7 +151,7 @@ def train_abmil_fold(
             _train_one_epoch(model, train_slides, ce_cri, optimizer, device, py_rng)
 
             if val_slides:
-                cur_metrics = _evaluate(model, val_slides, num_classes, device)
+                cur_metrics = _evaluate(model, val_slides, num_classes, device, ordinal=ordinal)
                 cur = _val_auc(cur_metrics)
                 if cur > best_auc:
                     best_auc = cur
@@ -152,10 +170,12 @@ def train_abmil_fold(
             model.load_state_dict(best_snap)
 
         test_metrics = (
-            _evaluate(model, test_slides, num_classes, device) if test_slides else {}
+            _evaluate(model, test_slides, num_classes, device, ordinal=ordinal,
+                      predictions_path=(os.path.join(fold_dir, "predictions.csv") if fold_dir else None)) if test_slides else {}
         )
         val_metrics = (
-            _evaluate(model, val_slides, num_classes, device) if val_slides else {}
+            _evaluate(model, val_slides, num_classes, device, ordinal=ordinal,
+                      predictions_path=(os.path.join(fold_dir, "predictions_val.csv") if fold_dir else None)) if val_slides else {}
         )
 
         return {

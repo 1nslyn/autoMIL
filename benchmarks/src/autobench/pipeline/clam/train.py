@@ -181,6 +181,7 @@ def train_fold(
 
     test_metrics = compute_extended_metrics(
         all_labels, all_probs, all_preds, exp_cfg.task.n_classes,
+        ordinal=exp_cfg.task.ordinal,
     )
 
     # Re-run summary on val to get extended val metrics
@@ -203,6 +204,7 @@ def train_fold(
         val_preds = val_probs.argmax(axis=1)
         val_metrics = compute_extended_metrics(
             val_labels, val_probs, val_preds, exp_cfg.task.n_classes,
+            ordinal=exp_cfg.task.ordinal,
         )
     else:
         val_metrics = {"auc_roc": val_auc, "accuracy": val_acc}

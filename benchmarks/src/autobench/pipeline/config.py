@@ -60,6 +60,9 @@ class TaskConfig:
     time_col: str | None = None
     survival_losses: list[str] = field(default_factory=lambda: ["cox"])
     nll_bins: int = 4
+    #: Ordered classes (see autobench.config.TaskDef.ordinal). Threaded through
+    #: to compute_extended_metrics so ``qwk`` is emitted for these tasks only.
+    ordinal: bool = False
 
 
 @dataclass
@@ -377,6 +380,7 @@ def build_registries(ds: DatasetConfig) -> Registries:
             label_col=tdef.label_col,
             label_dict=label_dict,
             n_classes=tdef.n_classes,
+            ordinal=bool(getattr(tdef, "ordinal", False)),
         )
 
     # Models (CLAM models are universal)
