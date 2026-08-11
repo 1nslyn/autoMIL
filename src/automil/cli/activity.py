@@ -33,6 +33,7 @@ def ingest() -> None:
     )
     from automil.cells.activity import (
         ActivityError,
+        close_dead_session,
         finalize_session_end,
         record_hook_event,
     )
@@ -44,19 +45,36 @@ def ingest() -> None:
             # race to any concurrent scrape and stranded the session open
             # forever once the exporter died with the runtime.
             try:
-                exposition = fetch_activity_exposition(
-                    url=activity_metrics_url(project_exporter_port(automil_dir))
-                )
-            except ActivityError as exc:
-                raise ActivityError(
-                    "cannot read this session's final Claude active-time "
-                    f"metric before SessionEnd: {exc}"
-                ) from exc
+                port = project_exporter_port(automil_dir)
             except ValueError as exc:
                 # A malformed activity.exporter_port declaration, surfaced
                 # with the config path rather than as an endpoint failure.
+                # Never fall back on this: the exporter was never addressed.
                 raise ActivityError(str(exc)) from exc
-            finalize_session_end(automil_dir, payload, exposition)
+            try:
+                exposition = fetch_activity_exposition(
+                    url=activity_metrics_url(port)
+                )
+            except ActivityError as exc:
+                # The exporter dies with the runtime that hosts it, so a
+                # SessionEnd scrape races its own teardown and loses often
+                # enough to matter. Refusing here stranded the session open
+                # and left the cell unfinalizable until an operator ran
+                # `activity close` by hand -- for a runtime that had in fact
+                # exited cleanly, making every such attestation misstate what
+                # happened. The last durable sample is already on disk and is
+                # exactly what that manual recovery would have promoted, so
+                # promote it here instead and mark who decided.
+                close_dead_session(
+                    automil_dir,
+                    payload.get("session_id"),
+                    "SessionEnd hook ran but the activity exporter was already "
+                    f"unreachable ({exc}); finalized from the last durable "
+                    "active-time sample on disk",
+                    finalized_by="hook-exporter-unreachable",
+                )
+            else:
+                finalize_session_end(automil_dir, payload, exposition)
         else:
             # Hooks identify the runtime session, not a mutable config-derived
             # cell. Submit binds this project-local session once it resolves
