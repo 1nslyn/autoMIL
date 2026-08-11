@@ -49,6 +49,38 @@ def load_completed(benchmark_dir: str) -> set[str]:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def reconcile_completed(
+    benchmark_dir: str,
+    experiments: list["ExperimentConfig"],
+    completed: set[str],
+) -> set[str]:
+    """Drop ledger entries whose ``summary.json`` is no longer on disk.
+
+    ``_completed.json`` is a *cache* of a fact that lives on disk, and the two
+    drift apart the moment a results directory moves: archiving a stale cell,
+    clearing one arm to re-run it, a purge that misses the ledger. Nothing
+    rewrites the ledger when that happens, so it goes on claiming completion
+    for a cell with nothing behind it.
+
+    Trusting it then fails twice over. The run skips the cell — so a re-run
+    meant to make every arm homogeneous silently leaves some arms on old
+    results — and then ``_collect_all_summaries_or_raise`` kills the job at the
+    very end looking for the summary that was never there. Hours of real work
+    land on disk and the job still exits non-zero.
+
+    Disk is the source of truth: a cell counts as completed only if its summary
+    really exists. Anything else goes back in the pending queue, where the
+    per-fold cache still short-circuits whatever work survives, so a cell that
+    lost only its summary is rebuilt cheaply rather than retrained.
+    """
+    return {
+        exp.experiment_id
+        for exp in experiments
+        if exp.experiment_id in completed
+        and _load_or_collect_summary(benchmark_dir, exp) is not None
+    }
+
+
 def mark_completed(benchmark_dir: str, experiment_id: str) -> None:
     os.makedirs(os.path.join(benchmark_dir, "results"), exist_ok=True)
     path = _completed_path(benchmark_dir)
@@ -449,7 +481,9 @@ def run_benchmark(
         _prepare_titan_plans(cfg, titan_experiments, registries=registries, dataset_name=dataset_name)
 
     experiments.sort(key=lambda e: (e.encoder_key, e.task.name, e.model.model_type))
-    completed = load_completed(cfg.benchmark_dir)
+    completed = reconcile_completed(
+        cfg.benchmark_dir, experiments, load_completed(cfg.benchmark_dir),
+    )
     print(f"\nTotal experiments: {len(experiments)}  "
           f"(already completed: {len(completed)})")
 
@@ -620,7 +654,9 @@ def run_benchmark_multigpu(
         _prepare_titan_plans(cfg, titan_experiments, registries=registries, dataset_name=dataset_name)
 
     expected_experiment_ids = {e.experiment_id for e in experiments}
-    completed = load_completed(cfg.benchmark_dir)
+    completed = reconcile_completed(
+        cfg.benchmark_dir, experiments, load_completed(cfg.benchmark_dir),
+    )
     pending = [e for e in experiments if e.experiment_id not in completed]
     failed_records = load_failed(cfg.benchmark_dir)
     n_failed_history = sum(1 for eid in expected_experiment_ids if eid in failed_records)
