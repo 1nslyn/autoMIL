@@ -124,14 +124,29 @@ inside this cell's `automil/` and the overlay is copied at submit time.
 after the first submit, start a persistent Monitor on the orchestrator log:
 
 ```bash
-tail -n 0 -F "$PWD/automil/orchestrator/orchestrator.log" 2>/dev/null \
-  | grep --line-buffered -E "Completed node_|Launched node_|crash"
+( tail -n 0 -F "$PWD/automil/orchestrator/orchestrator.log" 2>/dev/null &
+  while :; do sleep 60
+    [ -z "$(find "$PWD/automil/orchestrator/queue" \
+                 "$PWD/automil/orchestrator/running" \
+                 -type f -name '*.json' -print -quit 2>/dev/null)" ] \
+      && echo "ALL_IDLE $(date -Is)"
+  done ) | grep --line-buffered -E "Completed node_|Launched node_|crash|ALL_IDLE"
 ```
 
 Use `persistent: true` and an absolute path. When a `Completed` event
 arrives: reconcile, read the result, update `automil/learnings.md`, queue
 the next work. Keep the queue non-empty while attempts remain, but do not
 edit orchestrator or GPU settings — scheduling is the operator's side.
+
+The `ALL_IDLE` line is the drain signal, and it is why this Monitor is
+written as a group rather than a bare `tail`. A completion event only fires
+while the log is still being written; when the last launched attempt of a
+batch finishes, the log goes quiet and no further event can wake you. Without
+a signal that outlives the log, you would wait on a batch that already ended.
+The `while` loop supplies that signal from the queue and running directories,
+so the loop stays event-driven and costs you no active time. On `ALL_IDLE`,
+reconcile and decide: queue the next batch if attempts remain, or report to
+the operator that discovery is complete.
 
 **LEARN.** `uv run --project "$REPO_ROOT" automil reconcile`; read results;
 update `automil/learnings.md` (what worked / failed / near-miss, with paper
