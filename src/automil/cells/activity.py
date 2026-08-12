@@ -28,6 +28,11 @@ ACTIVE_TIME_METRIC = "claude_code.active_time.total"
 
 _LOCK_FILENAME = ".activity.lock"
 _SAMPLES_SCHEMA_VERSION = 1
+# Who finalized a session that could not be closed by a live scrape. Both
+# promote the same stored sample, so the ledger needs them kept apart: an
+# operator ran the recovery command by hand, or the SessionEnd hook itself
+# ran on time and found the exporter already torn down with its runtime.
+_FINALIZED_BY = frozenset({"operator-close", "hook-exporter-unreachable"})
 _PROMETHEUS_METRIC_NAMES = {
     ACTIVE_TIME_METRIC,
     ACTIVE_TIME_METRIC.replace(".", "_"),
@@ -253,6 +258,7 @@ def close_dead_session(
     automil_dir: Path | str,
     session_id: str,
     attestation: str,
+    finalized_by: str = "operator-close",
 ) -> float:
     """Operator-attested SessionEnd for a runtime that died without its hook.
 
@@ -265,9 +271,23 @@ def close_dead_session(
     hook. The caller must first verify the exporter no longer serves this
     session; a live session ends through its own hook. Returns the attested
     final cumulative active seconds.
+
+    ``finalized_by`` records who took that decision and must stay meaningful
+    in the ledger: an operator reaching for the recovery command is not the
+    same event as a SessionEnd hook that ran on time and found the exporter
+    already gone (``hook-exporter-unreachable``). Both promote the same stored
+    sample, so only this field distinguishes them afterwards.
     """
 
     sid = _identifier(session_id, "session_id")
+    marker = finalized_by.strip() if isinstance(finalized_by, str) else ""
+    if marker not in _FINALIZED_BY:
+        # Reject here, not on the next read: the journal is append-only, so a
+        # marker the replay validator refuses would leave the cell with a
+        # ledger it can no longer parse.
+        raise ActivityError(
+            "finalized_by must be one of " + ", ".join(sorted(_FINALIZED_BY))
+        )
     text = attestation.strip() if isinstance(attestation, str) else ""
     if not text:
         raise ActivityError("operator close requires a non-empty attestation")
@@ -290,7 +310,7 @@ def close_dead_session(
             sid,
             _timestamp(time.time()),
             final_sample_observed_at=prior["observed_at"],
-            finalized_by="operator-close",
+            finalized_by=marker,
             attestation=text,
         )
         _append_event_unlocked(root, event)
@@ -838,7 +858,10 @@ def _validate_journal_event(raw: object) -> dict[str, Any]:
         if event["final_sample_observed_at"] > event["observed_at"]:
             raise ActivityError("final active-time sample is newer than SessionEnd")
         if "finalized_by" in raw or "attestation" in raw:
-            if raw.get("finalized_by") != "operator-close":
+            # A closed-set enum, not free text: the ledger has to keep saying
+            # which path finalized a session, and an unknown marker means the
+            # journal was written by something this reader cannot account for.
+            if raw.get("finalized_by") not in _FINALIZED_BY:
                 raise ActivityError("invalid finalized_by for session_end")
             attestation = raw.get("attestation")
             if (

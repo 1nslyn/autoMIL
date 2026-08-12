@@ -205,7 +205,15 @@ def test_activity_ingest_rejects_tool_payload(tmp_path, monkeypatch):
     assert "unsupported hook event" in result.output
 
 
-def test_session_end_requires_its_final_native_metric(tmp_path, monkeypatch):
+def test_session_end_without_a_durable_sample_names_both_causes(
+    tmp_path, monkeypatch,
+):
+    """Nothing to promote: refuse, but say the scrape failed *and* why it mattered.
+
+    The fallback only has standing when a durable sample exists. With none, the
+    session must stay open rather than be attested from thin air -- and the
+    operator who has to debug it needs both causes, not just the last one.
+    """
     config = _config()
     _write_config(tmp_path, config)
     monkeypatch.chdir(tmp_path)
@@ -238,7 +246,110 @@ def test_session_end_requires_its_final_native_metric(tmp_path, monkeypatch):
     )
 
     assert result.exit_code != 0
-    assert "final Claude active-time metric" in result.output
+    assert "connection refused" in result.output
+    assert "could not be promoted" in result.output
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "automil" / ".activity.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert [record["event"] for record in records] == ["session_open"]
+
+
+def test_session_end_promotes_durable_sample_when_exporter_is_already_gone(
+    tmp_path, monkeypatch,
+):
+    """The exporter dies with its runtime; SessionEnd must not lose that race.
+
+    Refusing here stranded the cell unfinalizable until an operator ran
+    `activity close` by hand, for a runtime that had exited cleanly. The
+    promoted sample is the same one that manual recovery would have used, so
+    only `finalized_by` distinguishes the two afterwards.
+    """
+    from automil.cells.activity import ingest_prometheus_metrics, record_hook_event
+
+    config = _config()
+    _write_config(tmp_path, config)
+    monkeypatch.chdir(tmp_path)
+    automil_dir = tmp_path / "automil"
+    record_hook_event(
+        automil_dir,
+        resolve_cell_identity(config).cell_id,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-123",
+            "source": "startup",
+        },
+    )
+    ingest_prometheus_metrics(
+        automil_dir,
+        'claude_code_active_time_total{session_id="session-123",type="cli"} 42\n',
+    )
+    from automil.cells.activity import ActivityError
+
+    def _dead_endpoint(**_kwargs):
+        raise ActivityError("Claude metrics endpoint unavailable: connection refused")
+
+    monkeypatch.setattr(
+        "automil.activity_metrics.fetch_activity_exposition", _dead_endpoint
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["activity", "ingest"],
+        input=json.dumps(
+            {"hook_event_name": "SessionEnd", "session_id": "session-123"}
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    records = [
+        json.loads(line)
+        for line in (automil_dir / ".activity.jsonl").read_text().splitlines()
+    ]
+    assert [record["event"] for record in records] == ["session_open", "session_end"]
+    # The hook ran on time and found the exporter gone: that is not the same
+    # ledger event as an operator reaching for the recovery command.
+    assert records[1]["finalized_by"] == "hook-exporter-unreachable"
+    assert "connection refused" in records[1]["attestation"]
+    # The promoted sample is the durable one, not a fabricated observation.
+    samples = json.loads((automil_dir / ".activity.samples.json").read_text())
+    assert (
+        records[1]["final_sample_observed_at"]
+        == samples["sessions"]["session-123"]["observed_at"]
+    )
+
+
+def test_session_end_fallback_still_refuses_a_malformed_exporter_port(
+    tmp_path, monkeypatch,
+):
+    """A port that was never addressed is not evidence the exporter is gone."""
+    config = _config()
+    config["activity"] = {"exporter_port": "not-a-port"}
+    _write_config(tmp_path, config)
+    monkeypatch.chdir(tmp_path)
+    from automil.cells.activity import record_hook_event
+
+    record_hook_event(
+        tmp_path / "automil",
+        resolve_cell_identity(config).cell_id,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-123",
+            "source": "startup",
+        },
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["activity", "ingest"],
+        input=json.dumps(
+            {"hook_event_name": "SessionEnd", "session_id": "session-123"}
+        ),
+    )
+
+    assert result.exit_code != 0
     records = [
         json.loads(line)
         for line in (tmp_path / "automil" / ".activity.jsonl")
