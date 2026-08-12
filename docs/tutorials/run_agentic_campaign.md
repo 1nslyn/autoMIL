@@ -154,11 +154,29 @@ condition — never bypass it.
   (SHA-256 over the decoded text, so newline style is normalised first). Do not
   edit it during the campaign.
 - The **first token** of `claude --version` equals the protocol's
-  `runtime_version` — the pin is the bare version, `2.1.226`, not the whole
+  `runtime_version` — the pin is the bare version, `2.1.228`, not the whole
   line the CLI prints. Pin that
   version and **turn the CLI autoupdater off on the host** — the launcher sets
   `DISABLE_AUTOUPDATER=1` for the session it starts, which cannot protect you
   from a binary that drifted between cells.
+
+  Do this at the filesystem, not in settings. `autoUpdates: false` is silently
+  ignored on a native install: the resolver only honours it when
+  `installMethod !== "native"` or `autoUpdatesProtectedForNative !== true`, and
+  the native installer sets both against you. `DISABLE_AUTOUPDATER=1` in the
+  host shell profile stops the background updater, but any session with a shell
+  can unset it, and cells run under `bypassPermissions`. The only thing a
+  non-root process cannot defeat is the immutable flag on the directory the
+  updater must write into:
+
+  ```bash
+  sudo chattr +i ~/.local/share/claude/versions
+  ```
+
+  Confirm with `lsattr -d` (look for `i`), and clear it with `chattr -i` when
+  you deliberately upgrade — then repin `runtime_version` and re-freeze. A drift
+  caught here is a refused launch; a drift missed here is a cell that attests a
+  runtime it did not run on.
 
 ### 3c. Ports and GPUs
 

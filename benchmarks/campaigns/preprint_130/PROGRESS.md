@@ -70,7 +70,7 @@ proceeds with the rule inert — so nothing upstream catches it. The zero-GPU
 
 | Item | Status | Notes |
 |---|---|---|
-| `agent_protocol.json` generated + hash-verified | ✅ | built and committed from the two sources, pinned to `claude-opus-5[1m]` / Claude Code `2.1.226` from a throwaway session; `agent_protocol_sha256` `d8d86c22…`, re-verified in CI on every push. Rebuilding requires deleting the file first — it is frozen once. The pinned model ID is what `/status` reports but is not date-anchored; note that in the disclosure |
+| `agent_protocol.json` generated + hash-verified | ✅ | built and committed from the two sources, pinned to `claude-opus-5[1m]` / Claude Code `2.1.228`; `agent_protocol_sha256` `1b28308b…`, re-verified in CI on every push. Rebuilding requires deleting the file first — it is frozen once. Re-frozen twice since the original build: once for the `ALL_IDLE` policy fix, once to repin the runtime after the host autoupdater moved it 2.1.226 → 2.1.228. The host now holds the version with `chattr +i` on the CLI `versions/` directory, so the pin only moves deliberately. The pinned model ID is what `/status` reports but is not date-anchored; note that in the disclosure |
 | Per-cell agent launcher (one fresh session, locked tool surface) | ✅ | `campaign_launch.py` — protocol-derived flags + instruction render, pinned CLI/memory surface, per-cell exporter-port exclusivity, fail-closed preflight; first real-CLI exercise happens in the Gate-1 canary |
 | Allocation request (~8,000 GPU-h) | ⬜ | re-derive from canary timings first |
 
