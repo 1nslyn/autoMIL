@@ -125,11 +125,16 @@ after the first submit, start a persistent Monitor on the orchestrator log:
 
 ```bash
 ( tail -n 0 -F "$PWD/automil/orchestrator/orchestrator.log" 2>/dev/null &
-  while :; do sleep 60
-    [ -z "$(find "$PWD/automil/orchestrator/queue" \
-                 "$PWD/automil/orchestrator/running" \
-                 -type f -name '*.json' -print -quit 2>/dev/null)" ] \
-      && echo "ALL_IDLE $(date -Is)"
+  idle_wait=60
+  while :; do sleep "$idle_wait"
+    if [ -z "$(find "$PWD/automil/orchestrator/queue" \
+                    "$PWD/automil/orchestrator/running" \
+                    -type f -name '*.json' -print -quit 2>/dev/null)" ]; then
+      echo "ALL_IDLE $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      [ "$idle_wait" -ge 1800 ] || idle_wait=$(( idle_wait * 2 ))
+    else
+      idle_wait=60
+    fi
   done ) | grep --line-buffered -E "Completed node_|Launched node_|crash|ALL_IDLE"
 ```
 
@@ -138,15 +143,24 @@ arrives: reconcile, read the result, update `automil/learnings.md`, queue
 the next work. Keep the queue non-empty while attempts remain, but do not
 edit orchestrator or GPU settings — scheduling is the operator's side.
 
-The `ALL_IDLE` line is the drain signal, and it is why this Monitor is
-written as a group rather than a bare `tail`. A completion event only fires
-while the log is still being written; when the last launched attempt of a
-batch finishes, the log goes quiet and no further event can wake you. Without
-a signal that outlives the log, you would wait on a batch that already ended.
-The `while` loop supplies that signal from the queue and running directories,
-so the loop stays event-driven and costs you no active time. On `ALL_IDLE`,
-reconcile and decide: queue the next batch if attempts remain, or report to
-the operator that discovery is complete.
+`ALL_IDLE` is a watchdog, not a one-shot edge signal, and it is why this
+Monitor is written as a group rather than a bare `tail`. The orchestrator does
+log the final `Completed node_...` of a batch, so the drain is not silent — but
+that single line is the only wake-up it will ever produce. Lose it and nothing
+further is written, and you wait forever on a batch that already ended. The
+`while` loop re-derives idleness from the queue and running directories and
+keeps saying so until you act, so no single lost event can strand the cell.
+Do not "fix" this to fire only once on the busy-to-idle edge: a latched signal
+is lost the same way the completion line was, and reintroduces the exact hang
+it exists to cover.
+
+The interval doubles while the cell stays idle (60s up to 30min) and resets to
+60s the moment work is queued. A real drain is caught within a minute, while a
+cell that has genuinely finished costs you an occasional ping instead of one
+every minute — the poll runs in the Monitor's own shell, but each line it emits
+spends your active time, so the backoff is what keeps the watchdog cheap. On
+`ALL_IDLE`, reconcile and decide: queue the next batch if attempts remain, or
+report to the operator that discovery is complete.
 
 **LEARN.** `uv run --project "$REPO_ROOT" automil reconcile`; read results;
 update `automil/learnings.md` (what worked / failed / near-miss, with paper
