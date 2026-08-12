@@ -65,14 +65,24 @@ def ingest() -> None:
                 # happened. The last durable sample is already on disk and is
                 # exactly what that manual recovery would have promoted, so
                 # promote it here instead and mark who decided.
-                close_dead_session(
-                    automil_dir,
-                    payload.get("session_id"),
-                    "SessionEnd hook ran but the activity exporter was already "
-                    f"unreachable ({exc}); finalized from the last durable "
-                    "active-time sample on disk",
-                    finalized_by="hook-exporter-unreachable",
-                )
+                try:
+                    close_dead_session(
+                        automil_dir,
+                        payload.get("session_id"),
+                        "SessionEnd hook ran but the activity exporter was "
+                        f"already unreachable ({exc}); finalized from the last "
+                        "durable active-time sample on disk",
+                        finalized_by="hook-exporter-unreachable",
+                    )
+                except ActivityError as fallback:
+                    # Both causes or neither: the operator debugging a
+                    # still-open session needs to know the scrape failed, not
+                    # only that the promotion had nothing to promote.
+                    raise ActivityError(
+                        "cannot finalize SessionEnd: the exporter was "
+                        f"unreachable ({exc}) and the last durable "
+                        f"active-time sample could not be promoted: {fallback}"
+                    ) from fallback
             else:
                 finalize_session_end(automil_dir, payload, exposition)
         else:

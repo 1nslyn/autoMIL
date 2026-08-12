@@ -181,3 +181,59 @@ def test_operator_close_requires_sample_open_session_and_attestation(tmp_path):
     close_dead_session(tmp_path, "session-1", "died")
     with pytest.raises(ActivityError, match="already ended"):
         close_dead_session(tmp_path, "session-1", "died twice")
+
+
+def test_close_rejects_an_unknown_finalized_by_marker_before_writing(tmp_path):
+    """The enum is validated on write because the journal is append-only.
+
+    A marker the replay validator would refuse must never reach the file: it
+    is unremovable afterwards and would leave the cell with a ledger it can no
+    longer parse, which is strictly worse than refusing the close.
+    """
+    _open_session(tmp_path)
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=7.0), observed_at=110.0)
+    journal = tmp_path / ".activity.jsonl"
+    before = journal.read_text()
+
+    for marker in ("", "   ", "operator_close", "hook", None):
+        with pytest.raises(ActivityError, match="finalized_by must be one of"):
+            close_dead_session(tmp_path, "session-1", "why", finalized_by=marker)
+
+    assert journal.read_text() == before
+    # Still closable through a legitimate marker afterwards.
+    assert close_dead_session(tmp_path, "session-1", "why") == 7.0
+
+
+def test_hook_close_marker_round_trips_through_the_replay_validator(tmp_path):
+    """`hook-exporter-unreachable` must be a first-class ledger value.
+
+    The hook path promotes the same stored sample an operator close would, so
+    the only thing separating the two afterwards is this marker -- and a value
+    the strict replay validator rejects would make the cell unreadable.
+    """
+    _open_session(tmp_path)
+    ingest_prometheus_metrics(tmp_path, _metrics(cli=42.0), observed_at=110.0)
+
+    seconds = close_dead_session(
+        tmp_path,
+        "session-1",
+        "SessionEnd hook ran but the exporter was already unreachable",
+        finalized_by="hook-exporter-unreachable",
+    )
+
+    assert seconds == 42.0
+    report = read_activity_report(tmp_path, "cell-1")
+    assert report.complete
+    assert report.active_seconds == 42.0
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / ".activity.jsonl").read_text().splitlines()
+    ]
+    assert lines[-1]["finalized_by"] == "hook-exporter-unreachable"
+    # Promoted, not fabricated: the attested end is the durable sample's own
+    # observation time.
+    samples = json.loads((tmp_path / ACTIVITY_SAMPLES_FILENAME).read_text())
+    assert (
+        lines[-1]["final_sample_observed_at"]
+        == samples["sessions"]["session-1"]["observed_at"]
+    )
