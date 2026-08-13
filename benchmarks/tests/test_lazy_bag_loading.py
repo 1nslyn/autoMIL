@@ -20,6 +20,7 @@ two arms was the outlier. These tests keep it that way.
 from __future__ import annotations
 
 import dataclasses
+import re
 import typing
 
 import h5py
@@ -40,11 +41,16 @@ _SLIDE_TYPES = [
 
 @pytest.mark.parametrize("slide_type", _SLIDE_TYPES)
 def test_slide_holds_a_path_not_a_tensor(slide_type) -> None:
-    """No slide dataclass may carry the bag itself."""
+    """No slide dataclass may carry the bag itself.
+
+    Matches the rendered annotation rather than ``__name__``: a union such as
+    ``torch.Tensor | None`` has no ``__name__``, so an identity check on it
+    silently passes and the field slips back in.
+    """
     hints = typing.get_type_hints(slide_type)
     tensor_fields = sorted(
         f.name for f in dataclasses.fields(slide_type)
-        if getattr(hints.get(f.name, None), "__name__", "") == "Tensor"
+        if re.search(r"Tensor|ndarray", str(hints.get(f.name, "")))
     )
     assert not tensor_fields, (
         f"{slide_type.__name__} holds {tensor_fields} in the dataclass, so every "
@@ -150,3 +156,106 @@ def test_min_bag_size_reads_only_shape_metadata(tmp_path, monkeypatch):
 
     assert dtfd_ds.min_bag_size(slides) == 16
     assert calls == [], "min_bag_size read bag contents instead of the H5 shape"
+
+
+def _count_h5_opens(monkeypatch, module) -> list[str]:
+    """Spy on real file opens, not on a function name.
+
+    Watching ``_read_bag`` is not enough. Memoizing it
+    (``@functools.lru_cache``) leaves the call site intact while the bag stops
+    being re-read, and an inline ``h5py.File`` in the loader stops calling it
+    entirely. Both restore whole-split residency and both pass a name-level
+    spy. File opens are the property.
+    """
+    opens: list[str] = []
+    real = module.h5py.File
+
+    def spy(path, *args, **kwargs):
+        opens.append(str(path))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(module.h5py, "File", spy)
+    return opens
+
+
+@pytest.mark.parametrize(
+    "module,loader",
+    [
+        pytest.param(abmil_ds, "load_abmil_split", id="abmil"),
+        pytest.param(dtfd_ds, "load_dtfd_split", id="dtfd"),
+    ],
+)
+def test_loading_a_split_opens_no_bag_files(module, loader, tmp_path, monkeypatch):
+    """Building a split must not open a single bag.
+
+    Stronger than spying on ``_read_bag``: this also catches an inline
+    ``h5py.File`` read that stashes tensors in a module-level dict.
+    """
+    task_csv, split_csv, h5_dir = _cohort(tmp_path, n_slides=6, n_patches=8, dim=4)
+    opens = _count_h5_opens(monkeypatch, module)
+
+    slides = getattr(module, loader)(
+        task_csv, split_csv, h5_dir, {"0": 0, "1": 1}, "train",
+    )
+
+    assert len(slides) == 6
+    assert opens == [], (
+        f"{loader} opened {len(opens)} bag file(s) while building the split; "
+        "loading a split must not touch bag contents at all"
+    )
+
+
+@pytest.mark.parametrize("arm", ["abmil", "dtfd"])
+def test_bags_are_reread_every_epoch(arm, tmp_path, monkeypatch):
+    """Training longer must read more.
+
+    This is the half the structural tests cannot express. Under any memoization
+    the open count is flat in epochs, so the split becomes resident again from
+    epoch two onward -- worse than the original bug, because a module-level
+    cache is keyed by path and survives the fold boundary that used to drop it.
+    """
+    import torch
+
+    if arm == "abmil":
+        from autobench.pipeline.abmil.config import ABMILConfig
+        from autobench.pipeline.abmil.train import train_abmil_fold
+        module = abmil_ds
+        loader, label_dict = abmil_ds.load_abmil_split, {"0": 0, "1": 1}
+
+        def run(epochs, slides):
+            return train_abmil_fold(
+                "abmil", *slides, embed_dim=4, num_classes=2,
+                cfg=ABMILConfig(max_epochs=epochs, early_stopping=False),
+                device=torch.device("cpu"), seed=0,
+            )
+    else:
+        from autobench.pipeline.dtfd.config import DTFDConfig
+        from autobench.pipeline.dtfd.train import train_dtfd_fold
+        module = dtfd_ds
+        loader, label_dict = dtfd_ds.load_dtfd_split, {"0": 0, "1": 1}
+
+        def run(epochs, slides):
+            return train_dtfd_fold(
+                *slides, embed_dim=4, num_classes=2,
+                cfg=DTFDConfig(numGroup=2, mDim=8, max_epochs=epochs, lr=1e-3,
+                               early_stopping=False),
+                device=torch.device("cpu"), seed=0,
+            )
+
+    args = _cohort(tmp_path, n_slides=6, n_patches=8, dim=4)
+    splits = [loader(*args, label_dict, s) for s in ("train", "val", "test")]
+
+    counts = []
+    for epochs in (1, 3):
+        opens = _count_h5_opens(monkeypatch, module)
+        run(epochs, splits)
+        counts.append(len(opens))
+        monkeypatch.undo()
+
+    one_epoch, three_epochs = counts
+    assert one_epoch > 0, "no bag was ever read"
+    assert three_epochs > one_epoch, (
+        f"{arm} opened {one_epoch} bag file(s) for 1 epoch and {three_epochs} for "
+        "3 -- the count is flat in epochs, so bags are being cached and the whole "
+        "split is resident again"
+    )
