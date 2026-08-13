@@ -16,7 +16,7 @@ import numpy as np
 import torch
 
 from autobench.pipeline.dtfd.config import DTFDConfig
-from autobench.pipeline.dtfd.dataset import DTFDSlide
+from autobench.pipeline.dtfd.dataset import DTFDSlide, _read_bag
 from autobench.pipeline.dtfd.model import DTFDBundle
 from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
 
@@ -85,7 +85,7 @@ def evaluate_dtfd(
     probs: list[np.ndarray] = []
     labels: list[int] = []
     for slide in slides:
-        probs.append(_slide_prob(bundle, slide.features, cfg, device, rng))
+        probs.append(_slide_prob(bundle, _read_bag(slide.h5_path), cfg, device, rng))
         labels.append(slide.label)
 
     y_probs = np.vstack(probs)                 # [num_slides, num_classes]
