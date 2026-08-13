@@ -12,9 +12,12 @@ Covers, on tiny CPU fixtures:
   (e) run_abmil_experiment on a 2-fold H5 fixture writes summary.json.
 """
 
+import itertools
 import json
 import os
+import pathlib
 import sys
+import tempfile
 
 import h5py
 import numpy as np
@@ -339,10 +342,20 @@ class TestInputValidation:
 # ---------------------------------------------------------------------------
 
 
+#: Bags are lazy (``h5_path``, not a tensor), so fixtures write real H5 files
+#: and the trainer reads them back through the same ``_read_bag`` production
+#: uses. A counter keeps filenames unique across tests that reuse slide ids.
+_BAG_DIR = pathlib.Path(tempfile.mkdtemp(prefix="abmil-bags-"))
+_BAG_SEQ = itertools.count()
+
+
 def _make_slide(rng, sid, label, n=N_INSTANCES, emb=IN_DIM, sep=3.0):
     """Class-separable bag so the training loop has a learnable signal."""
     feats = rng.standard_normal((n, emb)).astype("float32") + label * sep
-    return ABMILSlide(slide_id=sid, features=torch.from_numpy(feats), label=label)
+    path = _BAG_DIR / f"{sid}-{next(_BAG_SEQ)}.h5"
+    with h5py.File(path, "w") as f:
+        f.create_dataset("features", data=feats)
+    return ABMILSlide(slide_id=sid, h5_path=str(path), label=label)
 
 
 def _make_split(rng, prefix, n_slides):

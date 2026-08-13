@@ -25,10 +25,25 @@ from autobench.pipeline.dataset_guards import check_split_retention
 
 @dataclass(frozen=True)
 class DTFDSlide:
-    """One bag: slide id, ``[N, embed_dim]`` float32 features, int label."""
+    """One bag: slide id, H5 path, int label.
+
+    Holds the H5 *path*, not the loaded tensor -- features are read on demand
+    (``_read_bag``) in the trainer, so a fold never has every bag resident in
+    host RAM at once. Same contract as ``DTFDSurvivalSlide`` below, and as CLAM
+    and nnMIL in both task types.
+
+    This used to hold the tensor. At virchow2 (2560-dim, ~7.4k patches/slide)
+    that is ~76 MB per slide, so a 372-slide train split sat at ~28 GB for the
+    whole fold -- and the runner keeps train+val+test alive at once, then
+    builds the next fold's split before rebinding, doubling it at the fold
+    boundary. Concurrent cells were OOM-killed by the cgroup exactly there
+    (``oom-kill: constraint=CONSTRAINT_MEMCG``, no traceback, worker log
+    stopping mid-fold). Reading on demand also lets the OS page cache serve
+    every worker on the node from ONE copy instead of each holding its own.
+    """
 
     slide_id: str
-    features: torch.Tensor  # [N, embed_dim], float32, CPU
+    h5_path: str
     label: int
 
 
@@ -100,7 +115,7 @@ def load_dtfd_split(
             missing.append(sid)
             continue
         slides.append(
-            DTFDSlide(slide_id=sid, features=_read_bag(h5_path), label=label_lookup[sid])
+            DTFDSlide(slide_id=sid, h5_path=h5_path, label=label_lookup[sid])
         )
 
     if missing:
@@ -128,17 +143,14 @@ def min_bag_size(
 ) -> int:
     """Smallest patch count across a split (used to guard ``numGroup``).
 
-    Handles both eager slides (``.features`` already loaded, classification) and
-    lazy survival slides (``.h5_path`` only): the latter reads just the H5
-    dataset's shape metadata, not its contents, so it stays cheap and RAM-free.
+    Reads only the H5 dataset's shape metadata, never its contents, so guarding
+    a split costs no RAM. Both slide types are lazy now, so there is no longer
+    an ``.features`` branch to fall back to.
     """
     if not slides:
         return 0
 
     def _n(s: DTFDSlide | DTFDSurvivalSlide) -> int:
-        feats = getattr(s, "features", None)
-        if feats is not None:
-            return int(feats.shape[0])
         with h5py.File(s.h5_path, "r") as f:
             return int(f["features"].shape[0])
 

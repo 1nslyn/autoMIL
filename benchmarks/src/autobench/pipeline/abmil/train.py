@@ -18,7 +18,7 @@ import numpy as np
 import torch
 
 from autobench.pipeline.abmil.config import ABMILConfig
-from autobench.pipeline.abmil.dataset import ABMILSlide
+from autobench.pipeline.abmil.dataset import ABMILSlide, _read_bag
 from autobench.pipeline.abmil.model import build_abmil_model
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
@@ -41,7 +41,7 @@ def _train_one_epoch(
     losses: list[float] = []
     for i in order:
         slide = slides[i]
-        features = slide.features.to(device).unsqueeze(0)  # [1, N, in_dim]
+        features = _read_bag(slide.h5_path).to(device).unsqueeze(0)  # [1, N, in_dim]
         label_t = torch.LongTensor([slide.label]).to(device)
 
         out = model(features)
@@ -77,7 +77,7 @@ def _evaluate(
     probs: list[np.ndarray] = []
     labels: list[int] = []
     for slide in slides:
-        features = slide.features.to(device).unsqueeze(0)  # [1, N, in_dim]
+        features = _read_bag(slide.h5_path).to(device).unsqueeze(0)  # [1, N, in_dim]
         out = model(features)
         prob = torch.softmax(out["logits"], dim=1).squeeze(0).cpu().numpy()
         probs.append(prob)

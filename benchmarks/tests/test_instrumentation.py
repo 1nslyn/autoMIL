@@ -290,6 +290,7 @@ class TestTitanElapsedSeconds:
 
 class TestDtfdElapsedSeconds:
     def test_fold_metrics_json_has_elapsed_seconds(self, tmp_path):
+        import h5py
         import torch
 
         from autobench.pipeline.dtfd.config import DTFDConfig
@@ -297,11 +298,17 @@ class TestDtfdElapsedSeconds:
         from autobench.pipeline.dtfd.train import train_dtfd_fold
 
         rng = np.random.default_rng(0)
+        bags = tmp_path / "bags"
+        bags.mkdir()
 
         def _make_slide(prefix, i, label, n=20, emb=32, sep=3.0):
+            # Bags are lazy (h5_path, not a tensor), so write a real H5 file.
             feats = rng.standard_normal((n, emb)).astype("float32") + label * sep
+            path = bags / f"{prefix}{i}.h5"
+            with h5py.File(path, "w") as f:
+                f.create_dataset("features", data=feats)
             return DTFDSlide(
-                slide_id=f"{prefix}{i}", features=torch.from_numpy(feats), label=label,
+                slide_id=f"{prefix}{i}", h5_path=str(path), label=label,
             )
 
         train_slides = [_make_slide("t", i, i % 2) for i in range(8)]

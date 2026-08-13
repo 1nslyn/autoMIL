@@ -11,10 +11,13 @@ Covers, on tiny CPU fixtures (design spec §6, §10):
       real runner instead of raising.
 """
 
+import itertools
 import json
 import math
 import os
+import pathlib
 import sys
+import tempfile
 
 import h5py
 import numpy as np
@@ -65,10 +68,20 @@ SHARED_KEYS = {
 # ---------------------------------------------------------------------------
 
 
+#: Bags are lazy (``h5_path``, not a tensor), so fixtures write real H5 files
+#: and the trainer reads them back through the same ``_read_bag`` production
+#: uses. A counter keeps filenames unique across tests that reuse slide ids.
+_BAG_DIR = pathlib.Path(tempfile.mkdtemp(prefix="dtfd-bags-"))
+_BAG_SEQ = itertools.count()
+
+
 def _make_slide(rng, sid, label, n=N_PATCHES, emb=EMB, sep=3.0):
     """Class-separable bag so the two-tier loop has a learnable signal."""
     feats = rng.standard_normal((n, emb)).astype("float32") + label * sep
-    return DTFDSlide(slide_id=sid, features=torch.from_numpy(feats), label=label)
+    path = _BAG_DIR / f"{sid}-{next(_BAG_SEQ)}.h5"
+    with h5py.File(path, "w") as f:
+        f.create_dataset("features", data=feats)
+    return DTFDSlide(slide_id=sid, h5_path=str(path), label=label)
 
 
 def _make_split(rng, prefix, n_slides):

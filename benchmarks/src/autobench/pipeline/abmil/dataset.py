@@ -23,10 +23,25 @@ from autobench.pipeline.dataset_guards import check_split_retention
 
 @dataclass(frozen=True)
 class ABMILSlide:
-    """One bag: slide id, ``[N, embed_dim]`` float32 features, int label."""
+    """One bag: slide id, H5 path, int label.
+
+    Holds the H5 *path*, not the loaded tensor -- features are read on demand
+    (``_read_bag``) in the trainer, so a fold never has every bag resident in
+    host RAM at once. Same contract as ``ABMILSurvivalSlide`` below, and as
+    CLAM and nnMIL in both task types.
+
+    This used to hold the tensor. At virchow2 (2560-dim, ~7.4k patches/slide)
+    that is ~76 MB per slide, so a 372-slide train split sat at ~28 GB for the
+    whole fold -- and the runner keeps train+val+test alive at once, then
+    builds the next fold's split before rebinding, doubling it at the fold
+    boundary. Concurrent cells were OOM-killed by the cgroup exactly there
+    (``oom-kill: constraint=CONSTRAINT_MEMCG``, no traceback, worker log
+    stopping mid-fold). Reading on demand also lets the OS page cache serve
+    every worker on the node from ONE copy instead of each holding its own.
+    """
 
     slide_id: str
-    features: torch.Tensor  # [N, embed_dim], float32, CPU
+    h5_path: str
     label: int
 
 
@@ -98,7 +113,7 @@ def load_abmil_split(
             missing.append(sid)
             continue
         slides.append(
-            ABMILSlide(slide_id=sid, features=_read_bag(h5_path), label=label_lookup[sid])
+            ABMILSlide(slide_id=sid, h5_path=h5_path, label=label_lookup[sid])
         )
 
     if missing:
