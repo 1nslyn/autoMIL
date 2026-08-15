@@ -163,7 +163,13 @@ def train_titan_fold(
             break
 
     model.load_state_dict(best_state)
-    print(f"[selected] epoch={best_epoch}", flush=True)
+    # A3: this arm ALWAYS restores best_state. source=best when some epoch
+    # improved on it; source=untrained when the restored snapshot is the
+    # pre-loop deepcopy that predates any training step (best_epoch == -1,
+    # e.g. an all-NaN val split) — NOT the "final weights kept" of the arms
+    # that print source=final.
+    print(f"[selected] epoch={best_epoch} "
+          f"source={'best' if best_epoch >= 0 else 'untrained'}", flush=True)
     test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
                              predictions_path=os.path.join(fold_dir, "predictions.csv"))
     val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,

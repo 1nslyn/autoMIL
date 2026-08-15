@@ -169,7 +169,10 @@ def train_abmil_fold(
 
         if best_snap is not None:
             model.load_state_dict(best_snap)
-        print(f"[selected] epoch={best_epoch}", flush=True)
+        # A3: source=best when a val-selected snapshot was restored above,
+        # source=final when the final weights were kept (no restore).
+        print(f"[selected] epoch={best_epoch} "
+              f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
         test_metrics = (
             _evaluate(model, test_slides, num_classes, device, ordinal=ordinal,

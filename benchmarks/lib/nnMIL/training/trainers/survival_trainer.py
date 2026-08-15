@@ -382,14 +382,20 @@ class SurvivalTrainer(BaseTrainer):
         self.logger.info(f"Saved latest model to {latest_model_path}")
         
         # Load best model
+        restored = False
         best_model_path = os.path.join(self.save_dir, f'best_{self.model_type}.pth')
         if os.path.exists(best_model_path):
             self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
             self.logger.info("Loaded best model for final evaluation")
+            restored = True
         elif hasattr(early_stopping, 'best_model_state') and early_stopping.best_model_state is not None:
             self.model.load_state_dict(early_stopping.best_model_state)
             self.logger.info("Loaded best model from early stopping state")
-        print(f"[selected] epoch={early_stopping.best_epoch}", flush=True)
+            restored = True
+        # A3: source=best when a val-selected checkpoint was restored above,
+        # source=final when the final weights were kept (no restore).
+        print(f"[selected] epoch={early_stopping.best_epoch} "
+              f"source={'best' if restored else 'final'}", flush=True)
 
         self.model.eval()
         torch.set_grad_enabled(False)

@@ -277,12 +277,18 @@ def train_survival_fold(
             break
 
     # Restore the val-loss-selected best checkpoint before final scoring.
+    restored = False
     best_path = os.path.join(fold_dir, f"best_{model_type}.pth")
     if os.path.exists(best_path):
         model.load_state_dict(torch.load(best_path, map_location=device))
+        restored = True
     elif getattr(early_stopping, "best_model_state", None) is not None:
         model.load_state_dict(early_stopping.best_model_state)
-    print(f"[selected] epoch={early_stopping.best_epoch}", flush=True)
+        restored = True
+    # A3: source=best when a val-selected checkpoint was restored above,
+    # source=final when the final weights were kept (no restore).
+    print(f"[selected] epoch={early_stopping.best_epoch} "
+          f"source={'best' if restored else 'final'}", flush=True)
 
     # CR-3: export the val risk records so the runner can score concordance over
     # the POOLED cross-fold validation set. The per-fold c-index below stays for

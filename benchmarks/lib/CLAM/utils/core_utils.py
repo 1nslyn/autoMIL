@@ -208,13 +208,15 @@ def train(datasets, cur, args):
 
     if args.early_stopping:
         model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
+        selected_epoch, selected_source = early_stopping.best_epoch, 'best'
     else:
         torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+        selected_epoch, selected_source = last_epoch, 'final'
 
     # A3: the epoch whose weights are scored below — EarlyStopping's best
-    # checkpoint when enabled, else the final epoch's own weights (last_epoch
-    # is -1, never an unbound `epoch`, when max_epochs == 0).
-    print('[selected] epoch={}'.format(early_stopping.best_epoch if args.early_stopping else last_epoch), flush=True)
+    # checkpoint when enabled (source=best), else the final epoch's own
+    # weights, no restore (source=final; epoch=-1 when max_epochs == 0).
+    print('[selected] epoch={} source={}'.format(selected_epoch, selected_source), flush=True)
 
     _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
     print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))
