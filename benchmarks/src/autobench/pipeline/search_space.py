@@ -36,6 +36,17 @@ campaign locks those same names one layer up, in the hash-locked
 ``registry.identity_locked_hparams`` block of each cell config (audited against
 ``EXPECTED_IDENTITY_LOCKED_HPARAMS`` in ``autobench.campaign``); the campaign's
 tunable set is this module's ``tunable`` minus that lock list.
+
+**nnMIL overrides layer ABOVE the planner — the batch_size clamp included,
+and that is intended.** nnMIL's training config is *computed* at prep time
+(nnU-Net-style self-configuration: ``prepare.py`` derives ``batch_size`` from
+rare-class prevalence and cohort size, clamping it into the planner's band).
+``hparams.apply_overrides_to_plan`` applies declared overrides AFTER that
+computation, so an explicit ``batch_size`` override REPLACES the planner's
+clamped value — it is not re-clamped. The clamp is a heuristic default for the
+unattended path, not a validity bound; an agent that sets the knob owns the
+value, exactly as on every other arm (and gets the standard fail-loud error
+for undeclared/locked names, never a silent re-clamp).
 """
 from __future__ import annotations
 
