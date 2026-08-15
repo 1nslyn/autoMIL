@@ -25,7 +25,7 @@ from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.evaluate import (
     compute_confidence_intervals,
-    file_sha256,
+    file_sha256_or_none,
     pooled_val_block,
 )
 from autobench.pipeline.policy_dispatch import PolicyRuntime
@@ -145,7 +145,7 @@ def run_abmil_experiment(
             **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
             # A4': no-op detector — hash of the fold's persisted val predictions
             # (both branches write fold_dir/predictions_val.csv).
-            "val_predictions_sha256": file_sha256(
+            "val_predictions_sha256": file_sha256_or_none(
                 os.path.join(fold_dir, "predictions_val.csv")
             ),
             "fold": fold,

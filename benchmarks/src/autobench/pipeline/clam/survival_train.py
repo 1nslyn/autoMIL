@@ -23,7 +23,7 @@ from autobench import LIB_ROOT
 from autobench.pipeline.clam._imports import CLAM_SB, CLAM_MB, get_optim
 from autobench.pipeline.clam.dataset import load_survival_fold_splits
 from autobench.pipeline.config import ExperimentConfig, TrainConfig
-from autobench.pipeline.evaluate import file_sha256, write_survival_predictions_csv
+from autobench.pipeline.evaluate import file_sha256_or_none, write_survival_predictions_csv
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -304,7 +304,7 @@ def train_survival_fold(
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "val_records": _val_records,
-        "val_predictions_sha256": file_sha256(val_predictions_path),
+        "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
         "fold": fold,
         "elapsed_seconds": time.time() - start,
     }

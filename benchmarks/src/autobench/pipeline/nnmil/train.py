@@ -11,7 +11,7 @@ import os
 import time
 
 from autobench.pipeline.config import ExperimentConfig, get_nnmil_runtime_overrides
-from autobench.pipeline.evaluate import file_sha256
+from autobench.pipeline.evaluate import file_sha256_or_none
 from autobench.pipeline.nnmil.evaluate import normalize_nnmil_metrics
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
@@ -143,7 +143,7 @@ def train_nnmil_fold(
         # (classification: metrics_addon's CSV; survival: the vendored
         # trainer's val CSV — both land at fold_dir/predictions_val.csv,
         # written by the final evaluate('val') above, i.e. the restored model).
-        "val_predictions_sha256": file_sha256(
+        "val_predictions_sha256": file_sha256_or_none(
             os.path.join(fold_dir, "predictions_val.csv")
         ),
         "fold": fold,

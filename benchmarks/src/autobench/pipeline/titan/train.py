@@ -22,7 +22,7 @@ from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import (
     compute_extended_metrics,
-    file_sha256,
+    file_sha256_or_none,
     write_predictions_csv,
 )
 from autobench.pipeline.policy_dispatch import PolicyRuntime
@@ -180,7 +180,7 @@ def train_titan_fold(
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         # A4': no-op detector — hash of the persisted val predictions above.
-        "val_predictions_sha256": file_sha256(
+        "val_predictions_sha256": file_sha256_or_none(
             os.path.join(fold_dir, "predictions_val.csv")
         ),
         "fold": fold,

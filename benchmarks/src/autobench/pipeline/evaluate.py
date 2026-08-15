@@ -518,13 +518,17 @@ def write_survival_predictions_csv(path: str, records: dict) -> None:
             w.writerow([pid, int(status), float(time_), float(risk)])
 
 
-def file_sha256(path: str) -> str | None:
+def file_sha256_or_none(path: str) -> str | None:
     """sha256 hex of a file's bytes, or None when the file does not exist.
 
     The no-op detector (A4'): two runs whose recipes differ but whose selected
     models score the validation split identically are indistinguishable by
     metrics on a small split — the hash of the persisted per-fold val
     predictions tells a changed model from an unchanged one.
+
+    The name carries the contract: ``autobench.campaign.file_sha256`` is the
+    strict sibling (``Path -> str``, raises on a missing file). Keeping the
+    two names distinct is what stops the contracts being silently swapped.
     """
     import hashlib
     import os as _os

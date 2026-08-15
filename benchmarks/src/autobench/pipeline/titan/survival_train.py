@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from autobench import LIB_ROOT
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.evaluate import file_sha256, write_survival_predictions_csv
+from autobench.pipeline.evaluate import file_sha256_or_none, write_survival_predictions_csv
 from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
@@ -263,7 +263,7 @@ def train_titan_survival_fold(
         "val_metrics": val_metrics,
         "val_records": val_records,
         # A4': no-op detector — hash of the persisted val risk scores above.
-        "val_predictions_sha256": file_sha256(val_predictions_path),
+        "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore and
         # final scoring included, so the number is comparable across arms and
