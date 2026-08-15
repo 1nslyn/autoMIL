@@ -23,7 +23,7 @@ autoMIL overlays an `automil/` subdirectory onto an existing git repo. It does N
 - Experiments are tracked as a directed tree in `graph.json`, not a flat log
 - Each experiment stores only its changed files (overlay), not the full repo
 - The orchestrator runs experiments in git worktrees, overlaying modified files on a base commit
-- Keep/discard is decided by the framework via single-axis composite-score comparison, gated by a predeclared Ladder keep-margin (child kept iff `child.composite > parent.composite + margin`, where `margin = max(accept_margin, se_multiplier x the parent's composite_se)`; δ defaults to 0.0 in `meta.scoring`, seeded from `config.yaml`'s `scoring.accept_margin`); the composite is the **validation** selection signal (the val-firewall: test never drives selection), carried in `result.json` and recomputed by the framework at ingest from the validation `metrics` block (CR-1b; held-out-named keys inside `metrics` fail the node closed) (see D-200)
+- Keep/discard is decided by the framework via single-axis composite-score comparison, gated by a predeclared Ladder keep-margin (child kept iff `child.composite > parent.composite + margin`, where `margin = max(accept_margin, se_multiplier x SE)`; the SE basis is the **paired per-fold delta SE** when parent and child carry composites for the same fold set under the `mean` reducer — runs share folds under a locked seed, so the fold effect cancels — falling back to the parent's marginal `composite_se` otherwise; δ defaults to 0.0 in `meta.scoring`, seeded from `config.yaml`'s `scoring.accept_margin`); the composite is the **validation** selection signal (the val-firewall: test never drives selection), carried in `result.json` and recomputed by the framework at ingest from the validation `metrics` block (CR-1b; held-out-named keys inside `metrics` fail the node closed) (see D-200)
 - Val-firewall: `result.json` `metrics` is validation-only; test metrics go in a sealed `held_out` block that the orchestrator writes to `archive/<node>/certify.json`, quarantined from every agent-facing surface during search and revealed once at the end via `automil certify`
 - `results.tsv` is written solely by the orchestrator from `result.json`, never by train.py
 - `_recover_orphans()` only runs in the daemon loop (`run()`), never on construction (to prevent `status`/`stop` from corrupting live runs)
@@ -103,17 +103,28 @@ Training scripts must write `result.json` to their working directory. `metrics`
 is the agent-facing **validation** block and `composite` is computed from it (the
 selection signal); test metrics go in a sealed `held_out` block that the
 orchestrator quarantines to `archive/<node>/certify.json` (read once via
-`automil certify`):
+`automil certify`). `validation_folds` carries the per-fold val evidence the
+framework consumes: fold composites feed the paired keep-margin (a node without
+them silently falls back to the wider marginal-SE basis) and
+`val_predictions_sha256` is the prediction-identity no-op detector; both are
+val-only by construction:
 ```json
 {
   "status": "completed",
   "metrics": {"val_auc": 0.87, "val_bacc": 0.81},
   "held_out": {"test_auc": 0.87, "test_bacc": 0.83},
   "composite": 0.84,
+  "composite_se": 0.021,
+  "validation_folds": [
+    {"fold_index": 0, "metrics": {"val_auc": 0.90, "val_bacc": 0.84},
+     "composite": 0.87, "val_predictions_sha256": "<64-hex or null>"}
+  ],
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500
 }
 ```
+(`composite_se` and each fold `composite` are recomputed at ingest from the
+val evidence — reported values are never trusted verbatim.)
 
 The orchestrator sets `CUDA_VISIBLE_DEVICES` for GPU masking and `AUTOMIL_GPU=0` (logical device).
 

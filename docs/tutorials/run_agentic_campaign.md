@@ -482,7 +482,7 @@ Two standing rules:
   cells and fails closed below that.
 - **Timing anchors in this repository are H100-based.** On any other
   accelerator, re-derive attempt wall-clock from your own canary before
-  planning a schedule — the 360-minute attempt timeout is the constraint that
+  planning a schedule — the 600-minute attempt timeout is the constraint that
   bites first on slower cards.
 
 ---

@@ -93,10 +93,11 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         "elapsed_seconds": int(result.get("elapsed_seconds", 0) or 0),
         "peak_vram_mb":    int(result.get("peak_vram_mb", 0) or 0),
         # A4': no-op detector, ENTRY level — never inside `metrics` (CR-1b
-        # recomputes the composite from every value in there). NOTE: the
-        # cap-kill aggregator (automil.cells.reconcile.aggregate_folds) does
-        # not yet carry this field into a partial result.json; the full-run
-        # path (summary -> validation_folds) does.
+        # recomputes the composite from every value in there). Both paths
+        # carry it: the full-run summary -> validation_folds projection here,
+        # and the cap-kill aggregator (automil.cells.reconcile.aggregate_folds),
+        # which rebuilds entries from the sealed fold files. Null means the
+        # fold predates hashing, not "not implemented".
         "val_predictions_sha256": result.get("val_predictions_sha256"),
     }
     # Atomic: these files are written in exactly the window a cap-kill SIGTERM
