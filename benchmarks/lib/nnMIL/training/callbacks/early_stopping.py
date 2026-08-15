@@ -28,7 +28,15 @@ class EarlyStopping:
         self.save_dir = save_dir
         self.model_type = model_type
         self.logger = logger
-        
+        # Epoch of the checkpoint currently saved (-1: none yet). Owned HERE,
+        # where the checkpoint is saved, so callers read it instead of
+        # inferring "saved this epoch" from counter == 0 -- an inference any
+        # counter-semantics change would corrupt silently. Callers pass the
+        # true epoch to __call__; the internal per-call counter stands in for
+        # callers that do not (one __call__ per epoch).
+        self.best_epoch = -1
+        self._epochs_seen = 0
+
         # Use metric from plan file (no hardcoding)
         metric_lower = metric.lower()
         if 'kappa' in metric_lower:
@@ -49,7 +57,10 @@ class EarlyStopping:
         else:
             print(msg)
 
-    def __call__(self, val_loss, val_bacc, val_f1, val_auc, model, val_kappa=None):
+    def __call__(self, val_loss, val_bacc, val_f1, val_auc, model, val_kappa=None, epoch=None):
+        current_epoch = self._epochs_seen if epoch is None else epoch
+        self._epochs_seen += 1
+
         # Use metric from plan file
         if self.primary_metric == "KAPPA":
             score = val_kappa if val_kappa is not None else 0.0
@@ -67,6 +78,7 @@ class EarlyStopping:
             
         if self.best_score is None:
             self.best_score = score
+            self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_bacc, val_f1, val_auc, model, val_kappa)
             msg = f'EarlyStopping: Initial {self.primary_metric} = {score:.4f}'
             if self.logger:
@@ -93,6 +105,7 @@ class EarlyStopping:
             improvement = score - self.best_score
             old_score = self.best_score
             self.best_score = score
+            self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_bacc, val_f1, val_auc, model, val_kappa)
             self.counter = 0
             msg = f'EarlyStopping: {self.primary_metric} improved from {old_score:.4f} to {self.best_score:.4f} (+{improvement:.4f}). Reset counter.'
@@ -262,6 +275,11 @@ class EarlyStoppingSurvival:
         self.model_type = model_type
         self.logger = logger
         self.mode = mode
+        # Epoch of the checkpoint currently saved (-1: none yet); same
+        # contract as EarlyStopping.best_epoch above -- owned where the
+        # checkpoint is saved, never inferred from counter == 0.
+        self.best_epoch = -1
+        self._epochs_seen = 0
 
         # Monitored quantity depends on mode: val loss (min) or c-index (max).
         self.primary_metric = "val_loss" if mode == 'min' else "C-index"
@@ -272,7 +290,10 @@ class EarlyStoppingSurvival:
         else:
             print(msg)
 
-    def __call__(self, val_loss, val_c_index, model):
+    def __call__(self, val_loss, val_c_index, model, epoch=None):
+        current_epoch = self._epochs_seen if epoch is None else epoch
+        self._epochs_seen += 1
+
         score = val_loss if self.mode == 'min' else val_c_index
 
         # Handle NaN/inf scores: treat as the worst possible so they never win.
@@ -281,6 +302,7 @@ class EarlyStoppingSurvival:
 
         if self.best_score is None:
             self.best_score = score
+            self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_c_index, model)
             msg = f'EarlyStopping: Initial {self.primary_metric} = {score:.4f}'
             if self.logger:
@@ -312,6 +334,7 @@ class EarlyStoppingSurvival:
             improvement = abs(score - self.best_score)
             old_score = self.best_score
             self.best_score = score
+            self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_c_index, model)
             self.counter = 0
             msg = f'EarlyStopping: {self.primary_metric} improved from {old_score:.4f} to {self.best_score:.4f} ({improvement:+.4f}). Reset counter.'

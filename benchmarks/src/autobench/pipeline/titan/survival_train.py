@@ -207,7 +207,6 @@ def train_titan_survival_fold(
         )
         return float(ci) if ci is not None else float("nan")
 
-    best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
     start = time.time()
     for epoch in range(exp_cfg.train.max_epochs):
         model.train()
@@ -225,9 +224,7 @@ def train_titan_survival_fold(
         )
         # Always save the best (val-loss) checkpoint; early_stopping only gates
         # stopping early (matches classification/DTFD).
-        early_stopping(v_loss, v_cidx, model)
-        if early_stopping.counter == 0:  # saved a new best this epoch
-            best_epoch = epoch
+        early_stopping(v_loss, v_cidx, model, epoch=epoch)
         default_stop = exp_cfg.train.early_stopping and early_stopping.early_stop
         if policy_runtime.should_stop(
             default_stop,
@@ -244,7 +241,7 @@ def train_titan_survival_fold(
         model.load_state_dict(torch.load(best_path, map_location=torch_device))
     elif getattr(early_stopping, "best_model_state", None) is not None:
         model.load_state_dict(early_stopping.best_model_state)
-    print(f"[selected] epoch={best_epoch}", flush=True)
+    print(f"[selected] epoch={early_stopping.best_epoch}", flush=True)
 
     test_metrics = {"c_index": _c_index(test_loader)}
     val_metrics = {"c_index": _c_index(val_loader)}
