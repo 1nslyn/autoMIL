@@ -18,7 +18,7 @@ from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
 from autobench.pipeline.results_cache import resolve_results_dir
-from autobench.pipeline.titan.config import TitanHeadConfig
+from autobench.pipeline.titan.config import TitanHeadConfig, apply_train_overrides
 from autobench.pipeline.titan.dataset import build_split_dataset, build_survival_split_dataset
 from autobench.pipeline.titan.survival_train import train_titan_survival_fold
 from autobench.pipeline.titan.train import train_titan_fold
@@ -60,6 +60,12 @@ def run_titan_experiment(
     # and config.json/summary record the real dimension.
     exp_cfg = replace(exp_cfg, embed_dim=int(manifest["embed_dim"]))
     policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
+
+    # H-3 / CR-5b: apply the opaque channel's train-side slice (max_epochs,
+    # early_stopping) HERE — before results-dir resolution and exp_cfg.save —
+    # so cache identity and the archived config.json record the effective
+    # values. The trainers read exp_cfg.train as already-effective.
+    apply_train_overrides(exp_cfg)
 
     # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is

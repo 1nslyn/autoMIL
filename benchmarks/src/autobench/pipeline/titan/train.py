@@ -85,9 +85,10 @@ def train_titan_fold(
     Seed follows the shared convention: ``train.seed + fold`` (matches
     nnMIL/DTFD).
     """
-    # H-3: mixed provenance, resolved through one seam — head knobs land on
-    # TitanHeadConfig, the opaque channel's max_epochs/early_stopping on
-    # exp_cfg.train (see resolve_head_config).
+    # H-3: head-side filtering only — the opaque channel's max_epochs/
+    # early_stopping were already applied onto exp_cfg.train at the RUNNER
+    # level (apply_train_overrides, before config.json was saved), so
+    # exp_cfg.train is read here as already-effective.
     head_cfg = resolve_head_config(exp_cfg, head_cfg)
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
