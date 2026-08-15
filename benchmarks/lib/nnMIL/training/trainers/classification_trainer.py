@@ -209,10 +209,11 @@ class ClassificationTrainer(BaseTrainer):
         # Training loop
         self.model.train()
         global_step = 0
-        
+        best_epoch = -1  # epoch of the best checkpoint restored at fold end
+
         self.logger.info(f"Starting training for {num_epochs} epochs")
         self.logger.info(f"Total steps: {total_steps}, Warmup steps: {warmup_steps}")
-        
+
         for epoch in tqdm(range(num_epochs), desc="Training"):
             epoch_start_time = time.time()
             self.model.train()
@@ -295,6 +296,8 @@ class ClassificationTrainer(BaseTrainer):
             val_kappa = val_metrics.get('val_val/kappa', val_metrics.get('val/kappa', None))
             
             early_stopping(val_loss, val_bacc, val_f1, val_auc, self.model, val_kappa=val_kappa)
+            if early_stopping.counter == 0:  # saved a new best this epoch
+                best_epoch = epoch
             default_stop = early_stopping.early_stop
             if self.policy_runtime is not None:
                 default_stop = self.policy_runtime.should_stop(
@@ -324,6 +327,7 @@ class ClassificationTrainer(BaseTrainer):
         elif hasattr(early_stopping, 'best_model_state'):
             self.model.load_state_dict(early_stopping.best_model_state)
             self.logger.info("Loaded best model from early stopping state")
+        print(f"[selected] epoch={best_epoch}", flush=True)
 
         # NOTE: do NOT call torch.set_grad_enabled(False) here.  It is a
         # thread-local *global* switch; leaving it off leaks into whatever runs
