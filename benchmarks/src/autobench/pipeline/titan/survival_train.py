@@ -20,11 +20,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from autobench import LIB_ROOT
-from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import file_sha256, write_survival_predictions_csv
-from autobench.pipeline.titan.config import TitanHeadConfig
+from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
 from autobench.pipeline.policy_dispatch import PolicyRuntime
@@ -117,16 +116,10 @@ def train_titan_survival_fold(
     patient-level c-index, adapted to TITAN's ``DataLoader``-batched linear
     probe.
     """
-    if head_cfg is None:
-        head_cfg = TitanHeadConfig()
-    # H-3: TitanHeadConfig stays the source of truth for lr/weight_decay/
-    # patience; layer on only the explicitly-set overrides. max_epochs and
-    # early_stopping are deliberately excluded — this arm reads those straight
-    # off exp_cfg.train (its documented mixed provenance), so routing them here
-    # would double-apply and trip the fail-loud guard.
-    _titan_ov = {k: v for k, v in all_overrides(exp_cfg).items()
-                 if k not in ("max_epochs", "early_stopping")}
-    head_cfg = apply_overrides(head_cfg, _titan_ov, arm="titan")
+    # H-3: mixed provenance, resolved through one seam — head knobs land on
+    # TitanHeadConfig, the opaque channel's max_epochs/early_stopping on
+    # exp_cfg.train (see resolve_head_config).
+    head_cfg = resolve_head_config(exp_cfg, head_cfg)
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
