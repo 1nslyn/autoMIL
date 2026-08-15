@@ -33,17 +33,9 @@ def bag(tmp_path):
     return str(path), torch.from_numpy(feats)
 
 
-@pytest.fixture(autouse=True)
-def _clean_module_state(monkeypatch):
-    """Reset the process-global latch and warn-set around EVERY test.
-
-    ``_disabled`` is module state that survives across tests. Without this, one
-    test exercising the degrade path would silently switch the cache off for
-    every test that ran after it -- and those tests would still pass, for
-    entirely the wrong reason.
-    """
-    monkeypatch.setattr(bag_cache, "_disabled", False)
-    monkeypatch.setattr(bag_cache, "_warned", set())
+# Process-global state (_disabled, _warned, _checked_dir) and the env var are
+# reset for every test by the autouse fixture in conftest.py, so that reset
+# applies to the whole suite rather than only this file.
 
 
 def _enable(monkeypatch, tmp_path):
@@ -263,25 +255,34 @@ class TestStalenessAndFailure:
         assert leftovers == [], f"temp files left behind: {leftovers}"
 
 
-def test_arms_read_through_the_cache():
+def test_arms_call_the_cache(bag, monkeypatch):
     """ABMIL and DTFD must route through it, or the fix reaches nothing.
+
+    Asserts the CALL, not the source text. A substring check on
+    ``inspect.getsource`` is vacuous here: the function's own ``def _read_bag(``
+    line contains "read_bag(", so it holds for any function of that name --
+    including one that reads the H5 directly and never imports this module.
 
     Both are the arms that read chunked H5. CLAM reads contiguous .pt and nnMIL
     reads through its vendored loader, which is why neither is covered here.
     """
-    import inspect
-
     from autobench.pipeline.abmil import dataset as abmil_ds
     from autobench.pipeline.dtfd import dataset as dtfd_ds
 
-    for module in (abmil_ds, dtfd_ds):
-        source = inspect.getsource(module._read_bag)
-        assert "read_bag(" in source, (
-            f"{module.__name__}._read_bag bypasses the shared cache"
-        )
+    path, _ = bag
+    calls: list[str] = []
+    monkeypatch.setattr(
+        bag_cache, "read_bag", lambda p: calls.append(p) or torch.zeros(1, 1),
+    )
+
+    abmil_ds._read_bag(path)
+    dtfd_ds._read_bag(path)
+    assert calls == [path, path], (
+        "an arm's _read_bag did not go through bag_cache.read_bag"
+    )
 
 
-def test_derivation_version_is_in_the_key():
+def test_changing_the_derivation_moves_every_key(bag, monkeypatch):
     """The key must fingerprint the TRANSFORM, not only the input.
 
     read_bag_from_h5 pins a dataset key and a dtype. If those change and the
@@ -289,18 +290,229 @@ def test_derivation_version_is_in_the_key():
     claims the new one -- the same failure the per-fold results cache has
     already shipped once, where it fingerprints configuration and never the
     code version.
-    """
-    import inspect
 
-    assert "_DERIVATION" in inspect.getsource(bag_cache._cache_key), (
-        "_cache_key does not include _DERIVATION, so changing the dtype or the "
-        "dataset key in read_bag_from_h5 would silently serve stale bags"
+    Asserts the behaviour rather than the presence of the token in the source:
+    ``_cache_key``'s own docstring names ``_DERIVATION`` twice, so a text check
+    passes even after the payload drops it.
+    """
+    path, _ = bag
+    before = bag_cache._cache_key(path)
+    monkeypatch.setattr(bag_cache, "_DERIVATION", "features|float16|v99")
+    assert bag_cache._cache_key(path) != before, (
+        "changing _DERIVATION left the key unchanged, so a warm cache would "
+        "keep serving bags built by the old derivation"
     )
+
+
+def test_derivation_names_what_the_read_actually_does():
+    """A version token that does not track the transform is decoration."""
     for token in ("features", "float32"):
         assert token in bag_cache._DERIVATION, (
             f"_DERIVATION must name what read_bag_from_h5 actually does; "
             f"{token!r} is missing"
         )
+
+
+class TestTheMappingIsTheMechanism:
+    """The win comes from mapping, not from remembering."""
+
+    def test_every_cached_read_goes_back_to_the_mapping(
+        self, bag, tmp_path, monkeypatch,
+    ):
+        """A process-level dict of arrays would pass every other test here.
+
+        It would also put the whole split back in each worker's RAM -- the
+        ~28 GB/worker that lazy loading removed. Spying on the resource rather
+        than on a name is what distinguishes the two.
+        """
+        path, _ = bag
+        _enable(monkeypatch, tmp_path)
+        bag_cache.read_bag(path)  # populate
+
+        modes: list[str | None] = []
+        real = bag_cache.np.load
+        monkeypatch.setattr(
+            bag_cache.np, "load",
+            lambda p, **k: (modes.append(k.get("mmap_mode")), real(p, **k))[1],
+        )
+        for _ in range(3):
+            bag_cache.read_bag(path)
+
+        assert modes == ["c", "c", "c"], (
+            f"reads were served from process memory ({modes}); the split is "
+            "resident per worker again"
+        )
+
+    def test_the_entry_is_invisible_until_it_is_complete(self, tmp_path, monkeypatch):
+        """Publish must be atomic as a CONCURRENT READER sees it.
+
+        Cleaning up after an exception is not the same property: writing
+        straight to the final path passes that check while exposing a
+        partially-written entry from the first byte, and a SIGKILL mid-write --
+        this codebase's documented failure mode -- would publish it permanently.
+        """
+        cache = tmp_path / "cache"
+        target = os.path.join(str(cache), "x.npy")
+        seen: list[bool] = []
+        real = bag_cache.np.save
+
+        def observe(fh, arr, **kw):
+            real(fh, arr, **kw)
+            fh.flush()
+            seen.append(os.path.exists(target))
+
+        monkeypatch.setattr(bag_cache.np, "save", observe)
+        bag_cache._write_atomically(target, np.zeros((2, 2), dtype="float32"))
+
+        assert seen == [False], "entry was visible at its final path mid-write"
+        assert os.path.exists(target)
+
+
+@pytest.mark.parametrize("impostor", [None, "SLURM_TMPDIR", "TMPDIR", "XDG_CACHE_HOME"])
+def test_only_the_opt_in_variable_turns_it_on(bag, tmp_path, monkeypatch, impostor):
+    """Opt-in means one variable, not any plausible-looking one.
+
+    ``$SLURM_TMPDIR`` is documented as the natural home, which makes falling
+    back to it a tempting one-line change -- and one that would silently cache
+    on every scheduler node for runs that never asked, voiding the
+    byte-for-byte promise exactly where it matters.
+    """
+    path, _ = bag
+    if impostor:
+        monkeypatch.setenv(impostor, str(tmp_path / "elsewhere"))
+    monkeypatch.chdir(tmp_path)
+
+    opens: list[str] = []
+    real = bag_cache.h5py.File
+    monkeypatch.setattr(
+        bag_cache.h5py, "File",
+        lambda p, *a, **k: (opens.append(str(p)), real(p, *a, **k))[1],
+    )
+    bag_cache.read_bag(path)
+    bag_cache.read_bag(path)
+
+    assert len(opens) == 2, "something cached without the opt-in variable"
+    assert list(tmp_path.rglob("*.npy")) == [], "wrote a cache entry anyway"
+
+
+class TestFilesystemParser:
+    """The real longest-match parser, not a stand-in for it.
+
+    Every other filesystem test fakes ``filesystem_type`` wholesale, which
+    leaves this logic unexecuted -- and a typo in it fails OPEN, straight back
+    to caching on tmpfs.
+    """
+
+    @staticmethod
+    def _mounts(tmp_path, body: str) -> str:
+        path = tmp_path / "mounts"
+        path.write_text(body)
+        return str(path)
+
+    def test_longest_mount_point_wins(self, tmp_path):
+        mounts = self._mounts(tmp_path, "/dev/a / ext4 rw 0 0\ntmp /scratch tmpfs rw 0 0\n")
+        assert bag_cache.filesystem_type("/scratch/x/y", mounts) == "tmpfs"
+        assert bag_cache.filesystem_type("/home/x", mounts) == "ext4"
+
+    def test_a_prefix_that_is_not_a_path_component_does_not_match(self, tmp_path):
+        mounts = self._mounts(tmp_path, "/dev/a / ext4 rw 0 0\ntmp /scratch tmpfs rw 0 0\n")
+        assert bag_cache.filesystem_type("/scratchpad/x", mounts) == "ext4"
+
+    def test_escaped_space_in_mount_point(self, tmp_path):
+        mounts = self._mounts(tmp_path, "/dev/a /my\\040disk ext4 rw 0 0\n")
+        assert bag_cache.filesystem_type("/my disk/x", mounts) == "ext4"
+
+    def test_malformed_line_is_skipped(self, tmp_path):
+        mounts = self._mounts(tmp_path, "garbage\n/dev/a / ext4 rw 0 0\n")
+        assert bag_cache.filesystem_type("/x", mounts) == "ext4"
+
+    def test_missing_mounts_file_is_undeterminable(self, tmp_path):
+        assert bag_cache.filesystem_type("/x", str(tmp_path / "nope")) is None
+
+    def test_read_bag_refuses_a_tmpfs_dir_through_the_real_parser(
+        self, bag, tmp_path, monkeypatch,
+    ):
+        """End to end, faking the mount TABLE rather than the function.
+
+        This is the only test in which the real parser decides the outcome, so
+        it is the only one that would notice the parser breaking.
+        """
+        path, expected = bag
+        cache = _enable(monkeypatch, tmp_path)
+        mounts = self._mounts(
+            tmp_path, f"/dev/a / ext4 rw 0 0\ntmp {cache} tmpfs rw 0 0\n",
+        )
+        real = bag_cache.filesystem_type
+        monkeypatch.setattr(
+            bag_cache, "filesystem_type", lambda p, _f=None: real(p, mounts),
+        )
+
+        assert torch.equal(bag_cache.read_bag(path), expected)
+        assert bag_cache._disabled, "real parser saw tmpfs and did not refuse"
+        assert not list(cache.glob("*.npy"))
+
+
+def test_the_filesystem_is_checked_once_not_per_bag(bag, tmp_path, monkeypatch):
+    """Re-parsing the mount table per read is a real cost at 4 ms/step.
+
+    On a host with many mounts (containers, autofs, NFS) this measured ~0.33 ms
+    per bag, which is ~12 s per fold spent answering the same question.
+    """
+    path, _ = bag
+    _enable(monkeypatch, tmp_path)
+
+    checks: list[str] = []
+    monkeypatch.setattr(
+        bag_cache, "filesystem_type",
+        lambda p, mounts_file="/proc/self/mounts": (checks.append(p), "ext4")[1],
+    )
+    for _ in range(5):
+        bag_cache.read_bag(path)
+
+    assert len(checks) == 1, (
+        f"parsed the mount table {len(checks)} times for 5 reads; it is the "
+        "same answer every time and belongs behind the latch"
+    )
+
+
+def test_a_stat_failure_degrades_instead_of_killing_the_worker(
+    bag, tmp_path, monkeypatch,
+):
+    """With the cache ON, a transient stat error must not be fatal.
+
+    A retrying ``h5py.File`` open survives ESTALE/EACCES that ``os.stat`` does
+    not, so without this branch enabling the cache would make a run strictly
+    more fragile than leaving it off -- the one asymmetry it must never have.
+    """
+    path, expected = bag
+    _enable(monkeypatch, tmp_path)
+
+    def boom(*_a, **_k):
+        raise OSError(116, "Stale file handle")
+
+    monkeypatch.setattr(bag_cache.os, "stat", boom)
+    assert torch.equal(bag_cache.read_bag(path), expected)
+
+
+def test_degradation_is_announced(bag, tmp_path, monkeypatch, capsys):
+    """A silently degraded run looks exactly like a healthy one.
+
+    The latch keeps a broken cache from being slower than no cache; this keeps
+    it from being invisible, which is how a cluster-wide misconfiguration
+    survives for a whole campaign.
+    """
+    path, _ = bag
+    _enable(monkeypatch, tmp_path)
+
+    def boom(*_a, **_k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(bag_cache, "_write_atomically", boom)
+    bag_cache.read_bag(path)
+
+    assert "bag-cache" in capsys.readouterr().out, (
+        "degraded to uncached reads without telling anyone"
+    )
 
 
 def test_no_consumer_mutates_a_returned_bag():

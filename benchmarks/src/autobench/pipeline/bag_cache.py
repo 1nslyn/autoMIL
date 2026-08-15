@@ -93,6 +93,10 @@ _warned: set[str] = set()
 #: Latched off after a failure that will recur for every remaining bag.
 _disabled = False
 
+#: Cache dir whose filesystem has already been vetted, so the mount table is
+#: parsed once per process rather than once per bag.
+_checked_dir: str | None = None
+
 
 def _warn_once(key: str, message: str) -> None:
     if key not in _warned:
@@ -113,30 +117,54 @@ def _disable(message: str) -> None:
     _warn_once("disabled", f"{message}; falling back to direct H5 reads")
 
 
-def filesystem_type(path: str) -> str | None:
+def filesystem_type(path: str, mounts_file: str = "/proc/self/mounts") -> str | None:
     """Filesystem backing ``path``, or None when it cannot be determined.
 
-    Reads /proc/self/mounts and takes the longest matching mount point. Returns
-    None off Linux, where the caller treats the filesystem as acceptable rather
-    than refusing to run.
+    Takes the longest matching mount point, so ``/scratch`` wins over ``/``.
+    Returns None off Linux, where the caller treats the filesystem as acceptable
+    rather than refusing to run.
+
+    ``mounts_file`` is injectable so the parser itself is testable. Faking this
+    function wholesale would leave the real longest-match logic unexecuted by
+    any test, and a typo in it fails open -- straight back to caching on tmpfs.
     """
     try:
-        with open("/proc/self/mounts") as fh:
-            mounts = [line.split()[:3] for line in fh]
+        with open(mounts_file) as fh:
+            rows = [line.split()[:3] for line in fh]
     except OSError:
         return None
 
     target = os.path.realpath(path)
     best_type, best_len = None, -1
-    for entry in mounts:
-        if len(entry) < 3:
+    for row in rows:
+        if len(row) < 3:
             continue
-        _device, point, fstype = entry[0], entry[1], entry[2]
-        point = point.replace("\\040", " ")
+        point, fstype = row[1].replace("\\040", " "), row[2]
         if (target == point or target.startswith(point.rstrip("/") + "/")) \
                 and len(point) > best_len:
             best_type, best_len = fstype, len(point)
     return best_type
+
+
+def _cache_dir_is_usable(cache_dir: str) -> bool:
+    """Check the filesystem ONCE per process, not once per bag.
+
+    This re-opens and re-parses the mount table; on a host with many mounts
+    (containers, autofs, NFS) that is a measurable per-read cost against a
+    ~4 ms/step target, and it is the same answer every time.
+    """
+    global _checked_dir
+    if _checked_dir == cache_dir:
+        return True
+    fstype = filesystem_type(cache_dir)
+    if fstype in _UNSAFE_FSTYPES:
+        _disable(
+            f"{_ENV_VAR}={cache_dir!r} is on {fstype!r}, where this cache is "
+            "harmful rather than helpful (see _UNSAFE_FSTYPES)"
+        )
+        return False
+    _checked_dir = cache_dir
+    return True
 
 
 def read_bag_from_h5(h5_path: str) -> np.ndarray:
@@ -165,8 +193,8 @@ def _cache_key(h5_path: str) -> str:
     """
     stat = os.stat(h5_path)
     payload = (
-        f"{os.path.realpath(h5_path)}|{stat.st_size}|{stat.st_ino}"
-        f"|{stat.st_mtime_ns}|{_DERIVATION}"
+        f"{os.path.realpath(h5_path)}|{stat.st_dev}|{stat.st_ino}"
+        f"|{stat.st_size}|{stat.st_mtime_ns}|{_DERIVATION}"
     )
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -203,12 +231,7 @@ def read_bag(h5_path: str) -> torch.Tensor:
     if not cache_dir or _disabled:
         return torch.from_numpy(read_bag_from_h5(h5_path))
 
-    fstype = filesystem_type(cache_dir)
-    if fstype in _UNSAFE_FSTYPES:
-        _disable(
-            f"{_ENV_VAR}={cache_dir!r} is on {fstype!r}, where this cache is "
-            "harmful rather than helpful (see _UNSAFE_FSTYPES)"
-        )
+    if not _cache_dir_is_usable(cache_dir):
         return torch.from_numpy(read_bag_from_h5(h5_path))
 
     try:

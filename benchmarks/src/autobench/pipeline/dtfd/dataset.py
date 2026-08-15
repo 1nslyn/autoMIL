@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from autobench.pipeline.bag_cache import read_bag
+from autobench.pipeline import bag_cache
 from autobench.pipeline.dataset_guards import check_split_retention
 
 
@@ -69,8 +69,11 @@ def _read_bag(h5_path: str) -> torch.Tensor:
 
     Identical bytes with or without the cache; see ``bag_cache`` for why the
     H5 read is 95% of a training step and what the mapping does about it.
+
+    Called through the module rather than a from-import so a test can observe
+    that this arm really does route through the cache.
     """
-    return read_bag(h5_path)
+    return bag_cache.read_bag(h5_path)
 
 
 def _load_split_ids(split_csv: str, column: str) -> list[str]:
