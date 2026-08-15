@@ -126,7 +126,7 @@ class TestCollectResultSurvivesUnestimableDiagnostics:
             worktree_dir=worktree,
         )
 
-        result = Runner(tmp_path).collect_result(worktree, archive)
+        result = Runner(tmp_path, tmp_path / "automil").collect_result(worktree, archive)
 
         assert result["status"] == "completed"
         assert result["composite"] == 0.84
@@ -145,7 +145,7 @@ class TestCollectResultSurvivesUnestimableDiagnostics:
             '{"status": "completed", "composite": Infinity, "metrics": {}}'
         )
 
-        result = Runner(tmp_path).collect_result(worktree, archive)
+        result = Runner(tmp_path, tmp_path / "automil").collect_result(worktree, archive)
 
         assert result["status"] == "crash"
         assert result["composite"] == 0.0

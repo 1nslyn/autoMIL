@@ -62,7 +62,7 @@ def test_collect_result_degrades_nonfinite_token_to_crash(tmp_path, token):
         '{"status": "completed", "composite": %s, "metrics": {}}' % token
     )
 
-    runner = Runner(project_root=tmp_path)
+    runner = Runner(project_root=tmp_path, automil_dir=tmp_path / "automil")
     out = runner.collect_result(worktree, archive)
 
     assert out is not None
@@ -82,7 +82,7 @@ def test_collect_result_parses_finite_normally(tmp_path):
         json.dumps({"status": "completed", "composite": 0.7, "metrics": {"val_auc": 0.7}})
     )
 
-    runner = Runner(project_root=tmp_path)
+    runner = Runner(project_root=tmp_path, automil_dir=tmp_path / "automil")
     out = runner.collect_result(worktree, archive)
 
     assert out["status"] == "completed"

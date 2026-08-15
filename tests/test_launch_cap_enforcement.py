@@ -52,19 +52,21 @@ def _make_orch(tmp_path: Path) -> Any:
 
 def _write_cell(automil_dir: Path, *, status: CellStatus = CellStatus.ACTIVE,
                 eval_budget: int | None = None, consumed_evals: int = 0,
-                mode: str = "wall_clock") -> Cell:
+                mode: str = "wall_clock", started_at: float | None = None,
+                billed_node_ids: list[str] | None = None) -> Cell:
     cell = Cell(
         cell_id=CELL_ID,
         dataset="ds",
         encoder="enc",
         mil_model="clam sb",
-        started_at=time.time() - 60,
+        started_at=time.time() - 60 if started_at is None else started_at,
         budget_seconds=21600,
         safety_buffer_seconds=1800,
         status=status,
         mode=mode,
         eval_budget=eval_budget,
         consumed_evals=consumed_evals,
+        billed_node_ids=list(billed_node_ids or []),
     )
     write_cell(cell, automil_dir / "cells")
     return cell
@@ -334,6 +336,88 @@ def test_tick_refuses_closed_cell_specs_even_with_no_gpu_free(tmp_path):
     assert NODE_ID not in orch.running
     orch.runner.create_worktree.assert_not_called()
     orch._find_best_gpu.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# A9 billed retries through closed cells (canary recovery, 2026-08-15)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status", [CellStatus.REFUSING_NEW, CellStatus.TERMINATING, CellStatus.FINALIZED],
+)
+def test_billed_node_relaunches_through_any_eval_closed_state(tmp_path, status):
+    """A billed node is paid-for work being completed, not new work.
+
+    Eval-axis closure (REFUSING_NEW draining to TERMINATING/FINALIZED with
+    running=0) must complete a billed retry, never cancel it: refusal stamps
+    ``cap_refused`` onto a BILLED archived spec, leaving the freeze census
+    permanently short of ``consumed_evals``. Observed live 2026-08-15: all 20
+    billed promotion retries of the canary recovery were refused by
+    terminating/finalized cells whose 7-day wall_clock budgets had days of
+    headroom left.
+    """
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, status=status, eval_budget=10,
+                consumed_evals=10, billed_node_ids=[NODE_ID])
+    _seed_graph(orch)
+    spec = _write_queued_spec(orch)
+    _stub_runner(orch, tmp_path)
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(spec, gpu_id=0)
+
+    assert len(_FakePopen.calls) == 1, (
+        f"a billed retry must relaunch through a {status.value} cell"
+    )
+    assert NODE_ID in orch.running
+    archived = orch.archive_dir / NODE_ID / "spec.json"
+    if archived.exists():
+        assert not (json.loads(archived.read_text()).get("metadata") or {}).get(
+            "cap_refused"
+        ), "a billed spec must never carry a cap_refused stamp"
+
+
+def test_billed_node_is_still_refused_by_an_expired_wall_clock(tmp_path):
+    """The one wall that may refuse paid work: a genuinely expired wall_clock
+    budget — the only axis denominated in the unit the retry would spend."""
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, status=CellStatus.FINALIZED, eval_budget=10,
+                consumed_evals=10, billed_node_ids=[NODE_ID],
+                started_at=time.time() - 36000)  # budget_seconds=21600: expired
+    _seed_graph(orch)
+    _write_queued_spec(orch)
+    _stub_runner(orch, tmp_path)
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch.tick()
+
+    assert _FakePopen.calls == [], (
+        "an expired wall_clock budget is the hard wall: even billed work stays refused"
+    )
+    assert not (orch.queue_dir / f"{NODE_ID}.json").exists()
+
+
+def test_billed_retry_does_not_double_bill(tmp_path):
+    """Exactly-once: relaunching a billed node must not advance consumed_evals."""
+    from automil.cells.state import read_cell
+
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, status=CellStatus.FINALIZED, eval_budget=10,
+                consumed_evals=10, billed_node_ids=[NODE_ID])
+    _seed_graph(orch)
+    spec = _write_queued_spec(orch)
+    _stub_runner(orch, tmp_path)
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(spec, gpu_id=0)
+
+    cell = read_cell(orch.automil_dir / "cells" / f"{CELL_ID}.json")
+    assert cell.consumed_evals == 10
+    assert cell.billed_node_ids.count(NODE_ID) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -77,7 +77,7 @@ def test_completion_leaves_agent_archive_test_free(tmp_path: Path) -> None:
     # --- Simulate a born-sealed run on disk -------------------------------------
     # 1. The training script wrote result.json to its worktree with BOTH the val
     #    metrics (agent-facing) and the sealed held_out (test) block.
-    runner = Runner(project_root=project)
+    runner = Runner(project_root=project, automil_dir=project / "automil")
     wt = runner.worktree_path(node_id)
     wt.mkdir(parents=True, exist_ok=True)
     raw_result = {

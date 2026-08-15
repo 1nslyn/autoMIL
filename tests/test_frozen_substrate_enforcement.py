@@ -91,7 +91,7 @@ class TestOverlayManifestIsVerified:
     def _runner(self, tmp_path: Path) -> Runner:
         project = tmp_path / "project"
         project.mkdir(exist_ok=True)
-        return Runner(project)
+        return Runner(project, project / "automil")
 
     def test_matching_digest_applies_normally(self, tmp_path):
         overlay, manifest, _ = self._overlay(tmp_path)

@@ -149,90 +149,16 @@ def _find_git_root(start: Path | None = None) -> Path:
     raise RuntimeError("Not inside a git repository.")
 
 
-# ---------------------------------------------------------------------------
-# PID-file starttime cross-check (CLN-04 / D-17)
-# ---------------------------------------------------------------------------
-# PID reuse on Linux can cause a stale PID file to claim ownership of an
-# unrelated process. Compare both pid AND /proc/<pid>/stat starttime_ticks
-# before signalling. Linux-only is acceptable per PROJECT.md Constraints.
-
-def _parse_starttime_from_stat_line(line: str) -> int:
-    """Parse field 22 (1-indexed) — process starttime in clock ticks — from a /proc/<pid>/stat line.
-
-    The `comm` field (#2) is wrapped in parentheses and CAN contain spaces.
-    Find the LAST ')' to skip past comm, then split the suffix on whitespace.
-    """
-    end_comm = line.rfind(")")
-    if end_comm == -1:
-        raise ValueError(f"Malformed /proc/<pid>/stat line: {line!r}")
-    # After the ')' there's a space, then field 3 (state) onwards.
-    suffix = line[end_comm + 1:].strip()
-    fields = suffix.split()
-    # suffix starts at field 3; starttime is field 22 (1-indexed) -> suffix index 22 - 3 = 19.
-    if len(fields) < 20:
-        raise ValueError(f"/proc/<pid>/stat has fewer fields than expected: {len(fields)}")
-    return int(fields[19])
-
-
-def _read_proc_starttime(pid: int) -> int | None:
-    """Read /proc/<pid>/stat field 22 (starttime_ticks). Returns None if pid not found or /proc unavailable."""
-    try:
-        line = Path(f"/proc/{pid}/stat").read_text()
-    except (FileNotFoundError, PermissionError, OSError):
-        return None
-    try:
-        return _parse_starttime_from_stat_line(line)
-    except ValueError as e:
-        logger.warning("Could not parse /proc/%d/stat: %s", pid, e)
-        return None
-
-
-def _is_pid_alive_with_starttime(pid: int, expected_starttime_ticks: int) -> bool:
-    """True iff the process at *pid* is running AND its starttime matches the recorded value.
-
-    The starttime check defends against PID reuse: a previous daemon's PID
-    could be reassigned to an unrelated process; signalling that PID would
-    be wrong. See CONCERNS.md §"PID-file stale-detection uses os.kill(pid, 0)".
-    """
-    actual = _read_proc_starttime(pid)
-    if actual is None:
-        return False
-    return actual == expected_starttime_ticks
-
-
-def _write_pid_file(pid_file: Path) -> None:
-    """Write PID file as JSON with pid + starttime_ticks + starttime_iso (D-17 shape)."""
-    my_pid = os.getpid()
-    starttime = _read_proc_starttime(my_pid)
-    if starttime is None:
-        # /proc unavailable (non-Linux test env); record what we can.
-        starttime = 0
-    payload = {
-        "pid": my_pid,
-        "starttime_ticks": starttime,
-        "starttime_iso": datetime.now().isoformat(),
-    }
-    pid_file.write_text(json.dumps(payload) + "\n")
-
-
-def _load_pid_file(pid_file: Path) -> dict | None:
-    """Load pid_file as JSON. Returns None on legacy plain-int, invalid JSON, or missing keys.
-
-    None means "treat as stale" — the caller should unlink and proceed as
-    if no daemon were running. Documented for plain-int compat: an in-flight
-    daemon started before this change uses the legacy format; on first
-    post-upgrade cmd_start, the legacy file is treated as stale and
-    unlinked, the operator restarts and gets the new format.
-    """
-    try:
-        data = json.loads(pid_file.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    if not {"pid", "starttime_ticks", "starttime_iso"}.issubset(data.keys()):
-        return None
-    return data
+# PID-file starttime cross-check (CLN-04 / D-17) lives in automil.backends.pidfile
+# (public surface, shared with operator tooling). Private aliases preserve the
+# daemon-internal and automil.orchestrator shim call sites.
+from automil.backends.pidfile import (  # noqa: E402
+    parse_starttime_from_stat_line as _parse_starttime_from_stat_line,
+    read_proc_starttime as _read_proc_starttime,
+    is_pid_alive_with_starttime as _is_pid_alive_with_starttime,
+    write_pid_file as _write_pid_file,
+    load_pid_file as _load_pid_file,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +511,7 @@ class ExperimentOrchestrator:
         # activity health so a file blip never fakes a telemetry transition.
         self._unreadable_cell_logged: set[str] = set()
 
-        self.runner = Runner(self.project_root)
+        self.runner = Runner(self.project_root, self.automil_dir)
 
         # CR-01 fix: ExperimentGraph instance initialized here so _handle_completion
         # and _handle_cap_killed_completion both receive a valid graph object at
@@ -1549,24 +1475,31 @@ class ExperimentOrchestrator:
             return False
         if not blocks_new_work(cell):
             return False
-        if (
-            node_id in cell.billed_node_ids
-            and cell.status not in (CellStatus.TERMINATING, CellStatus.FINALIZED)
-        ):
-            # A9 exactly-once, final-attempt corner: an attempt that was already
-            # BILLED (crash/unlink-abort inside its launch window, now retrying)
-            # is paid-for work being completed, not new work — and on the last
-            # budgeted attempt the bill itself flips evals_exhausted, so refusing
-            # here would stamp the archived spec cap_refused and leave the freeze
-            # census permanently one short of consumed_evals. Exempt it, unless
-            # the TIME axis has already escalated to terminating/finalized (the
-            # hard wall may not be crossed to start new processes).
-            logger.info(
-                "Launching already-billed %s despite %s cell %s: a charged "
-                "attempt being retried is not new work.",
-                node_id, cell.status.value, cell.cell_id[:8],
+        if node_id in cell.billed_node_ids:
+            # A9 exactly-once: an attempt that was already BILLED (crash or
+            # unlink-abort inside its launch window, now retrying) is paid-for
+            # work being completed, not new work. Refusing it stamps the
+            # archived spec cap_refused and leaves the freeze census
+            # permanently short of consumed_evals — so no EVAL-axis state may
+            # refuse it, including TERMINATING/FINALIZED reached by the idle
+            # drain (canary recovery 2026-08-15: all 20 billed promotion
+            # retries were cancelled by finalized cells whose 7-day wall_clock
+            # budgets had days of headroom left). The one wall that may refuse
+            # paid work is a genuinely expired wall_clock budget — the only
+            # axis denominated in the unit the retry would spend; an
+            # agent_active budget bounds agent seconds, which a billed GPU
+            # retry cannot consume.
+            wall_expired = (
+                cell.mode == "wall_clock"
+                and (time.time() - cell.started_at) >= cell.budget_seconds
             )
-            return False
+            if not wall_expired:
+                logger.info(
+                    "Launching already-billed %s despite %s cell %s: a charged "
+                    "attempt being retried is not new work.",
+                    node_id, cell.status.value, cell.cell_id[:8],
+                )
+                return False
         logger.warning(
             "Refusing to launch %s: cell %s is %s "
             "(consumed_evals=%d/%s). Dequeuing the spec and cancelling "

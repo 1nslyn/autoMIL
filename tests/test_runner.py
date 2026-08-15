@@ -31,7 +31,14 @@ def project_repo(tmp_path):
 
 @pytest.fixture
 def runner(project_repo):
-    return Runner(project_root=project_repo)
+    return Runner(project_root=project_repo, automil_dir=project_repo / "automil")
+
+
+def _head(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
 
 
 class TestWorktreeLifecycle:
@@ -225,3 +232,81 @@ class TestResultCollection:
         sealed = json.loads((archive_dir / "certify" / "result.json").read_text())
         assert sealed["held_out"] == {"test_auc": 0.87}
         runner.cleanup_worktree(wt_path)
+
+
+class TestWorktreeRecovery:
+    """create_worktree must survive every orphan shape a crash can leave behind.
+
+    Canary incident 2026-08-15: the wipe-before-recreate path called
+    ``shutil.rmtree`` without ``git worktree prune``, so the follow-up
+    ``git worktree add`` always failed with exit 128 ("missing but already
+    registered worktree") — the documented recovery never once succeeded,
+    turning a recoverable race into 18 dead promotion jobs.
+    """
+
+    def test_recreate_after_out_of_band_rmtree(self, runner, project_repo):
+        """Registration stale, directory gone — the exact exit-128 case."""
+        import shutil
+        base = _head(project_repo)
+        wt = runner.create_worktree(base_commit=base, node_id="node_0042")
+        shutil.rmtree(wt)  # no prune: registration left dangling in .git/worktrees
+        wt2 = runner.create_worktree(base_commit=base, node_id="node_0042")
+        assert wt2 == wt
+        assert (wt2 / "train.py").exists()
+        runner.cleanup_worktree(wt2)
+
+    def test_recreate_over_live_orphan_dir(self, runner, project_repo):
+        """Directory present and still registered (interrupted prior launch)."""
+        base = _head(project_repo)
+        wt = runner.create_worktree(base_commit=base, node_id="node_0043")
+        (wt / "leftover.marker").write_text("stale state from a dead launch\n")
+        wt2 = runner.create_worktree(base_commit=base, node_id="node_0043")
+        assert wt2 == wt
+        assert not (wt2 / "leftover.marker").exists(), (
+            "recreate must produce a fresh checkout, not reuse orphan contents"
+        )
+        assert (wt2 / "train.py").exists()
+        runner.cleanup_worktree(wt2)
+
+
+class TestWorktreeScoping:
+    """Two automil projects in one checkout must never share a worktree path.
+
+    Canary incident 2026-08-15: every cell's promotion jobs are named
+    ``node_0001..node_0010`` and the runner keyed worktrees on node_id alone
+    under one repo-global ``.automil_worktrees/``, so two concurrent promotion
+    orchestrators wiped each other's live worktrees deterministically.
+    """
+
+    def test_same_node_id_disjoint_across_projects(self, project_repo):
+        a = Runner(project_root=project_repo,
+                   automil_dir=project_repo / "cellA" / "automil")
+        b = Runner(project_root=project_repo,
+                   automil_dir=project_repo / "cellB" / "automil")
+        assert a.worktree_path("node_0001") != b.worktree_path("node_0001")
+        base_dir = project_repo / ".automil_worktrees"
+        assert base_dir in a.worktree_path("node_0001").parents
+        assert base_dir in b.worktree_path("node_0001").parents
+
+    def test_concurrent_projects_do_not_clobber(self, project_repo):
+        base = _head(project_repo)
+        a = Runner(project_root=project_repo,
+                   automil_dir=project_repo / "cellA" / "automil")
+        b = Runner(project_root=project_repo,
+                   automil_dir=project_repo / "cellB" / "automil")
+        wa = a.create_worktree(base_commit=base, node_id="node_0001")
+        (wa / "in_flight.marker").write_text("cell A training here\n")
+        wb = b.create_worktree(base_commit=base, node_id="node_0001")
+        assert wa != wb
+        assert wa.exists() and wb.exists()
+        assert (wa / "in_flight.marker").exists(), (
+            "cell B's launch wiped cell A's live worktree"
+        )
+        a.cleanup_worktree(wa)
+        b.cleanup_worktree(wb)
+
+    def test_scope_is_stable_across_instances(self, project_repo):
+        adir = project_repo / "cellA" / "automil"
+        p1 = Runner(project_root=project_repo, automil_dir=adir).worktree_path("node_0009")
+        p2 = Runner(project_root=project_repo, automil_dir=adir).worktree_path("node_0009")
+        assert p1 == p2
