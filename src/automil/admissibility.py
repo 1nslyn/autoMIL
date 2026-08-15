@@ -536,13 +536,37 @@ def validate_campaign_binding(
     *,
     base_run_command: str | None,
     budget_cell_id: str,
+    spec_timeout_min: float | None = None,
+    default_timeout_min: float | None = None,
 ) -> dict[str, object]:
     """Prove command, budget, and cell metadata share one manifest record.
 
     The framework does not interpret the consumer's dataset/model axes.  It
     only enforces a generic campaign envelope: one unique cell, a canonical
     per-cell hash, one budget identity, and a command selected by stage.
+
+    Timeout cap (optional, enforced only when BOTH timeout params are given):
+    the campaign's attempt timeout is a hash-audited failure-containment
+    constant, not a search budget — a per-spec ``--timeout`` ABOVE the cell
+    default would silently unbind it (the runtime-canary agent raised 360→600
+    unchallenged). Lowering stays free: a cheap probe releasing its slot early
+    is exactly what containment wants. The two enforcing callers are submit
+    (agent-facing refusal) and the daemon's launch-time revalidation (queue
+    specs are agent-editable JSON, so submit-only enforcement is bypassable);
+    the campaign-materialization and promotion callers pass neither param and
+    skip the check.
     """
+    if (
+        spec_timeout_min is not None
+        and default_timeout_min is not None
+        and float(spec_timeout_min) > float(default_timeout_min)
+    ):
+        raise AdmissibilityError(
+            f"campaign attempt timeout is failure containment, not a search "
+            f"budget: --timeout {spec_timeout_min:g}min exceeds the cell's "
+            f"audited default of {default_timeout_min:g}min (lowering is "
+            f"allowed; raising is not)"
+        )
     required = (
         "campaign_id", "manifest", "manifest_sha256", "cell_id",
         "cell_sha256", "budget_cell_id", "stage",

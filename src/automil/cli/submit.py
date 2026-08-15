@@ -619,6 +619,12 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 _campaign_binding,
                 base_run_command=_base_run_command,
                 budget_cell_id=_identity.cell_id,
+                # Timeout cap: --timeout above the audited cell default would
+                # unbind the hash-locked failure-containment constant.
+                spec_timeout_min=timeout,
+                default_timeout_min=(
+                    (_automil_cfg.get("orchestrator") or {}).get("default_timeout_min")
+                ),
             )
             _protocol_sha256 = _campaign_cfg.get("agent_protocol_sha256")
             if (

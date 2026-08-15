@@ -1108,11 +1108,26 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
     eligible.sort(key=lambda item: (-item["discovery_mean"], item["candidate_id"]))
     unique_eligible: list[dict[str, Any]] = []
     seen_identities: set[str] = set()
+    seen_outcomes: set[tuple] = set()
     for candidate in eligible:
         identity = candidate["candidate_sha256"]
         if identity in seen_identities:
             continue
+        # Outcome identity: runs are bit-deterministic under the locked seed,
+        # so two candidates with the SAME per-fold composites are the same
+        # measurement wearing different configs (uni_v2 canary: a weight-decay
+        # value inside the logit-scaling invariant regime reproduced its parent
+        # to 16 digits and occupied a second promotion slot). Promotion re-runs
+        # byte-copies on folds 3/4; re-measuring an identical fold vector twice
+        # buys zero information, so the slot goes to the next distinct config.
+        outcome = tuple(
+            (fold["fold_index"], fold["composite"])
+            for fold in candidate["validation_folds"]
+        )
+        if outcome in seen_outcomes:
+            continue
         seen_identities.add(identity)
+        seen_outcomes.add(outcome)
         unique_eligible.append(candidate)
     promoted = unique_eligible[:PROMOTION_CANDIDATES]
     frozen_at = _utc_now()

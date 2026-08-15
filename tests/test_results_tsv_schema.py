@@ -93,7 +93,8 @@ class TestMixedCampaignKeepsEveryMetric:
         orch._append_results_tsv("0002", _surv(), "b")
         header = _rows(orch.results_tsv)[0]
         assert header[0] == "node_id"
-        assert header[-5:] == ["composite", "vram_gb", "elapsed_min", "status", "description"]
+        assert header[-6:] == ["composite", "composite_se", "vram_gb",
+                               "elapsed_min", "status", "description"]
 
     def test_node_ids_and_descriptions_survive_the_rewrite(self, orch):
         orch._append_results_tsv("0001", _cls(), "first idea")
@@ -119,6 +120,63 @@ class TestNoNeedlessRewrites:
         header = _rows(orch.results_tsv)[0]
         assert header.count("val_auc") == 1
         assert "val_bacc" in header
+
+
+class TestCompositeSeColumn:
+    def test_composite_se_lands_in_its_own_column(self, orch):
+        orch._append_results_tsv(
+            "0001", dict(_cls(), composite_se=0.0116), "a",
+        )
+        header, row = _rows(orch.results_tsv)
+        assert row[header.index("composite_se")] == "0.011600"
+
+    def test_missing_composite_se_is_blank_not_zero(self, orch):
+        orch._append_results_tsv("0001", _cls(), "a")
+        header, row = _rows(orch.results_tsv)
+        assert row[header.index("composite_se")] == ""
+
+
+class TestTrailingSchemaWidening:
+    """A results.tsv written before ``composite_se`` joined the trailing block
+    must be rewritten — with every old cell mapped by the header actually on
+    disk. Zipping old rows against a reconstruction from the CURRENT trailing
+    tuple shifted every backfilled trailing cell one column left (the exact
+    silent corruption this class pins)."""
+
+    LEGACY_HEADER = "node_id\tval_auc\tval_bacc\tcomposite\tvram_gb\telapsed_min\tstatus\tdescription"
+    LEGACY_ROW = "node_0007\t0.6046\t0.6317\t0.618150\t1.4\t286.3\tcompleted\twarmup 2 + patience 40"
+
+    def _seed_legacy(self, orch):
+        orch.results_tsv.write_text(self.LEGACY_HEADER + "\n" + self.LEGACY_ROW + "\n")
+
+    def test_legacy_file_widens_on_next_append(self, orch):
+        self._seed_legacy(orch)
+        orch._append_results_tsv("0002", dict(_cls(), composite_se=0.02), "b")
+        header, r1, r2 = _rows(orch.results_tsv)
+        assert "composite_se" in header
+        assert len(r1) == len(header) == len(r2)
+
+    def test_legacy_row_cells_keep_their_columns(self, orch):
+        self._seed_legacy(orch)
+        orch._append_results_tsv("0002", dict(_cls(), composite_se=0.02), "b")
+        header, r1, _ = _rows(orch.results_tsv)
+        by = dict(zip(header, r1))
+        assert by["composite"] == "0.618150"
+        assert by["composite_se"] == ""          # legacy row genuinely had none
+        assert by["vram_gb"] == "1.4"
+        assert by["elapsed_min"] == "286.3"
+        assert by["status"] == "completed"
+        assert by["description"] == "warmup 2 + patience 40"
+
+    def test_legacy_rewrite_happens_even_without_new_metric_keys(self, orch):
+        """The old trigger fired only on new METRIC keys; a trailing-schema
+        change alone must also rewrite, or the append writes rows wider than
+        the on-disk header."""
+        self._seed_legacy(orch)
+        orch._append_results_tsv("0002", _cls(), "b")     # same metric keys
+        header, r1, r2 = _rows(orch.results_tsv)
+        assert "composite_se" in header
+        assert len(r1) == len(header) == len(r2)
 
 
 class TestDegenerateInputs:

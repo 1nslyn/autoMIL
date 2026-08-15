@@ -4,11 +4,10 @@ PID reuse on Linux can cause a stale PID file to claim ownership of an
 unrelated process. Compare both pid AND /proc/<pid>/stat starttime_ticks
 before signalling. Linux-only is acceptable per PROJECT.md Constraints.
 
-Extracted from ``_orchestrator_daemon`` so that operator tooling (e.g.
-``benchmarks/scripts/campaign_operate.py``) can check daemon liveness with
-the daemon's own semantics without importing the daemon module. Ad-hoc
-parsing of these JSON pid files has already caused one wrong "all daemons
-stale" verdict; this module is the single authority.
+Extracted from ``_orchestrator_daemon`` so that operator tooling can check
+daemon liveness with the daemon's own semantics without importing the daemon
+module. Ad-hoc parsing of these JSON pid files has already caused one wrong
+"all daemons stale" verdict; this module is the single authority.
 """
 from __future__ import annotations
 

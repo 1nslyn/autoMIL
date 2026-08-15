@@ -129,9 +129,11 @@ else:
 
 def _find_automil_dir() -> Path:
     """Walk up from cwd to find automil/config.yaml. Returns the automil/ dir."""
+    from automil.paths import probe_exists
+
     p = Path.cwd()
     while p != p.parent:
-        if (p / "automil" / "config.yaml").exists():
+        if probe_exists(p / "automil" / "config.yaml"):
             return p / "automil"
         p = p.parent
     raise RuntimeError(
@@ -1178,6 +1180,12 @@ class ExperimentOrchestrator:
         # AUTOMIL_ACCELERATOR to distinguish CPU from accelerator execution.
         env["AUTOMIL_GPU"] = "0"
         env["AUTOMIL_ACCELERATOR"] = accelerator
+        # Training stdout goes to run.log through a pipe, where CPython
+        # block-buffers ~8KB: per-epoch lines were invisible to any live probe
+        # and LOST outright when a timeout escalated to SIGKILL — exactly the
+        # runs whose learning curve the post-mortem needs. Unbuffered stdout is
+        # measurement-neutral (log I/O only).
+        env["PYTHONUNBUFFERED"] = "1"
         env["AUTOMIL_DESC"] = spec.get("description", "")
         env["AUTOMIL_NODE_ID"] = node_id
         try:
@@ -1832,6 +1840,11 @@ class ExperimentOrchestrator:
                     _campaign,
                     base_run_command=self.run_command,
                     budget_cell_id=str((spec.get("metadata") or {}).get("cell_id", "")),
+                    # Queue specs are agent-editable JSON: re-enforce the
+                    # timeout cap here, or submit-time enforcement is
+                    # bypassable by editing the spec after submit.
+                    spec_timeout_min=spec.get("timeout_min"),
+                    default_timeout_min=self.default_timeout,
                 )
         except Exception as exc:  # fail closed at the last pre-launch seam
             logger.error(
@@ -2776,7 +2789,8 @@ class ExperimentOrchestrator:
         # the graph must not wait for a reconcile that may never be run.
         self._mark_node_terminal_in_graph(node_id, "crash", error)
 
-    _TSV_TRAILING = ("composite", "vram_gb", "elapsed_min", "status", "description")
+    _TSV_TRAILING = ("composite", "composite_se", "vram_gb", "elapsed_min",
+                     "status", "description")
 
     def _append_results_tsv(self, node_id: str, result: dict, description: str = ""):
         """Append a row to results.tsv (sole writer, no locking needed).
@@ -2813,27 +2827,31 @@ class ExperimentOrchestrator:
 
         trailing = list(self._TSV_TRAILING)
         existing_rows: list[list[str]] = []
+        disk_header: list[str] = []
         if self.results_tsv.exists() and self.results_tsv.stat().st_size:
             lines = self.results_tsv.read_text().splitlines()
-            header_cols = lines[0].split("\t")
-            metric_cols = [c for c in header_cols
+            disk_header = lines[0].split("\t")
+            # Old trailing names are a subset of the current tuple, so this
+            # extraction stays correct across a trailing-schema widening.
+            metric_cols = [c for c in disk_header
                            if c != "node_id" and c not in set(trailing)]
             existing_rows = [ln.split("\t") for ln in lines[1:] if ln]
         else:
-            header_cols, metric_cols = [], []
+            metric_cols = []
 
-        new_metrics = [k for k in sorted(metrics) if k not in metric_cols]
-        if new_metrics or not header_cols:
-            # Schema change (or first write): widen and rewrite, backfilling the
-            # rows that predate the new column(s) with blanks.
-            old_metric_cols = list(metric_cols)
-            metric_cols = sorted(set(metric_cols) | set(metrics))
-            header_cols = ["node_id"] + metric_cols + trailing
-            rebuilt = ["\t".join(header_cols)]
+        metric_cols = sorted(set(metric_cols) | set(metrics))
+        canonical_header = ["node_id"] + metric_cols + trailing
+        if disk_header != canonical_header:
+            # Schema change (new metric key, a grown trailing block, or first
+            # write): widen and rewrite, backfilling the rows that predate the
+            # new column(s) with blanks. Rows are remapped by the header
+            # actually on disk — zipping against a reconstruction from the
+            # CURRENT trailing tuple misaligns every backfilled trailing cell
+            # the moment the trailing schema changes.
+            rebuilt = ["\t".join(canonical_header)]
             for row in existing_rows:
-                old_header = ["node_id"] + old_metric_cols + trailing
-                by_name = dict(zip(old_header, row))
-                rebuilt.append("\t".join(by_name.get(c, "") for c in header_cols))
+                by_name = dict(zip(disk_header, row))
+                rebuilt.append("\t".join(by_name.get(c, "") for c in canonical_header))
             self._write_tsv_atomic("\n".join(rebuilt) + "\n")
 
         def _fmt(v) -> str:
@@ -2844,10 +2862,15 @@ class ExperimentOrchestrator:
             except (TypeError, ValueError):
                 return str(v)
 
+        composite_se = result.get("composite_se")
+        if isinstance(composite_se, bool) or not isinstance(composite_se, (int, float)):
+            composite_se = None   # blank cell: SE not estimable (<2 finite folds)
+
         cells: list[str] = [node_id]
         cells.extend(_fmt(metrics.get(c, "")) for c in metric_cols)
         cells.extend([
             f"{composite:.6f}",
+            "" if composite_se is None else f"{composite_se:.6f}",
             f"{vram_mb / 1024:.1f}",
             f"{elapsed_s / 60:.1f}",
             status,

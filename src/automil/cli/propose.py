@@ -56,18 +56,67 @@ def rank(n: int, max_per_branch: int, include_held_out: bool):
 
     if not proposals:
         click.echo("No proposals available. Time to brainstorm!")
-        return
+    else:
+        click.echo(f"Top {len(proposals)} proposals:\n")
+        for i, node in enumerate(proposals, 1):
+            node_id = node["id"]
+            parent = node.get("parent_id", "root")
+            desc = node.get("description", "")
+            score = node.get("potential", 0)
+            kind = node.get("kind", "unspecified")
+            click.echo(f"  {i}. [{node_id}] [{kind}] (parent: {parent}, score: {score:.4f})")
+            click.echo(f"     {desc}")
+            click.echo()
 
-    click.echo(f"Top {len(proposals)} proposals:\n")
-    for i, node in enumerate(proposals, 1):
-        node_id = node["id"]
-        parent = node.get("parent_id", "root")
-        desc = node.get("description", "")
-        score = node.get("potential", 0)
-        kind = node.get("kind", "unspecified")
-        click.echo(f"  {i}. [{node_id}] [{kind}] (parent: {parent}, score: {score:.4f})")
-        click.echo(f"     {desc}")
-        click.echo()
+    _print_leaderboard(graph)
+
+
+def _print_leaderboard(graph, top: int = 10) -> None:
+    """Completed-node leaderboard: composite ± SE, paired Δparent ± SE, and the
+    margin each node faced.
+
+    This is the noise-floor surface the search loop needs in-band: without it,
+    the fold spread and the required keep-bar are visible only by hand-parsing
+    ``archive/<node>/result.json`` per node (both runtime-canary agents spent
+    charged attempts rediscovering exactly these numbers). Validation-only by
+    construction — every value derives from the val ``metrics`` block.
+    """
+    from automil.graph import (effective_accept_margin, node_composite_se,
+                               node_fold_composites)
+    from automil.scoring import paired_delta_se
+
+    executed = [
+        node for node in graph.nodes.values()
+        if node.get("type") == "executed"
+        and node.get("status") in ("keep", "discard", "partial")
+    ]
+    if not executed:
+        return
+    executed.sort(key=lambda node: -float(node.get("composite") or 0.0))
+
+    def _pm(value: float | None) -> str:
+        return "±?" if value is None else f"±{value:.4f}"
+
+    click.echo(f"Completed nodes (top {min(top, len(executed))} of {len(executed)} by composite):\n")
+    for node in executed[:top]:
+        composite = float(node.get("composite") or 0.0)
+        se = node_composite_se(node)
+        parent = graph.get_node(node.get("parent_id")) if node.get("parent_id") else None
+        if parent is not None:
+            delta = composite - float(parent.get("composite") or 0.0)
+            pair_se = paired_delta_se(
+                node_fold_composites(node), node_fold_composites(parent)
+            )
+            bar = effective_accept_margin(graph.meta, parent, node)
+            versus = f"Δparent {delta:+.4f} {_pm(pair_se)} (bar {bar:.4f})"
+        else:
+            versus = "root"
+        desc = (node.get("description", "") or "")[:60]
+        click.echo(
+            f"  {node['id']}  {composite:.4f} {_pm(se)}  {versus}  "
+            f"[{node.get('status')}]  {desc}"
+        )
+    click.echo()
 
 
 #: Free mode exposes every kind. Architecture-preserving mode is narrower than

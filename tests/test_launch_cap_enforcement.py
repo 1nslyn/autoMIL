@@ -394,7 +394,10 @@ def test_billed_node_is_still_refused_by_an_expired_wall_clock(tmp_path):
                side_effect=_FakePopen):
         orch.tick()
 
-    assert _FakePopen.calls == [], (
+    # tick()'s state save legitimately queries nvidia-smi on GPU hosts; the
+    # contract under test is that no TRAINING process is spawned.
+    launches = [c for c in _FakePopen.calls if "nvidia-smi" not in str(c[0])]
+    assert launches == [], (
         "an expired wall_clock budget is the hard wall: even billed work stays refused"
     )
     assert not (orch.queue_dir / f"{NODE_ID}.json").exists()

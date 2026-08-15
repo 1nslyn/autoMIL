@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import click
 
+from automil.paths import probe_exists
+
 from automil.cli import main
 
 
@@ -72,7 +74,7 @@ def record(event_json: str) -> None:
         automil_dir = None
         for parent in [cwd] + list(cwd.parents):
             candidate = parent / "automil"
-            if (candidate / "config.yaml").exists():
+            if probe_exists(candidate / "config.yaml"):
                 automil_dir = candidate
                 break
         if automil_dir is None:
@@ -141,7 +143,7 @@ def export(node_id: str, out: str | None) -> None:
         automil_dir = None
         for parent in [cwd] + list(cwd.parents):
             candidate = parent / "automil"
-            if (candidate / "config.yaml").exists():
+            if probe_exists(candidate / "config.yaml"):
                 automil_dir = candidate
                 break
         if automil_dir is None:

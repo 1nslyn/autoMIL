@@ -271,6 +271,32 @@ def test_completed_artifact_round_trips_fold_composites(tmp_path: Path) -> None:
     assert completion["fold_composites"] == _entries(CHILD_FOLDS)
 
 
+def test_rank_leaderboard_shows_paired_delta_and_bar(tmp_path: Path, capsys) -> None:
+    """The leaderboard surfaces composite ± SE, paired Δparent ± SE, and the
+    required bar — the numbers both canary agents hand-parsed 30 archive
+    JSONs to reconstruct."""
+    from automil.cli.propose import _print_leaderboard
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    _print_leaderboard(reloaded)
+    out = capsys.readouterr().out
+
+    assert "Completed nodes" in out
+    assert child_id in out
+    assert "Δparent +0.0186" in out
+    assert "±0.0116" in out          # paired SE, not the marginal 0.0735
+    assert "(bar 0.0150)" in out     # max(δ=0.015, paired SE)
+    assert "[keep]" in out
+
+
 def test_reevaluate_descendants_uses_paired_basis(tmp_path: Path) -> None:
     """_reevaluate_descendants re-runs the accept with node-stored folds."""
     from automil.graph import ExperimentGraph

@@ -69,6 +69,7 @@ FORBIDDEN_ATTR: str = "pid"
 ALLOWLIST_PATHS: frozenset[Path] = frozenset({
     Path("backends/local.py"),
     Path("backends/_orchestrator_daemon.py"),
+    Path("backends/pidfile.py"),  # PID-file helpers extracted from the daemon (public liveness surface)
     Path("viz/server.py"),
     Path("cli/cancel.py"),  # OPS-01 CLI direct-kill of daemon-launched local jobs (see docstring rationale)
 })

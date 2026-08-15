@@ -752,6 +752,42 @@ def test_discovery_deduplicates_semantically_identical_hparams(staged_cell):
     }
 
 
+def test_discovery_deduplicates_outcome_identical_candidates(staged_cell):
+    """Runs are bit-deterministic under the locked seed: two DISTINCT configs
+    with identical per-fold composites are one measurement wearing two names,
+    and re-running both on the promotion folds buys zero information (uni_v2
+    canary: a weight-decay value inside the logit-scaling invariant regime
+    reproduced its parent to 16 digits and occupied a second promotion slot).
+    The result.json here is authored as the training script would author it;
+    the dedup under test happens entirely inside freeze_discovery."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    donor = json.loads((archive_root / "node_0012" / "result.json").read_text())
+    twin_path = archive_root / "node_0011" / "result.json"
+    twin = json.loads(twin_path.read_text())
+    twin["validation_folds"] = donor["validation_folds"]
+    twin["composite"] = donor["composite"]
+    twin["metrics"] = donor["metrics"]
+    twin_path.write_text(json.dumps(twin))
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    promoted = {
+        candidate["candidate_id"]
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert state["discovery"]["complete_candidates"] == 12
+    assert state["discovery"]["unique_complete_candidates"] == 11
+    # Equal means tie-break on candidate_id, so the earlier node keeps the slot.
+    assert "node_0011" in promoted
+    assert "node_0012" not in promoted
+
+
 def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
