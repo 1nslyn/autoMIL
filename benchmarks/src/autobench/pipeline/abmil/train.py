@@ -144,6 +144,7 @@ def train_abmil_fold(
 
         best_auc = float("-inf")
         best_snap: dict | None = None
+        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         epochs_no_improve = 0
 
         start = time.time()
@@ -156,6 +157,7 @@ def train_abmil_fold(
                 if cur > best_auc:
                     best_auc = cur
                     best_snap = copy.deepcopy(model.state_dict())
+                    best_epoch = _epoch
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
@@ -167,6 +169,7 @@ def train_abmil_fold(
 
         if best_snap is not None:
             model.load_state_dict(best_snap)
+        print(f"[selected] epoch={best_epoch}", flush=True)
 
         test_metrics = (
             _evaluate(model, test_slides, num_classes, device, ordinal=ordinal,

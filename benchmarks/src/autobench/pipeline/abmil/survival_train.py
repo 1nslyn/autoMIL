@@ -204,6 +204,7 @@ def train_abmil_survival_fold(
             return _c_index_from(_risk_records(samples))
 
         rng = random.Random(seed)
+        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         start = time.time()
         for epoch in range(cfg.max_epochs):
             model.train()
@@ -225,6 +226,8 @@ def train_abmil_survival_fold(
                 # Always save the best (val-loss) checkpoint; cfg.early_stopping
                 # only gates stopping early (matches classification/DTFD).
                 early_stopping(v_loss, v_cidx, model)
+                if early_stopping.counter == 0:  # saved a new best this epoch
+                    best_epoch = epoch
                 default_stop = cfg.early_stopping and early_stopping.early_stop
                 if policy_runtime.should_stop(
                     default_stop,
@@ -241,6 +244,7 @@ def train_abmil_survival_fold(
             model.load_state_dict(torch.load(best_path, map_location=device))
         elif getattr(early_stopping, "best_model_state", None) is not None:
             model.load_state_dict(early_stopping.best_model_state)
+        print(f"[selected] epoch={best_epoch}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
         # across folds instead of averaging five ~2-event c-indices.

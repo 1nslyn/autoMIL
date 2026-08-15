@@ -125,6 +125,7 @@ def train_titan_fold(
 
     best_val_auc = -float("inf")
     best_state = copy.deepcopy(model.state_dict())
+    best_epoch = -1  # -1: never improved; the pre-training snapshot is kept
     epochs_without_improvement = 0
 
     start = time.time()
@@ -150,6 +151,7 @@ def train_titan_fold(
         if improved:
             best_val_auc = val_auc
             best_state = copy.deepcopy(model.state_dict())
+            best_epoch = _epoch
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -164,6 +166,7 @@ def train_titan_fold(
             break
 
     model.load_state_dict(best_state)
+    print(f"[selected] epoch={best_epoch}", flush=True)
     test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
                              predictions_path=os.path.join(fold_dir, "predictions.csv"))
     val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,

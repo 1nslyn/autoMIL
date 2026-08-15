@@ -313,6 +313,7 @@ def train_dtfd_survival_fold(
         # own snapshot/restore instead of EarlyStoppingSurvival.
         best_loss = float("inf")
         best_snap: dict | None = None
+        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         epochs_no_improve = 0
 
         start = time.time()
@@ -333,6 +334,7 @@ def train_dtfd_survival_fold(
                 if v_loss < best_loss:
                     best_loss = v_loss
                     best_snap = _snapshot(bundle)
+                    best_epoch = epoch
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
@@ -346,6 +348,7 @@ def train_dtfd_survival_fold(
 
         if best_snap is not None:
             _restore(bundle, best_snap)
+        print(f"[selected] epoch={best_epoch}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
         # across folds instead of averaging five ~2-event c-indices.

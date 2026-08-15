@@ -216,6 +216,7 @@ def train_dtfd_fold(
 
         best_auc = float("-inf")
         best_snap: dict | None = None
+        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         epochs_no_improve = 0
         history: list[float] = []
 
@@ -232,6 +233,7 @@ def train_dtfd_fold(
                 if cur > best_auc:
                     best_auc = cur
                     best_snap = _snapshot(bundle)
+                    best_epoch = epoch
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
@@ -243,6 +245,7 @@ def train_dtfd_fold(
 
         if best_snap is not None:
             _restore(bundle, best_snap)
+        print(f"[selected] epoch={best_epoch}", flush=True)
 
         test_metrics = (
             evaluate_dtfd(bundle, test_slides, cfg, num_classes, device, seed, ordinal=ordinal,
