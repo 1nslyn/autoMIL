@@ -160,8 +160,12 @@ class TestGenerateTrainingConfig:
         if task_type == "classification":
             labels = np.arange(n_samples) % 2
             planner.df = pd.DataFrame({"label": labels})
+            # metric="auc" mirrors prepare.py's classification plans (the
+            # upstream AUC-task convention); the oracle and the adapter must
+            # be fed the same metric so batch_sampler derivation is compared
+            # on the value production actually uses.
             planner.dataset_info = {
-                "metric": "bacc",
+                "metric": "auc",
                 "labels": {"0": "negative", "1": "positive"},
             }
         else:
@@ -190,7 +194,7 @@ class TestGenerateTrainingConfig:
             },
             n_samples=n_samples,
             n_classes=2,
-            metric="bacc" if task_type == "classification" else "c_index",
+            metric="auc" if task_type == "classification" else "c_index",
             min_class_count=n_samples // 2 if task_type == "classification" else None,
             task_type=task_type,
             survival_loss="cox" if task_type == "survival" else None,
@@ -384,6 +388,13 @@ class TestPrepareNnmilExperiment:
         assert "data_splits" in plan
         assert "training_configuration" in plan
         assert plan["random_seed"] == 42
+        # Pin the classification selection metric: "auc" (upstream AUC-task
+        # convention). This drives BOTH checkpoint selection (EarlyStopping in
+        # nnMIL's classification trainer reads dataset_info["metric"]) and the
+        # batch sampler ("auc" -> natural-prior sampling instead of forced
+        # class balance).
+        assert plan["metric"] == "auc"
+        assert plan["training_configuration"]["batch_sampler"] == "auc"
 
     def test_idempotent(
         self, benchmark_dir, h5_features_dir, task_csv_with_splits, registries,

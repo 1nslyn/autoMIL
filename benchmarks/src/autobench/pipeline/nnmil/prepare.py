@@ -149,7 +149,16 @@ def prepare_nnmil_experiment(
             "evaluation_setting": f"{n_splits}fold",
             "feature_dir": h5_dir,
             "labels": labels_map,
-            "metric": "bacc",
+            # Upstream nnMIL's examples use metric="auc" for AUC-scored tasks,
+            # and our leaderboard grades test auc_roc. This field flips TWO
+            # behaviours at once: checkpoint selection (classification_trainer
+            # .py:195-199 passes it to EarlyStopping) and the batch sampler
+            # (the planner rule replicated at _generate_training_config's
+            # "adaptive batch_sampler on metric" block below: "auc" -> the
+            # natural-prior sampler, "bacc" -> forced class balance). The
+            # previous hardcoded "bacc" selected checkpoints on balanced
+            # accuracy while the benchmark scores AUC.
+            "metric": "auc",
             "modality": {"0": "Histopathology"},
         }
     with open(os.path.join(dataset_dir, "dataset.json"), "w") as f:
