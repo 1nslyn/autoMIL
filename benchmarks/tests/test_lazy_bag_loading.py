@@ -247,10 +247,15 @@ def test_bags_are_reread_every_epoch(arm, tmp_path, monkeypatch):
 
     counts = []
     for epochs in (1, 3):
-        opens = _count_h5_opens(monkeypatch, module)
-        run(epochs, splits)
-        counts.append(len(opens))
-        monkeypatch.undo()
+        # A scoped context, NOT monkeypatch.undo(): undo() reverts every change
+        # made so far, including those from autouse fixtures. Here that restored
+        # AUTOBENCH_BAG_CACHE between the two runs, so the second run read
+        # through the cache and the open count fell instead of rising -- the
+        # test then "detected" residency that was really its own doing.
+        with monkeypatch.context() as scoped:
+            opens = _count_h5_opens(scoped, module)
+            run(epochs, splits)
+            counts.append(len(opens))
 
     one_epoch, three_epochs = counts
     assert one_epoch > 0, "no bag was ever read"
