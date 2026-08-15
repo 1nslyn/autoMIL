@@ -712,7 +712,8 @@ def cmd_fleet(args: argparse.Namespace) -> None:
             continue
         status, error = _try_stage_status(child)
         if status is None:
-            rows.append((child.name, "error", "-", error.splitlines()[-1][:60]))
+            detail = (error.splitlines() or ["(no output)"])[-1][:60]
+            rows.append((child.name, "error", "-", detail))
             continue
         discovery = status.get("discovery") or {}
         attempts = (
