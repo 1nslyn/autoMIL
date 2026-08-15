@@ -294,6 +294,14 @@ def write_terminal_state(
                 if composite_recomputed is not None:
                     composite = composite_recomputed
 
+                # Paired margin: attach the fold projection BEFORE the accept so
+                # this node pairs with its parent now and serves as a pairable
+                # incumbent for its own children later.
+                from automil.scoring import fold_composite_entries as _fold_entries
+                _folds = _fold_entries(result)
+                if _folds is not None:
+                    gnode["fold_composites"] = _folds
+
                 # D-01: partial nodes stay quarantined — never get keep/discard
                 # crash nodes stay crash (composite=0.0 should not become discard)
                 if raw_status == "partial":
@@ -305,7 +313,8 @@ def write_terminal_state(
                     graph_status = (
                         "keep"
                         if _accept(composite, p_comp,
-                                   effective_accept_margin(g.meta, parent) if parent else 0.0)
+                                   effective_accept_margin(g.meta, parent, gnode)
+                                   if parent else 0.0)
                         else "discard"
                     )
 
@@ -388,6 +397,8 @@ def write_terminal_state(
             }
 
     # Step 4 — completed/<node>.json (atomic write)
+    from automil.scoring import fold_composite_entries as _completion_fold_entries
+
     completion = {
         "id": node_id,
         "status": result.get("status", "crash"),
@@ -396,6 +407,9 @@ def write_terminal_state(
         # noise has to survive the round trip or a recovered node would silently
         # revert to the bare predeclared margin.
         "composite_se": _node_se_reader({"composite_se": result.get("composite_se")}),
+        # Paired margin: same round-trip contract for the fold projection —
+        # without it a recovered node falls back to the marginal basis.
+        "fold_composites": _completion_fold_entries(result),
         "metrics": result.get("metrics", {}),
         "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
         "peak_vram_mb": result.get("peak_vram_mb", 0),

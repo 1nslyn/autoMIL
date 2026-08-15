@@ -115,6 +115,13 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                 _se_final = _se_rec if _se_rec is not None else _node_se(payload)
                 if _se_final is not None:
                     gnode["composite_se"] = _se_final
+                # Paired margin: refresh the fold projection from the archive
+                # result so the keep/discard below (and this node's future role
+                # as a parent) uses the paired basis.
+                from automil.scoring import fold_composite_entries as _fold_entries
+                _folds_refresh = _fold_entries(payload)
+                if _folds_refresh is not None:
+                    gnode["fold_composites"] = _folds_refresh
 
                 # CR-03 fix: result.json status enum (completed/budget_killed/crash/
                 # partial/cancelled) must NOT be written directly into gnode["status"].
@@ -141,7 +148,8 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                         composite = gnode["composite"]  # already updated above
                         gnode["status"] = ("keep" if _accept(
                             composite, p_comp,
-                            effective_accept_margin(g.meta, parent) if parent else 0.0,
+                            effective_accept_margin(g.meta, parent, gnode)
+                            if parent else 0.0,
                         ) else "discard")
                     # else: unknown status value — leave gnode["status"] unchanged
                     # Preserve raw result status for traceability (operator-visible).

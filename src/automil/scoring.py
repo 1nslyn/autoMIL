@@ -168,6 +168,84 @@ def recompute_composite_se(result: Mapping[str, object] | None) -> float | None:
     )
 
 
+def fold_composite_map(entries: object) -> dict[int, float] | None:
+    """``fold_index -> composite`` from a ``validation_folds``-shaped list.
+
+    Accepts any list of mappings carrying ``fold_index`` (int) and
+    ``composite`` (finite number) — the shape shared by ``result.json``
+    ``validation_folds``, the baseline root's ``metadata.validation_folds``,
+    and the graph-node ``fold_composites`` projection. Entries missing either
+    field, or non-finite, are skipped; a duplicate ``fold_index`` keeps the
+    last occurrence. Returns ``None`` when nothing usable remains, never ``{}``.
+    """
+    if not isinstance(entries, list):
+        return None
+    out: dict[int, float] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        idx = entry.get("fold_index")
+        val = entry.get("composite")
+        if isinstance(idx, bool) or not isinstance(idx, int):
+            continue
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            continue
+        f = float(val)
+        if math.isfinite(f):
+            out[idx] = f
+    return out or None
+
+
+def paired_delta_se(
+    child_folds: Mapping[int, float] | None,
+    parent_folds: Mapping[int, float] | None,
+) -> float | None:
+    """SE of the per-fold ``child − parent`` deltas over a shared fold set.
+
+    Parent and child are trained and validated on identical folds under a
+    locked seed, so the fold effect — the dominant noise term at n=3 folds on
+    ~47-patient validation splits — cancels in the paired difference. This is
+    the statistic the Ladder keep-margin should be scaled by; the marginal
+    ``cross_fold_se`` of either node measures between-fold heterogeneity
+    instead and overstates the comparison noise by a large factor (0.07 vs
+    0.01 on the virchow2 canary baseline).
+
+    Returns ``None`` — never 0.0 — unless the two fold-index sets are
+    IDENTICAL with at least two folds: on differing sets the paired mean no
+    longer equals the composite difference the accept predicate compares, so
+    the caller must fall back to the marginal basis. Identical deltas across
+    all shared folds ARE 0.0 (a real, degenerate measurement — same contract
+    as :func:`cross_fold_se`).
+    """
+    if not child_folds or not parent_folds:
+        return None
+    if set(child_folds) != set(parent_folds):
+        return None
+    deltas = [float(child_folds[i]) - float(parent_folds[i]) for i in sorted(child_folds)]
+    if len(deltas) < 2 or not all(math.isfinite(d) for d in deltas):
+        return None
+    if len(set(deltas)) == 1:
+        return 0.0
+    mean = sum(deltas) / len(deltas)
+    variance = sum((d - mean) ** 2 for d in deltas) / (len(deltas) - 1)
+    return math.sqrt(variance) / math.sqrt(len(deltas))
+
+
+def fold_composite_entries(result: Mapping[str, object] | None) -> list[dict] | None:
+    """The minimal ``[{fold_index, composite}]`` projection of a result's
+    ``validation_folds`` — what the graph stores per node so the paired
+    keep-margin can pair a child with its parent without re-reading archives.
+    Validation-only by construction (fold composites are recomputed from the
+    val ``metrics`` block); ``None`` when the result carries no usable folds.
+    """
+    if not isinstance(result, Mapping):
+        return None
+    folds = fold_composite_map(result.get("validation_folds"))
+    if folds is None:
+        return None
+    return [{"fold_index": i, "composite": folds[i]} for i in sorted(folds)]
+
+
 def ingest_signal(
     result: Mapping[str, object] | None,
     formula: str | None,

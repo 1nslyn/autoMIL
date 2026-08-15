@@ -175,28 +175,93 @@ def _se_multiplier(meta: dict | None) -> float:
         return DEFAULT_SE_MULTIPLIER
 
 
-def effective_accept_margin(meta: dict | None, parent_node: dict | None) -> float:
-    """The margin actually applied: ``max(predeclared δ, k × parent SE)`` (CR-4).
+def node_fold_composites(node: dict | None) -> dict[int, float] | None:
+    """``fold_index -> composite`` for a node, from whichever source it has.
 
-    Two invariants, both load-bearing:
+    Two sources, one shape (entries of ``{fold_index, composite, ...}``):
 
-    **Monotone.** The measured noise can only ever RAISE the bar. A campaign that
-    predeclared δ=0.05 must not silently drop to 0.01 because one parent happened
-    to have a tight CV — the predeclared value is a pre-registration commitment,
-    not an opening bid.
+    - ``node["fold_composites"]`` — written at ingest for every executed node
+      (terminal writer, both reconcile scans, ``reconcile --refresh``).
+    - ``node["metadata"]["validation_folds"]`` — the baseline root's folds,
+      written by the campaign controller's ``_ensure_discovery_baseline_root``.
+      The baseline is the dominant parent of a discovery cell, and it never
+      passes through the terminal writer, so the paired margin must read the
+      metadata form or it would silently fall back to the marginal SE in
+      exactly the topology it exists for.
 
-    **The bar belongs to the incumbent.** It is derived from the PARENT's SE, not
-    the child's. If it came from the child's, then taking the argmax over ~60
-    screened candidates would simultaneously be taking the argmin over their
-    margins: the search would be selecting on the gate itself.
+    Returns ``None`` when neither source yields a usable fold map.
+    """
+    if not isinstance(node, dict):
+        return None
+    from automil.scoring import fold_composite_map
 
-    This is a conservative single-arm screen, **not a test**. Parent and child
-    share folds, so the SE of their difference is not the SE of either one. The
-    honest paired inference happens at the Stage-B gate (``gate/stats.py``:
-    paired Wilcoxon + BCa on per-cell deltas). Do not report this margin as
-    significance.
+    folds = fold_composite_map(node.get("fold_composites"))
+    if folds is not None:
+        return folds
+    meta = node.get("metadata")
+    if isinstance(meta, dict):
+        return fold_composite_map(meta.get("validation_folds"))
+    return None
+
+
+def _formula_pairs_folds(meta: dict | None) -> bool:
+    """True when the composite is the mean of the per-fold composites.
+
+    The paired margin substitutes ``SE(per-fold child−parent deltas)`` for the
+    marginal SE while the accept predicate still compares node composites.
+    That substitution is coherent only under the ``mean`` reducer (the default),
+    where ``composite == mean(fold composites)`` and hence the composite
+    difference equals the mean paired delta. Under ``max``/``min`` (or an
+    opt-out formula trusting reported scalars) the identity breaks, so the
+    margin falls back to the marginal basis.
+    """
+    formula = ((meta or {}).get("scoring") or {}).get("formula")
+    return formula in (None, "", "mean")
+
+
+def effective_accept_margin(
+    meta: dict | None, parent_node: dict | None, child_node: dict | None = None,
+) -> float:
+    """The margin actually applied: ``max(predeclared δ, k × SE)`` (CR-4).
+
+    The SE basis is chosen by evidence available, best first:
+
+    **Paired** — when parent and child both carry composites for the SAME fold
+    set (and the reducer is ``mean``; see :func:`_formula_pairs_folds`), the
+    basis is ``SE(per-fold child−parent deltas)``. Runs share folds under a
+    locked seed, so the fold effect — the dominant noise term — cancels in the
+    difference; on the canary cells this basis is 3–6× tighter than the
+    marginal SE and moves the detectable-effect floor into the range train-only
+    recipe changes actually produce. The paired basis is child-derived by
+    construction: the screen becomes "paired t > k, with floor δ", which is the
+    standard form for a noisy-CV accept rule. The old incumbent-only argument
+    (child-derived bars let the argmax select on the gate) traded a real
+    multiplicity concern for a bar so wide it discarded everything — the
+    virchow2 canary discarded 30/30 attempts against a bar its per-fold oracle
+    could not reach. The multiplicity concern is real and handled downstream:
+    at k=1 a null child passes with p ≈ 0.21 (one-sided t, 2 df), so over ~30
+    screened candidates several false keeps are EXPECTED — promotion re-runs
+    the top-10 on held-back folds 3/4 and the winner is selected on the 5-fold
+    mean, which is the arbitration this screen defers to. A zero paired SE
+    (fold-uniform delta) keeps at the δ floor; that is legitimately strong
+    paired evidence at this n, but note the sign-test bound: n=3 uniform
+    deltas reach one-sided p = 1/8 at best. NEVER report a keep as
+    significance — it is a search-steering screen.
+
+    **Marginal** — otherwise, ``k × parent composite_se`` (the pre-existing
+    CR-4 basis). Still monotone: measured noise can only RAISE the bar above
+    the predeclared δ; a campaign that predeclared δ=0.05 must not silently
+    drop to 0.01 because one parent happened to have a tight CV.
     """
     delta = _accept_margin(meta)
+    if child_node is not None and _formula_pairs_folds(meta):
+        from automil.scoring import paired_delta_se
+
+        paired_se = paired_delta_se(
+            node_fold_composites(child_node), node_fold_composites(parent_node)
+        )
+        if paired_se is not None:
+            return max(delta, _se_multiplier(meta) * paired_se)
     se = node_composite_se(parent_node)
     if se is None:
         return delta
@@ -670,13 +735,22 @@ class ExperimentGraph:
         _se = node_composite_se({"composite_se": metrics.get("composite_se")})
         if _se is not None or "composite_se" not in node:
             node["composite_se"] = _se
+        # Paired margin: lift the fold projection alongside the SE — same
+        # framework-owned contract, same "recovered incumbent must not lose its
+        # evidence" rationale.
+        from automil.scoring import fold_composite_map as _fold_map
+        _folds = metrics.get("fold_composites")
+        if _fold_map(_folds) is not None:
+            node["fold_composites"] = _folds
         node["global_delta"] = metrics.get("global_delta", metrics.get("delta", 0.0))
         node["parent_delta"] = composite - parent_composite
-        # D-200: store consumer metrics as opaque dict. `composite_se` is a
-        # framework-owned scalar (lifted above), so it is excluded here for the
-        # same reason as in add_executed: CR-1b recomputes the composite as the
-        # mean of `metrics`, and an SE averaged in would corrupt it.
-        node["metrics"] = {k: v for k, v in metrics.items() if k != "composite_se"}
+        # D-200: store consumer metrics as opaque dict. `composite_se` and
+        # `fold_composites` are framework-owned (lifted above), so they are
+        # excluded here for the same reason as in add_executed: CR-1b recomputes
+        # the composite as the mean of `metrics`, and foreign values averaged or
+        # carried in would corrupt it.
+        node["metrics"] = {k: v for k, v in metrics.items()
+                           if k not in ("composite_se", "fold_composites")}
         # Orchestrator-measured scalars stay top-level.
         node["vram_gb"] = metrics.get("vram_gb", 0.0)
         node["elapsed_min"] = metrics.get("elapsed_min", 0.0)
@@ -736,7 +810,8 @@ class ExperimentGraph:
                 # D-200 Option B: composite-only dominance, gated by the Ladder
                 # keep-margin (δ=0.0 → strict dominance). The composite is the
                 # consumer-computed validation selection signal (val-firewall).
-                keep = _accept(c_comp, p_comp, effective_accept_margin(self.meta, parent))
+                keep = _accept(c_comp, p_comp,
+                               effective_accept_margin(self.meta, parent, child))
                 child["status"] = "keep" if keep else "discard"
                 child["parent_delta"] = c_comp - p_comp
                 stack.append(child["id"])
@@ -1054,8 +1129,13 @@ class ExperimentGraph:
                     if parent_node:
                         p_comp = parent_node.get("composite", 0)
                         # D-200 Option B: composite-only dominance + Ladder margin.
+                        # The completion artifact carries the fold projection, so
+                        # the paired basis survives this recovery path too.
                         keep = _accept(composite, p_comp,
-                                       effective_accept_margin(self.meta, parent_node))
+                                       effective_accept_margin(
+                                           self.meta, parent_node,
+                                           {"fold_composites": completion.get("fold_composites")},
+                                       ))
                         graph_status = "keep" if keep else "discard"
                     else:
                         graph_status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
@@ -1073,6 +1153,9 @@ class ExperimentGraph:
                 metrics["status"] = graph_status
                 metrics["global_delta"] = composite - self.meta.get("best_composite", 0)
                 metrics["composite_se"] = composite_se   # CR-4: lifted by add_executed
+                # Paired margin: the fold projection travels with the recovery so
+                # promote() can lift it onto the node (framework-owned, like the SE).
+                metrics["fold_composites"] = completion.get("fold_composites")
 
                 config_hash = completion.get("config_hash")
                 if not config_hash:
@@ -1202,13 +1285,20 @@ class ExperimentGraph:
                         parent_id = gm.get("parent_id")
                         parent = self.get_node(parent_id) if parent_id else None
                         parent_composite = parent.get("composite", 0.0) if parent else 0.0
+                        # Paired margin: the archive result carries the full
+                        # validation_folds; project it once for both the margin
+                        # and the recovered node below.
+                        from automil.scoring import fold_composite_entries as _fold_entries
+                        _folds_r = _fold_entries(result)
                         raw_status = result.get("status", "completed")
                         if raw_status == "completed":
                             if parent:
                                 p_comp = parent.get("composite", 0)
                                 # D-200 Option B: composite-only dominance + Ladder margin.
                                 keep = _accept(composite, p_comp,
-                                              effective_accept_margin(self.meta, parent))
+                                              effective_accept_margin(
+                                                  self.meta, parent,
+                                                  {"fold_composites": _folds_r}))
                                 status = "keep" if keep else "discard"
                             else:
                                 status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
@@ -1222,6 +1312,7 @@ class ExperimentGraph:
                             "description": spec.get("description", f"recovered {node_id_r}"),
                             "techniques": techniques, "composite": composite,
                             "composite_se": composite_se,   # CR-4
+                            "fold_composites": _folds_r,    # paired-margin evidence
                             "global_delta": composite - self.meta.get("best_composite", 0),
                             "parent_delta": composite - parent_composite,
                             # D-200: consumer metrics opaque dict.
