@@ -138,6 +138,11 @@ def run_titan_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
+        # A4': positional with per_fold_val; None for folds resumed from
+        # pre-hash metrics.json.
+        "per_fold_val_predictions_sha256": [
+            fr.get("val_predictions_sha256") for fr in fold_results
+        ],
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

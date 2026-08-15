@@ -40,6 +40,36 @@ def gpu_init(gpu_id: int) -> None:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
+def resume_summary(benchmark_dir: str, experiment) -> dict | None:
+    """The stored summary for an already-finished experiment, else ``None``.
+
+    ``None`` means "you must actually run this", and it covers two cases: the
+    experiment was never marked completed, OR ``_completed.json`` claims it but
+    no ``summary.json`` exists on disk. Disk is the source of truth; the ledger
+    is a cache that keeps claiming cells whose directories were archived or
+    purged (see ``orchestrator.reconcile_completed``, which applies the same
+    rule on the scheduler side).
+
+    Kept out of ``run_single_experiment`` so it is testable without a GPU: that
+    function imports torch and binds ``cuda:0`` before it does anything else.
+    """
+    from autobench.pipeline.orchestrator import (
+        _load_or_collect_summary,
+        load_completed,
+    )
+
+    exp_id = experiment.experiment_id
+    if exp_id not in load_completed(benchmark_dir):
+        return None
+    summary = _load_or_collect_summary(benchmark_dir, experiment)
+    if summary is None:
+        print(
+            f"[STALE-LEDGER] {exp_id}: marked completed but no summary.json on "
+            "disk; running it rather than reporting a phantom success"
+        )
+    return summary
+
+
 def run_single_experiment(
     experiment,
     benchmark_dir: str,
@@ -61,16 +91,21 @@ def run_single_experiment(
     from autobench.pipeline.config import Framework
     from autobench.pipeline.orchestrator import (
         _isolated_torch_state,
-        _load_or_collect_summary,
-        load_completed,
         mark_completed,
     )
 
     exp_id = experiment.experiment_id
 
     # ---- Race-condition guard: already completed? ----
-    if exp_id in load_completed(benchmark_dir):
-        return _load_or_collect_summary(benchmark_dir, experiment)
+    # Returning a bare None here is fatal out of all proportion: the caller
+    # raises `RuntimeError: Experiment ... returned None`, which tears down the
+    # whole block and strands every cell still queued behind it. It also lands
+    # BEFORE the per-experiment log is opened below, so the cell dies in seconds
+    # leaving no log -- the newest one on disk is from whenever it last really
+    # ran, which makes the failure look like something else entirely.
+    resumed = resume_summary(benchmark_dir, experiment)
+    if resumed is not None:
+        return resumed
 
     # ---- Per-experiment log file (organized: logs/{framework}/{strategy}/) ----
     log_dir = os.path.join(

@@ -14,13 +14,16 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import torch
 
 from autobench.pipeline.clam._imports import clam_train, initiate_model, summary
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything
-from autobench.pipeline.evaluate import compute_extended_metrics
+from autobench.pipeline.evaluate import (
+    compute_extended_metrics,
+    file_sha256,
+    write_predictions_csv,
+)
 
 # CLAM's core_utils and utils.utils use a module-level ``device`` variable.
 # We patch it to match the device selected by the benchmark runner so that
@@ -113,13 +116,19 @@ def train_fold(
     os.makedirs(fold_dir, exist_ok=True)
 
     predictions_path = os.path.join(fold_dir, "predictions.csv")
+    val_predictions_path = os.path.join(fold_dir, "predictions_val.csv")
     metrics_path = os.path.join(fold_dir, "metrics.json")
 
     # Ensure CLAM's internal device matches our device
     _set_clam_device(device)
 
-    # Resume: skip if already completed
-    if os.path.exists(predictions_path) and os.path.exists(metrics_path):
+    # Resume: skip only if EVERY expected artifact is present. Keying this on a
+    # subset is how CLAM folds kept resuming as "complete" while missing
+    # predictions_val.csv -- the fold looked done, so the gap survived every
+    # re-run. A fold that cannot produce the full set is redone; if it still
+    # cannot, the caller's no-progress guard stops the loop rather than spinning.
+    if all(os.path.exists(p) for p in
+           (predictions_path, val_predictions_path, metrics_path)):
         print(f"\n    [fold {fold}] Already completed, loading from disk")
         with open(metrics_path) as f:
             return json.load(f)
@@ -206,6 +215,14 @@ def train_fold(
             val_labels, val_probs, val_preds, exp_cfg.task.n_classes,
             ordinal=exp_cfg.task.ordinal,
         )
+        # Val predictions, same as every other arm writes. CLAM computed these
+        # already to get extended val metrics and then discarded them, so it was
+        # the one arm whose validation split could not be re-scored without a
+        # retrain -- exactly what the shared writer exists to prevent.
+        write_predictions_csv(
+            os.path.join(fold_dir, "predictions_val.csv"),
+            val_slide_ids, val_labels, val_probs, val_preds,
+        )
     else:
         val_metrics = {"auc_roc": val_auc, "accuracy": val_acc}
 
@@ -221,17 +238,19 @@ def train_fold(
         wandb.finish()
 
     # --- Save predictions CSV (not in CLAM) ---
-    pred_data = {"slide_id": slide_ids, "y_true": all_labels}
-    for i in range(all_probs.shape[1]):
-        pred_data[f"y_prob_{i}"] = all_probs[:, i]
-    pred_data["y_hat"] = all_preds
-    pred_df = pd.DataFrame(pred_data)
-    pred_df.to_csv(predictions_path, index=False)
+    # Through the shared writer rather than a hand-rolled frame: the schema is
+    # identical (write_predictions_csv was built from this very format), so one
+    # writer now serves all five arms and both splits.
+    write_predictions_csv(
+        predictions_path, slide_ids, all_labels, all_probs, all_preds,
+    )
 
     # --- Save fold metrics JSON (not in CLAM) ---
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
+        # A4': no-op detector — hash of the persisted val predictions above.
+        "val_predictions_sha256": file_sha256(val_predictions_path),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation and
         # prediction writing included, so the number is comparable across arms

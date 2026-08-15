@@ -18,12 +18,15 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
+from autobench.pipeline.evaluate import (
+    compute_extended_metrics,
+    file_sha256,
+    write_predictions_csv,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
-from autobench.pipeline.titan.config import TitanHeadConfig
+from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSlideDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
 
@@ -82,16 +85,10 @@ def train_titan_fold(
     Seed follows the shared convention: ``train.seed + fold`` (matches
     nnMIL/DTFD).
     """
-    if head_cfg is None:
-        head_cfg = TitanHeadConfig()
-    # H-3: TitanHeadConfig stays the source of truth for lr/weight_decay/
-    # patience; layer on only the explicitly-set overrides. max_epochs and
-    # early_stopping are deliberately excluded — this arm reads those straight
-    # off exp_cfg.train (its documented mixed provenance), so routing them here
-    # would double-apply and trip the fail-loud guard.
-    _titan_ov = {k: v for k, v in all_overrides(exp_cfg).items()
-                 if k not in ("max_epochs", "early_stopping")}
-    head_cfg = apply_overrides(head_cfg, _titan_ov, arm="titan")
+    # H-3: mixed provenance, resolved through one seam — head knobs land on
+    # TitanHeadConfig, the opaque channel's max_epochs/early_stopping on
+    # exp_cfg.train (see resolve_head_config).
+    head_cfg = resolve_head_config(exp_cfg, head_cfg)
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
@@ -125,6 +122,7 @@ def train_titan_fold(
 
     best_val_auc = -float("inf")
     best_state = copy.deepcopy(model.state_dict())
+    best_epoch = -1  # -1: never improved; the pre-training snapshot is kept
     epochs_without_improvement = 0
 
     start = time.time()
@@ -150,6 +148,7 @@ def train_titan_fold(
         if improved:
             best_val_auc = val_auc
             best_state = copy.deepcopy(model.state_dict())
+            best_epoch = _epoch
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -164,6 +163,7 @@ def train_titan_fold(
             break
 
     model.load_state_dict(best_state)
+    print(f"[selected] epoch={best_epoch}", flush=True)
     test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
                              predictions_path=os.path.join(fold_dir, "predictions.csv"))
     val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,
@@ -172,6 +172,10 @@ def train_titan_fold(
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
+        # A4': no-op detector — hash of the persisted val predictions above.
+        "val_predictions_sha256": file_sha256(
+            os.path.join(fold_dir, "predictions_val.csv")
+        ),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation
         # included, so the number is comparable across arms and task types.

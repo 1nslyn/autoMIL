@@ -92,6 +92,12 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         "composite":       composite,
         "elapsed_seconds": int(result.get("elapsed_seconds", 0) or 0),
         "peak_vram_mb":    int(result.get("peak_vram_mb", 0) or 0),
+        # A4': no-op detector, ENTRY level — never inside `metrics` (CR-1b
+        # recomputes the composite from every value in there). NOTE: the
+        # cap-kill aggregator (automil.cells.reconcile.aggregate_folds) does
+        # not yet carry this field into a partial result.json; the full-run
+        # path (summary -> validation_folds) does.
+        "val_predictions_sha256": result.get("val_predictions_sha256"),
     }
     # Atomic: these files are written in exactly the window a cap-kill SIGTERM
     # can land, and a torn one is silently dropped by the aggregator.
@@ -181,6 +187,11 @@ def run_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
+        # A4': positional with per_fold_val; None for folds resumed from
+        # pre-hash metrics.json.
+        "per_fold_val_predictions_sha256": [
+            fr.get("val_predictions_sha256") for fr in fold_results
+        ],
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

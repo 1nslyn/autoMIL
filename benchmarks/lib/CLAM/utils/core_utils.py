@@ -64,6 +64,7 @@ class EarlyStopping:
         self.best_score = None
         self.early_stop = False
         self.val_loss_min = np.inf
+        self.best_epoch = -1  # epoch of the checkpoint currently saved
 
     def __call__(self, epoch, val_loss, model, ckpt_name = 'checkpoint.pt'):
 
@@ -71,6 +72,7 @@ class EarlyStopping:
 
         if self.best_score is None:
             self.best_score = score
+            self.best_epoch = epoch
             self.save_checkpoint(val_loss, model, ckpt_name)
         elif score < self.best_score:
             self.counter += 1
@@ -79,6 +81,7 @@ class EarlyStopping:
                 self.early_stop = True
         else:
             self.best_score = score
+            self.best_epoch = epoch
             self.save_checkpoint(val_loss, model, ckpt_name)
             self.counter = 0
 
@@ -205,6 +208,10 @@ def train(datasets, cur, args):
         model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
     else:
         torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+
+    # A3: the epoch whose weights are scored below — EarlyStopping's best
+    # checkpoint when enabled, else the final epoch's own weights.
+    print('[selected] epoch={}'.format(early_stopping.best_epoch if args.early_stopping else epoch), flush=True)
 
     _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
     print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))

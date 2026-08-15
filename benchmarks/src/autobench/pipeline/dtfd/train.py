@@ -30,7 +30,7 @@ import torch
 
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.dtfd.config import DTFDConfig
-from autobench.pipeline.dtfd.dataset import DTFDSlide, min_bag_size
+from autobench.pipeline.dtfd.dataset import DTFDSlide, _read_bag, min_bag_size
 from autobench.pipeline.dtfd.eval import evaluate_dtfd, val_auc
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.policy_dispatch import PolicyRuntime
@@ -102,7 +102,7 @@ def _train_one_epoch(
     tier2_losses: list[float] = []
     for i in order:
         slide = slides[i]
-        features = slide.features.to(device)
+        features = _read_bag(slide.h5_path).to(device)
         label_t = torch.LongTensor([slide.label]).to(device)
 
         sub_preds, sub_labels, pseudo_feats = _pseudo_bag_forward(
@@ -216,6 +216,7 @@ def train_dtfd_fold(
 
         best_auc = float("-inf")
         best_snap: dict | None = None
+        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         epochs_no_improve = 0
         history: list[float] = []
 
@@ -232,6 +233,7 @@ def train_dtfd_fold(
                 if cur > best_auc:
                     best_auc = cur
                     best_snap = _snapshot(bundle)
+                    best_epoch = epoch
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
@@ -243,6 +245,7 @@ def train_dtfd_fold(
 
         if best_snap is not None:
             _restore(bundle, best_snap)
+        print(f"[selected] epoch={best_epoch}", flush=True)
 
         test_metrics = (
             evaluate_dtfd(bundle, test_slides, cfg, num_classes, device, seed, ordinal=ordinal,
