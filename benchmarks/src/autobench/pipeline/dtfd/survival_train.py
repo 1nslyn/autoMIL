@@ -18,6 +18,7 @@ comparison available within one slide's own pseudo-bags. See
 
 from __future__ import annotations
 
+import os
 import random
 import sys
 import time
@@ -32,6 +33,7 @@ from autobench.pipeline.dtfd.dataset import DTFDSurvivalSlide, _read_bag, min_ba
 from autobench.pipeline.dtfd.eval import _split_pseudo_bags
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.dtfd.train import _restore, _snapshot
+from autobench.pipeline.evaluate import write_survival_predictions_csv
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -263,6 +265,7 @@ def train_dtfd_survival_fold(
     device: torch.device,
     seed: int,
     policy_runtime: PolicyRuntime | None = None,
+    fold_dir: str | None = None,
 ) -> dict:
     """Train one DTFD-MIL survival (nllsurv) fold; return shared-schema c-index metrics.
 
@@ -356,6 +359,12 @@ def train_dtfd_survival_fold(
             _risk_records(bundle, val_samples, cfg, device, seed) if val_samples
             else {"risks": [], "statuses": [], "times": [], "patient_ids": []}
         )
+        # A4': persist the selected model's val risk scores (already in hand)
+        # so the fold carries a hashable no-op detector.
+        if fold_dir:
+            write_survival_predictions_csv(
+                os.path.join(fold_dir, "predictions_val.csv"), _val_records,
+            )
         test_metrics = {
             "c_index": _c_index(bundle, test_samples, cfg, device, seed)
             if test_samples else float("nan"),

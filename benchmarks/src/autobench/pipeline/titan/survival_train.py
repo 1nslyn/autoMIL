@@ -23,6 +23,7 @@ from autobench import LIB_ROOT
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
+from autobench.pipeline.evaluate import file_sha256, write_survival_predictions_csv
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
@@ -256,10 +257,16 @@ def train_titan_survival_fold(
     val_metrics = {"c_index": _c_index(val_loader)}
     # CR-3: pooled cross-fold val concordance is computed by the runner.
     val_records = _risk_records(val_loader)
+    # A4': persist the selected model's val risk scores (the arrays are already
+    # in hand) so the fold carries a hashable no-op detector.
+    val_predictions_path = os.path.join(fold_dir, "predictions_val.csv")
+    write_survival_predictions_csv(val_predictions_path, val_records)
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "val_records": val_records,
+        # A4': no-op detector — hash of the persisted val risk scores above.
+        "val_predictions_sha256": file_sha256(val_predictions_path),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore and
         # final scoring included, so the number is comparable across arms and

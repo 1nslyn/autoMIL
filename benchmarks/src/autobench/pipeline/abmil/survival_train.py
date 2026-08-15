@@ -18,6 +18,7 @@ from autobench import LIB_ROOT
 from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSurvivalSlide, _read_bag
 from autobench.pipeline.abmil.model import build_abmil_model
+from autobench.pipeline.evaluate import write_survival_predictions_csv
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -251,6 +252,11 @@ def train_abmil_survival_fold(
         _val_records = _risk_records(val_samples) if val_samples else {
             "risks": [], "statuses": [], "times": [], "patient_ids": []
         }
+        # A4': persist the selected model's val risk scores (already in hand)
+        # so the fold carries a hashable no-op detector.
+        write_survival_predictions_csv(
+            os.path.join(fold_dir, "predictions_val.csv"), _val_records,
+        )
         test_metrics = {
             "c_index": _c_index(test_samples) if test_samples else float("nan")
         }

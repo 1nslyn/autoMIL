@@ -23,7 +23,11 @@ from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.results_cache import resolve_results_dir
-from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.evaluate import (
+    compute_confidence_intervals,
+    file_sha256,
+    pooled_val_block,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
@@ -139,6 +143,11 @@ def run_abmil_experiment(
             "val_metrics": raw["val_metrics"],
             # CR-3: carry the val risk records through for pooled concordance.
             **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
+            # A4': no-op detector — hash of the fold's persisted val predictions
+            # (both branches write fold_dir/predictions_val.csv).
+            "val_predictions_sha256": file_sha256(
+                os.path.join(fold_dir, "predictions_val.csv")
+            ),
             "fold": fold,
             "elapsed_seconds": int(raw.get("elapsed_seconds", 0) or 0),
         }
@@ -172,6 +181,11 @@ def run_abmil_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
+        # A4': positional with per_fold_val; None for folds resumed from
+        # pre-hash metrics.json.
+        "per_fold_val_predictions_sha256": [
+            fr.get("val_predictions_sha256") for fr in fold_results
+        ],
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

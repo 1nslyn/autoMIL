@@ -455,6 +455,21 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
             for key, value in metrics.items():
                 self.logger.info(f"{key}: {value:.4f}" if isinstance(value, float) else f"{key}: {value}")
         
+        # A4': persist val risk scores under the benchmark's shared name so the
+        # fold carries a hashable no-op detector (mirrors the test CSV below).
+        if split == 'val':
+            save_csv_path = os.path.join(self.save_dir, "predictions_val.csv")
+            risk_for_csv = risk_tensor.squeeze(1) if risk_tensor.dim() > 1 else risk_tensor
+            risk_for_csv_np = risk_for_csv.detach().cpu().numpy() if isinstance(risk_for_csv, torch.Tensor) else risk_for_csv
+            results_df = pd.DataFrame({
+                'patient_id': all_patient_ids,
+                'status': all_status.astype(int),
+                'time': all_time,
+                'risk_score': risk_for_csv_np.flatten()
+            })
+            results_df.to_csv(save_csv_path, index=False)
+            self.logger.info(f"Val predictions saved to {save_csv_path}")
+
         # Save results to CSV if test split (like train_surv_porpoise.py: lines 591-592)
         if split == 'test':
             save_csv_path = os.path.join(self.save_dir, f"results_{self.model_type}.csv")

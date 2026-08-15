@@ -22,7 +22,11 @@ from autobench.pipeline.dtfd.survival_train import train_dtfd_survival_fold
 from autobench.pipeline.dtfd.train import train_dtfd_fold
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.results_cache import resolve_results_dir
-from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.evaluate import (
+    compute_confidence_intervals,
+    file_sha256,
+    pooled_val_block,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
@@ -134,6 +138,7 @@ def run_dtfd_experiment(
                 embed_dim=exp_cfg.embed_dim, nll_bins=exp_cfg.task.nll_bins,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
                 policy_runtime=fold_policy_runtime,
+                fold_dir=fold_dir,
             )
         else:
             train_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "train")
@@ -153,6 +158,11 @@ def run_dtfd_experiment(
             "val_metrics": raw["val_metrics"],
             # CR-3: carry the val risk records through for pooled concordance.
             **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
+            # A4': no-op detector — hash of the fold's persisted val predictions
+            # (both branches write fold_dir/predictions_val.csv).
+            "val_predictions_sha256": file_sha256(
+                os.path.join(fold_dir, "predictions_val.csv")
+            ),
             "fold": fold,
             # Both branches now report their own span (FOLD-TIMING CONTRACT);
             # the runner no longer times one of them itself.
@@ -188,6 +198,11 @@ def run_dtfd_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
+        # A4': positional with per_fold_val; None for folds resumed from
+        # pre-hash metrics.json.
+        "per_fold_val_predictions_sha256": [
+            fr.get("val_predictions_sha256") for fr in fold_results
+        ],
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

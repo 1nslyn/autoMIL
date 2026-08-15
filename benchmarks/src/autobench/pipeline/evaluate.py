@@ -491,3 +491,48 @@ def write_predictions_csv(
             sid = slide_ids[i] if slide_ids is not None and i < len(slide_ids) else f"sample_{i}"
             w.writerow([sid, int(y_true[i])]
                        + [float(x) for x in y_probs[i]] + [int(y_pred[i])])
+
+
+def write_survival_predictions_csv(path: str, records: dict) -> None:
+    """Persist one split's per-sample survival risk scores (A4').
+
+    ``records`` is the ``val_records`` dict every survival trainer already
+    materializes at fold end (CR-3): ``risks`` / ``statuses`` / ``times`` /
+    ``patient_ids``, parallel lists. Written as
+    ``patient_id, status, time, risk_score`` — the same column set nnMIL's own
+    test-side CSV uses — so a survival fold's validation split can be re-scored
+    (or byte-compared across runs) without a retrain, exactly what
+    ``write_predictions_csv`` provides on the classification side.
+    """
+    import csv as _csv
+    import os as _os
+
+    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["patient_id", "status", "time", "risk_score"])
+        for pid, status, time_, risk in zip(
+            records["patient_ids"], records["statuses"],
+            records["times"], records["risks"],
+        ):
+            w.writerow([pid, int(status), float(time_), float(risk)])
+
+
+def file_sha256(path: str) -> str | None:
+    """sha256 hex of a file's bytes, or None when the file does not exist.
+
+    The no-op detector (A4'): two runs whose recipes differ but whose selected
+    models score the validation split identically are indistinguishable by
+    metrics on a small split — the hash of the persisted per-fold val
+    predictions tells a changed model from an unchanged one.
+    """
+    import hashlib
+    import os as _os
+
+    if not _os.path.exists(path):
+        return None
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

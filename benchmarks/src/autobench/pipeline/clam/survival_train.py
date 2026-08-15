@@ -23,6 +23,7 @@ from autobench import LIB_ROOT
 from autobench.pipeline.clam._imports import CLAM_SB, CLAM_MB, get_optim
 from autobench.pipeline.clam.dataset import load_survival_fold_splits
 from autobench.pipeline.config import ExperimentConfig, TrainConfig
+from autobench.pipeline.evaluate import file_sha256, write_survival_predictions_csv
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -290,12 +291,17 @@ def train_survival_fold(
     # the POOLED cross-fold validation set. The per-fold c-index below stays for
     # reporting; the pooled value is what the selection composite uses.
     _val_records = _risk_records(val)
+    # A4': persist the selected model's val risk scores (the arrays are already
+    # in hand) so the fold carries a hashable no-op detector.
+    val_predictions_path = os.path.join(fold_dir, "predictions_val.csv")
+    write_survival_predictions_csv(val_predictions_path, _val_records)
     test_metrics = {"c_index": _c_index(test)}
     val_metrics = {"c_index": _c_index_from(_val_records)}
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "val_records": _val_records,
+        "val_predictions_sha256": file_sha256(val_predictions_path),
         "fold": fold,
         "elapsed_seconds": time.time() - start,
     }

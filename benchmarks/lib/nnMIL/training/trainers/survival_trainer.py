@@ -524,7 +524,19 @@ class SurvivalTrainer(BaseTrainer):
             })
             results_df.to_csv(save_csv_path, index=False)
             self.logger.info(f"Results saved to {save_csv_path}")
-        
+        elif split == 'val':
+            # A4': persist val risk scores under the benchmark's shared name so
+            # the fold carries a hashable no-op detector (mirrors the test CSV).
+            save_csv_path = os.path.join(self.save_dir, "predictions_val.csv")
+            results_df = pd.DataFrame({
+                'patient_id': all_patient_ids,
+                'status': all_status.astype(int),
+                'time': all_time,
+                'risk_score': all_risks
+            })
+            results_df.to_csv(save_csv_path, index=False)
+            self.logger.info(f"Val predictions saved to {save_csv_path}")
+
         return metrics
     
     def save_training_config(self):
