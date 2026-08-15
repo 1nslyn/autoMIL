@@ -35,11 +35,13 @@ from automil.backends._orchestrator_daemon import (  # noqa: F401, F403
     NVIDIA_SMI_PATH,
     _SYSTEM_ENV_WHITELIST_LITERAL,
     _SYSTEM_ENV_WHITELIST_PREFIX,
-    _parse_starttime_from_stat_line,
     _is_pid_alive_with_starttime,
     _read_proc_starttime,
     _write_pid_file,
     _load_pid_file,
+)
+from automil.backends.pidfile import (  # noqa: F401 — test-facing legacy alias
+    parse_starttime_from_stat_line as _parse_starttime_from_stat_line,
 )
 from automil.backends._orchestrator_daemon import *  # noqa: F401, F403
 

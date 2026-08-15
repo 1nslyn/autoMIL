@@ -141,9 +141,26 @@ def test_paired_margin_monotone_over_delta_floor() -> None:
     from automil.graph import effective_accept_margin
 
     meta = {"scoring": {"accept_margin": 0.005, "se_multiplier": 1.0, "formula": "mean"}}
-    parent = {"metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
-    child = {"fold_composites": _entries(CHILD_FOLDS)}
+    parent = {"composite": _mean(BASELINE_FOLDS),
+              "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
+    child = {"composite": _mean(CHILD_FOLDS),
+             "fold_composites": _entries(CHILD_FOLDS)}
     assert effective_accept_margin(meta, parent, child) == pytest.approx(0.011603, abs=1e-5)
+
+
+def test_identity_guard_rejects_composite_fold_disagreement() -> None:
+    """The paired basis requires composite == mean(fold composites) on BOTH
+    nodes; a node whose composite disagrees with its own fold vector (sparse-
+    metric recovery aggregate, or a shaped payload) falls back to the marginal
+    basis rather than differencing incomparable quantities."""
+    from automil.graph import effective_accept_margin
+
+    meta = {"scoring": {"accept_margin": DELTA, "se_multiplier": 1.0, "formula": "mean"}}
+    parent = {"composite": _mean(BASELINE_FOLDS), "composite_se": 0.07347,
+              "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
+    shaped = {"composite": _mean(CHILD_FOLDS) + 0.05,   # disagrees with its folds
+              "fold_composites": _entries(CHILD_FOLDS)}
+    assert effective_accept_margin(meta, parent, shaped) == pytest.approx(0.07347)
 
 
 # ---------------------------------------------------------------------------
@@ -311,3 +328,63 @@ def test_reevaluate_descendants_uses_paired_basis(tmp_path: Path) -> None:
     reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
     reloaded._reevaluate_descendants(root_id)
     assert reloaded.get_node(child_id)["status"] == "keep"
+
+
+def test_rebuilt_from_completed_node_keeps_fold_evidence(tmp_path: Path) -> None:
+    """K3: a node whose graph entry is LOST and rebuilt from completed/<id>.json
+    (the real reconcile scan) must carry fold_composites and composite_se, or
+    the recovered incumbent screens its children against the wider marginal
+    bar with no error anywhere."""
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    # Lose the node (graph rebuilt from scratch), keep the completed artifact.
+    wiped = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    del wiped.nodes[child_id]
+    wiped.save()
+
+    recovered = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    (tmp_path / "queue").mkdir(exist_ok=True)
+    (tmp_path / "running").mkdir(exist_ok=True)
+    recovered.reconcile(str(tmp_path / "queue"), str(tmp_path / "running"),
+                        str(tmp_path / "completed"), str(tmp_path / "archive"))
+    node = recovered.get_node(child_id)
+    assert node is not None
+    assert node["fold_composites"] == _entries(CHILD_FOLDS)
+    assert node["composite_se"] is not None
+
+
+def test_refresh_without_folds_clears_stale_projection(tmp_path: Path) -> None:
+    """K4: re-ingest of a result WITHOUT usable validation_folds must CLEAR the
+    node's previous fold vector — pairing children against a different run's
+    folds than the composite being compared is neither basis."""
+    from automil.scoring import fold_composite_entries
+
+    payload = _result_payload(CHILD_FOLDS)
+    del payload["validation_folds"]
+    assert fold_composite_entries(payload) is None  # the projection says none
+
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    # Re-ingest the SAME node id from a foldless payload via the terminal
+    # writer (the real assign-or-clear site).
+    reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    reloaded.nodes[child_id]["status"] = "running"
+    reloaded.save()
+    _ingest(tmp_path, reloaded, child_id, payload)
+
+    node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(child_id)
+    assert node.get("fold_composites") is None or "fold_composites" not in node

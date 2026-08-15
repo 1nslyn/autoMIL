@@ -345,3 +345,25 @@ def test_validation_folds_carry_composites_and_prediction_hashes(tmp_path: Path)
     # Val-only projection: the sealed test block never enters an entry.
     assert all("held_out" not in e for e in entries)
     assert all(not k.startswith("test_") for e in entries for k in e["metrics"])
+
+
+def test_unresolvable_fold_index_drops_the_whole_fold(tmp_path: Path) -> None:
+    """One denominator: a fold that cannot be placed in the fold vector must
+    not count toward composite/composite_se/partial_folds either — a split
+    denominator would let the ingest-side SE recompute (which prefers
+    validation_folds) replace the N-fold SE and fire the tamper WARNING on a
+    benign naming gap."""
+    _write_fold(tmp_path, 0, composite=0.80)
+    _write_fold(tmp_path, 1, composite=0.60)
+    # A fold whose filename second token is non-numeric AND whose payload
+    # carries a junk fold_index: unplaceable.
+    rogue = json.loads((tmp_path / "fold_0_result.json").read_text())
+    rogue["fold_index"] = "not-an-int"
+    rogue["composite"] = 0.99
+    (tmp_path / "fold_val_extra_result.json").write_text(json.dumps(rogue))
+
+    result = aggregate_folds(tmp_path, expected_fold_count=2)
+
+    assert result["partial_folds"] == 2
+    assert result["composite"] == pytest.approx(0.70)
+    assert [e["fold_index"] for e in result["validation_folds"]] == [0, 1]

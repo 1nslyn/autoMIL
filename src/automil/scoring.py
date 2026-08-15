@@ -160,12 +160,14 @@ def recompute_composite_se(result: Mapping[str, object] | None) -> float | None:
     """
     if not isinstance(result, Mapping):
         return None
-    folds = result.get("validation_folds")
-    if not isinstance(folds, list):
+    folds = fold_composite_map(result.get("validation_folds"))
+    if folds is None:
         return None
-    return cross_fold_se(
-        fold.get("composite") for fold in folds if isinstance(fold, Mapping)
-    )
+    # One parser for every consumer of validation_folds: keyed and deduplicated
+    # by fold_index exactly like the paired-margin projection, so the marginal
+    # SE and the paired SE can never be computed over different fold multisets
+    # of the same payload.
+    return cross_fold_se(folds.values())
 
 
 def fold_composite_map(entries: object) -> dict[int, float] | None:
@@ -235,12 +237,31 @@ def fold_composite_entries(result: Mapping[str, object] | None) -> list[dict] | 
     """The minimal ``[{fold_index, composite}]`` projection of a result's
     ``validation_folds`` — what the graph stores per node so the paired
     keep-margin can pair a child with its parent without re-reading archives.
-    Validation-only by construction (fold composites are recomputed from the
-    val ``metrics`` block); ``None`` when the result carries no usable folds.
+    Validation-only by construction; ``None`` when no usable folds remain.
+
+    Each entry's composite is RECOMPUTED as the mean of its own val ``metrics``
+    whenever that block is present (CR-1b at fold granularity): result.json is
+    agent-editable, and a reported fold composite that disagrees with its own
+    metrics could otherwise shape the paired SE (uniform deltas → bar drops to
+    the δ floor) while the honest aggregate metrics pass every node-level
+    check. The reported value survives only for entries with no metrics block.
+    The mean reducer is the right recompute here regardless of the configured
+    formula, because the paired margin is enabled only under ``mean``.
     """
     if not isinstance(result, Mapping):
         return None
-    folds = fold_composite_map(result.get("validation_folds"))
+    raw = result.get("validation_folds")
+    if isinstance(raw, list):
+        recomputed = []
+        for entry in raw:
+            if not isinstance(entry, Mapping):
+                continue
+            fold_mean = recompute_composite(entry.get("metrics"), "mean")
+            if fold_mean is not None:
+                entry = {**entry, "composite": fold_mean}
+            recomputed.append(entry)
+        raw = recomputed
+    folds = fold_composite_map(raw)
     if folds is None:
         return None
     return [{"fold_index": i, "composite": folds[i]} for i in sorted(folds)]

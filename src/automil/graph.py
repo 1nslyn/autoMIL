@@ -257,15 +257,61 @@ def effective_accept_margin(
     if child_node is not None and _formula_pairs_folds(meta):
         from automil.scoring import paired_delta_se
 
-        paired_se = paired_delta_se(
-            node_fold_composites(child_node), node_fold_composites(parent_node)
-        )
-        if paired_se is not None:
-            return max(delta, _se_multiplier(meta) * paired_se)
+        child_folds = node_fold_composites(child_node)
+        parent_folds = node_fold_composites(parent_node)
+        # Identity guard: the paired basis substitutes SE(per-fold deltas)
+        # while _accept still compares node composites, so it is coherent only
+        # when each node's composite IS the mean of its fold composites. The
+        # reducer name alone cannot guarantee that — a recovery aggregate with
+        # sparse per-fold metrics reports a composite whose denominator
+        # differs from the fold vector's. Verify the property on the data in
+        # hand and fall back to the marginal basis when it fails.
+        if _composite_matches_folds(child_node, child_folds) and \
+                _composite_matches_folds(parent_node, parent_folds):
+            paired_se = paired_delta_se(child_folds, parent_folds)
+            if paired_se is not None:
+                return max(delta, _se_multiplier(meta) * paired_se)
     se = node_composite_se(parent_node)
     if se is None:
         return delta
     return max(delta, _se_multiplier(meta) * se)
+
+
+def _composite_matches_folds(node: dict | None, folds: dict[int, float] | None) -> bool:
+    """True when the node's composite equals the mean of its fold composites
+    (within the ingest rounding tolerance) — the identity the paired margin
+    rests on."""
+    if not isinstance(node, dict) or not folds:
+        return False
+    composite = node.get("composite")
+    if isinstance(composite, bool) or not isinstance(composite, (int, float)):
+        return False
+    from automil.scoring import COMPOSITE_TOLERANCE
+
+    mean = sum(folds.values()) / len(folds)
+    return abs(float(composite) - mean) <= COMPOSITE_TOLERANCE
+
+
+def keep_or_discard(meta: dict | None, parent_node: dict | None, child_node: dict) -> str:
+    """THE keep/discard decision — every accept site routes through here.
+
+    ``child_node`` is REQUIRED (no default): a site that cannot supply child
+    evidence must say so by constructing the evidence dict explicitly, never
+    by omission — an omitted child would silently select the wider marginal
+    bar and stamp a genuinely improved node ``discard``, indistinguishable
+    from a real rejection (the exact failure the paired margin exists to fix).
+    Root semantics (no parent): keep iff composite > 0, margin N/A.
+    """
+    composite = child_node.get("composite")
+    composite = float(composite) if isinstance(composite, (int, float)) \
+        and not isinstance(composite, bool) else 0.0
+    if parent_node is None:
+        return "keep" if composite > 0 else "discard"
+    p_comp = parent_node.get("composite")
+    p_comp = float(p_comp) if isinstance(p_comp, (int, float)) \
+        and not isinstance(p_comp, bool) else 0.0
+    margin = effective_accept_margin(meta, parent_node, child_node)
+    return "keep" if _accept(composite, p_comp, margin) else "discard"
 
 
 def _config_accept_margin(graph_path) -> float | None:
@@ -737,11 +783,15 @@ class ExperimentGraph:
             node["composite_se"] = _se
         # Paired margin: lift the fold projection alongside the SE — same
         # framework-owned contract, same "recovered incumbent must not lose its
-        # evidence" rationale.
+        # evidence" rationale. Assign-or-CLEAR: a re-ingest without usable
+        # folds must not leave a previous run's vector beside a new composite
+        # (the paired deltas would difference across runs).
         from automil.scoring import fold_composite_map as _fold_map
         _folds = metrics.get("fold_composites")
         if _fold_map(_folds) is not None:
             node["fold_composites"] = _folds
+        else:
+            node.pop("fold_composites", None)
         node["global_delta"] = metrics.get("global_delta", metrics.get("delta", 0.0))
         node["parent_delta"] = composite - parent_composite
         # D-200: store consumer metrics as opaque dict. `composite_se` and
@@ -810,9 +860,7 @@ class ExperimentGraph:
                 # D-200 Option B: composite-only dominance, gated by the Ladder
                 # keep-margin (δ=0.0 → strict dominance). The composite is the
                 # consumer-computed validation selection signal (val-firewall).
-                keep = _accept(c_comp, p_comp,
-                               effective_accept_margin(self.meta, parent, child))
-                child["status"] = "keep" if keep else "discard"
+                child["status"] = keep_or_discard(self.meta, parent, child)
                 child["parent_delta"] = c_comp - p_comp
                 stack.append(child["id"])
 
@@ -1126,19 +1174,16 @@ class ExperimentGraph:
                     if not parent_id_check and node:
                         parent_id_check = node.get("parent_id")
                     parent_node = self.get_node(parent_id_check) if parent_id_check else None
-                    if parent_node:
-                        p_comp = parent_node.get("composite", 0)
-                        # D-200 Option B: composite-only dominance + Ladder margin.
-                        # The completion artifact carries the fold projection, so
-                        # the paired basis survives this recovery path too.
-                        keep = _accept(composite, p_comp,
-                                       effective_accept_margin(
-                                           self.meta, parent_node,
-                                           {"fold_composites": completion.get("fold_composites")},
-                                       ))
-                        graph_status = "keep" if keep else "discard"
-                    else:
-                        graph_status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
+                    # D-200 Option B: composite-only dominance + Ladder margin.
+                    # The completion artifact carries the full child evidence
+                    # (composite + SE + fold projection), so the paired basis
+                    # survives this recovery path too.
+                    child_evidence = {
+                        "composite": composite,
+                        "composite_se": composite_se,
+                        "fold_composites": completion.get("fold_composites"),
+                    }
+                    graph_status = keep_or_discard(self.meta, parent_node, child_evidence)
                 else:
                     graph_status = "discard"
 
@@ -1199,6 +1244,12 @@ class ExperimentGraph:
                         "description": completion.get("description", "recovered"),
                         "techniques": techniques,
                         "composite": metrics["composite"],
+                        # CR-4 + paired margin: a node REBUILT from completed/
+                        # must carry the same evidence promote() lifts, or the
+                        # recovered incumbent screens its children against the
+                        # wider marginal bar (or none) with no error anywhere.
+                        "composite_se": composite_se,
+                        "fold_composites": completion.get("fold_composites"),
                         "global_delta": metrics["global_delta"],
                         "parent_delta": 0.0,
                         # D-200: consumer metrics opaque dict.
@@ -1292,16 +1343,13 @@ class ExperimentGraph:
                         _folds_r = _fold_entries(result)
                         raw_status = result.get("status", "completed")
                         if raw_status == "completed":
-                            if parent:
-                                p_comp = parent.get("composite", 0)
-                                # D-200 Option B: composite-only dominance + Ladder margin.
-                                keep = _accept(composite, p_comp,
-                                              effective_accept_margin(
-                                                  self.meta, parent,
-                                                  {"fold_composites": _folds_r}))
-                                status = "keep" if keep else "discard"
-                            else:
-                                status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
+                            # D-200 Option B: composite-only dominance + Ladder
+                            # margin, decided on the full child evidence.
+                            status = keep_or_discard(self.meta, parent, {
+                                "composite": composite,
+                                "composite_se": composite_se,
+                                "fold_composites": _folds_r,
+                            })
                         else:
                             status = raw_status
 

@@ -119,6 +119,20 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         composite = _finite(data.get("composite"))
         if composite is None:
             offenders.insert(0, f"composite={data.get('composite')!r}")
+        # fold_index is part of the same all-or-nothing contract: a fold that
+        # cannot be placed in the fold vector must not count toward the
+        # aggregate either, or composite/composite_se run over N folds while
+        # validation_folds carries N−1 — and the ingest-side SE recompute
+        # (which prefers validation_folds) would silently replace the N-fold
+        # SE and fire the val-firewall tamper WARNING on a benign naming gap.
+        fold_index = data.get("fold_index")
+        if not isinstance(fold_index, int) or isinstance(fold_index, bool):
+            try:  # fold_<i>_result.json — the writer's own naming contract
+                fold_index = int(ff.name.split("_")[1])
+            except (IndexError, ValueError):
+                fold_index = None
+        if fold_index is None:
+            offenders.append(f"fold_index={data.get('fold_index')!r}")
         if offenders:
             logger.warning(
                 "Skipping fold %s: unestimable %s (a fold contributes all of its "
@@ -138,29 +152,24 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         # normal completion: validation_folds is what carries fold composites
         # (paired keep-margin) and the val-prediction hash (no-op detection)
         # onto the node and its round-trip artifacts. Val-only projection —
-        # held_out stays in its sealed aggregate above.
-        fold_index = data.get("fold_index")
-        if not isinstance(fold_index, int) or isinstance(fold_index, bool):
-            try:  # fold_<i>_result.json — the writer's own naming contract
-                fold_index = int(ff.name.split("_")[1])
-            except (IndexError, ValueError):
-                fold_index = None
-        if fold_index is not None:
-            from automil.firewall import held_out_metric_keys
+        # held_out stays in its sealed aggregate above. fold_index was
+        # resolved (or the whole fold skipped) in the offender check, so the
+        # entry list and the aggregates share one denominator by construction.
+        from automil.firewall import held_out_metric_keys
 
-            fold_metrics = dict(data.get("metrics") or {})
-            for leak in held_out_metric_keys(fold_metrics):
-                # A held-out-named key inside a fold's metrics trips the
-                # ingest firewall for the whole node anyway; the entry
-                # projection is DECLARED val-only, so it enforces the
-                # vocabulary itself rather than relying on that.
-                fold_metrics.pop(leak, None)
-            fold_entries.append({
-                "fold_index": fold_index,
-                "metrics": fold_metrics,
-                "composite": composite,
-                "val_predictions_sha256": data.get("val_predictions_sha256"),
-            })
+        fold_metrics = dict(data.get("metrics") or {})
+        for leak in held_out_metric_keys(fold_metrics):
+            # A held-out-named key inside a fold's metrics trips the
+            # ingest firewall for the whole node anyway; the entry
+            # projection is DECLARED val-only, so it enforces the
+            # vocabulary itself rather than relying on that.
+            fold_metrics.pop(leak, None)
+        fold_entries.append({
+            "fold_index": fold_index,
+            "metrics": fold_metrics,
+            "composite": composite,
+            "val_predictions_sha256": data.get("val_predictions_sha256"),
+        })
 
     n = len(composites)
     if n == 0:

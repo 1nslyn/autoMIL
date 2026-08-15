@@ -222,9 +222,9 @@ Consequences you must design around, not discover:
 - **Detect no-ops from predictions, not metrics.** Each fold entry in
   `result.json` carries `val_predictions_sha256`; identical hashes mean
   your change never altered a prediction — metric equality alone cannot
-  distinguish that from a change too small for ~47 validation slides to
-  express. Charge the lesson once; never re-measure a hash-identical
-  configuration.
+  distinguish that from a change too small for a validation split of a few
+  dozen slides to express. Charge the lesson once; never re-measure a
+  hash-identical configuration.
 
 ## 4. PolicyVariant — the honest seam sheet
 
@@ -240,10 +240,10 @@ policy variant can only adapt what is handed to it:
   discovering this.
 - `should_stop(*, default, epoch, metrics) -> bool` — live on every arm,
   receives per-epoch **validation** metrics, must return a plain bool. The
-  framework already logs one `[epoch k] ...` line per epoch with exactly
-  those metrics and one `[selected] epoch=k` line per fold on EVERY arm, so
-  the learning curve is in `run.log` for free — never spend an attempt on a
-  trajectory-probe variant.
+  framework already logs one `[epoch k] ...` line per VALIDATED epoch with
+  exactly those metrics and one `[selected] epoch=k` line per fold on every
+  arm, so the learning curve is in `run.log` for free — never spend an
+  attempt on a trajectory-probe variant.
 - `step(loss, opt)` — invoked by **no** shipped trainer. Dead code here.
 - SAM-class two-pass optimizers are out of reach through this seam (no
   closure re-evaluates the loss). Loss shaping, sampling changes, and

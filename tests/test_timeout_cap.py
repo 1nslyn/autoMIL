@@ -2,57 +2,58 @@
 
 ``PROTOCOL.attempt_timeout`` is a hash-audited failure-containment constant,
 yet ``submit --timeout`` wrote ``spec.timeout_min`` unchecked — the
-runtime-canary agent raised 360→600 unchallenged. The cap lives in
-``validate_campaign_binding`` behind OPTIONAL params: two enforcing callers
-(submit, and the daemon's launch-time revalidation — queue specs are
-agent-editable JSON, so submit-only enforcement is bypassable), two
-non-enforcing callers (campaign materialization, promotion) that pass
-nothing and skip the check.
+runtime-canary agent raised 360→600 unchallenged. ``enforce_attempt_timeout_cap``
+is a standalone check with two explicit enforcing callers: submit and the
+daemon's launch-time revalidation (queue specs are agent-editable JSON, so
+submit-only enforcement is bypassable). Both pass the RAW
+``orchestrator.default_timeout_min`` config value, so an absent key skips the
+check SYMMETRICALLY — never accepted at submit and refused post-billing at
+launch against a framework fallback the config never declared.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-
-def _call(spec_timeout, default_timeout):
-    from automil.admissibility import validate_campaign_binding
-
-    # The cap check fires before any manifest I/O, so a placeholder path and
-    # minimal campaign mapping exercise it in isolation.
-    return validate_campaign_binding(
-        Path("/nonexistent/manifest.json"),
-        {"campaign_id": "c"},
-        base_run_command=None,
-        budget_cell_id="cell",
-        spec_timeout_min=spec_timeout,
-        default_timeout_min=default_timeout,
-    )
+from automil.admissibility import AdmissibilityError, enforce_attempt_timeout_cap
 
 
 def test_raising_the_timeout_is_refused() -> None:
-    from automil.admissibility import AdmissibilityError
-
     with pytest.raises(AdmissibilityError, match="failure containment"):
-        _call(600, 360)
+        enforce_attempt_timeout_cap(600, 360)
 
 
 def test_lowering_and_matching_pass_the_cap() -> None:
-    from automil.admissibility import AdmissibilityError
-
-    # Passing the cap then failing on the minimal campaign mapping proves the
-    # cap itself accepted these values.
-    for spec_timeout in (360, 90):
-        with pytest.raises(AdmissibilityError, match="missing non-empty string"):
-            _call(spec_timeout, 360)
+    enforce_attempt_timeout_cap(360, 360)
+    enforce_attempt_timeout_cap(90, 360)
 
 
-def test_absent_params_skip_the_check() -> None:
-    from automil.admissibility import AdmissibilityError
+def test_absent_reference_or_spec_skips_symmetrically() -> None:
+    # Absent config key (None reference) or no explicit --timeout (None spec):
+    # skipped — at BOTH gates, by construction of the shared reference.
+    enforce_attempt_timeout_cap(None, 360)
+    enforce_attempt_timeout_cap(600, None)
+    enforce_attempt_timeout_cap(None, None)
 
-    # Non-enforcing callers (materialization, promotion) pass neither param;
-    # a spec with no explicit --timeout passes None for the spec side.
-    for spec_timeout, default in ((None, 360), (600, None), (None, None)):
-        with pytest.raises(AdmissibilityError, match="missing non-empty string"):
-            _call(spec_timeout, default)
+
+def test_both_enforcing_callers_use_the_raw_config_reference() -> None:
+    """submit and the daemon must resolve the SAME reference: the raw config
+    value. The daemon's scheduling fallback (DEFAULT_TIMEOUT_MIN) must never
+    leak into the cap, or a config lacking the key accepts at submit and
+    refuses after billing at launch."""
+    import inspect
+
+    from automil.backends import _orchestrator_daemon as daemon_mod
+
+    src = inspect.getsource(daemon_mod.ExperimentOrchestrator._load_config_and_state) \
+        if hasattr(daemon_mod.ExperimentOrchestrator, "_load_config_and_state") \
+        else inspect.getsource(daemon_mod)
+    assert 'orch_cfg.get("default_timeout_min")' in src, (
+        "the daemon's timeout_cap must be the RAW config value (no fallback)"
+    )
+    from automil.cli import submit as submit_mod
+
+    submit_src = inspect.getsource(submit_mod)
+    assert "enforce_attempt_timeout_cap(" in submit_src
+    daemon_src = inspect.getsource(daemon_mod)
+    assert "enforce_attempt_timeout_cap(" in daemon_src
+    assert "self.timeout_cap" in daemon_src

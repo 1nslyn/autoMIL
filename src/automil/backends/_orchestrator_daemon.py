@@ -152,10 +152,9 @@ def _find_git_root(start: Path | None = None) -> Path:
 
 
 # PID-file starttime cross-check (CLN-04 / D-17) lives in automil.backends.pidfile
-# (public surface, shared with operator tooling). Private aliases preserve the
-# daemon-internal and automil.orchestrator shim call sites.
+# (public surface, shared with operator tooling). Only the names the daemon
+# itself calls are aliased here; anything else imports from pidfile directly.
 from automil.backends.pidfile import (  # noqa: E402
-    parse_starttime_from_stat_line as _parse_starttime_from_stat_line,
     read_proc_starttime as _read_proc_starttime,
     is_pid_alive_with_starttime as _is_pid_alive_with_starttime,
     write_pid_file as _write_pid_file,
@@ -546,6 +545,10 @@ class ExperimentOrchestrator:
         self.poll_interval = orch_cfg.get("poll_interval_sec", POLL_INTERVAL_SEC)
         self.safety_margin_gb = orch_cfg.get("safety_margin_gb", SAFETY_MARGIN_GB)
         self.default_timeout = orch_cfg.get("default_timeout_min", DEFAULT_TIMEOUT_MIN)
+        # The timeout CAP reference is the RAW config value — None when the
+        # key is absent, so the cap skips symmetrically with submit's gate
+        # instead of refusing (post-billing) against the framework fallback.
+        self.timeout_cap = orch_cfg.get("default_timeout_min")
         self.max_per_gpu = orch_cfg.get("max_concurrent_per_gpu", MAX_CONCURRENT_PER_GPU)
         self.default_vram = orch_cfg.get("default_vram_estimate_gb", DEFAULT_VRAM_ESTIMATE_GB)
         self.scheduling_policy: str = orch_cfg.get("scheduling_policy", SCHEDULING_POLICY)
@@ -1501,13 +1504,61 @@ class ExperimentOrchestrator:
                 cell.mode == "wall_clock"
                 and (time.time() - cell.started_at) >= cell.budget_seconds
             )
-            if not wall_expired:
-                logger.info(
-                    "Launching already-billed %s despite %s cell %s: a charged "
-                    "attempt being retried is not new work.",
-                    node_id, cell.status.value, cell.cell_id[:8],
-                )
+            # Exactly-once completion: a billed retry exists to COMPLETE a
+            # measurement that never landed (crash or unlink-abort inside the
+            # launch window). A billed node whose archive already holds a
+            # MEASURED terminal result (completed/partial) has nothing left to
+            # complete — relaunching it would overwrite evidence a freeze
+            # census may already have counted. This is also the wall for
+            # agent_active cells, which have no wall-clock expiry: with a
+            # measured result the retry is refused; without one, completing
+            # the paid-for attempt is exactly what the census needs, whenever
+            # it happens. (A crash result stays retryable — crash IS the
+            # retry case.)
+            already_measured = False
+            try:
+                _archived = self.archive_dir / node_id / "result.json"
+                if _archived.exists():
+                    already_measured = json.loads(_archived.read_text()).get(
+                        "status"
+                    ) in ("completed", "partial")
+            except (OSError, json.JSONDecodeError):
+                already_measured = False   # unreadable → treat as unmeasured
+            if not wall_expired and not already_measured:
+                # Once per spec, not per tick: this INFO fired 6,900+ times in
+                # a 105-minute canary recovery and buried the two real ERRORs.
+                if not hasattr(self, "_billed_exempt_logged"):
+                    self._billed_exempt_logged = set()
+                if node_id not in self._billed_exempt_logged:
+                    self._billed_exempt_logged.add(node_id)
+                    logger.info(
+                        "Launching already-billed %s despite %s cell %s: a charged "
+                        "attempt being retried is not new work.",
+                        node_id, cell.status.value, cell.cell_id[:8],
+                    )
                 return False
+            if already_measured:
+                # NOT the cap-refusal tail below: stamping cap_refused onto a
+                # billed archived spec (or cancelling its executed node) is the
+                # census corruption the billed exemption exists to prevent.
+                # The measurement is done; only the stale queue file goes.
+                logger.warning(
+                    "Dropping stale billed queue spec %s: its archive already "
+                    "holds a measured terminal result — nothing left to "
+                    "complete, and relaunching would overwrite counted "
+                    "evidence.",
+                    node_id,
+                )
+                src_file = spec.get("_file")
+                if src_file and Path(src_file).exists():
+                    try:
+                        Path(src_file).unlink()
+                    except OSError as exc:
+                        logger.warning(
+                            "Could not remove stale billed queue spec %s: %s",
+                            src_file, exc,
+                        )
+                return True
         logger.warning(
             "Refusing to launch %s: cell %s is %s "
             "(consumed_evals=%d/%s). Dequeuing the spec and cancelling "
@@ -1835,16 +1886,20 @@ class ExperimentOrchestrator:
                 ).hexdigest()
                 if _actual_manifest_hash != _campaign.get("manifest_sha256"):
                     raise ValueError("campaign manifest changed between submit and launch")
+                # Queue specs are agent-editable JSON: re-enforce the timeout
+                # cap here, or submit-time enforcement is bypassable by
+                # editing the spec after submit. Same RAW config reference as
+                # submit — absent key skips at both gates.
+                from automil.admissibility import enforce_attempt_timeout_cap
+
+                enforce_attempt_timeout_cap(
+                    spec.get("timeout_min"), self.timeout_cap
+                )
                 validate_campaign_binding(
                     _manifest_path,
                     _campaign,
                     base_run_command=self.run_command,
                     budget_cell_id=str((spec.get("metadata") or {}).get("cell_id", "")),
-                    # Queue specs are agent-editable JSON: re-enforce the
-                    # timeout cap here, or submit-time enforcement is
-                    # bypassable by editing the spec after submit.
-                    spec_timeout_min=spec.get("timeout_min"),
-                    default_timeout_min=self.default_timeout,
                 )
         except Exception as exc:  # fail closed at the last pre-launch seam
             logger.error(

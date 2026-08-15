@@ -247,9 +247,13 @@ def write_terminal_state(
     composite_disagreement: dict | None = None
 
     # Step 3 — Graph node update via locked_update (D-10, D-01)
-    from automil.graph import (locked_update, _accept, _accept_margin,
-                           effective_accept_margin, merged_metadata,
+    from automil.graph import (locked_update, keep_or_discard, merged_metadata,
                            node_composite_se as _node_se_reader)
+    from automil.scoring import fold_composite_entries as _fold_entries
+
+    # One projection serves the graph node AND the completion artifact below —
+    # the round-trip contract requires them identical, so compute once.
+    _folds = _fold_entries(result)
     try:
         # _technique_map is the internal attribute on ExperimentGraph
         _tm = getattr(graph, "_technique_map", None)
@@ -294,13 +298,16 @@ def write_terminal_state(
                 if composite_recomputed is not None:
                     composite = composite_recomputed
 
-                # Paired margin: attach the fold projection BEFORE the accept so
+                # Paired margin: attach the child evidence BEFORE the accept so
                 # this node pairs with its parent now and serves as a pairable
-                # incumbent for its own children later.
-                from automil.scoring import fold_composite_entries as _fold_entries
-                _folds = _fold_entries(result)
+                # incumbent for its own children later. Assign-or-CLEAR: a
+                # re-ingest without usable folds must not leave a previous
+                # run's vector beside a new composite.
                 if _folds is not None:
                     gnode["fold_composites"] = _folds
+                else:
+                    gnode.pop("fold_composites", None)
+                gnode["composite"] = composite
 
                 # D-01: partial nodes stay quarantined — never get keep/discard
                 # crash nodes stay crash (composite=0.0 should not become discard)
@@ -310,13 +317,7 @@ def write_terminal_state(
                     graph_status = "crash"    # failure — not a keep/discard candidate
                 else:
                     # completed, budget_killed, cancelled — Ladder-gated dominance
-                    graph_status = (
-                        "keep"
-                        if _accept(composite, p_comp,
-                                   effective_accept_margin(g.meta, parent, gnode)
-                                   if parent else 0.0)
-                        else "discard"
-                    )
+                    graph_status = keep_or_discard(g.meta, parent, gnode)
 
                 # M-7: the daemon's terminal path never maintained the counters.
                 # `meta.total_executed` is the UCB exploration denominator
@@ -397,8 +398,6 @@ def write_terminal_state(
             }
 
     # Step 4 — completed/<node>.json (atomic write)
-    from automil.scoring import fold_composite_entries as _completion_fold_entries
-
     completion = {
         "id": node_id,
         "status": result.get("status", "crash"),
@@ -408,8 +407,9 @@ def write_terminal_state(
         # revert to the bare predeclared margin.
         "composite_se": _node_se_reader({"composite_se": result.get("composite_se")}),
         # Paired margin: same round-trip contract for the fold projection —
-        # without it a recovered node falls back to the marginal basis.
-        "fold_composites": _completion_fold_entries(result),
+        # without it a recovered node falls back to the marginal basis. Same
+        # single projection the graph node received above.
+        "fold_composites": _folds,
         "metrics": result.get("metrics", {}),
         "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
         "peak_vram_mb": result.get("peak_vram_mb", 0),

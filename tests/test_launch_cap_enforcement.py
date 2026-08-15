@@ -481,3 +481,67 @@ def test_spec_referencing_an_unknown_cell_is_held_not_cancelled(tmp_path, caplog
         f"expected a warning naming the unknown cell; got "
         f"{[r.getMessage() for r in caplog.records]}"
     )
+
+
+def test_billed_retry_refused_when_archive_already_measured(tmp_path):
+    """Exactly-once completion — the agent_active analog of the wall.
+
+    agent_active cells have no wall-clock expiry, so before this guard NO
+    state could refuse a billed retry there: a stale billed queue spec could
+    launch into a closed (even census-sealed) cell at any later time. A billed
+    node whose archive already holds a MEASURED terminal result has nothing
+    left to complete; the stale spec is dropped WITHOUT the cap_refused stamp
+    (that stamp on a billed spec is the census corruption A9 exists to
+    prevent)."""
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, status=CellStatus.FINALIZED, eval_budget=10,
+                consumed_evals=10, billed_node_ids=[NODE_ID],
+                mode="agent_active")
+    _seed_graph(orch)
+    _write_queued_spec(orch)
+    measured = orch.archive_dir / NODE_ID
+    measured.mkdir(parents=True, exist_ok=True)
+    (measured / "result.json").write_text(json.dumps(
+        {"status": "completed", "composite": 0.5,
+         "metrics": {"val_auc": 0.5}}))
+    _stub_runner(orch, tmp_path)
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch.tick()
+
+    launches = [c for c in _FakePopen.calls if "nvidia-smi" not in str(c[0])]
+    assert launches == [], "a measured billed node must never relaunch"
+    assert not (orch.queue_dir / f"{NODE_ID}.json").exists(), (
+        "the stale billed queue spec must be dropped"
+    )
+    archived_spec = measured / "spec.json"
+    if archived_spec.exists():
+        assert not (json.loads(archived_spec.read_text()).get("metadata") or {}).get(
+            "cap_refused"
+        ), "a billed spec must never carry a cap_refused stamp"
+
+
+def test_billed_retry_without_measurement_relaunches_agent_active(tmp_path):
+    """The exemption's purpose survives the new guard: a billed node with NO
+    measured result (crash inside the launch window) relaunches through a
+    closed agent_active cell — completing paid-for work the census needs."""
+    orch = _make_orch(tmp_path)
+    _write_cell(orch.automil_dir, status=CellStatus.FINALIZED, eval_budget=10,
+                consumed_evals=10, billed_node_ids=[NODE_ID],
+                mode="agent_active")
+    _seed_graph(orch)
+    spec = _write_queued_spec(orch)
+    crashed = orch.archive_dir / NODE_ID
+    crashed.mkdir(parents=True, exist_ok=True)
+    (crashed / "result.json").write_text(json.dumps(
+        {"status": "crash", "composite": 0.0, "metrics": {}}))
+    _stub_runner(orch, tmp_path)
+
+    with patch("automil.backends._orchestrator_daemon.subprocess.Popen",
+               side_effect=_FakePopen):
+        orch._launch(spec, gpu_id=0)
+
+    assert len(_FakePopen.calls) == 1, (
+        "a crash-status billed retry must still relaunch (crash IS the retry case)"
+    )

@@ -530,43 +530,51 @@ class CandidatePolicy:
         return live
 
 
+def enforce_attempt_timeout_cap(
+    spec_timeout_min: float | None,
+    default_timeout_min: float | None,
+) -> None:
+    """Refuse a per-spec timeout ABOVE the cell's declared default.
+
+    The campaign's attempt timeout is a hash-audited failure-containment
+    constant, not a search budget — a per-spec ``--timeout`` above the cell
+    default would silently unbind it (the runtime-canary agent raised 360→600
+    unchallenged). Lowering stays free: a cheap probe releasing its slot
+    early is exactly what containment wants.
+
+    A standalone, grep-able check with two explicit enforcing callers —
+    ``automil submit`` (agent-facing refusal) and the daemon's launch-time
+    revalidation (queue specs are agent-editable JSON, so submit-only
+    enforcement is bypassable). BOTH callers pass the RAW
+    ``orchestrator.default_timeout_min`` config value as the reference: when
+    the key is absent the check is skipped symmetrically at both gates, never
+    accepted at one and refused (post-billing) at the other against a
+    framework fallback the config never declared.
+    """
+    if spec_timeout_min is None or default_timeout_min is None:
+        return
+    if float(spec_timeout_min) > float(default_timeout_min):
+        raise AdmissibilityError(
+            f"campaign attempt timeout is failure containment, not a search "
+            f"budget: --timeout {float(spec_timeout_min):g}min exceeds the "
+            f"cell's audited default of {float(default_timeout_min):g}min "
+            f"(lowering is allowed; raising is not)"
+        )
+
+
 def validate_campaign_binding(
     manifest_path: Path,
     campaign: Mapping[str, object],
     *,
     base_run_command: str | None,
     budget_cell_id: str,
-    spec_timeout_min: float | None = None,
-    default_timeout_min: float | None = None,
 ) -> dict[str, object]:
     """Prove command, budget, and cell metadata share one manifest record.
 
     The framework does not interpret the consumer's dataset/model axes.  It
     only enforces a generic campaign envelope: one unique cell, a canonical
     per-cell hash, one budget identity, and a command selected by stage.
-
-    Timeout cap (optional, enforced only when BOTH timeout params are given):
-    the campaign's attempt timeout is a hash-audited failure-containment
-    constant, not a search budget — a per-spec ``--timeout`` ABOVE the cell
-    default would silently unbind it (the runtime-canary agent raised 360→600
-    unchallenged). Lowering stays free: a cheap probe releasing its slot early
-    is exactly what containment wants. The two enforcing callers are submit
-    (agent-facing refusal) and the daemon's launch-time revalidation (queue
-    specs are agent-editable JSON, so submit-only enforcement is bypassable);
-    the campaign-materialization and promotion callers pass neither param and
-    skip the check.
     """
-    if (
-        spec_timeout_min is not None
-        and default_timeout_min is not None
-        and float(spec_timeout_min) > float(default_timeout_min)
-    ):
-        raise AdmissibilityError(
-            f"campaign attempt timeout is failure containment, not a search "
-            f"budget: --timeout {spec_timeout_min:g}min exceeds the cell's "
-            f"audited default of {default_timeout_min:g}min (lowering is "
-            f"allowed; raising is not)"
-        )
     required = (
         "campaign_id", "manifest", "manifest_sha256", "cell_id",
         "cell_sha256", "budget_cell_id", "stage",

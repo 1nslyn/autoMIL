@@ -52,8 +52,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
     # Default reconcile (no --from-archive) stays missing-node-only.
     if from_archive is not None:
         import json as _json
-        from automil.graph import (locked_update, _accept, _accept_margin,
-                           effective_accept_margin, merged_metadata)
+        from automil.graph import keep_or_discard, locked_update, merged_metadata
         archive_dir = adir / "orchestrator" / "archive"
         graph_path = adir / "graph.json"
 
@@ -117,11 +116,15 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     gnode["composite_se"] = _se_final
                 # Paired margin: refresh the fold projection from the archive
                 # result so the keep/discard below (and this node's future role
-                # as a parent) uses the paired basis.
+                # as a parent) uses the paired basis. Assign-or-CLEAR — the
+                # refresh is authoritative; keeping a previous run's folds
+                # beside a refreshed composite would pair across runs.
                 from automil.scoring import fold_composite_entries as _fold_entries
                 _folds_refresh = _fold_entries(payload)
                 if _folds_refresh is not None:
                     gnode["fold_composites"] = _folds_refresh
+                else:
+                    gnode.pop("fold_composites", None)
 
                 # CR-03 fix: result.json status enum (completed/budget_killed/crash/
                 # partial/cancelled) must NOT be written directly into gnode["status"].
@@ -144,13 +147,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     elif raw_result_status in _COMPUTE_KEEPDISCARD:
                         parent_id = gnode.get("parent_id")
                         parent = g.get_node(parent_id) if parent_id else None
-                        p_comp = parent.get("composite", 0.0) if parent else 0.0
-                        composite = gnode["composite"]  # already updated above
-                        gnode["status"] = ("keep" if _accept(
-                            composite, p_comp,
-                            effective_accept_margin(g.meta, parent, gnode)
-                            if parent else 0.0,
-                        ) else "discard")
+                        gnode["status"] = keep_or_discard(g.meta, parent, gnode)
                     # else: unknown status value — leave gnode["status"] unchanged
                     # Preserve raw result status for traceability (operator-visible).
                     # L-8a: copy-on-write (graph.merged_metadata) — node["metadata"]
