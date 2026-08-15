@@ -185,7 +185,7 @@ class TestRoundTripWithCollectResult:
             ["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True, check=True,
         ).stdout.strip()
 
-        runner = Runner(project_root=project)
+        runner = Runner(project_root=project, automil_dir=project / "automil")
         wt_path = runner.create_worktree(base_commit=base, node_id="node_0099")
         archive_dir = project / "orchestrator" / "archive" / "node_0099"
         archive_dir.mkdir(parents=True)

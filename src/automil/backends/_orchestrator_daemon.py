@@ -585,7 +585,7 @@ class ExperimentOrchestrator:
         # activity health so a file blip never fakes a telemetry transition.
         self._unreadable_cell_logged: set[str] = set()
 
-        self.runner = Runner(self.project_root)
+        self.runner = Runner(self.project_root, self.automil_dir)
 
         # CR-01 fix: ExperimentGraph instance initialized here so _handle_completion
         # and _handle_cap_killed_completion both receive a valid graph object at

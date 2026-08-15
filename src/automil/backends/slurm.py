@@ -226,7 +226,7 @@ class SLURMBackend(Backend):
           2. ``runner.apply_overlay(worktree_path, spec.overlay_dir, deletions=...)``
         """
         from automil.runner import Runner  # noqa: PLC0415; lazy to avoid cycles
-        runner = Runner(self._project_root)
+        runner = Runner(self._project_root, self._automil_dir)
         # Real Runner API: 2-positional create_worktree, then separate apply_overlay
         # (mirrors _orchestrator_daemon.py:629-642 — the canonical two-step pattern)
         worktree_path = runner.create_worktree(spec.base_commit, spec.node_id)

@@ -112,8 +112,9 @@ def _run_slurm_debug(project_root: Path, automil_dir: Path) -> float:
             f"SLURM-debug run did not complete: state={final_state}"
         )
 
-    # Worktree path is project_root / ".automil_worktrees" / node_id (Runner convention).
-    worktree_path = project_root / ".automil_worktrees" / "smoke_slurm_debug"
+    # Worktree path follows the Runner convention (scoped per automil project).
+    from automil.runner import Runner
+    worktree_path = Runner(project_root, automil_dir).worktree_path("smoke_slurm_debug")
     return _read_composite(worktree_path)
 
 
@@ -156,8 +157,9 @@ def _run_ray_local(project_root: Path, automil_dir: Path) -> float:
                 f"ray-local run did not complete: state={final_state}"
             )
 
-        # Worktree path follows Runner convention: project_root/.automil_worktrees/<node_id>
-        worktree_path = project_root / ".automil_worktrees" / "smoke_ray_local"
+        # Worktree path follows the Runner convention (scoped per automil project).
+        from automil.runner import Runner
+        worktree_path = Runner(project_root, automil_dir).worktree_path("smoke_ray_local")
         return _read_composite(worktree_path)
     finally:
         if backend._we_started_ray:
