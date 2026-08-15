@@ -1549,24 +1549,31 @@ class ExperimentOrchestrator:
             return False
         if not blocks_new_work(cell):
             return False
-        if (
-            node_id in cell.billed_node_ids
-            and cell.status not in (CellStatus.TERMINATING, CellStatus.FINALIZED)
-        ):
-            # A9 exactly-once, final-attempt corner: an attempt that was already
-            # BILLED (crash/unlink-abort inside its launch window, now retrying)
-            # is paid-for work being completed, not new work — and on the last
-            # budgeted attempt the bill itself flips evals_exhausted, so refusing
-            # here would stamp the archived spec cap_refused and leave the freeze
-            # census permanently one short of consumed_evals. Exempt it, unless
-            # the TIME axis has already escalated to terminating/finalized (the
-            # hard wall may not be crossed to start new processes).
-            logger.info(
-                "Launching already-billed %s despite %s cell %s: a charged "
-                "attempt being retried is not new work.",
-                node_id, cell.status.value, cell.cell_id[:8],
+        if node_id in cell.billed_node_ids:
+            # A9 exactly-once: an attempt that was already BILLED (crash or
+            # unlink-abort inside its launch window, now retrying) is paid-for
+            # work being completed, not new work. Refusing it stamps the
+            # archived spec cap_refused and leaves the freeze census
+            # permanently short of consumed_evals — so no EVAL-axis state may
+            # refuse it, including TERMINATING/FINALIZED reached by the idle
+            # drain (canary recovery 2026-08-15: all 20 billed promotion
+            # retries were cancelled by finalized cells whose 7-day wall_clock
+            # budgets had days of headroom left). The one wall that may refuse
+            # paid work is a genuinely expired wall_clock budget — the only
+            # axis denominated in the unit the retry would spend; an
+            # agent_active budget bounds agent seconds, which a billed GPU
+            # retry cannot consume.
+            wall_expired = (
+                cell.mode == "wall_clock"
+                and (time.time() - cell.started_at) >= cell.budget_seconds
             )
-            return False
+            if not wall_expired:
+                logger.info(
+                    "Launching already-billed %s despite %s cell %s: a charged "
+                    "attempt being retried is not new work.",
+                    node_id, cell.status.value, cell.cell_id[:8],
+                )
+                return False
         logger.warning(
             "Refusing to launch %s: cell %s is %s "
             "(consumed_evals=%d/%s). Dequeuing the spec and cancelling "
