@@ -320,3 +320,28 @@ def test_val_side_uneven_coverage_cannot_trip_the_firewall_alarm(tmp_path: Path)
     assert result["partial_folds"] == 2     # the null-bacc fold drops whole
     recomputed = recompute_composite(result["metrics"])
     assert recomputed is None or not composite_disagrees(result["composite"], recomputed)
+
+
+def test_validation_folds_carry_composites_and_prediction_hashes(tmp_path: Path) -> None:
+    """The recovery path must emit the same per-fold evidence contract as a
+    normal completion: fold composites feed the paired keep-margin and
+    ``val_predictions_sha256`` feeds no-op detection; without them a recovered
+    node silently reverts to the marginal-SE basis."""
+    _write_fold(tmp_path, 0, composite=0.80)
+    _write_fold(tmp_path, 1, composite=0.60)
+    # Stamp a hash onto fold 0 the way _write_fold_result_json does (top level).
+    f0 = tmp_path / "fold_0_result.json"
+    data = json.loads(f0.read_text())
+    data["val_predictions_sha256"] = "a" * 64
+    f0.write_text(json.dumps(data))
+
+    result = aggregate_folds(tmp_path, expected_fold_count=2)
+
+    entries = result["validation_folds"]
+    assert [e["fold_index"] for e in entries] == [0, 1]
+    assert [e["composite"] for e in entries] == [0.80, 0.60]
+    assert entries[0]["val_predictions_sha256"] == "a" * 64
+    assert entries[1]["val_predictions_sha256"] is None   # pre-hash fold file
+    # Val-only projection: the sealed test block never enters an entry.
+    assert all("held_out" not in e for e in entries)
+    assert all(not k.startswith("test_") for e in entries for k in e["metrics"])

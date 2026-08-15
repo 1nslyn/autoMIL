@@ -68,6 +68,7 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
     composites: list[float] = []
     metrics_by_key: dict[str, list[float]] = {}
     held_out_by_key: dict[str, list[float]] = {}
+    fold_entries: list[dict] = []
     elapsed_total = 0
     peak_vram = 0
 
@@ -133,6 +134,33 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         # routes it to certify.json, never into agent-facing artifacts (val-firewall).
         for k, v in (data.get("held_out") or {}).items():
             held_out_by_key.setdefault(k, []).append(_finite(v))
+        # The recovery path must emit the same per-fold evidence contract as a
+        # normal completion: validation_folds is what carries fold composites
+        # (paired keep-margin) and the val-prediction hash (no-op detection)
+        # onto the node and its round-trip artifacts. Val-only projection —
+        # held_out stays in its sealed aggregate above.
+        fold_index = data.get("fold_index")
+        if not isinstance(fold_index, int) or isinstance(fold_index, bool):
+            try:  # fold_<i>_result.json — the writer's own naming contract
+                fold_index = int(ff.name.split("_")[1])
+            except (IndexError, ValueError):
+                fold_index = None
+        if fold_index is not None:
+            from automil.firewall import held_out_metric_keys
+
+            fold_metrics = dict(data.get("metrics") or {})
+            for leak in held_out_metric_keys(fold_metrics):
+                # A held-out-named key inside a fold's metrics trips the
+                # ingest firewall for the whole node anyway; the entry
+                # projection is DECLARED val-only, so it enforces the
+                # vocabulary itself rather than relying on that.
+                fold_metrics.pop(leak, None)
+            fold_entries.append({
+                "fold_index": fold_index,
+                "metrics": fold_metrics,
+                "composite": composite,
+                "val_predictions_sha256": data.get("val_predictions_sha256"),
+            })
 
     n = len(composites)
     if n == 0:
@@ -153,6 +181,7 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         # it -- sparse arm-specific diagnostics are honest evidence.
         "metrics": {k: sum(v) / len(v) for k, v in metrics_by_key.items()},
         "held_out": {k: sum(v) / len(v) for k, v in held_out_by_key.items()},
+        "validation_folds": sorted(fold_entries, key=lambda e: e["fold_index"]),
         "partial_folds": n,
         "expected_folds": expected_fold_count,
         "elapsed_seconds": elapsed_total,
