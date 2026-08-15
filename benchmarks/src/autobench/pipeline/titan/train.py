@@ -21,7 +21,11 @@ from torch.utils.data import DataLoader
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
+from autobench.pipeline.evaluate import (
+    compute_extended_metrics,
+    file_sha256,
+    write_predictions_csv,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 from autobench.pipeline.titan.config import TitanHeadConfig
 from autobench.pipeline.titan.dataset import TitanSlideDataset
@@ -175,6 +179,10 @@ def train_titan_fold(
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
+        # A4': no-op detector — hash of the persisted val predictions above.
+        "val_predictions_sha256": file_sha256(
+            os.path.join(fold_dir, "predictions_val.csv")
+        ),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation
         # included, so the number is comparable across arms and task types.

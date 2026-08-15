@@ -262,14 +262,26 @@ def _validation_fold_evidence(summary: dict, ordinal: bool = False) -> list[dict
     recover validation values.  This deliberately narrow projection is safe to
     leave in the agent-facing ``result.json`` and is sufficient to prove exact
     fold coverage and recompute an equal-weight cross-stage mean.
+
+    Each entry also carries ``val_predictions_sha256`` (A4'): the sha256 of the
+    fold's persisted val-prediction file, val-only data and firewall-safe. Its
+    authoritative home is result.json + the graph node; the campaign ledger
+    rebuilds entries on its own schema and drops it, which is fine.
     """
     per_fold = summary.get("per_fold_val", []) or []
     indices = summary.get("fold_indices")
     if not isinstance(indices, list) or len(indices) != len(per_fold):
         indices = list(range(len(per_fold)))
+    # A4': per-fold no-op detector, positional with per_fold_val (each runner
+    # emits the two lists together). ENTRY level, never inside `metrics` — the
+    # campaign controller exact-key-locks the metric schema, and CR-1b would
+    # fold anything in `metrics` into the composite.
+    raw_hashes = summary.get("per_fold_val_predictions_sha256")
+    if not isinstance(raw_hashes, list) or len(raw_hashes) != len(per_fold):
+        raw_hashes = [None] * len(per_fold)
     is_survival = "c_index" in (summary.get("test") or {})
     evidence: list[dict] = []
-    for fold_index, raw_metrics in zip(indices, per_fold):
+    for fold_index, raw_metrics, fold_hash in zip(indices, per_fold, raw_hashes):
         metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
         # Non-finite fold values are nulled here, not passed through raw: this
         # block ships in the AGENT-FACING copy of result.json, so a NaN AUC from
@@ -286,6 +298,9 @@ def _validation_fold_evidence(summary: dict, ordinal: bool = False) -> list[dict
             "metrics": public_metrics,
             "composite": (
                 sum(values) / len(values) if finite else None
+            ),
+            "val_predictions_sha256": (
+                fold_hash if isinstance(fold_hash, str) else None
             ),
         })
     return evidence

@@ -112,21 +112,27 @@ def test_validation_fold_evidence_is_public_and_fold_indexed():
     summary["fold_indices"] = [0, 1, 2]
     result = m.summary_to_result_json(summary, 10.0)
 
+    # val_predictions_sha256 (A4') is part of the entry schema, at ENTRY level
+    # (never inside the exact-key-locked `metrics`); None when the summary
+    # carries no per-fold hash, as this hand-built one does not.
     assert result["validation_folds"] == [
         {
             "fold_index": 0,
             "metrics": {"val_auc": 0.70, "val_bacc": 0.6},
             "composite": pytest.approx(0.65),
+            "val_predictions_sha256": None,
         },
         {
             "fold_index": 1,
             "metrics": {"val_auc": 0.72, "val_bacc": 0.6},
             "composite": pytest.approx(0.66),
+            "val_predictions_sha256": None,
         },
         {
             "fold_index": 2,
             "metrics": {"val_auc": 0.68, "val_bacc": 0.6},
             "composite": pytest.approx(0.64),
+            "val_predictions_sha256": None,
         },
     ]
     assert all("test" not in str(fold).lower()
