@@ -16,7 +16,7 @@ answer; spend the budget honestly and let validation decide.
 ## 0. Session start — read-only until bound
 
 The operator opens this session's formal binding by running
-`open-agent-session` from inside this session. Binding requires the cell to
+`open-agent-session` from their own terminal. Binding requires the cell to
 be byte-pristine. Until the operator confirms the session is bound:
 
 - Do not create or edit ANY file — in particular `automil/plan.md`,
@@ -66,9 +66,22 @@ campaign and will be refused.
 - Exactly **30 launched attempts** are charged to this cell. Every launched
   attempt counts — crashes, timeouts, OOMs, and budget-kills included.
   Submit-time refusals are free. An attempt trains discovery folds 0,1,2.
-- Your active time is metered natively (12-hour agent-active cap).
-  Research and diagnosis while a batch trains are billed like any other
-  active work — stay purposeful, never idle-poll.
+- Every attempt runs under the cell's wall-clock timeout
+  (`orchestrator.default_timeout_min` in `automil/config.yaml`).
+  `submit --timeout <min>` may LOWER it for cheap probes — freeing the queue
+  sooner — but raising it above the default is refused: the timeout is
+  failure containment, not search budget. A run killed at the timeout is
+  still charged and its partial result is ineligible for promotion (and its
+  completed folds are a biased, not random, subsample). Before submitting a
+  config expected to train materially longer than its parent did, check the
+  parent's `elapsed_min` in `results.tsv` and leave ~2× headroom, or lower
+  the ambition of that attempt.
+- Your active time is metered natively (12-hour agent-active cap). The cap
+  bounds runaway sessions; it does not ration thought — in rehearsals under
+  10% of it was used while the attempts and GPU hours ran out. The scarce
+  resources are the 30 attempts and the training wall-clock, never your
+  deliberation between batches. Never idle-poll; think as long as the
+  decision deserves.
 - Check `uv run --project "$REPO_ROOT" automil cell status` before every
   batch. Never spend an attempt on a duplicate, an unverified guess, or a
   submission you have not sanity-checked (imports, JSON validity, variant
@@ -90,10 +103,14 @@ rewrites, no data-format changes. Log title + arXiv id in
 
 **DIAGNOSE.** Read `automil/graph.json`, recent
 `automil/orchestrator/archive/<node>/result.json` and `run.log`, and
-`automil/learnings.md`; name the **one primary failure mode** of the
-current best — overfit · underfit · attention-collapse · poor calibration ·
-class-imbalance — with evidence. Propose from "what limits the model", never
-from "which knob is untried".
+`automil/learnings.md`; `automil rank` prints the completed-node leaderboard
+(composite ± SE, paired Δparent ± SE, and the keep-bar each node faced) —
+read it instead of re-deriving those numbers from archives. Name the **one
+primary failure mode** of the current best — overfit · underfit ·
+attention-collapse · poor calibration · class-imbalance — with evidence
+from the per-epoch validation lines and `[selected] epoch=` markers in
+`run.log`. Propose from "what limits the model", never from "which knob is
+untried".
 
 **PLAN.** Rewrite `automil/plan.md`: the diagnosis, then a table of this
 batch's proposals, each with kind, parent, and *hypothesis → expected
@@ -109,11 +126,11 @@ proposal:
   is relative to this cell root), then submit it under its
   **git-root-relative** path — every `--files` path is resolved from the
   repository root, never from your working directory. The exact allowed
-  pattern is declared in `automil/config.yaml` `files.editable`; it has the
-  shape `benchmarks/campaigns/preprint_130/runtime/<cell-id>/automil/variants/_policies/*.py`,
-  where `<cell-id>` is this cell's directory name (also recorded in
-  `automil/campaign_cell.json`):
-  `uv run --project "$REPO_ROOT" automil submit --node <id> --desc "..." --files benchmarks/campaigns/preprint_130/runtime/<cell-id>/automil/variants/_policies/<name>.py --override "--policy-variant <name>"`
+  pattern is declared in `automil/config.yaml` `files.editable` — read the
+  value and use it VERBATIM as the `--files` prefix; it ends
+  `<cell-id>/automil/variants/_policies/*.py`, where `<cell-id>` is this
+  cell's directory name (also recorded in `automil/campaign_cell.json`):
+  `uv run --project "$REPO_ROOT" automil submit --node <id> --desc "..." --files <files.editable path with *.py replaced by <name>.py> --override "--policy-variant <name>"`
   (a policy file without an explicit `--policy-variant` is refused as a
   no-op; the two channels compose in one `--override` string).
 
@@ -166,6 +183,49 @@ report to the operator that discovery is complete.
 update `automil/learnings.md` (what worked / failed / near-miss, with paper
 ids). Do not commit to git: campaign identity is the archive, not commits.
 
+## 3b. Measurement discipline — what a 3-fold signal can and cannot resolve
+
+Every run trains and validates on the same three folds under the locked
+seed, and training is deterministic: two runs of one config are bit-equal.
+Consequences you must design around, not discover:
+
+- **Comparisons are paired.** The difference between a child and its parent
+  cancels the fold effect — the dominant noise term on splits this small.
+  `automil rank` prints each node's paired Δparent ± SE and the keep-bar it
+  faced; the marginal fold spread (`composite_se`) is a property of the
+  task, not of your change, and must never be read as the comparison noise.
+- **State the detectable effect before spending.** An attempt whose
+  hypothesis predicts a gain well under the current keep-bar cannot change
+  any decision, whatever it measures — redesign it (larger dose, different
+  axis) or drop it. A null result is evidence only where the design could
+  have detected the effect; record that detectable size next to every null
+  in `automil/learnings.md`.
+- **Phase the budget.** Open with ~8 attempts spanning at least five
+  distinct axes, one change per attempt. Never spend more than three
+  consecutive attempts on one axis without a paired gain above the bar —
+  close the axis and move. Reserve the last ~4 attempts: pre-registered
+  robustness neighbours of the champion (write the predicted result in
+  `automil/plan.md` BEFORE launch) and the strongest untested distinct
+  hypothesis.
+- **Cheapened configurations do not transfer by default.** A finding
+  measured under any reduced training configuration (shorter schedule,
+  truncated inputs, anything cheaper than the arm's native recipe) is
+  provisional until it replicates at the native configuration. Do not
+  build further attempts on an unreplicated proxy finding.
+- **Measurement-coupled axes need trajectory evidence.** Any axis that
+  changes evaluation cadence, metric quantization, or the distribution the
+  checkpoint-selection maximum is drawn from can move the composite without
+  a better model. Do not blanket-ban such axes and do not ride them blind:
+  state the mechanism, read the per-epoch lines and `[selected] epoch=`
+  markers in `run.log` for the folds in question, and let the held-back
+  promotion folds arbitrate what survives.
+- **Detect no-ops from predictions, not metrics.** Each fold entry in
+  `result.json` carries `val_predictions_sha256`; identical hashes mean
+  your change never altered a prediction — metric equality alone cannot
+  distinguish that from a change too small for ~47 validation slides to
+  express. Charge the lesson once; never re-measure a hash-identical
+  configuration.
+
 ## 4. PolicyVariant — the honest seam sheet
 
 The protected trainer owns forward, loss, validation, and result writing. A
@@ -179,12 +239,11 @@ policy variant can only adapt what is handed to it:
   scheduler wrapper there is silently inert. Do not spend attempts
   discovering this.
 - `should_stop(*, default, epoch, metrics) -> bool` — live on every arm,
-  receives per-epoch **validation** metrics, must return a plain bool.
-  It doubles as a learning-curve probe: print the epoch-by-epoch validation
-  trajectory it observes to stdout and read it back from that run's
-  archived `run.log`. On abmil, dtfd, and titan the trainers print no
-  per-epoch lines, so this probe is the only learning curve; clam and
-  nnmil also print their own per-epoch lines to the same log.
+  receives per-epoch **validation** metrics, must return a plain bool. The
+  framework already logs one `[epoch k] ...` line per epoch with exactly
+  those metrics and one `[selected] epoch=k` line per fold on EVERY arm, so
+  the learning curve is in `run.log` for free — never spend an attempt on a
+  trajectory-probe variant.
 - `step(loss, opt)` — invoked by **no** shipped trainer. Dead code here.
 - SAM-class two-pass optimizers are out of reach through this seam (no
   closure re-evaluates the loss). Loss shaping, sampling changes, and

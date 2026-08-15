@@ -126,9 +126,14 @@ def expected_promotion_sources(
     return selected
 # This is a failure-containment wall clock for one submitted multi-fold attempt,
 # not an optimization budget.  Three CLAM classification folds take about
-# 206 minutes in the committed timing census; six hours leaves a substantial
-# guard band without changing the equal 30-attempt research budget.
-ATTEMPT_TIMEOUT_MIN = 360
+# 206 minutes in the committed timing census. The runtime-canary rehearsal
+# showed 360 punishing exactly the recipes that train longer than the native
+# defaults (three charged partials, 23.6 wasted GPU-hours, and a re-run
+# attempt in one cell; every such config completed within 600). Ten hours
+# still contains a hung attempt at ~2.4x the longest completed rehearsal run
+# while no longer clipping the search surface — and submit refuses any
+# per-spec attempt to raise it further (lowering stays free).
+ATTEMPT_TIMEOUT_MIN = 600
 MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
     DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
     + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])

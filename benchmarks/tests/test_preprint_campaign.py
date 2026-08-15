@@ -173,7 +173,7 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
     }
     assert protocol["discovery_agent_active_budget"] == "12h"
     assert protocol["attempt_timeout"] == {
-        "minutes": 360,
+        "minutes": 600,
         "role": "failure-containment-not-search-budget",
         "scope": "one-multi-fold-attempt",
     }
@@ -263,7 +263,7 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["cap"]["eval_budget"] == DISCOVERY_ATTEMPTS
         assert config["cap"]["budget"] == DISCOVERY_AGENT_ACTIVE_BUDGET
         assert config["training"]["fold_count"] == 3
-        assert config["orchestrator"]["default_timeout_min"] == 360
+        assert config["orchestrator"]["default_timeout_min"] == 600
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]

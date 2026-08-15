@@ -4987,7 +4987,7 @@
       "unknown"
     ],
     "attempt_timeout": {
-      "minutes": 360,
+      "minutes": 600,
       "role": "failure-containment-not-search-budget",
       "scope": "one-multi-fold-attempt"
     },
