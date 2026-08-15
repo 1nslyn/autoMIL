@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from autobench.pipeline.bag_cache import read_bag
 from autobench.pipeline.dataset_guards import check_split_retention
 
 
@@ -62,9 +63,12 @@ class ABMILSurvivalSlide:
 
 
 def _read_bag(h5_path: str) -> torch.Tensor:
-    with h5py.File(h5_path, "r") as f:
-        feats = np.asarray(f["features"][:], dtype=np.float32)
-    return torch.from_numpy(feats)
+    """One bag, through the shared memory-mapped cache when it is configured.
+
+    Identical bytes with or without the cache; see ``bag_cache`` for why the
+    H5 read is 95% of a training step and what the mapping does about it.
+    """
+    return read_bag(h5_path)
 
 
 def _load_split_ids(split_csv: str, column: str) -> list[str]:
