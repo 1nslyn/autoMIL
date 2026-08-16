@@ -62,11 +62,6 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         value = float(metric)
         return value if math.isfinite(value) else None
 
-    def _mean(values: list[float | None]) -> float | None:
-        # A half-composite is on a different scale from every other fold, so a
-        # missing component drops the whole fold rather than shrinking the mean.
-        return None if any(v is None for v in values) else sum(values) / len(values)
-
     test_m = result.get("test_metrics", {}) or {}
     val_m = result.get("val_metrics", {}) or {}
     if "c_index" in test_m:
@@ -75,7 +70,7 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         # during search; read once by ``automil certify`` (val-firewall).
         metrics = {"val_c_index": _unwrap(val_m.get("c_index"))}
         held_out = {"test_c_index": _unwrap(test_m.get("c_index"))}
-        composite = metrics["val_c_index"]
+        primary = "val_c_index"
     else:
         metrics = {
             "val_auc":  _unwrap(val_m.get("auc_roc")),
@@ -85,7 +80,18 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
             "test_auc":  _unwrap(test_m.get("auc_roc")),
             "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
         }
-        composite = _mean([metrics["val_auc"], metrics["val_bacc"]])
+        primary = "val_auc"
+    # Selection is the primary validation metric alone (scoring.formula:
+    # val_auc / val_c_index); companions stay recorded but no longer vote —
+    # see run_experiment._composite_components, the aggregate-side authority
+    # this per-fold value must mirror. A fold that lost ANY recorded
+    # component (companion included) carries a null composite: fold validity
+    # spans the full evidence set, matching _per_fold_composites and the
+    # campaign's ingest validator.
+    composite = (
+        None if any(value is None for value in metrics.values())
+        else metrics[primary]
+    )
 
     payload = {
         "fold_index":      fold_index,
@@ -96,8 +102,9 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         "composite":       composite,
         "elapsed_seconds": int(result.get("elapsed_seconds", 0) or 0),
         "peak_vram_mb":    int(result.get("peak_vram_mb", 0) or 0),
-        # A4': no-op detector, ENTRY level — never inside `metrics` (CR-1b
-        # recomputes the composite from every value in there). Both paths
+        # A4': no-op detector, ENTRY level — never inside `metrics` (the
+        # exact-key-locked CR-1b input: every value votes under the `mean`
+        # reducer, and any extra key fails the campaign schema lock). Both paths
         # carry it: the full-run summary -> validation_folds projection here,
         # and the cap-kill aggregator (automil.cells.reconcile.aggregate_folds),
         # which rebuilds entries from the sealed fold files. Null means the

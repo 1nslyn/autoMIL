@@ -9,16 +9,22 @@ detect the leak.
 
 This module closes that hole by deriving the selection signal from the declared
 **validation** ``metrics`` block instead of trusting the reported scalar. The
-reducer is declared per-project in ``automil/config.yaml``:
+formula is declared per-project in ``automil/config.yaml`` and is either a
+reducer over every value in ``metrics`` or a ``val_``-prefixed metric selector:
 
     scoring:
-      formula: mean          # default
+      formula: mean          # default reducer
+      # formula: val_auc     # selector: the composite IS this one val metric
 
 ``mean`` reproduces the established composites exactly — classification
 ``{val_auc, val_bacc}`` → their mean; survival ``{val_c_index}`` → itself — so the
 default is behaviour-preserving while making test-derived composites detectable.
+A selector (``val_auc``, ``val_c_index``, …) makes the named validation metric
+the entire selection signal; companion metrics stay recorded but do not vote.
 
 Set ``formula: trust_reported`` to opt out (documented as weakening the firewall).
+An empty/unset formula means the DEFAULT, never the opt-out — opting out of
+CR-1b requires the explicit token.
 """
 from __future__ import annotations
 
@@ -45,15 +51,36 @@ _REDUCERS = {
 def known_formula(name: object) -> bool:
     """Is this a valid ``scoring.formula`` value? (B2, claims-alignment.)
 
-    Valid: empty/None (framework default), a reducer name, or an explicit
-    opt-out. Anything else — e.g. an arithmetic expression like
-    ``"(val_auc + val_bacc) / 2"`` — is a config error that used to be caught
-    only per-result at ERROR level while silently trusting the reported
-    composite (CR-1b disabled by a comment's own example). Config seeding and
-    ``automil check`` validate with this predicate so the state is
-    unrepresentable before any run.
+    Valid: empty/None (framework default), a reducer name, an explicit
+    opt-out, or a ``val_``-prefixed METRIC SELECTOR (``val_auc``,
+    ``val_c_index``, …) that names the single validation metric the composite
+    equals. The prefix restriction keeps B2's reducer guarantee — a typo'd
+    reducer (``"meen"``) can never be mistaken for a selector — but selector
+    NAMES cannot be validated statically (the metric vocabulary is the
+    trainer's). A typo'd selector (``"val_aucc"``) therefore passes here and
+    is caught at INGEST instead: a recomputing formula over a present metrics
+    block that yields no value is a refusal (:func:`recompute_refused`), and
+    every ingest mouth fails that payload closed rather than trusting the
+    reported scalar. Anything else — e.g. an arithmetic expression like
+    ``"(val_auc + val_bacc) / 2"`` — is a config error caught at config
+    seeding and ``automil check``.
     """
-    return (not name) or name in _REDUCERS or name in _OPT_OUT
+    if not name:
+        return True
+    if not isinstance(name, str):
+        return False
+    return name in _REDUCERS or name in _OPT_OUT or name.startswith("val_")
+
+
+def formula_recomputes(formula: object) -> bool:
+    """Does this formula derive the composite from val metrics at ingest?
+
+    True for reducers and selectors (including empty/None, which resolve to
+    the default reducer); False only for the explicit opt-out tokens. The
+    inverse question of ``formula in _OPT_OUT``, kept as the public name so
+    callers never touch the private token set.
+    """
+    return not (isinstance(formula, str) and formula in _OPT_OUT)
 
 
 def recompute_composite(
@@ -64,7 +91,12 @@ def recompute_composite(
 
     Returns ``None`` when recomputation does not apply — the project opted out,
     the metrics block is absent/empty (crash and partial results), or it holds no
-    finite numeric value. Callers keep the reported composite in that case.
+    finite numeric value. Callers keep the reported composite ONLY when
+    :func:`recompute_refused` is also False; a present-but-unusable metrics
+    block under a recomputing formula must fail closed instead.
+
+    An empty/unset formula resolves to the DEFAULT reducer — never the
+    opt-out; opting out requires the explicit token.
 
     Raises:
         ValueError: unknown formula name. Note the terminal writer catches this
@@ -74,13 +106,29 @@ def recompute_composite(
             ``automil check`` reports it), so this raise is defense-in-depth
             for values injected outside the config path.
     """
-    if not formula or formula in _OPT_OUT:
+    formula = formula or DEFAULT_FORMULA
+    if formula in _OPT_OUT:
         return None
+    if isinstance(formula, str) and formula.startswith("val_"):
+        # Metric selector: the composite IS this one validation metric. On a
+        # few-dozen-slide validation split a rank statistic (val_auc) carries
+        # the selection signal; averaging in a threshold-quantized companion
+        # (val_bacc jumps ~1/17 per flipped minority slide — the size of the
+        # accept-margin floor) injects lattice noise at exactly the decision
+        # scale. The companion metrics stay recorded in ``metrics``; they
+        # just no longer vote.
+        if not isinstance(metrics, Mapping):
+            return None
+        value = metrics.get(formula)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value) if math.isfinite(float(value)) else None
     reducer = _REDUCERS.get(formula)
     if reducer is None:
         raise ValueError(
             f"unknown scoring.formula {formula!r}; expected one of "
-            f"{sorted(_REDUCERS)} or 'trust_reported'"
+            f"{sorted(_REDUCERS)}, 'trust_reported', or a 'val_'-prefixed "
+            f"metric selector"
         )
     if not isinstance(metrics, Mapping):
         return None
@@ -93,6 +141,37 @@ def recompute_composite(
     if not values:
         return None
     return float(reducer(values))
+
+
+def recompute_refused(
+    metrics: Mapping[str, object] | None,
+    formula: str | None,
+) -> bool:
+    """True when CR-1b SHOULD have recomputed but the metrics cannot support it.
+
+    The fail-closed complement of :func:`recompute_composite` returning
+    ``None`` (B2/B3): under a recomputing formula (reducer or selector), a
+    PRESENT, non-empty validation metrics block that yields no recomputed
+    value — a typo'd selector, a stripped or non-finite selector key — means
+    the payload cannot be scored on the declared estimand at all. Trusting
+    the reported scalar there would silently hand selection back to the
+    agent-editable number, so every ingest mouth treats this as a
+    disagreement-class failure (composite 0.0 + audit stamp) instead.
+
+    False when recompute simply does not apply: explicit opt-out, or an
+    absent/empty metrics block (crashes and partials legitimately carry
+    none — those stay on their reported 0.0-class composites).
+    """
+    if not formula_recomputes(formula):
+        return False
+    if not isinstance(metrics, Mapping) or not metrics:
+        return False
+    try:
+        return recompute_composite(metrics, formula) is None
+    except ValueError:
+        # Unknown reducer name: the legacy-graph escape hatch documented on
+        # recompute_composite — the caller already logs it loudly.
+        return False
 
 
 def composite_disagrees(reported: float, recomputed: float,
@@ -145,7 +224,10 @@ def cross_fold_se(fold_values: Iterable[object] | None) -> float | None:
     return math.sqrt(variance) / math.sqrt(n)
 
 
-def recompute_composite_se(result: Mapping[str, object] | None) -> float | None:
+def recompute_composite_se(
+    result: Mapping[str, object] | None,
+    formula: str | None,
+) -> float | None:
     """Derive the cross-fold SE from the result's own validation-fold evidence.
 
     B1 (claims-alignment): ``composite_se`` gates the Ladder keep-margin
@@ -155,19 +237,19 @@ def recompute_composite_se(result: Mapping[str, object] | None) -> float | None:
     benchmark runner emits), recompute the SE from those composites; the caller
     prefers this value and keeps the reported one only as the legacy fallback.
 
+    The SE is measured over the SAME per-fold projection the graph stores
+    (:func:`fold_composite_entries` — fold composites recomputed from their
+    own metrics under the node's formula, unverifiable entries dropped), so
+    the marginal SE and the paired SE can never be computed over different
+    fold multisets or different per-fold values of the same payload.
+
     Returns ``None`` when fewer than two folds carry a finite composite —
     same contract as :func:`cross_fold_se`.
     """
-    if not isinstance(result, Mapping):
+    entries = fold_composite_entries(result, formula)
+    if entries is None:
         return None
-    folds = fold_composite_map(result.get("validation_folds"))
-    if folds is None:
-        return None
-    # One parser for every consumer of validation_folds: keyed and deduplicated
-    # by fold_index exactly like the paired-margin projection, so the marginal
-    # SE and the paired SE can never be computed over different fold multisets
-    # of the same payload.
-    return cross_fold_se(folds.values())
+    return cross_fold_se(entry["composite"] for entry in entries)
 
 
 def fold_composite_map(entries: object) -> dict[int, float] | None:
@@ -233,32 +315,64 @@ def paired_delta_se(
     return math.sqrt(variance) / math.sqrt(len(deltas))
 
 
-def fold_composite_entries(result: Mapping[str, object] | None) -> list[dict] | None:
+def fold_composite_entries(
+    result: Mapping[str, object] | None,
+    formula: str | None,
+) -> list[dict] | None:
     """The minimal ``[{fold_index, composite}]`` projection of a result's
     ``validation_folds`` — what the graph stores per node so the paired
     keep-margin can pair a child with its parent without re-reading archives.
     Validation-only by construction; ``None`` when no usable folds remain.
 
-    Each entry's composite is RECOMPUTED as the mean of its own val ``metrics``
-    whenever that block is present (CR-1b at fold granularity): result.json is
-    agent-editable, and a reported fold composite that disagrees with its own
-    metrics could otherwise shape the paired SE (uniform deltas → bar drops to
-    the δ floor) while the honest aggregate metrics pass every node-level
-    check. The reported value survives only for entries with no metrics block.
-    The mean reducer is the right recompute here regardless of the configured
-    formula, because the paired margin is enabled only under ``mean``.
+    Each entry's composite is RECOMPUTED from its own val ``metrics`` with the
+    node's OWN formula whenever that block is present (CR-1b at fold
+    granularity): result.json is agent-editable, and a reported fold composite
+    that disagrees with its own metrics could otherwise shape the paired SE
+    (uniform deltas → bar drops to the δ floor) while the honest aggregate
+    metrics pass every node-level check. Using the node's formula — not a
+    hardcoded reducer — keeps the paired-margin identity
+    ``composite == mean(fold composites)`` intact under metric selectors:
+    the node composite is the per-key mean over folds, so per-fold selector
+    values average back to it exactly as per-fold means do.
+
+    Fail-closed at fold granularity, under the SAME full-recorded-evidence
+    rule as the trainer and the campaign validator: an entry whose metrics
+    block carries any non-finite value — a lost companion included — or that
+    cannot support the formula is DROPPED, never trusted and never
+    resurrected on its surviving keys (a selector reading only val_auc would
+    otherwise re-validate a fold the trainer explicitly nulled, and the
+    projection would disagree with the payload's own n_valid_folds). The
+    reported value survives only for entries carrying no metrics block at
+    all (legacy state artifacts) or under an unknown legacy formula, both of
+    which the node-level ingest already logs.
     """
     if not isinstance(result, Mapping):
         return None
+    # An unset formula means the framework default, not the recompute opt-out:
+    # the projection must keep its CR-1b protection for default-config projects.
+    formula = formula or DEFAULT_FORMULA
     raw = result.get("validation_folds")
     if isinstance(raw, list):
         recomputed = []
         for entry in raw:
             if not isinstance(entry, Mapping):
                 continue
-            fold_mean = recompute_composite(entry.get("metrics"), "mean")
-            if fold_mean is not None:
-                entry = {**entry, "composite": fold_mean}
+            metrics_block = entry.get("metrics")
+            if isinstance(metrics_block, Mapping) and metrics_block and any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                for value in metrics_block.values()
+            ):
+                continue
+            try:
+                fold_value = recompute_composite(metrics_block, formula)
+            except ValueError:
+                fold_value = None   # unknown formula: keep the reported value
+            if fold_value is not None:
+                entry = {**entry, "composite": fold_value}
+            elif recompute_refused(metrics_block, formula):
+                continue
             recomputed.append(entry)
         raw = recomputed
     folds = fold_composite_map(raw)
@@ -270,11 +384,11 @@ def fold_composite_entries(result: Mapping[str, object] | None) -> list[dict] | 
 def ingest_signal(
     result: Mapping[str, object] | None,
     formula: str | None,
-) -> tuple[tuple[str, ...], float | None, float | None]:
+) -> tuple[tuple[str, ...], float | None, float | None, bool]:
     """One sanitation contract for every mouth that turns a result payload into
     graph state (the terminal writer and the reconcile scans — B6).
 
-    Returns ``(leaking_keys, composite_recomputed, se_recomputed)``:
+    Returns ``(leaking_keys, composite_recomputed, se_recomputed, refused)``:
 
     - ``leaking_keys``: held-out-named keys found inside ``metrics``. Non-empty
       means the payload violates the val-firewall and the caller must ingest it
@@ -285,16 +399,21 @@ def ingest_signal(
       reducer name — the caller logs that case).
     - ``se_recomputed``: the val-fold-derived SE, or ``None`` to keep the
       reported value.
+    - ``refused``: :func:`recompute_refused` — the metrics block is present but
+      cannot support the declared recomputing formula (typo'd selector,
+      stripped selector key). The caller must fail the payload closed
+      (composite 0.0 + audit stamp), NOT keep the reported scalar.
     """
     from automil.firewall import held_out_metric_keys
 
     if not isinstance(result, Mapping):
-        return (), None, None
+        return (), None, None, False
     leaking = held_out_metric_keys(result.get("metrics"))
     if leaking:
-        return leaking, None, None
+        return leaking, None, None, False
+    metrics = result.get("metrics") or {}
     try:
-        recomputed = recompute_composite(result.get("metrics") or {}, formula)
+        recomputed = recompute_composite(metrics, formula)
     except ValueError as exc:
         # Reachable only via a legacy graph.json whose STORED formula is
         # invalid (B2 blocks the config path at seeding). Loud, because the
@@ -305,4 +424,5 @@ def ingest_signal(
             "ingest: %s — trusting the reported composite for this payload", exc
         )
         recomputed = None
-    return (), recomputed, recompute_composite_se(result)
+    refused = recomputed is None and recompute_refused(metrics, formula)
+    return (), recomputed, recompute_composite_se(result, formula), refused

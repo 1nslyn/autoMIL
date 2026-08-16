@@ -213,7 +213,7 @@ CANARY_AGENT_PROTOCOL = {
     "runtime_version": "canary-1",
     "model": "canary",
     "model_version": "canary-1",
-    "effort": "high",
+    "effort": "max",
     "network_access": "enabled",
     "fallback_model": None,
     "proposal_policy_content": _CANARY_PROPOSAL_POLICY,
@@ -282,8 +282,8 @@ def validate_agent_protocol(
             raise CampaignManifestError(
                 f"agent protocol {stem} content/hash binding mismatch"
             )
-    if raw.get("effort") != "high":
-        raise CampaignManifestError("preprint protocol requires high agent effort")
+    if raw.get("effort") != "max":
+        raise CampaignManifestError("preprint protocol requires max agent effort")
     if raw.get("network_access") != "enabled":
         raise CampaignManifestError("preprint protocol requires external network access")
     if raw.get("fallback_model") is not None:
@@ -319,7 +319,7 @@ def build_agent_protocol(
         "runtime_version": runtime_version,
         "model": model,
         "model_version": model_version,
-        "effort": "high",
+        "effort": "max",
         "network_access": "enabled",
         "fallback_model": None,
         "max_sessions_per_cell": 1,
@@ -755,30 +755,30 @@ def materialize_discovery_cells(
         config.setdefault("data", {})["num_folds"] = PROTOCOL["split_folds"]
         config["data"]["seed"] = PROTOCOL["seed"]
         config.setdefault("encoders", {})["primary"] = cell["encoder"]
+        # The agent reads this and hill-climbs on it, so it must match what
+        # run_experiment.py actually computes (_composite_components) and what
+        # the framework recomputes at ingest (scoring.formula selector below).
+        # Selection is the PRIMARY validation metric ALONE: on few-dozen-slide
+        # validation splits bacc/qwk are threshold-quantized companions whose
+        # single-count jitter is the size of the accept-margin floor — they
+        # stay tracked and recorded, but no longer vote.
         if cell["task_type"] == "survival":
-            config["metrics"] = {
-                "primary": "val_c_index", "composite_formula": "val_c_index",
-                "track": ["val_c_index"],
-            }
+            primary = "val_c_index"
+            track = ["val_c_index"]
         else:
-            # The agent reads this and hill-climbs on it, so it must match what
-            # run_experiment.py actually computes. Ordinal tasks add qwk, and a
-            # stale 2-term string here would tell the agent to optimise a
-            # different function than the one it is scored on.
-            # Read from the dataset YAML this cell is already hash-locked to,
-            # so the declared objective cannot drift from the task definition.
             import yaml as _yaml
             _tasks = (_yaml.safe_load(dataset_path.read_text()) or {}).get("tasks") or {}
             ordinal = bool((_tasks.get(cell["task"]) or {}).get("ordinal", False))
+            primary = "val_auc"
             track = ["val_auc", "val_bacc"] + (["val_qwk"] if ordinal else [])
-            config["metrics"] = {
-                "primary": "composite",
-                "composite_formula": (
-                    "(val_auc + val_bacc + val_qwk) / 3" if ordinal
-                    else "(val_auc + val_bacc) / 2"
-                ),
-                "track": track,
-            }
+        config["metrics"] = {
+            "primary": primary,
+            "composite_formula": primary,
+            "track": track,
+        }
+        # The framework-side selector (CR-1b recompute + per-fold projection):
+        # campaign-owned, template-independent, audited below.
+        config.setdefault("scoring", {})["formula"] = primary
         adir_rel = adir.relative_to(repo_root).as_posix()
         config["files"] = {
             "editable": [f"{adir_rel}/variants/_policies/*.py"],
@@ -979,6 +979,42 @@ def audit_materialized_campaign(
             "default_timeout_min"
         ) != ATTEMPT_TIMEOUT_MIN:
             raise CampaignManifestError(f"{cell_id}: attempt timeout drift")
+        _expected_formula = (
+            "val_c_index" if cell["task_type"] == "survival" else "val_auc"
+        )
+        if (config.get("scoring") or {}).get("formula") != _expected_formula:
+            raise CampaignManifestError(
+                f"{cell_id}: selection-formula drift (expected "
+                f"{_expected_formula})"
+            )
+        if (config.get("metrics") or {}).get("primary") != _expected_formula:
+            raise CampaignManifestError(
+                f"{cell_id}: declared objective drift (metrics.primary must "
+                f"match the selection formula)"
+            )
+        if (config.get("metrics") or {}).get("composite_formula") != _expected_formula:
+            raise CampaignManifestError(
+                f"{cell_id}: declared objective drift (metrics.composite_formula "
+                f"must match the selection formula)"
+            )
+        # A graph.json seeded under a DIFFERENT formula silently wins over
+        # config.yaml forever after (graph meta uses setdefault freeze
+        # semantics — deliberate for accept_margin, inherited by formula).
+        # Materialized cells must start graph-less; an existing graph that
+        # froze another formula would recompute every composite on the wrong
+        # estimand while passing the config audit above.
+        graph_path = adir / "graph.json"
+        if graph_path.exists():
+            frozen_formula = (
+                (json.loads(graph_path.read_text()).get("meta") or {})
+                .get("scoring") or {}
+            ).get("formula")
+            if frozen_formula != _expected_formula:
+                raise CampaignManifestError(
+                    f"{cell_id}: graph.json froze scoring.formula "
+                    f"{frozen_formula!r}; the campaign selects on "
+                    f"{_expected_formula}"
+                )
         policy = load_candidate_policy(adir)
         expected_editable = (
             f"{adir.relative_to(repo_root).as_posix()}/variants/_policies/*.py",

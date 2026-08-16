@@ -39,8 +39,8 @@ baseline:
   composite: 0.744
 
 metrics:
-  primary: "composite"
-  composite_formula: "(val_auc + val_bacc) / 2"
+  primary: "val_auc"
+  composite_formula: "val_auc"
   track: ["val_auc", "val_bacc"]
 
 training:
@@ -151,3 +151,8 @@ env:
 viz:
   port: 8421
   host: "0.0.0.0"
+
+# Selection composite = the primary validation metric alone
+# (companions in metrics.track stay recorded but do not vote).
+scoring:
+  formula: "val_auc"

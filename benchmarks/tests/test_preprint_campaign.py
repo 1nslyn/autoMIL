@@ -46,7 +46,7 @@ AGENT_PROTOCOL = {
     "runtime_version": "test-runtime-1",
     "model": "test-model",
     "model_version": "test-model-1",
-    "effort": "high",
+    "effort": "max",
     "network_access": "enabled",
     "fallback_model": None,
     "proposal_policy_content": "test proposal policy",
@@ -305,7 +305,7 @@ def test_materializer_rejects_unresolvable_agent_policy_hashes(tmp_path):
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ({"effort": "medium"}, "requires high agent effort"),
+        ({"effort": "high"}, "requires max agent effort"),
         ({"network_access": "disabled"}, "requires external network access"),
         ({"fallback_model": "test-model-2"}, "forbids model fallback"),
     ],

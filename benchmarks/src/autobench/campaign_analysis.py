@@ -121,11 +121,19 @@ def _primary_values(
     baseline_folds = _ordered_folds(
         bundle.get("baseline_held_out_folds"), f"{cell_id}.baseline",
     )
+    # The sealed evidence schema stays exact-key-locked (both classification
+    # metrics must be present and coherent), but the PRIMARY estimand is the
+    # analysis plan's single metric — test_auc / test_c_index — mirroring the
+    # selection side (scoring.formula: val_auc / val_c_index): the campaign
+    # must be ranked on the quantity its agents actually optimized, and bacc
+    # carries the same ~1/17-per-slide threshold quantization on the sealed
+    # folds as on the validation folds.
     required = (
         ("test_auc", "test_bacc")
         if task_type == "classification"
         else ("test_c_index",)
     )
+    primary_key = required[0]
     values: list[list[float]] = [[], []]
     for output, folds, label in (
         (values[0], baseline_folds, "baseline"),
@@ -137,11 +145,13 @@ def _primary_values(
                 raise CampaignAnalysisError(
                     f"{cell_id}.{label} metric schema differs from {sorted(required)}"
                 )
-            primary = (
-                math.fsum(_unit_interval(metrics[key], f"{cell_id}.{label}.{key}")
-                          for key in required) / len(required)
+            for key in required:
+                _unit_interval(metrics[key], f"{cell_id}.{label}.{key}")
+            output.append(
+                _unit_interval(
+                    metrics[primary_key], f"{cell_id}.{label}.{primary_key}",
+                )
             )
-            output.append(primary)
 
     for aggregate_key, folds, aggregate in (
         ("baseline_held_out", baseline_folds, bundle.get("baseline_held_out")),

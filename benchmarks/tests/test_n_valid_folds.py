@@ -84,10 +84,19 @@ def test_discovery_with_two_of_three_valid_folds_is_partial():
     assert m.summary_to_result_json(summary, 10.0)["status"] == "partial"
 
 
-def test_classification_fold_requires_both_composite_components():
+def test_classification_fold_requires_full_recorded_evidence():
+    """Only val_auc votes, but fold VALIDITY spans the recorded set: a fold
+    that lost its companion is the fold the campaign validator rejects at
+    ingest, so it must quarantine as partial on this side too."""
     m = _load_run_experiment()
     summary = _cls_summary([0.70, 0.72])
     summary["per_fold_val"][1]["balanced_accuracy"] = NAN
+    result = m.summary_to_result_json(summary, 10.0)
+    assert result["status"] == "partial"
+    assert result["n_valid_folds"] == 1
+    # Losing the selection metric invalidates the fold just the same.
+    summary["per_fold_val"][1]["balanced_accuracy"] = 0.60
+    summary["per_fold_val"][1]["auc_roc"] = NAN
     assert m.summary_to_result_json(summary, 10.0)["status"] == "partial"
 
 
@@ -119,19 +128,19 @@ def test_validation_fold_evidence_is_public_and_fold_indexed():
         {
             "fold_index": 0,
             "metrics": {"val_auc": 0.70, "val_bacc": 0.6},
-            "composite": pytest.approx(0.65),
+            "composite": pytest.approx(0.70),
             "val_predictions_sha256": None,
         },
         {
             "fold_index": 1,
             "metrics": {"val_auc": 0.72, "val_bacc": 0.6},
-            "composite": pytest.approx(0.66),
+            "composite": pytest.approx(0.72),
             "val_predictions_sha256": None,
         },
         {
             "fold_index": 2,
             "metrics": {"val_auc": 0.68, "val_bacc": 0.6},
-            "composite": pytest.approx(0.64),
+            "composite": pytest.approx(0.68),
             "val_predictions_sha256": None,
         },
     ]

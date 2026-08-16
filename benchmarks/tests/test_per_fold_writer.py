@@ -62,8 +62,9 @@ def test_writes_fold_file_when_results_dir_set(tmp_path, monkeypatch):
     assert "test_bacc" not in payload["metrics"]
     assert payload["held_out"]["test_auc"] == pytest.approx(0.85)
     assert payload["held_out"]["test_bacc"] == pytest.approx(0.82)
-    # composite is the VALIDATION selection signal (val sum 1.74 != test sum 1.67)
-    assert payload["composite"] == pytest.approx((0.90 + 0.84) / 2.0)
+    # composite is the VALIDATION selection signal — the primary metric alone
+    # (scoring.formula: val_auc); val 0.90 != test 0.85 proves the val side won
+    assert payload["composite"] == pytest.approx(0.90)
     assert payload["elapsed_seconds"] == 100
     assert payload["peak_vram_mb"] == 4500
 

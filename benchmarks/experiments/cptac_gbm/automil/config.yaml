@@ -34,8 +34,8 @@ encoders:
     conch_v15: 768        # TITAN's input features
 
 metrics:
-  primary: "composite"
-  composite_formula: "(val_auc + val_bacc) / 2"
+  primary: "val_auc"
+  composite_formula: "val_auc"
   track: ["val_auc", "val_bacc"]
 
 # CR-4 / PRELAUNCH_REVIEW O2: the Ladder keep-margin. δ=0.0 (strict dominance) is
@@ -47,7 +47,7 @@ metrics:
 # ones. This is a predeclared placeholder — CR-4 replaces it with a per-cell
 # δ computed as ≥1 SE of the CV composite.
 scoring:
-  formula: ""
+  formula: "val_auc"
   technique_map: {}
   accept_margin: 0.05
   # CR-4: the applied margin is max(accept_margin, se_multiplier x the parent's

@@ -64,11 +64,13 @@ CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
 
 
 def _folds(indices, base=0.6):
+    # Fold composite IS the primary validation metric (scoring.formula:
+    # val_auc); val_bacc rides along as a recorded companion that never votes.
     return [
         {
             "fold_index": index,
             "metrics": {"val_auc": base + index / 100, "val_bacc": base},
-            "composite": base + index / 200,
+            "composite": base + index / 100,
         }
         for index in indices
     ]
@@ -106,7 +108,7 @@ AGENT_PROTOCOL = {
     "runtime_version": "test-runtime-1",
     "model": "test-model",
     "model_version": "test-model-1",
-    "effort": "high",
+    "effort": "max",
     "network_access": "enabled",
     "fallback_model": None,
     "proposal_policy_content": "test proposal policy",
@@ -226,7 +228,7 @@ def _baseline(
     sealed.mkdir(parents=True)
     result = {
         "status": "completed",
-        "composite": 0.61,
+        "composite": 0.62,
         "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
         "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60),
     }
@@ -415,14 +417,14 @@ def test_baseline_registration_hashes_but_does_not_parse_sealed_test(staged_cell
     )
     assert state["baseline"]["candidate_id"] == "baseline"
     assert len(state["baseline"]["sealed_fold_sha256"]) == 5
-    assert state["baseline"]["validation_mean"] == pytest.approx(0.61)
+    assert state["baseline"]["validation_mean"] == pytest.approx(0.62)
     root_id = state["baseline"]["discovery_root_node_id"]
     graph = json.loads((adir / "graph.json").read_text())
     assert list(graph["nodes"]) == [root_id]
     root = graph["nodes"][root_id]
     assert root["parent_id"] is None
     assert root["status"] == "keep"
-    assert root["composite"] == pytest.approx(0.605)
+    assert root["composite"] == pytest.approx(0.61)
     assert root["metadata"]["cell_id"] == cell["budget_identity"]["cell_id"]
     assert [
         fold["fold_index"] for fold in root["metadata"]["validation_folds"]
@@ -483,7 +485,7 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
         )
         public = {
             "status": "completed",
-            "composite": 0.61,
+            "composite": 0.62,
             "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
             "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60),
         }
@@ -1325,13 +1327,13 @@ def test_exact_validation_tie_prefers_native_baseline(staged_cell):
     )
     freeze_discovery(cell_root)
     materialize_promotion(cell_root, repo_root=repo_root)
-    # Rank-1 source node_0012 has discovery composites .610/.615/.620.
-    # Promotion .600/.605 makes the exact five-fold mean .610, baseline's mean.
+    # Rank-1 source node_0012 has discovery composites .610/.620/.630.
+    # Promotion .615/.625 makes the exact five-fold mean .620, baseline's mean.
     _finish_promotion(cell_root, completed=1, promotion_base=0.585)
     freeze_promotion(cell_root)
 
     state = select_winner(cell_root)
-    assert state["winner"]["validation_mean"] == pytest.approx(0.61)
+    assert state["winner"]["validation_mean"] == pytest.approx(0.62)
     assert state["winner"]["kind"] == "baseline"
 
 
@@ -2094,7 +2096,7 @@ def test_searched_certification_reads_winner_and_never_losers(staged_cell):
         (cell_root.parent / SELECTION_FREEZE_FILE).read_text()
     )
     process = freeze_artifact["cells"][0]["process_evidence"]["discovery"]
-    assert process["baseline_validation_mean"] == pytest.approx(0.605)
+    assert process["baseline_validation_mean"] == pytest.approx(0.61)
     assert process["validation_anytime"][-1][
         "running_best_validation_mean"
     ] > process["baseline_validation_mean"]

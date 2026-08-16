@@ -1,7 +1,7 @@
 {
   "aggregation": {
     "cell_metric": "equal-weight arithmetic mean across the five predeclared folds",
-    "classification_primary": "(test_auc + test_bacc) / 2",
+    "classification_primary": "test_auc",
     "survival_primary": "test_c_index",
     "survival_scale_rule": "aggregate fold-level c-index values; never pool raw risks across independently trained folds"
   },

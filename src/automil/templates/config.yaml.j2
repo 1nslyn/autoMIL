@@ -145,13 +145,19 @@ env:
   dotenv_files: []
 
 # --- Composite scoring (DEC-04 / D-200 / CR-1b) ---
-# scoring.formula is the reducer the framework uses to recompute the composite
-# from the validation `metrics` block at ingest (CR-1b: the val-firewall does
-# not trust the reported scalar). Valid values:
+# scoring.formula is the reducer or metric selector the framework uses to
+# recompute the composite from the validation `metrics` block at ingest
+# (CR-1b: the val-firewall does not trust the reported scalar). Valid values:
 #   formula: ""                # default -> "mean" over metrics values; this
 #                              #   reproduces (val_auc + val_bacc) / 2 and a
 #                              #   lone val_c_index exactly
 #   formula: "mean" | "max" | "min"
+#   formula: "val_<metric>"    # METRIC SELECTOR: the composite IS this one
+#                              #   validation metric (e.g. "val_auc",
+#                              #   "val_c_index"); other metrics stay recorded
+#                              #   but do not vote. The name must exist in
+#                              #   `metrics` — a result whose metrics cannot
+#                              #   support the selector fails ingest closed.
 #   formula: "trust_reported"  # explicit opt-out; weakens the val-firewall
 # Anything else (e.g. an arithmetic expression) fails `automil check` and graph
 # seeding — it is NOT evaluated. Document the human-readable recipe in a

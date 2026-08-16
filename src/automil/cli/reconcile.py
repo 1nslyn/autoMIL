@@ -86,7 +86,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                 # and fold-derived SE over the reported values.
                 from automil.scoring import ingest_signal as _ingest_signal
                 from automil.graph import node_composite_se as _node_se
-                _leaking, _comp_rec, _se_rec = _ingest_signal(
+                _leaking, _comp_rec, _se_rec, _refused = _ingest_signal(
                     payload, (g.meta.get("scoring") or {}).get("formula")
                 )
                 if _leaking:
@@ -109,6 +109,17 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     continue
                 if _comp_rec is not None and payload.get("status") == "completed":
                     gnode["composite"] = _comp_rec
+                elif _refused:
+                    # Fail-closed (B2/B3), status-independent like every other
+                    # ingest mouth: metrics present but unable to support the
+                    # declared formula — never keep the reported scalar (even
+                    # a quarantined node can still parent a keep bar).
+                    click.echo(
+                        f"  {nid}: metrics cannot support the declared "
+                        "scoring.formula; refusing the reported composite "
+                        "(scored 0.0)"
+                    )
+                    gnode["composite"] = 0.0
                 else:
                     gnode["composite"] = payload.get("composite", gnode.get("composite", 0.0))
                 _se_final = _se_rec if _se_rec is not None else _node_se(payload)
@@ -120,7 +131,9 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                 # refresh is authoritative; keeping a previous run's folds
                 # beside a refreshed composite would pair across runs.
                 from automil.scoring import fold_composite_entries as _fold_entries
-                _folds_refresh = _fold_entries(payload)
+                _folds_refresh = _fold_entries(
+                    payload, (g.meta.get("scoring") or {}).get("formula")
+                )
                 if _folds_refresh is not None:
                     gnode["fold_composites"] = _folds_refresh
                 else:

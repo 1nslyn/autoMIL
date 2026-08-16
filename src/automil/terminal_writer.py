@@ -218,9 +218,14 @@ def write_terminal_state(
     # it from the result's own val-only per-fold evidence when present; the
     # recomputed value replaces the reported one here so every downstream
     # artifact (graph node, completed/, archive result.json) round-trips it.
+    # Formula-aware: the SE is measured over the same recomputed per-fold
+    # projection the graph stores, never the reported fold composites.
     from automil.scoring import recompute_composite_se as _recompute_se
 
-    _se_recomputed = _recompute_se(result)
+    _se_recomputed = _recompute_se(
+        result,
+        ((getattr(graph, "meta", None) or {}).get("scoring") or {}).get("formula"),
+    )
     if _se_recomputed is not None:
         _se_reported = result.get("composite_se")
         if isinstance(_se_reported, (int, float)) and not isinstance(_se_reported, bool) \
@@ -252,8 +257,11 @@ def write_terminal_state(
     from automil.scoring import fold_composite_entries as _fold_entries
 
     # One projection serves the graph node AND the completion artifact below —
-    # the round-trip contract requires them identical, so compute once.
-    _folds = _fold_entries(result)
+    # the round-trip contract requires them identical, so compute once, with
+    # the graph's own formula (the meta is seeded at graph creation and never
+    # changes mid-run, so reading it outside the lock is safe).
+    _graph_formula = ((getattr(graph, "meta", None) or {}).get("scoring") or {}).get("formula")
+    _folds = _fold_entries(result, _graph_formula)
     try:
         # _technique_map is the internal attribute on ExperimentGraph
         _tm = getattr(graph, "_technique_map", None)
@@ -271,7 +279,9 @@ def write_terminal_state(
                 composite = result.get("composite", 0.0)
 
                 # CR-1b: recompute from the val metrics; the val-derived value wins.
-                from automil.scoring import composite_disagrees, recompute_composite
+                from automil.scoring import (
+                    composite_disagrees, recompute_composite, recompute_refused,
+                )
                 _formula = (g.meta.get("scoring") or {}).get("formula")
                 try:
                     composite_recomputed = recompute_composite(
@@ -297,6 +307,26 @@ def write_terminal_state(
                     }
                 if composite_recomputed is not None:
                     composite = composite_recomputed
+                elif recompute_refused(result.get("metrics") or {}, _formula):
+                    # Fail-closed (B2/B3): the metrics block is present but
+                    # cannot support the declared formula — typo'd selector or
+                    # stripped selector key. Trusting the reported scalar here
+                    # would silently turn CR-1b off for exactly the payloads
+                    # it exists to police.
+                    logger.error(
+                        "terminal_writer: VAL-FIREWALL — metrics for %s cannot "
+                        "support the declared scoring.formula %r (missing or "
+                        "non-finite selector key). Refusing the reported "
+                        "composite %.6f; scoring the node 0.0.",
+                        node_id, _formula, composite,
+                    )
+                    composite_disagreement = {
+                        "reported": composite,
+                        "recomputed": None,
+                        "formula": _formula,
+                        "refused": True,
+                    }
+                    composite = 0.0
 
                 # Paired margin: attach the child evidence BEFORE the accept so
                 # this node pairs with its parent now and serves as a pairable

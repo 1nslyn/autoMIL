@@ -209,14 +209,17 @@ def _formula_pairs_folds(meta: dict | None) -> bool:
 
     The paired margin substitutes ``SE(per-fold child−parent deltas)`` for the
     marginal SE while the accept predicate still compares node composites.
-    That substitution is coherent only under the ``mean`` reducer (the default),
-    where ``composite == mean(fold composites)`` and hence the composite
-    difference equals the mean paired delta. Under ``max``/``min`` (or an
+    That substitution is coherent under the ``mean`` reducer (the default) AND
+    under ``val_*`` metric selectors: the node-level metric is the per-key
+    mean over folds, so a per-fold selector value averages back to the node
+    composite exactly as per-fold means do. Under ``max``/``min`` (or an
     opt-out formula trusting reported scalars) the identity breaks, so the
     margin falls back to the marginal basis.
     """
     formula = ((meta or {}).get("scoring") or {}).get("formula")
-    return formula in (None, "", "mean")
+    if formula in (None, "", "mean"):
+        return True
+    return isinstance(formula, str) and formula.startswith("val_")
 
 
 def effective_accept_margin(
@@ -385,9 +388,11 @@ def _config_scoring_formula(graph_path) -> str | None:
         raise ValueError(
             f"scoring.formula {value!r} in {config_path} is not a known reducer. "
             "Valid values: mean | max | min (reducers over the validation "
-            "metrics) or trust_reported (explicit opt-out, weakens the "
-            "val-firewall). Arithmetic expressions are not evaluated — state "
-            "the human-readable recipe in metrics.composite_formula instead."
+            "metrics), a 'val_'-prefixed metric selector (val_auc | "
+            "val_c_index | ... — the composite IS that one metric), or "
+            "trust_reported (explicit opt-out, weakens the val-firewall). "
+            "Arithmetic expressions are not evaluated — state the "
+            "human-readable recipe in metrics.composite_formula instead."
         )
     return value
 
@@ -1128,7 +1133,7 @@ class ExperimentGraph:
                 # composite and fold-derived SE, preferring both over the
                 # reported values.
                 from automil.scoring import ingest_signal as _ingest_signal
-                _leaking, _comp_rec, _se_rec = _ingest_signal(
+                _leaking, _comp_rec, _se_rec, _refused = _ingest_signal(
                     completion, (self.meta.get("scoring") or {}).get("formula")
                 )
                 if _leaking:
@@ -1145,6 +1150,17 @@ class ExperimentGraph:
                             f"`metrics`: {', '.join(_leaking)}"
                         ),
                     }
+                elif _refused:
+                    # Fail-closed (B2/B3, same contract as terminal_writer):
+                    # metrics present but unable to support the declared
+                    # formula — the reported composite must not survive.
+                    logger.error(
+                        "reconcile: metrics for %s cannot support the declared "
+                        "scoring.formula; refusing the reported composite and "
+                        "scoring the node 0.0.",
+                        node_id,
+                    )
+                    completion = {**completion, "composite": 0.0}
 
                 # Initialized for every status (a crash-only completion used to
                 # leave composite_se unbound); the completed branch upgrades
@@ -1302,7 +1318,7 @@ class ExperimentGraph:
                         gm = spec.get("graph_metadata", {})
                         # B6: same ingest sanitation as the terminal writer.
                         from automil.scoring import ingest_signal as _ingest_signal
-                        _leaking, _comp_rec, _se_rec = _ingest_signal(
+                        _leaking, _comp_rec, _se_rec, _refused = _ingest_signal(
                             result, (self.meta.get("scoring") or {}).get("formula")
                         )
                         if _leaking:
@@ -1319,6 +1335,16 @@ class ExperimentGraph:
                                     f"in `metrics`: {', '.join(_leaking)}"
                                 ),
                             }
+                        elif _refused:
+                            # Fail-closed (B2/B3): same contract as the other
+                            # ingest mouths — never keep the reported scalar.
+                            logger.error(
+                                "reconcile(archive): metrics for %s cannot support "
+                                "the declared scoring.formula; refusing the "
+                                "reported composite and scoring the node 0.0.",
+                                node_id_r,
+                            )
+                            result = {**result, "composite": 0.0}
                         r_metrics = result.get("metrics", {})
                         composite = (
                             _comp_rec
@@ -1340,7 +1366,9 @@ class ExperimentGraph:
                         # validation_folds; project it once for both the margin
                         # and the recovered node below.
                         from automil.scoring import fold_composite_entries as _fold_entries
-                        _folds_r = _fold_entries(result)
+                        _folds_r = _fold_entries(
+                            result, (self.meta.get("scoring") or {}).get("formula")
+                        )
                         raw_status = result.get("status", "completed")
                         if raw_status == "completed":
                             # D-200 Option B: composite-only dominance + Ladder

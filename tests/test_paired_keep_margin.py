@@ -148,6 +148,22 @@ def test_paired_margin_monotone_over_delta_floor() -> None:
     assert effective_accept_margin(meta, parent, child) == pytest.approx(0.011603, abs=1e-5)
 
 
+def test_paired_basis_engages_under_a_metric_selector() -> None:
+    """`val_*` selectors keep the paired identity — the node composite is the
+    per-key mean over folds, so per-fold selector values average back to it —
+    and must therefore use the tight paired basis, not the marginal one."""
+    from automil.graph import effective_accept_margin
+
+    meta = {"scoring": {"accept_margin": 0.005, "se_multiplier": 1.0,
+                        "formula": "val_auc"}}
+    parent = {"composite": _mean(BASELINE_FOLDS), "composite_se": 0.07347,
+              "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
+    child = {"composite": _mean(CHILD_FOLDS),
+             "fold_composites": _entries(CHILD_FOLDS)}
+    assert effective_accept_margin(meta, parent, child) == pytest.approx(
+        0.011603, abs=1e-5)
+
+
 def test_identity_guard_rejects_composite_fold_disagreement() -> None:
     """The paired basis requires composite == mean(fold composites) on BOTH
     nodes; a node whose composite disagrees with its own fold vector (sparse-
@@ -368,7 +384,7 @@ def test_refresh_without_folds_clears_stale_projection(tmp_path: Path) -> None:
 
     payload = _result_payload(CHILD_FOLDS)
     del payload["validation_folds"]
-    assert fold_composite_entries(payload) is None  # the projection says none
+    assert fold_composite_entries(payload, "mean") is None  # projection: none
 
     from automil.graph import ExperimentGraph
 

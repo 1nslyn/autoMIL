@@ -411,7 +411,12 @@ def _converted_artifacts(validated: Mapping[str, Any]) -> tuple[dict, list[dict]
                 "test_auc": float(test["auc_roc"]),
                 "test_bacc": float(test["balanced_accuracy"]),
             }
-        composite = math.fsum(val_metrics.values()) / len(val_metrics)
+        # Selection is the primary validation metric alone (scoring.formula:
+        # val_auc / val_c_index); companions stay recorded but do not vote —
+        # the campaign fold validator requires composite == the primary.
+        composite = float(
+            val_metrics["val_c_index"] if is_survival else val_metrics["val_auc"]
+        )
         composites.append(composite)
         validation_folds.append({
             "fold_index": fold,

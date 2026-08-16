@@ -465,7 +465,7 @@ class TestSurvivalComposite:
         }
         _write_fold_result_json(0, result)
         payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-        assert payload["composite"] == pytest.approx((0.75 + 0.65) / 2)  # val (selection signal)
+        assert payload["composite"] == pytest.approx(0.75)  # val_auc (selection signal)
         assert payload["held_out"]["test_auc"] == 0.8  # sealed (val-firewall)
 
 

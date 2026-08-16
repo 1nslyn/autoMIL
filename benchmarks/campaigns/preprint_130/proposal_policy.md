@@ -273,9 +273,13 @@ class MyPolicy(PolicyVariant):
 ## 5. The val-firewall — validation only, ever
 
 Every `result.json` `metrics` block you can see is validation-only, and
-`composite` (the selection signal) is computed from it. Held-out test data
-is sealed at write time and quarantined outside your reach until a
-campaign-wide reveal long after this session ends.
+`composite` (the selection signal) is computed from it per the declared
+`scoring.formula` in `automil/config.yaml` — in this campaign the PRIMARY
+validation metric alone (`val_auc` for classification, `val_c_index` for
+survival); companion metrics stay recorded and are worth reading, but they
+do not vote. Held-out test data is sealed at write time and quarantined
+outside your reach until a campaign-wide reveal long after this session
+ends.
 
 - NEVER run `automil certify`, in any form, for any node.
 - NEVER pass `--include-held-out` to `automil rank`.

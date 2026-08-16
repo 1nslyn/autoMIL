@@ -416,16 +416,14 @@ def _validation_folds(
         # Ordinal tasks (TCGA-HNSC grade) carry a third component. Locked as its
         # own exact key set rather than relaxed to "any subset", so a fold that
         # merely LOST a component still fails closed.
-        if set(metrics) == {"val_auc", "val_bacc", "val_qwk"}:
-            expected_composite = (
-                float(metrics["val_auc"])
-                + float(metrics["val_bacc"])
-                + float(metrics["val_qwk"])
-            ) / 3
-        elif set(metrics) == {"val_auc", "val_bacc"}:
-            expected_composite = (
-                float(metrics["val_auc"]) + float(metrics["val_bacc"])
-            ) / 2
+        # Selection is the PRIMARY validation metric alone (scoring.formula:
+        # val_auc / val_c_index): companions stay recorded in `metrics` but no
+        # longer vote — bacc's ~1/17-per-slide threshold quantization injected
+        # lattice noise at exactly the accept-margin scale, and the canary
+        # cells' composite-vs-auc rankings disagreed throughout.
+        if set(metrics) in ({"val_auc", "val_bacc", "val_qwk"},
+                            {"val_auc", "val_bacc"}):
+            expected_composite = float(metrics["val_auc"])
         elif set(metrics) == {"val_c_index"}:
             expected_composite = float(metrics["val_c_index"])
         else:
