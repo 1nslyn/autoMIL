@@ -21,7 +21,11 @@ from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSlide, _read_bag
 from autobench.pipeline.abmil.model import build_abmil_model
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
+from autobench.pipeline.evaluate import (
+    compute_extended_metrics,
+    file_sha256_or_none,
+    write_predictions_csv,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
@@ -186,6 +190,13 @@ def train_abmil_fold(
         return {
             "test_metrics": test_metrics,
             "val_metrics": val_metrics,
+            # A4': no-op detector — hash of the val predictions persisted just
+            # above; the fold-result builder is the ONE hash home. None when
+            # this fold wrote none (no fold_dir, or an empty val split).
+            "val_predictions_sha256": (
+                file_sha256_or_none(os.path.join(fold_dir, "predictions_val.csv"))
+                if fold_dir else None
+            ),
             # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation
             # included, so the number is comparable across arms and task types.
             "elapsed_seconds": time.time() - start,

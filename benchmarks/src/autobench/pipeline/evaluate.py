@@ -518,6 +518,20 @@ def write_survival_predictions_csv(path: str, records: dict) -> None:
             w.writerow([pid, int(status), float(time_), float(risk)])
 
 
+def val_prediction_hashes(fold_results: list[dict]) -> list[str | None]:
+    """Project each fold's ``val_predictions_sha256`` for the summary (A4').
+
+    Positional with ``per_fold_val``. The hash has ONE home: every arm's
+    fold-result builder computes it right where that fold's
+    ``predictions_val.csv`` is written — this helper only reads it back out,
+    never recomputes it. ``None`` therefore means the fold result carries no
+    hash: a fold resumed from a metrics.json that predates hashing, or a fold
+    that never wrote val predictions (no ``fold_dir`` / empty val split) —
+    not "unimplemented".
+    """
+    return [fr.get("val_predictions_sha256") for fr in fold_results]
+
+
 def file_sha256_or_none(path: str) -> str | None:
     """sha256 hex of a file's bytes, or None when the file does not exist.
 

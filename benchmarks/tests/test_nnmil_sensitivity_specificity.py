@@ -266,14 +266,70 @@ def test_vendored_nnmil_metric_layer_is_not_modified():
         "autobench/pipeline/nnmil/metrics_addon.py, not in vendored code."
     )
 
+    # Committed-diff guard covers the FULL vendored tree minus the explicit
+    # allowlist of instrumentation-touched files, so models/, losses/, and
+    # data/ stay guarded — a loss tweak or architecture edit hidden in the
+    # vendored tree would move the arm's numbers for a reason invisible in
+    # autobench/ while the suite stayed green.
+    allowed_vendored_edits = {
+        "benchmarks/lib/nnMIL/training/trainers/classification_trainer.py",
+        "benchmarks/lib/nnMIL/training/trainers/survival_trainer.py",
+        "benchmarks/lib/nnMIL/training/trainers/survival_porpoise_trainer.py",
+        "benchmarks/lib/nnMIL/training/callbacks/early_stopping.py",
+    }
     base = _git("merge-base", "HEAD", "origin/main").stdout.strip()
     if base:
-        committed = _git(
-            "diff", "--stat", base, "HEAD", "--", metric_layer,
-        ).stdout.strip()
+        committed = [
+            p for p in _git(
+                "diff", "--name-only", base, "HEAD", "--", vendored,
+            ).stdout.split()
+            if p not in allowed_vendored_edits
+        ]
         assert not committed, (
-            f"benchmarks/lib/nnMIL/utilities was edited in a commit on this "
-            f"branch:\n{committed}\nKeep the metric mechanism consumer-side."
+            f"benchmarks/lib/nnMIL was edited outside the sanctioned "
+            f"instrumentation allowlist on this branch:\n"
+            + "\n".join(committed)
+            + "\nVendored edits beyond the PolicyRuntime dispatch / A3 "
+            "instrumentation files change what the paper compares."
+        )
+        assert metric_layer  # the metric layer is never allowlisted
+
+
+def test_vendored_clam_is_not_modified_outside_instrumentation():
+    """CLAM twin of the nnMIL pin — it had no guard at all while this branch
+    was already editing its ``core_utils.py``."""
+    repo = Path(__file__).resolve().parents[2]
+    vendored = "benchmarks/lib/CLAM"
+    allowed_vendored_edits = {
+        "benchmarks/lib/CLAM/utils/core_utils.py",
+    }
+
+    def _git(*args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True,
+        )
+
+    if _git("rev-parse", "--git-dir").returncode != 0:
+        pytest.skip("not a git checkout")
+
+    dirty = _git("status", "--porcelain", "--", vendored).stdout.strip()
+    assert not dirty, (
+        f"benchmarks/lib/CLAM has uncommitted changes:\n{dirty}\n"
+        "Vendored edits must be deliberate, reviewed commits."
+    )
+
+    base = _git("merge-base", "HEAD", "origin/main").stdout.strip()
+    if base:
+        committed = [
+            p for p in _git(
+                "diff", "--name-only", base, "HEAD", "--", vendored,
+            ).stdout.split()
+            if p not in allowed_vendored_edits
+        ]
+        assert not committed, (
+            f"benchmarks/lib/CLAM was edited outside the sanctioned "
+            f"instrumentation allowlist on this branch:\n"
+            + "\n".join(committed)
         )
 
 

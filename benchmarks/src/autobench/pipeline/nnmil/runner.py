@@ -7,7 +7,11 @@ import os
 
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.runner import _write_fold_result_json
-from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.evaluate import (
+    compute_confidence_intervals,
+    pooled_val_block,
+    val_prediction_hashes,
+)
 from autobench.pipeline.hparams import all_overrides, apply_overrides_to_plan
 from autobench.pipeline.nnmil.prepare import nnmil_plan_dir
 from autobench.pipeline.nnmil.train import train_nnmil_fold
@@ -127,11 +131,9 @@ def run_nnmil_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
-        # A4': positional with per_fold_val; None for folds resumed from
-        # pre-hash metrics.json.
-        "per_fold_val_predictions_sha256": [
-            fr.get("val_predictions_sha256") for fr in fold_results
-        ],
+        # A4': positional with per_fold_val; one hash home — see
+        # val_prediction_hashes.
+        "per_fold_val_predictions_sha256": val_prediction_hashes(fold_results),
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

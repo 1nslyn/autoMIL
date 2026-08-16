@@ -10,7 +10,11 @@ import torch
 
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.dataset import create_dataset, load_fold_splits
-from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.evaluate import (
+    compute_confidence_intervals,
+    pooled_val_block,
+    val_prediction_hashes,
+)
 from autobench.pipeline.hparams import apply_overrides_to_exp_cfg
 from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.clam.train import train_fold
@@ -188,11 +192,9 @@ def run_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
-        # A4': positional with per_fold_val; None for folds resumed from
-        # pre-hash metrics.json.
-        "per_fold_val_predictions_sha256": [
-            fr.get("val_predictions_sha256") for fr in fold_results
-        ],
+        # A4': positional with per_fold_val; one hash home — see
+        # val_prediction_hashes.
+        "per_fold_val_predictions_sha256": val_prediction_hashes(fold_results),
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

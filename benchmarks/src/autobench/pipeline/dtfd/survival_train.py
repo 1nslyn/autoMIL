@@ -33,7 +33,10 @@ from autobench.pipeline.dtfd.dataset import DTFDSurvivalSlide, _read_bag, min_ba
 from autobench.pipeline.dtfd.eval import _split_pseudo_bags
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.dtfd.train import _restore, _snapshot
-from autobench.pipeline.evaluate import write_survival_predictions_csv
+from autobench.pipeline.evaluate import (
+    file_sha256_or_none,
+    write_survival_predictions_csv,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -377,6 +380,13 @@ def train_dtfd_survival_fold(
             "test_metrics": test_metrics,
             "val_metrics": val_metrics,
             "val_records": _val_records,
+            # A4': no-op detector — hash of the val risk scores persisted just
+            # above; the fold-result builder is the ONE hash home. None when
+            # this fold wrote none (no fold_dir).
+            "val_predictions_sha256": (
+                file_sha256_or_none(os.path.join(fold_dir, "predictions_val.csv"))
+                if fold_dir else None
+            ),
             "elapsed_seconds": time.time() - start,
         }
     finally:

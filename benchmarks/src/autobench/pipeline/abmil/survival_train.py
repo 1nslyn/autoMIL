@@ -18,7 +18,10 @@ from autobench import LIB_ROOT
 from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSurvivalSlide, _read_bag
 from autobench.pipeline.abmil.model import build_abmil_model
-from autobench.pipeline.evaluate import write_survival_predictions_csv
+from autobench.pipeline.evaluate import (
+    file_sha256_or_none,
+    write_survival_predictions_csv,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -257,9 +260,8 @@ def train_abmil_survival_fold(
         }
         # A4': persist the selected model's val risk scores (already in hand)
         # so the fold carries a hashable no-op detector.
-        write_survival_predictions_csv(
-            os.path.join(fold_dir, "predictions_val.csv"), _val_records,
-        )
+        val_predictions_path = os.path.join(fold_dir, "predictions_val.csv")
+        write_survival_predictions_csv(val_predictions_path, _val_records)
         test_metrics = {
             "c_index": _c_index(test_samples) if test_samples else float("nan")
         }
@@ -268,6 +270,9 @@ def train_abmil_survival_fold(
             "test_metrics": test_metrics,
             "val_metrics": val_metrics,
             "val_records": _val_records,
+            # A4': no-op detector — hash of the persisted val risk scores
+            # above; the fold-result builder is the ONE hash home.
+            "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
             # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore
             # and final scoring included, so the number is comparable across
             # arms and task types.

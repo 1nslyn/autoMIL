@@ -33,6 +33,7 @@ from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import DTFDSlide, _read_bag, min_bag_size
 from autobench.pipeline.dtfd.eval import evaluate_dtfd, val_auc
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
+from autobench.pipeline.evaluate import file_sha256_or_none
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
@@ -264,6 +265,13 @@ def train_dtfd_fold(
         result: dict = {
             "test_metrics": test_metrics,
             "val_metrics": val_metrics,
+            # A4': no-op detector — hash of the val predictions persisted just
+            # above; the fold-result builder is the ONE hash home. None when
+            # this fold wrote none (no fold_dir, or an empty val split).
+            "val_predictions_sha256": (
+                file_sha256_or_none(os.path.join(fold_dir, "predictions_val.csv"))
+                if fold_dir else None
+            ),
             "elapsed_seconds": time.time() - start,
         }
         if return_history:
