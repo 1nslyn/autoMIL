@@ -383,6 +383,9 @@ def test_dtfd_survival_fold_runs_end_to_end(tmp_path):
 
     assert set(result) == {
         "test_metrics", "val_metrics", "val_records", "elapsed_seconds",
+        # A4'/R5: the fold-result builder is the ONE hash home for the
+        # val-prediction no-op detector across all five arms.
+        "val_predictions_sha256",
     }
     assert "c_index" in result["test_metrics"]
     assert "c_index" in result["val_metrics"]
