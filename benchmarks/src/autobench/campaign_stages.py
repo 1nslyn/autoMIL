@@ -1075,12 +1075,29 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                     raise CampaignStageError(audit["reason"])
                 folds = _validation_folds(result, STAGE_FOLDS["discovery"])
                 candidate_sha, identity = _candidate_identity(spec, verdict)
+                # Per-fold prediction hashes are the byte discriminator the
+                # outcome dedup below keys on. They live beside — never
+                # inside — the normalized fold entries: winner verification
+                # re-derives those entries from the archive and compares
+                # them by content hash, so their shape must stay stable.
+                raw_hash_by_fold = {
+                    raw_fold["fold_index"]: (
+                        raw_fold.get("val_predictions_sha256")
+                        if _is_sha256(raw_fold.get("val_predictions_sha256"))
+                        else None
+                    )
+                    for raw_fold in result["validation_folds"]
+                }
                 candidate = {
                     "candidate_id": archive.name,
                     "candidate_sha256": candidate_sha,
                     "source_spec_sha256": file_sha256(archive / "spec.json"),
                     "identity": identity,
                     "validation_folds": folds,
+                    "val_predictions_sha256": [
+                        raw_hash_by_fold.get(fold["fold_index"])
+                        for fold in folds
+                    ],
                     "discovery_mean": _mean(folds),
                     "sealed_fold_sha256": _sealed_fold_hashes(
                         archive, STAGE_FOLDS["discovery"],
@@ -1108,26 +1125,41 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
     eligible.sort(key=lambda item: (-item["discovery_mean"], item["candidate_id"]))
     unique_eligible: list[dict[str, Any]] = []
     seen_identities: set[str] = set()
+    seen_hash_vectors: set[tuple[str, ...]] = set()
     seen_outcomes: set[tuple] = set()
     for candidate in eligible:
         identity = candidate["candidate_sha256"]
         if identity in seen_identities:
             continue
         # Outcome identity: runs are bit-deterministic under the locked seed,
-        # so two candidates with the SAME per-fold composites are the same
-        # measurement wearing different configs (uni_v2 canary: a weight-decay
-        # value inside the logit-scaling invariant regime reproduced its parent
-        # to 16 digits and occupied a second promotion slot). Promotion re-runs
-        # byte-copies on folds 3/4; re-measuring an identical fold vector twice
-        # buys zero information, so the slot goes to the next distinct config.
-        outcome = tuple(
-            (fold["fold_index"], fold["composite"])
-            for fold in candidate["validation_folds"]
-        )
-        if outcome in seen_outcomes:
-            continue
+        # so two candidates that produced the SAME validation predictions are
+        # the same measurement wearing different configs (uni_v2 canary: a
+        # weight-decay value inside the logit-scaling invariant regime
+        # reproduced its parent to 16 digits and occupied a second promotion
+        # slot). Promotion re-runs byte-copies on folds 3/4; re-measuring an
+        # identical run twice buys zero information, so the slot goes to the
+        # next distinct config. The discriminator is the per-fold
+        # val_predictions_sha256 vector when both candidates carry a complete
+        # one — quantized composites can tie for genuinely different configs,
+        # and dropping those would silently lose a distinct candidate. Only
+        # hashless artifacts (pre-hash cells, e.g. the live canaries) fall
+        # back to the legacy composite-tuple rule, and a hash-bearing
+        # candidate never dedups against a hashless one.
+        hashes = candidate["val_predictions_sha256"]
+        if hashes and all(isinstance(value, str) for value in hashes):
+            vector = tuple(hashes)
+            if vector in seen_hash_vectors:
+                continue
+            seen_hash_vectors.add(vector)
+        else:
+            outcome = tuple(
+                (fold["fold_index"], fold["composite"])
+                for fold in candidate["validation_folds"]
+            )
+            if outcome in seen_outcomes:
+                continue
+            seen_outcomes.add(outcome)
         seen_identities.add(identity)
-        seen_outcomes.add(outcome)
         unique_eligible.append(candidate)
     promoted = unique_eligible[:PROMOTION_CANDIDATES]
     frozen_at = _utc_now()

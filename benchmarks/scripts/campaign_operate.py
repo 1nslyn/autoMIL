@@ -29,7 +29,6 @@ import json
 import os
 import shlex
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -39,6 +38,16 @@ from pathlib import Path
 
 from automil.activity_hooks import project_exporter_port
 from automil.backends.pidfile import is_pid_alive_with_starttime, load_pid_file
+from automil.cells.state import read_cell
+
+# Read-only PROBES are imported from the audited launcher so the runtime
+# version and exporter-port checks have one implementation and one failure
+# mode. State TRANSITIONS still run exclusively through subprocesses.
+from autobench.campaign_launch import (
+    CampaignLaunchError,
+    claude_cli_version,
+    port_in_use as _port_in_use,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STAGE_SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_stage.py"
@@ -51,6 +60,15 @@ RELEASE_LINE = "Session is bound. Begin the discovery loop per your policy."
 METRICS_RETRY_ERROR = "Claude active-time metrics were not recorded for this session"
 BIND_RETRY_SECONDS = 30
 POLL_SECONDS = 30
+# finish: queue/ and running/ are sampled non-atomically, so a spec mid-move
+# between them can be absent from both in one sample; "drained" therefore
+# requires two consecutive clean samples this far apart.
+DRAIN_CONFIRM_SECONDS = 2
+# finish: with queue and running both empty, this many consecutive polls
+# without consumed_evals advancing means the ledger can no longer reach its
+# budget (e.g. a cap-refused or cancelled spec). Waiting longer would hang
+# forever; stop and audit the slate instead.
+STALL_POLL_LIMIT = 3
 UNAVAILABLE_USAGE = {
     "status": "unavailable",
     "input_tokens": None,
@@ -178,7 +196,15 @@ def _daemon_alive(orch_dir: Path) -> int | None:
 
 
 def _claimed_gpus(orch_dir: Path) -> set[int] | None:
-    """GPU indexes a daemon's gpu_state.json records; None = unknown."""
+    """GPU indexes a daemon's gpu_state.json records; None = unknown.
+
+    "No claims" is never inferred from absence: a live daemon whose state
+    file is missing, unparseable, or yields no cuda slots (empty ``gpus``
+    from an nvidia-smi failure, or a rocm/cpu daemon with no
+    ``accelerator == "cuda"`` slot) has an UNKNOWN partition and must be
+    treated as claiming every GPU. Only a readable cuda slot map may grant
+    clearance.
+    """
     state_path = orch_dir / "gpu_state.json"
     try:
         state = json.loads(state_path.read_text())
@@ -199,7 +225,7 @@ def _claimed_gpus(orch_dir: Path) -> set[int] | None:
                 and isinstance(slot.get("device_index"), int)
             ):
                 claimed.add(slot["device_index"])
-    return claimed
+    return claimed or None
 
 
 def _candidate_cell_roots(cell_root: Path) -> list[Path]:
@@ -256,8 +282,9 @@ def _gpu_claim_conflicts(cell_root: Path, gpu: int) -> list[str]:
             if claimed is None:
                 conflicts.append(
                     f"{orch_dir} has a live daemon (pid {pid}) with no "
-                    "readable gpu_state.json — its GPU partition is unknown, "
-                    "so it may claim every GPU"
+                    "readable cuda slot map in gpu_state.json (missing, "
+                    "unparseable, or no cuda slots) — its GPU partition is "
+                    "unknown, so it may claim every GPU"
                 )
             elif gpu in claimed:
                 conflicts.append(
@@ -319,10 +346,12 @@ def _bind_payload(open_event: dict) -> dict:
     return {"session_id": open_event["session_id"], "started_at": started_at}
 
 
-def _port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.settimeout(1.0)
-        return probe.connect_ex(("127.0.0.1", port)) == 0
+def _has_session_evidence(cell_root: Path) -> bool:
+    """This cell already owns a formal session (bound file or journal open)."""
+    return (
+        (cell_root / AGENT_SESSION_FILE).is_file()
+        or _newest_session_open(cell_root, strict=False) is not None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -399,13 +428,12 @@ def _protocol_runtime_version(cell_root: Path) -> str:
 
 
 def _claude_version_first_token() -> str:
-    completed = _capture(["claude", "--version"])
-    if completed.returncode != 0 or not completed.stdout.strip():
-        _fail(
-            "cannot run `claude --version`: "
-            + (completed.stderr.strip() or "no output")
-        )
-    return completed.stdout.split()[0]
+    """First token of ``claude --version`` via the launcher's own probe."""
+    try:
+        return claude_cli_version("claude")
+    except CampaignLaunchError as exc:
+        _fail(str(exc))
+        raise AssertionError("unreachable")
 
 
 def _exporter_twin_conflicts(cell_root: Path, port: int) -> list[Path]:
@@ -482,11 +510,7 @@ def _preflight(cell_root: Path, gpu: int) -> None:
     except ValueError as exc:
         _fail(str(exc))
     twins = _exporter_twin_conflicts(cell_root, port)
-    session_evidence = (
-        (cell_root / AGENT_SESSION_FILE).is_file()
-        or _newest_session_open(cell_root, strict=False) is not None
-    )
-    if _port_in_use(port) and not session_evidence:
+    if _port_in_use(port) and not _has_session_evidence(cell_root):
         listing = "".join(f"\n  twin: {twin}" for twin in twins)
         _fail(
             f"activity exporter port {port} is already serving and this cell "
@@ -567,10 +591,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
             "cell's exporter before the session binds. Re-run `up` (orch "
             "window) first."
         )
-    if (
-        (cell_root / AGENT_SESSION_FILE).is_file()
-        or _newest_session_open(cell_root, strict=False) is not None
-    ):
+    if _has_session_evidence(cell_root):
         _fail(
             "this cell already has session evidence (agent_session.json or a "
             "journal session_open) — a cell never gets a second session, and "
@@ -650,17 +671,19 @@ def _budget_lines(automil_dir: Path) -> list[str]:
     if not cells_dir.is_dir():
         return ["  (no budget cells yet)"]
     for path in sorted(cells_dir.glob("*.json")):
+        # read_cell is the typed reader that fails loud on obsolete layouts;
+        # a raw parse here would silently report 0/None for them instead.
         try:
-            cell = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            lines.append(f"  {path.name}: unreadable")
+            cell = read_cell(path)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            lines.append(f"  {path.name}: unreadable: {exc}")
             continue
-        budget = cell.get("eval_budget")
+        budget = cell.eval_budget
         lines.append(
             f"  {path.stem}: consumed_evals "
-            f"{cell.get('consumed_evals', 0)}/{budget if budget is not None else '-'}"
-            f", completed {cell.get('completed_evals', 0)}"
-            f", status {cell.get('status', '?')}"
+            f"{cell.consumed_evals}/{budget if budget is not None else '-'}"
+            f", completed {cell.completed_evals}"
+            f", status {cell.status.value}"
         )
     return lines or ["  (no budget cells yet)"]
 
@@ -820,34 +843,115 @@ def _stop_discovery_daemon(cell_root: Path) -> None:
     _wait_daemon_dead(orch_dir, 300, "discovery orchestrator")
 
 
-def _promotion_pending(promotion_adir: Path) -> tuple[int, int]:
-    queue = promotion_adir / "orchestrator" / "queue"
-    running = promotion_adir / "orchestrator" / "running"
+def _pending_work_counts(adir: Path) -> tuple[int, int]:
+    """(queued, running) spec counts under one automil dir's orchestrator.
+
+    Mirrors ``autobench.campaign_stages._pending_stage_work`` — the freeze
+    gates' own census. Importing it would drag the full controller into this
+    script, so the globs are duplicated here and pinned against the original
+    by ``test_pending_work_counts_matches_controller_census``.
+    """
+    queue = adir / "orchestrator" / "queue"
+    running = adir / "orchestrator" / "running"
     queued = len(list(queue.glob("*.json"))) if queue.is_dir() else 0
     in_flight = len(list(running.rglob("*.json"))) if running.is_dir() else 0
     return queued, in_flight
 
 
-def _promotion_budget(promotion_adir: Path) -> tuple[int, int | None]:
+def _promotion_budget(promotion_adir: Path) -> tuple[int, int | None] | None:
+    """(consumed_evals, eval_budget) from the typed cell reader; None = unknown.
+
+    ``read_cell`` fails loud on obsolete cell layouts where a raw parse would
+    silently report 0. An unreadable ledger prints the verbatim error and
+    reports UNKNOWN (never drained) — the stall detector in
+    ``_drive_promotion`` bounds how long an unknown ledger can be polled.
+    """
     cell = json.loads((promotion_adir / "campaign_cell.json").read_text())
     budget_cell_id = str(cell["budget_identity"]["cell_id"])
     cell_path = promotion_adir / "cells" / f"{budget_cell_id}.json"
     try:
-        budget_cell = json.loads(cell_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        _fail(f"cannot read the promotion budget cell {cell_path}: {exc}")
-    return (
-        int(budget_cell.get("consumed_evals", 0)),
-        budget_cell.get("eval_budget"),
-    )
+        budget_cell = read_cell(cell_path)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        print(f"finish: cannot read the promotion budget cell {cell_path}: {exc}")
+        return None
+    return budget_cell.consumed_evals, budget_cell.eval_budget
+
+
+def _promotion_drained_once(promotion_adir: Path) -> bool:
+    queued, in_flight = _pending_work_counts(promotion_adir)
+    if queued or in_flight:
+        return False
+    budget = _promotion_budget(promotion_adir)
+    if budget is None:
+        return False
+    consumed, cap = budget
+    # >= — never ==: an overconsumed ledger must still count as drained, or
+    # the poll below would never terminate on it.
+    return cap is not None and consumed >= cap
 
 
 def _promotion_drained(promotion_adir: Path) -> bool:
-    queued, in_flight = _promotion_pending(promotion_adir)
-    if queued or in_flight:
+    """Two consecutive drained samples: queue/ then running/ are read
+    non-atomically, so a spec mid-move between the two directories can be
+    absent from both in a single sample."""
+    if not _promotion_drained_once(promotion_adir):
         return False
-    consumed, budget = _promotion_budget(promotion_adir)
-    return budget is not None and consumed == budget
+    _sleep(DRAIN_CONFIRM_SECONDS)
+    return _promotion_drained_once(promotion_adir)
+
+
+def _promotion_plan_node_ids(promotion_adir: Path) -> list[str]:
+    """Promotion node ids from the immutable plan written at materialization."""
+    plan_path = promotion_adir / "promotion_plan.json"
+    try:
+        plan = json.loads(plan_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _fail(f"cannot read the immutable promotion plan {plan_path}: {exc}")
+    jobs = plan.get("jobs")
+    if not isinstance(jobs, list) or not all(
+        isinstance(job, dict)
+        and isinstance(job.get("promotion_node_id"), str)
+        and job["promotion_node_id"]
+        for job in jobs
+    ):
+        _fail(f"{plan_path} carries no readable promotion job roster")
+    return [job["promotion_node_id"] for job in jobs]
+
+
+def _require_complete_promotion_slate(
+    promotion_adir: Path, accept_missing: bool,
+) -> None:
+    """Refuse to hand freeze-promotion a partially-measured slate.
+
+    freeze-promotion tolerates a missing result.json by marking the job
+    'ineligible', so proceeding on drained counters alone would silently
+    freeze whatever happened to finish. Every planned node must have a
+    terminal archive result, or the operator must accept the gap explicitly.
+    """
+    archive_root = promotion_adir / "orchestrator" / "archive"
+    missing = [
+        node_id for node_id in _promotion_plan_node_ids(promotion_adir)
+        if not (archive_root / node_id / "result.json").is_file()
+    ]
+    if not missing:
+        print("finish: every planned promotion job has a terminal result.json")
+        return
+    if accept_missing:
+        print(
+            f"finish: WARNING — proceeding with {len(missing)} promotion "
+            "job(s) lacking a terminal result.json (--accept-missing); "
+            "freeze-promotion will mark them ineligible: "
+            + ", ".join(missing)
+        )
+        return
+    _fail(
+        "the promotion queue and running set are empty but these planned "
+        "promotion jobs have no terminal result.json:\n  "
+        + "\n  ".join(missing)
+        + "\nfreeze-promotion would silently mark them 'ineligible' and "
+        "freeze a partially-measured slate. Re-run the missing jobs first, "
+        "or re-run finish with --accept-missing to freeze the slate as-is."
+    )
 
 
 def _supervisor_log_tail(log_path: Path) -> str:
@@ -857,7 +961,9 @@ def _supervisor_log_tail(log_path: Path) -> str:
         return "(no supervisor log)"
 
 
-def _drive_promotion(cell_root: Path, gpu: int | None) -> None:
+def _drive_promotion(
+    cell_root: Path, gpu: int | None, accept_missing: bool,
+) -> None:
     promotion_root = cell_root / "promotion"
     promotion_adir = promotion_root / "automil"
     if not (promotion_adir / "campaign_cell.json").is_file():
@@ -870,6 +976,7 @@ def _drive_promotion(cell_root: Path, gpu: int | None) -> None:
 
     if _promotion_drained(promotion_adir):
         print("finish: promotion queue already drained")
+        _require_complete_promotion_slate(promotion_adir, accept_missing)
         _stop_promotion_daemon(promotion_root, orch_dir, child=None)
         return
 
@@ -913,6 +1020,9 @@ def _drive_promotion(cell_root: Path, gpu: int | None) -> None:
             _sleep(2)
 
     try:
+        stalled = False
+        stall_polls = 0
+        last_consumed: int | None = None
         while not _promotion_drained(promotion_adir):
             if child is not None and child.poll() is not None:
                 _fail(
@@ -926,14 +1036,37 @@ def _drive_promotion(cell_root: Path, gpu: int | None) -> None:
                     "remaining; re-run finish with --gpu N to start a "
                     "supervised one"
                 )
-            queued, in_flight = _promotion_pending(promotion_adir)
-            consumed, budget = _promotion_budget(promotion_adir)
+            queued, in_flight = _pending_work_counts(promotion_adir)
+            budget = _promotion_budget(promotion_adir)
+            consumed, cap = budget if budget is not None else (None, None)
             print(
-                f"finish: promotion consumed {consumed}/{budget}, "
+                "finish: promotion consumed "
+                f"{'?' if consumed is None else consumed}/"
+                f"{'?' if cap is None else cap}, "
                 f"queued {queued}, running {in_flight}"
             )
+            # Stall detector: nothing queued, nothing running, and the
+            # consumed counter not advancing means the ledger can never
+            # reach its budget (cap-refused/cancelled spec). Polling on
+            # would hang forever — the one thing this script must not do.
+            if queued == 0 and in_flight == 0 and consumed == last_consumed:
+                stall_polls += 1
+            else:
+                stall_polls = 0
+            last_consumed = consumed
+            if stall_polls >= STALL_POLL_LIMIT:
+                stalled = True
+                print(
+                    "finish: promotion is STALLED — queue and running are "
+                    "empty and consumed_evals has not advanced for "
+                    f"{STALL_POLL_LIMIT} polls; the budget can no longer "
+                    "drain by itself. Auditing the slate instead of waiting."
+                )
+                break
             _sleep(POLL_SECONDS)
-        print("finish: promotion queue drained")
+        if not stalled:
+            print("finish: promotion queue drained")
+        _require_complete_promotion_slate(promotion_adir, accept_missing)
         _stop_promotion_daemon(promotion_root, orch_dir, child)
     finally:
         if log_handle is not None:
@@ -1001,6 +1134,47 @@ def _finalize_session(cell_root: Path, usage_json: str | None) -> None:
     )
 
 
+def _finish_discovery(cell_root: Path, args: argparse.Namespace) -> None:
+    # A live daemon still draining work would otherwise be stopped here, then
+    # spend hours finishing while _wait_daemon_dead times out at 300s with a
+    # misleading 'investigate' error. Refuse honestly up front. (With the
+    # daemon dead, fall through: freeze-discovery issues its own verbatim
+    # queued/running-work refusal.)
+    queued, in_flight = _pending_work_counts(cell_root / "automil")
+    pending = queued + in_flight
+    if pending and _daemon_alive(cell_root / "automil" / "orchestrator") is not None:
+        _fail(
+            f"the discovery orchestrator is still draining {pending} "
+            f"discovery run(s) (queued {queued}, running {in_flight}); "
+            "use `watch` and re-run finish after they complete"
+        )
+    _stop_discovery_daemon(cell_root)
+    _run_stage("freeze-discovery", cell_root)
+
+
+def _finish_promotion_ready(cell_root: Path, args: argparse.Namespace) -> None:
+    _run_stage("materialize-promotion", cell_root)
+
+
+def _finish_promotion(cell_root: Path, args: argparse.Namespace) -> None:
+    _drive_promotion(cell_root, args.gpu, args.accept_missing)
+    _run_stage("freeze-promotion", cell_root)
+
+
+def _finish_selection_ready(cell_root: Path, args: argparse.Namespace) -> None:
+    _run_stage("select-winner", cell_root)
+
+
+# Phase ladder: iterated in order, re-reading the controller's status once
+# per advance. Phase decides every step; history never does.
+_FINISH_LADDER = (
+    ("discovery", _finish_discovery),
+    ("promotion-ready", _finish_promotion_ready),
+    ("promotion", _finish_promotion),
+    ("selection-ready", _finish_selection_ready),
+)
+
+
 def cmd_finish(args: argparse.Namespace) -> None:
     cell_root = _cell_root_arg(args.cell_root)
     _ensure_session_end_evidence(cell_root, args.attest)
@@ -1009,20 +1183,13 @@ def cmd_finish(args: argparse.Namespace) -> None:
     phase = status.get("phase")
     print(f"finish: phase {phase}")
 
-    if phase == "discovery":
-        _stop_discovery_daemon(cell_root)
-        _run_stage("freeze-discovery", cell_root)
-        phase = _stage_status(cell_root).get("phase")
-    if phase == "promotion-ready":
-        _run_stage("materialize-promotion", cell_root)
-        phase = _stage_status(cell_root).get("phase")
-    if phase == "promotion":
-        _drive_promotion(cell_root, args.gpu)
-        _run_stage("freeze-promotion", cell_root)
-        phase = _stage_status(cell_root).get("phase")
-    if phase == "selection-ready":
-        _run_stage("select-winner", cell_root)
-        phase = _stage_status(cell_root).get("phase")
+    for expected_phase, advance in _FINISH_LADDER:
+        if phase != expected_phase:
+            continue
+        advance(cell_root, args)
+        status = _stage_status(cell_root)
+        phase = status.get("phase")
+
     if phase == "winner-frozen":
         _finalize_session(cell_root, args.usage_json)
     elif phase == "certified":
@@ -1031,7 +1198,7 @@ def cmd_finish(args: argparse.Namespace) -> None:
         _fail(f"finish does not know how to advance phase {phase!r}")
 
     print("finish: final status")
-    _run_or_die(stage_argv("status", cell_root))
+    print(json.dumps(status, indent=2, sort_keys=True))
 
 
 # ---------------------------------------------------------------------------
@@ -1089,6 +1256,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--attest", default=None,
         help="operator attestation for `automil activity close` when the "
              "runtime died before its SessionEnd hook",
+    )
+    finish.add_argument(
+        "--accept-missing", action="store_true",
+        help="proceed to freeze-promotion even though planned promotion jobs "
+             "lack a terminal result.json (they freeze as 'ineligible'); "
+             "without this flag finish refuses and lists the missing nodes",
     )
     finish.set_defaults(func=cmd_finish)
     return parser

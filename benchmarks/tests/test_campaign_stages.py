@@ -74,6 +74,29 @@ def _folds(indices, base=0.6):
     ]
 
 
+def _set_fold_prediction_hashes(result_path: Path, seed: str) -> None:
+    """Stamp deterministic per-fold val_predictions_sha256 onto a result."""
+    result = json.loads(result_path.read_text())
+    for fold in result["validation_folds"]:
+        fold["val_predictions_sha256"] = hashlib.sha256(
+            f"{seed}:{fold['fold_index']}".encode()
+        ).hexdigest()
+    result_path.write_text(json.dumps(result))
+
+
+def _twin_fold_evidence(archive_root: Path, donor: str, twin: str) -> Path:
+    """Copy donor's public fold evidence onto twin: tied composite vectors
+    for two genuinely different configs."""
+    donor_result = json.loads((archive_root / donor / "result.json").read_text())
+    twin_path = archive_root / twin / "result.json"
+    twin_result = json.loads(twin_path.read_text())
+    twin_result["validation_folds"] = donor_result["validation_folds"]
+    twin_result["composite"] = donor_result["composite"]
+    twin_result["metrics"] = donor_result["metrics"]
+    twin_path.write_text(json.dumps(twin_result))
+    return twin_path
+
+
 AGENT_PROTOCOL = {
     "schema_version": 2,
     "campaign_id": CAMPAIGN_ID,
@@ -753,24 +776,19 @@ def test_discovery_deduplicates_semantically_identical_hparams(staged_cell):
 
 
 def test_discovery_deduplicates_outcome_identical_candidates(staged_cell):
-    """Runs are bit-deterministic under the locked seed: two DISTINCT configs
-    with identical per-fold composites are one measurement wearing two names,
-    and re-running both on the promotion folds buys zero information (uni_v2
-    canary: a weight-decay value inside the logit-scaling invariant regime
-    reproduced its parent to 16 digits and occupied a second promotion slot).
-    The result.json here is authored as the training script would author it;
-    the dedup under test happens entirely inside freeze_discovery."""
+    """LEGACY FALLBACK — hashless artifacts only. Runs are bit-deterministic
+    under the locked seed: two DISTINCT configs with identical per-fold
+    composites are one measurement wearing two names (uni_v2 canary: a
+    weight-decay value inside the logit-scaling invariant regime reproduced
+    its parent to 16 digits and occupied a second promotion slot). When
+    neither candidate carries val_predictions_sha256 (pre-hash artifacts,
+    e.g. the live canary cells), the composite-tuple rule still dedups.
+    Hash-bearing candidates are covered by the tests below."""
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
     archive_root = adir / "orchestrator/archive"
-    donor = json.loads((archive_root / "node_0012" / "result.json").read_text())
-    twin_path = archive_root / "node_0011" / "result.json"
-    twin = json.loads(twin_path.read_text())
-    twin["validation_folds"] = donor["validation_folds"]
-    twin["composite"] = donor["composite"]
-    twin["metrics"] = donor["metrics"]
-    twin_path.write_text(json.dumps(twin))
+    _twin_fold_evidence(archive_root, donor="node_0012", twin="node_0011")
     _open_budget_cell(
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
     )
@@ -786,6 +804,120 @@ def test_discovery_deduplicates_outcome_identical_candidates(staged_cell):
     # Equal means tie-break on candidate_id, so the earlier node keeps the slot.
     assert "node_0011" in promoted
     assert "node_0012" not in promoted
+    kept = next(
+        candidate for candidate in state["discovery"]["promoted_candidates"]
+        if candidate["candidate_id"] == "node_0011"
+    )
+    assert kept["val_predictions_sha256"] == [None] * len(
+        STAGE_FOLDS["discovery"]
+    )
+
+
+def test_discovery_keeps_tied_composites_with_distinct_prediction_hashes(
+    staged_cell,
+):
+    """Quantized composites can tie for genuinely different configs. With
+    complete per-fold hash vectors on BOTH candidates, the byte discriminator
+    decides: different predictions => two real candidates, both promoted."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    twin_path = _twin_fold_evidence(
+        archive_root, donor="node_0012", twin="node_0011",
+    )
+    _set_fold_prediction_hashes(twin_path, seed="run-a")
+    _set_fold_prediction_hashes(
+        archive_root / "node_0012" / "result.json", seed="run-b",
+    )
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    by_id = {
+        candidate["candidate_id"]: candidate
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert state["discovery"]["unique_complete_candidates"] == 12
+    assert {"node_0011", "node_0012"} <= set(by_id)
+    fold_count = len(STAGE_FOLDS["discovery"])
+    assert len(by_id["node_0011"]["val_predictions_sha256"]) == fold_count
+    assert all(
+        isinstance(value, str) and len(value) == 64
+        for candidate_id in ("node_0011", "node_0012")
+        for value in by_id[candidate_id]["val_predictions_sha256"]
+    )
+    assert (
+        by_id["node_0011"]["val_predictions_sha256"]
+        != by_id["node_0012"]["val_predictions_sha256"]
+    )
+
+
+def test_discovery_deduplicates_equal_prediction_hash_vectors(staged_cell):
+    """Byte-identical predictions are ONE measurement regardless of config:
+    equal complete hash vectors dedup, earlier node id keeps the slot."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    twin_path = _twin_fold_evidence(
+        archive_root, donor="node_0012", twin="node_0011",
+    )
+    _set_fold_prediction_hashes(twin_path, seed="identical-run")
+    _set_fold_prediction_hashes(
+        archive_root / "node_0012" / "result.json", seed="identical-run",
+    )
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    promoted = {
+        candidate["candidate_id"]
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert state["discovery"]["unique_complete_candidates"] == 11
+    assert "node_0011" in promoted
+    assert "node_0012" not in promoted
+    kept = next(
+        candidate for candidate in state["discovery"]["promoted_candidates"]
+        if candidate["candidate_id"] == "node_0011"
+    )
+    assert kept["val_predictions_sha256"] == [
+        hashlib.sha256(f"identical-run:{fold}".encode()).hexdigest()
+        for fold in STAGE_FOLDS["discovery"]
+    ]
+
+
+def test_discovery_mixed_hash_presence_never_composite_dedups(staged_cell):
+    """A hash-bearing candidate must not dedup against a hashless one on
+    composites alone: the tie is only suspicious, never proven identical."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    twin_path = _twin_fold_evidence(
+        archive_root, donor="node_0012", twin="node_0011",
+    )
+    _set_fold_prediction_hashes(twin_path, seed="hashed-run")
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    by_id = {
+        candidate["candidate_id"]: candidate
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert state["discovery"]["unique_complete_candidates"] == 12
+    assert {"node_0011", "node_0012"} <= set(by_id)
+    assert by_id["node_0012"]["val_predictions_sha256"] == [None] * len(
+        STAGE_FOLDS["discovery"]
+    )
 
 
 def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
