@@ -719,6 +719,25 @@ class ExperimentOrchestrator:
         # (worktrees don't contain .env since it's typically gitignored)
         self._load_dotenv()
 
+        # Eagerly bind the completion path's lazy imports. A long-running
+        # daemon otherwise imports these at its FIRST completion — hours
+        # after start, from whatever is on disk by then. A repo update in
+        # that window makes the new file's imports resolve against stale
+        # cached modules and completion ingestion dies on the live daemon
+        # (observed 2026-08-16: a graph.py rename broke a running daemon's
+        # ingestion mid-recovery). Import at construction so the daemon's
+        # code surface is fixed at start. The set below is the transitive
+        # lazy closure of write_terminal_state and the daemon's own
+        # budget-kill/aggregation branches.
+        import automil.admissibility     # noqa: F401
+        import automil.cells.activity    # noqa: F401
+        import automil.cells.reconcile   # noqa: F401  (pulls cells + cells.state)
+        import automil.firewall          # noqa: F401
+        import automil.graph             # noqa: F401
+        import automil.schemas           # noqa: F401  (terminal_writer validate)
+        import automil.scoring           # noqa: F401
+        import automil.terminal_writer   # noqa: F401
+
         # Ensure directories.
         # NOTE: we create running_root (the parent running/ dir) but NOT the
         # per-backend running/local/ subdirectory here. The _backend_running_dir
