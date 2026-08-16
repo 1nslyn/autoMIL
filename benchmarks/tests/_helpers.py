@@ -79,3 +79,60 @@ def make_test_ds(**kwargs):
     )
     defaults.update(kwargs)
     return DatasetConfig(**defaults)
+
+
+def make_ledger_exp(
+    *,
+    task_name: str = "grade",
+    label_dict: dict | None = None,
+    encoder: str = "virchow2",
+    embed_dim: int = 768,
+    model_type: str = "clam_mb",
+    framework=None,
+    dataset: str = "tcga_hnsc",
+    seed: int = 42,
+):
+    """One experiment at the REAL path shape (``results_subdir``).
+
+    The single authority for completion-ledger/resume tests: two suites used
+    to carry drifting private copies, so a path-shape change could defang one
+    of them silently — the surviving copy kept writing summaries at the old
+    location and every resume test passed for the wrong reason.
+    """
+    from autobench.pipeline.config import (
+        ExperimentConfig,
+        Framework,
+        ModelConfig,
+        TaskConfig,
+        TrainConfig,
+    )
+
+    return ExperimentConfig(
+        task=TaskConfig(
+            name=task_name,
+            label_col="label",
+            label_dict=label_dict or {"g1": 0, "g2": 1, "g3": 2},
+            task_type="classification",
+        ),
+        encoder_key=encoder,
+        embed_dim=embed_dim,
+        model=ModelConfig(model_type=model_type),
+        train=TrainConfig(seed=seed),
+        n_folds=5,
+        framework=framework if framework is not None else Framework.CLAM,
+        strategy="standard",
+        dataset=dataset,
+    )
+
+
+def write_ledger_summary(benchmark_dir: str, exp, **extra) -> str:
+    """Materialize the cell directory the orchestrator will look for."""
+    import json
+    import os
+
+    cell = os.path.join(benchmark_dir, "results", exp.results_subdir)
+    os.makedirs(cell, exist_ok=True)
+    path = os.path.join(cell, "summary.json")
+    with open(path, "w") as f:
+        json.dump({"experiment_id": exp.experiment_id, **extra}, f)
+    return path

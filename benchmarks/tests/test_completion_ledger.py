@@ -36,41 +36,15 @@ from autobench.pipeline.orchestrator import (
     reconcile_completed,
 )
 
-
-def _exp(
-    *,
-    task_name: str = "grade",
-    encoder: str = "virchow2",
-    model_type: str = "clam_mb",
-    framework: Framework = Framework.CLAM,
-    dataset: str = "tcga_hnsc",
-    seed: int = 42,
-) -> ExperimentConfig:
-    """One experiment at the REAL path shape (``results_subdir``)."""
-    return ExperimentConfig(
-        task=TaskConfig(
-            name=task_name, label_col="label",
-            label_dict={"g1": 0, "g2": 1, "g3": 2}, task_type="classification",
-        ),
-        encoder_key=encoder,
-        embed_dim=768,
-        model=ModelConfig(model_type=model_type),
-        train=TrainConfig(seed=seed),
-        n_folds=5,
-        framework=framework,
-        strategy="standard",
-        dataset=dataset,
-    )
+from _helpers import make_ledger_exp, write_ledger_summary
 
 
-def _write_summary(benchmark_dir: str, exp: ExperimentConfig) -> str:
-    """Materialize the cell directory the orchestrator will look for."""
-    cell = os.path.join(benchmark_dir, "results", exp.results_subdir)
-    os.makedirs(cell, exist_ok=True)
-    path = os.path.join(cell, "summary.json")
-    with open(path, "w") as f:
-        json.dump({"experiment_id": exp.experiment_id}, f)
-    return path
+def _exp(**kwargs):
+    return make_ledger_exp(**kwargs)
+
+
+def _write_summary(benchmark_dir: str, exp) -> str:
+    return write_ledger_summary(benchmark_dir, exp)
 
 
 class TestReconcileCompleted:

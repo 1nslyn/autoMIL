@@ -322,7 +322,9 @@ def train_dtfd_survival_fold(
         best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         epochs_no_improve = 0
 
-        start = time.time()
+        # (no timer reset here — the FOLD-TIMING CONTRACT timer above covers
+        # setup too; a second assignment silently excluded it from
+        # elapsed_seconds and broke cross-arm comparability)
         for epoch in range(cfg.max_epochs):
             _train_one_epoch_survival(
                 bundle, train_samples, edges, cfg, loss_fn, opt0, opt1, device, py_rng
