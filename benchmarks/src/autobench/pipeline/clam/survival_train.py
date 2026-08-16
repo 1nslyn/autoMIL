@@ -23,7 +23,7 @@ from autobench import LIB_ROOT
 from autobench.pipeline.clam._imports import CLAM_SB, CLAM_MB, get_optim
 from autobench.pipeline.clam.dataset import load_survival_fold_splits
 from autobench.pipeline.config import ExperimentConfig, TrainConfig
-from autobench.pipeline.evaluate import file_sha256, write_survival_predictions_csv
+from autobench.pipeline.evaluate import file_sha256_or_none, write_survival_predictions_csv
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -251,7 +251,6 @@ def train_survival_fold(
         return _c_index_from(_risk_records(samples))
 
     rng = random.Random(exp_cfg.train.seed)
-    best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
     for epoch in range(exp_cfg.train.max_epochs):
         model.train()
         order = train[:]
@@ -268,9 +267,7 @@ def train_survival_fold(
             f"    [CLAM-surv fold {fold}] epoch {epoch + 1}: "
             f"val_loss={v_loss:.4f} val_c_index={v_cidx:.4f}"
         )
-        early_stopping(v_loss, v_cidx, model)
-        if early_stopping.counter == 0:  # saved a new best this epoch
-            best_epoch = epoch
+        early_stopping(v_loss, v_cidx, model, epoch=epoch)
         default_stop = _should_stop(exp_cfg.train, early_stopping)
         if policy_runtime.should_stop(
             default_stop,
@@ -280,12 +277,18 @@ def train_survival_fold(
             break
 
     # Restore the val-loss-selected best checkpoint before final scoring.
+    restored = False
     best_path = os.path.join(fold_dir, f"best_{model_type}.pth")
     if os.path.exists(best_path):
         model.load_state_dict(torch.load(best_path, map_location=device))
+        restored = True
     elif getattr(early_stopping, "best_model_state", None) is not None:
         model.load_state_dict(early_stopping.best_model_state)
-    print(f"[selected] epoch={best_epoch}", flush=True)
+        restored = True
+    # A3: source=best when a val-selected checkpoint was restored above,
+    # source=final when the final weights were kept (no restore).
+    print(f"[selected] epoch={early_stopping.best_epoch} "
+          f"source={'best' if restored else 'final'}", flush=True)
 
     # CR-3: export the val risk records so the runner can score concordance over
     # the POOLED cross-fold validation set. The per-fold c-index below stays for
@@ -301,7 +304,7 @@ def train_survival_fold(
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "val_records": _val_records,
-        "val_predictions_sha256": file_sha256(val_predictions_path),
+        "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
         "fold": fold,
         "elapsed_seconds": time.time() - start,
     }

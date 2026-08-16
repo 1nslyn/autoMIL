@@ -22,7 +22,7 @@ from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import (
     compute_extended_metrics,
-    file_sha256,
+    file_sha256_or_none,
     write_predictions_csv,
 )
 from autobench.pipeline.policy_dispatch import PolicyRuntime
@@ -85,9 +85,10 @@ def train_titan_fold(
     Seed follows the shared convention: ``train.seed + fold`` (matches
     nnMIL/DTFD).
     """
-    # H-3: mixed provenance, resolved through one seam — head knobs land on
-    # TitanHeadConfig, the opaque channel's max_epochs/early_stopping on
-    # exp_cfg.train (see resolve_head_config).
+    # H-3: head-side filtering only — the opaque channel's max_epochs/
+    # early_stopping were already applied onto exp_cfg.train at the RUNNER
+    # level (apply_train_overrides, before config.json was saved), so
+    # exp_cfg.train is read here as already-effective.
     head_cfg = resolve_head_config(exp_cfg, head_cfg)
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
@@ -163,7 +164,13 @@ def train_titan_fold(
             break
 
     model.load_state_dict(best_state)
-    print(f"[selected] epoch={best_epoch}", flush=True)
+    # A3: this arm ALWAYS restores best_state. source=best when some epoch
+    # improved on it; source=untrained when the restored snapshot is the
+    # pre-loop deepcopy that predates any training step (best_epoch == -1,
+    # e.g. an all-NaN val split) — NOT the "final weights kept" of the arms
+    # that print source=final.
+    print(f"[selected] epoch={best_epoch} "
+          f"source={'best' if best_epoch >= 0 else 'untrained'}", flush=True)
     test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
                              predictions_path=os.path.join(fold_dir, "predictions.csv"))
     val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,
@@ -173,7 +180,7 @@ def train_titan_fold(
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         # A4': no-op detector — hash of the persisted val predictions above.
-        "val_predictions_sha256": file_sha256(
+        "val_predictions_sha256": file_sha256_or_none(
             os.path.join(fold_dir, "predictions_val.csv")
         ),
         "fold": fold,

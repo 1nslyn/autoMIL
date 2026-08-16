@@ -164,8 +164,14 @@ def _assert_reaches(arm: str, knob: str, sentinel) -> None:
         assert getattr(cfg, knob) == sentinel
 
     elif arm == "titan":
-        from autobench.pipeline.titan.config import resolve_head_config
+        from autobench.pipeline.titan.config import (
+            apply_train_overrides,
+            resolve_head_config,
+        )
 
+        # Runner order: the train-side slice lands first (before the runner
+        # saves config.json), then the trainer filters the head side.
+        apply_train_overrides(exp)
         head = resolve_head_config(exp)
         if knob in ("max_epochs", "early_stopping"):
             # Mixed provenance: the trainers read these off exp_cfg.train.
@@ -227,11 +233,29 @@ def test_nnmil_batch_size_override_bypasses_the_planner_clamp():
 def test_titan_opaque_max_epochs_lands_on_the_train_transport():
     """Regression: an --hparams max_epochs on TITAN was silently dropped
     (head filtering excluded it and nothing else consumed the opaque
-    channel). resolve_head_config now routes it onto exp_cfg.train, which is
-    what both TITAN trainers read."""
-    from autobench.pipeline.titan.config import resolve_head_config
+    channel). apply_train_overrides — the RUNNER-level seam, run before
+    config.json is saved — routes it onto exp_cfg.train, which is what both
+    TITAN trainers read."""
+    from autobench.pipeline.titan.config import (
+        apply_train_overrides,
+        resolve_head_config,
+    )
 
     exp = _exp_with_override("titan", "max_epochs", 7)
+    apply_train_overrides(exp)
     head = resolve_head_config(exp)
     assert exp.train.max_epochs == 7
     assert not hasattr(head, "max_epochs")  # never double-applied to the head
+
+
+def test_titan_head_resolution_does_not_mutate_the_transport():
+    """resolve_head_config is head filtering ONLY. Its old exp_cfg.train
+    mutation ran inside the trainers — AFTER the runner had saved
+    config.json — so the archived provenance lied about max_epochs."""
+    from autobench.pipeline.titan.config import resolve_head_config
+
+    exp = _exp_with_override("titan", "max_epochs", 7)
+    before = exp.train
+    resolve_head_config(exp)
+    assert exp.train is before
+    assert exp.train.max_epochs == before.max_epochs

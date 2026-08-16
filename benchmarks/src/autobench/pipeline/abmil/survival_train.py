@@ -205,7 +205,6 @@ def train_abmil_survival_fold(
             return _c_index_from(_risk_records(samples))
 
         rng = random.Random(seed)
-        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         start = time.time()
         for epoch in range(cfg.max_epochs):
             model.train()
@@ -226,9 +225,7 @@ def train_abmil_survival_fold(
                 )
                 # Always save the best (val-loss) checkpoint; cfg.early_stopping
                 # only gates stopping early (matches classification/DTFD).
-                early_stopping(v_loss, v_cidx, model)
-                if early_stopping.counter == 0:  # saved a new best this epoch
-                    best_epoch = epoch
+                early_stopping(v_loss, v_cidx, model, epoch=epoch)
                 default_stop = cfg.early_stopping and early_stopping.early_stop
                 if policy_runtime.should_stop(
                     default_stop,
@@ -240,12 +237,18 @@ def train_abmil_survival_fold(
         # Restore the best (val-loss) checkpoint from disk before scoring: the
         # in-memory best_model_state is a shallow copy aliasing the live params,
         # so it decays to the last epoch's weights. Mirrors CLAM.
+        restored = False
         best_path = os.path.join(fold_dir, f"best_{model_type}.pth")
         if os.path.exists(best_path):
             model.load_state_dict(torch.load(best_path, map_location=device))
+            restored = True
         elif getattr(early_stopping, "best_model_state", None) is not None:
             model.load_state_dict(early_stopping.best_model_state)
-        print(f"[selected] epoch={best_epoch}", flush=True)
+            restored = True
+        # A3: source=best when a val-selected checkpoint was restored above,
+        # source=final when the final weights were kept (no restore).
+        print(f"[selected] epoch={early_stopping.best_epoch} "
+              f"source={'best' if restored else 'final'}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
         # across folds instead of averaging five ~2-event c-indices.

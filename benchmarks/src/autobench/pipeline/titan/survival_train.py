@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from autobench import LIB_ROOT
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.evaluate import file_sha256, write_survival_predictions_csv
+from autobench.pipeline.evaluate import file_sha256_or_none, write_survival_predictions_csv
 from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
@@ -116,9 +116,10 @@ def train_titan_survival_fold(
     patient-level c-index, adapted to TITAN's ``DataLoader``-batched linear
     probe.
     """
-    # H-3: mixed provenance, resolved through one seam — head knobs land on
-    # TitanHeadConfig, the opaque channel's max_epochs/early_stopping on
-    # exp_cfg.train (see resolve_head_config).
+    # H-3: head-side filtering only — the opaque channel's max_epochs/
+    # early_stopping were already applied onto exp_cfg.train at the RUNNER
+    # level (apply_train_overrides, before config.json was saved), so
+    # exp_cfg.train is read here as already-effective.
     head_cfg = resolve_head_config(exp_cfg, head_cfg)
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
@@ -207,7 +208,6 @@ def train_titan_survival_fold(
         )
         return float(ci) if ci is not None else float("nan")
 
-    best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
     start = time.time()
     for epoch in range(exp_cfg.train.max_epochs):
         model.train()
@@ -225,9 +225,7 @@ def train_titan_survival_fold(
         )
         # Always save the best (val-loss) checkpoint; early_stopping only gates
         # stopping early (matches classification/DTFD).
-        early_stopping(v_loss, v_cidx, model)
-        if early_stopping.counter == 0:  # saved a new best this epoch
-            best_epoch = epoch
+        early_stopping(v_loss, v_cidx, model, epoch=epoch)
         default_stop = exp_cfg.train.early_stopping and early_stopping.early_stop
         if policy_runtime.should_stop(
             default_stop,
@@ -239,12 +237,18 @@ def train_titan_survival_fold(
     # Restore the best (val-loss) checkpoint from disk before scoring: the
     # in-memory best_model_state is a shallow copy aliasing the live params,
     # so it decays to the last epoch's weights. Mirrors CLAM.
+    restored = False
     best_path = os.path.join(fold_dir, "best_titan.pth")
     if os.path.exists(best_path):
         model.load_state_dict(torch.load(best_path, map_location=torch_device))
+        restored = True
     elif getattr(early_stopping, "best_model_state", None) is not None:
         model.load_state_dict(early_stopping.best_model_state)
-    print(f"[selected] epoch={best_epoch}", flush=True)
+        restored = True
+    # A3: source=best when a val-selected checkpoint was restored above,
+    # source=final when the final weights were kept (no restore).
+    print(f"[selected] epoch={early_stopping.best_epoch} "
+          f"source={'best' if restored else 'final'}", flush=True)
 
     test_metrics = {"c_index": _c_index(test_loader)}
     val_metrics = {"c_index": _c_index(val_loader)}
@@ -259,7 +263,7 @@ def train_titan_survival_fold(
         "val_metrics": val_metrics,
         "val_records": val_records,
         # A4': no-op detector — hash of the persisted val risk scores above.
-        "val_predictions_sha256": file_sha256(val_predictions_path),
+        "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore and
         # final scoring included, so the number is comparable across arms and

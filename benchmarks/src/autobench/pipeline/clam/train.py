@@ -21,7 +21,7 @@ from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything
 from autobench.pipeline.evaluate import (
     compute_extended_metrics,
-    file_sha256,
+    file_sha256_or_none,
     write_predictions_csv,
 )
 
@@ -250,7 +250,7 @@ def train_fold(
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         # A4': no-op detector — hash of the persisted val predictions above.
-        "val_predictions_sha256": file_sha256(val_predictions_path),
+        "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation and
         # prediction writing included, so the number is comparable across arms

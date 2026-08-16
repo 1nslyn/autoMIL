@@ -351,7 +351,10 @@ def train_dtfd_survival_fold(
 
         if best_snap is not None:
             _restore(bundle, best_snap)
-        print(f"[selected] epoch={best_epoch}", flush=True)
+        # A3: source=best when a val-selected snapshot was restored above,
+        # source=final when the final weights were kept (no restore).
+        print(f"[selected] epoch={best_epoch} "
+              f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
         # across folds instead of averaging five ~2-event c-indices.

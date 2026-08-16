@@ -187,8 +187,10 @@ def train(datasets, cur, args):
         early_stopping = None
     print('Done!')
 
+    last_epoch = -1  # stays -1 when max_epochs == 0: the loop never binds `epoch`
     for epoch in range(args.max_epochs):
-        if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:     
+        last_epoch = epoch
+        if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:
             train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
             stop, val_metrics = validate_clam(cur, epoch, model, val_loader, args.n_classes,
                 early_stopping, writer, loss_fn, args.results_dir)
@@ -206,12 +208,15 @@ def train(datasets, cur, args):
 
     if args.early_stopping:
         model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
+        selected_epoch, selected_source = early_stopping.best_epoch, 'best'
     else:
         torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+        selected_epoch, selected_source = last_epoch, 'final'
 
     # A3: the epoch whose weights are scored below — EarlyStopping's best
-    # checkpoint when enabled, else the final epoch's own weights.
-    print('[selected] epoch={}'.format(early_stopping.best_epoch if args.early_stopping else epoch), flush=True)
+    # checkpoint when enabled (source=best), else the final epoch's own
+    # weights, no restore (source=final; epoch=-1 when max_epochs == 0).
+    print('[selected] epoch={} source={}'.format(selected_epoch, selected_source), flush=True)
 
     _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
     print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))
