@@ -155,3 +155,23 @@ class TestDTFDLoopSelectsOnLoss:
 def _dtfd_emb():
     from test_dtfd_arm import EMB
     return EMB
+
+
+class TestCLAMAlreadySelectsOnLoss:
+    """CLAM's vendored EarlyStopping is upstream loss-selection — pin it so a
+    future vendored bump cannot silently switch the fifth arm's rule."""
+
+    def test_clam_checkpoint_follows_val_loss(self, tmp_path):
+        import torch
+        from autobench.pipeline.clam._imports import EarlyStopping
+
+        es = EarlyStopping(patience=2, stop_epoch=0, verbose=False)
+        model = torch.nn.Linear(2, 2)
+        ck = str(tmp_path / "ck.pt")
+        es(0, 0.60, model, ckpt_name=ck)
+        assert es.counter == 0
+        es(1, 0.70, model, ckpt_name=ck)   # worse loss -> counter up
+        assert es.counter == 1
+        es(2, 0.50, model, ckpt_name=ck)   # better loss -> reset + save
+        assert es.counter == 0
+        assert es.val_loss_min == 0.50
