@@ -33,12 +33,33 @@ autoMIL: F2-readiness framework refactor.
   metric (`scoring.formula: val_auc` / `val_c_index`), so `test_qwk` reports
   but never selects. Classification checkpoint selection moved off the
   quantized epoch metric onto continuous validation loss on every tile arm
-  (nnMIL early stopping, ABMIL/DTFD shared CE helper, CLAM pinned as
-  already-upstream-loss; survival was already loss-selected), and the whole
+  (nnMIL early stopping, ABMIL/DTFD shared CE helper, CLAM upstream-loss
+  with its tracker now UNCONDITIONAL — the tunable `early_stopping` flag
+  only gates early termination, so no legal proposal can revert the arm to
+  final-epoch weights; survival was already loss-selected), and the whole
   checkpoint-selection layer joined `registry.protected` in the 9 cohort
-  templates. `revert-baseline` filters protected patterns through
-  `git ls-files --with-tree`, so a protected path with no baseline state can
-  no longer fail the all-or-nothing checkout.
+  templates. `revert-baseline` probes protected patterns with git's own
+  pathspec engine against the base commit's TREE (read-tree into a
+  throwaway index + `ls-files`), so a protected path with no baseline
+  state can no longer fail the all-or-nothing checkout — and glob patterns
+  still match.
+
+- **Adversarial-review fix round (Opus 5 max-effort, 13 findings).**
+  Highlights beyond the two above: a missing nnMIL `val/loss` now reads as
+  NaN (skipped epoch), never a perfect 0.0 loss that captures the
+  checkpoint; a `best_*.pth` left by a prior attempt is deleted at
+  EarlyStopping construction so a same-node relaunch cannot certify stale
+  weights; the CR-1b refusal propagates to `completed/`, archive
+  `result.json` and `results.tsv` (not just the graph node); the schema-3
+  migration also renames the baseline root's `metadata.validation_folds`
+  entries (paired-margin topology); legacy `composite`/`composite_se`
+  results.tsv columns migrate into their successors instead of becoming
+  phantom metrics; per-fold validity spans `held_out`; `reconcile
+  --from-archive`'s val-recompute is status-independent; the daemon PID
+  file writes atomically; and the ordinal invalid-reuse deadlock in
+  `repair_baselines` is resolved (audit accepts a valid fresh rerun when
+  history is unreusable; migrate skips invalid cells per cell instead of
+  refusing the dataset).
 
 - **One-session-per-host limit removed.** Activity metering is now
   multiplexed per project instead of pinned to one host-wide endpoint:

@@ -315,3 +315,137 @@ class TestCacheFingerprintCarriesProtocol:
                 return {"task": {"name": "t"}}
 
         assert fingerprint_payload(_Cfg())["protocol_version"] == PROTOCOL_VERSION
+
+
+class TestStaleCheckpointFromPriorAttempt:
+    """A best_<model>.pth left by a prior attempt in the same save_dir must
+    be deleted at constructor time: the end-of-training restore checks file
+    existence, not authorship, and under the orchestrator a same-node
+    relaunch reuses the results dir — an all-degenerate retry would
+    otherwise certify the previous attempt's weights as source=best."""
+
+    def test_classification_ctor_removes_stale_best(self, tmp_path):
+        stale = tmp_path / "best_simple_mil.pth"
+        stale.write_bytes(b"weights from a prior attempt")
+        EarlyStopping(patience=3, metric="bacc", save_dir=str(tmp_path),
+                      model_type="simple_mil")
+        assert not stale.exists()
+
+    def test_survival_ctor_removes_stale_best(self, tmp_path):
+        from training.callbacks.early_stopping import EarlyStoppingSurvival
+        stale = tmp_path / "best_simple_mil.pth"
+        stale.write_bytes(b"weights from a prior attempt")
+        EarlyStoppingSurvival(patience=3, save_dir=str(tmp_path),
+                              model_type="simple_mil", mode="min")
+        assert not stale.exists()
+
+    def test_regression_ctor_removes_stale_best(self, tmp_path):
+        from training.callbacks.early_stopping import RegressionEarlyStopping
+        stale = tmp_path / "best_simple_mil.pth"
+        stale.write_bytes(b"weights from a prior attempt")
+        RegressionEarlyStopping(patience=3, save_dir=str(tmp_path),
+                                model_type="simple_mil")
+        assert not stale.exists()
+
+    def test_all_degenerate_run_ends_with_no_checkpoint_file(self, tmp_path):
+        """End to end: stale file + every epoch non-finite → nothing on disk
+        to restore (the trainer's exists() restore finds no file)."""
+        stale = tmp_path / "best_simple_mil.pth"
+        stale.write_bytes(b"weights from a prior attempt")
+        es = EarlyStopping(patience=2, metric="bacc", save_dir=str(tmp_path),
+                           model_type="simple_mil")
+        m = _model()
+        es(val_loss=float("nan"), val_bacc=0.5, val_f1=0.5, val_auc=0.5,
+           model=m, epoch=0)
+        es(val_loss=float("nan"), val_bacc=0.5, val_f1=0.5, val_auc=0.5,
+           model=m, epoch=1)
+        assert es.early_stop and es.best_epoch == -1
+        assert not stale.exists()
+
+
+class TestMissingValLossIsNotAPerfectLoss:
+    """utils.compute_metrics only emits {prefix}/loss when val probs are
+    finite and the val split has >1 class. The trainer's extraction default
+    must therefore be NaN (routes into the non-finite guard: epoch skipped),
+    never 0.0 — score -0.0 is finite and beats every real loss, permanently
+    capturing the checkpoint."""
+
+    def test_trainer_defaults_missing_val_loss_to_nan(self):
+        import inspect
+        from training.trainers import classification_trainer
+        src = inspect.getsource(classification_trainer)
+        line = next(
+            l for l in src.splitlines()
+            if "val_loss = val_metrics.get" in l
+        )
+        assert "float('nan')" in line or 'float("nan")' in line, (
+            f"missing val/loss must default to NaN, got: {line.strip()}"
+        )
+        assert "0.0" not in line, (
+            f"a 0.0 default is a PERFECT loss and captures the checkpoint: "
+            f"{line.strip()}"
+        )
+
+    def test_nan_default_flows_to_no_save(self, tmp_path):
+        """The exact defect shape: first epoch has no val/loss key → NaN →
+        no checkpoint; a later real epoch takes the checkpoint normally."""
+        es = EarlyStopping(patience=3, metric="bacc", save_dir=str(tmp_path),
+                           model_type="simple_mil")
+        m = _model()
+        val_metrics: dict = {}  # val/loss suppressed (NaN probs / single-class val)
+        val_loss = val_metrics.get('val_val/loss',
+                                   val_metrics.get('val/loss', float('nan')))
+        es(val_loss=val_loss, val_bacc=0.9, val_f1=0.9, val_auc=0.9,
+           model=m, epoch=0)
+        assert es.best_epoch == -1, "missing val/loss must not checkpoint"
+        es(val_loss=0.7, val_bacc=0.6, val_f1=0.6, val_auc=0.6, model=m, epoch=1)
+        assert es.best_epoch == 1, "a real loss must beat the missing-loss epoch"
+
+
+class TestCLAMFlagOffStillSelectsOnLoss:
+    """`early_stopping` is a legal tunable knob (SEARCH_SPACE['clam']), and
+    upstream coupled it to checkpointing: flag off meant no per-epoch
+    checkpoint at all, so the FINAL epoch's weights were scored — one legal
+    proposal silently opted the fifth arm out of the frozen v3 selection
+    rule. The tracker must run unconditionally; the flag may only gate
+    early termination; the restore must key on checkpoint existence (and a
+    stale checkpoint from a prior attempt must be deleted up front)."""
+
+    @staticmethod
+    def _core_utils_src():
+        import inspect
+        from autobench.pipeline.clam._imports import EarlyStopping
+        return inspect.getsource(inspect.getmodule(EarlyStopping))
+
+    def test_tracker_constructed_unconditionally(self):
+        # Scope to train()'s body: validate()/validate_clam() legitimately
+        # declare `early_stopping = None` as a default parameter.
+        src = self._core_utils_src()
+        train_body = src.split("def train(", 1)[1].split("def train_loop_clam", 1)[0]
+        assert "early_stopping = None" not in train_body, (
+            "the val-loss checkpoint tracker must exist on every code path — "
+            "a None tracker means the final epoch's weights get scored"
+        )
+
+    def test_flag_only_suppresses_the_stop_signal(self):
+        src = self._core_utils_src()
+        assert "if not args.early_stopping:" in src
+        after = src.split("if not args.early_stopping:", 1)[1]
+        assert "stop = False" in after.splitlines()[2], (
+            "flag off must mean 'run every epoch', not 'do not checkpoint'"
+        )
+
+    def test_restore_keys_on_checkpoint_existence_not_the_flag(self):
+        src = self._core_utils_src()
+        assert "if os.path.exists(ckpt_path):\n        model.load_state_dict" in src, (
+            "the restore must follow the saved val-loss checkpoint whenever "
+            "one exists, regardless of the early_stopping flag"
+        )
+
+    def test_stale_prior_attempt_checkpoint_is_deleted_before_training(self):
+        src = self._core_utils_src()
+        pre_loop = src.split("for epoch in range(args.max_epochs):", 1)[0]
+        assert "os.remove(ckpt_path)" in pre_loop, (
+            "a checkpoint left by a prior attempt in the same results_dir "
+            "must not be restorable as this run's selection"
+        )

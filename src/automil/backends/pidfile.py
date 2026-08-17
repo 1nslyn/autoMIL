@@ -76,7 +76,13 @@ def write_pid_file(pid_file: Path) -> None:
         "starttime_ticks": starttime,
         "starttime_iso": datetime.now().isoformat(),
     }
-    pid_file.write_text(json.dumps(payload) + "\n")
+    # Atomic (tmp + rename), never truncate-in-place: a reader inside a
+    # write_text window sees "", load_pid_file returns None ("treat as
+    # stale"), and the caller unlinks and starts a SECOND daemon over a
+    # live one.
+    tmp = pid_file.with_name(pid_file.name + ".tmp")
+    tmp.write_text(json.dumps(payload) + "\n")
+    os.replace(tmp, pid_file)
 
 
 def load_pid_file(pid_file: Path) -> dict | None:

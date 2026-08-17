@@ -809,8 +809,16 @@ def migrate_reusable_results(
     preflight = preflight_migration(
         manifest_path, phase_root, datasets=datasets,
     )
-    if preflight["counts"]["invalid"]:
-        raise HistoricalBaselineError("migration preflight contains invalid cells")
+    # Invalid-reuse cells are SKIPPED per cell, not a dataset-wide refusal:
+    # preflight deliberately classifies instead of aborting so one
+    # unreusable cell (e.g. ordinal history predating qwk) never blocks its
+    # valid siblings from publishing. Those cells get fresh baseline runs;
+    # migrate has nothing to copy for them.
+    invalid_reuse: dict[str, str] = {
+        str(row["cell_id"]): str(row.get("reason", ""))
+        for row in preflight["cells"]
+        if row["status"] == "invalid-reuse"
+    }
     manifest = load_manifest(manifest_path)
     selected = _selected_datasets(manifest, datasets)
     cells = [
@@ -822,6 +830,15 @@ def migrate_reusable_results(
     rows: list[dict[str, Any]] = []
     for cell in cells:
         if cell["framework"] not in HISTORICAL_REUSABLE_FRAMEWORKS:
+            continue
+        if str(cell["cell_id"]) in invalid_reuse:
+            rows.append({
+                "cell_id": cell["cell_id"],
+                "dataset": cell["dataset"],
+                "framework": cell["framework"],
+                "disposition": "skipped-invalid-reuse",
+                "reason": invalid_reuse[str(cell["cell_id"])],
+            })
             continue
         source = historical_result_dir(phase_root, cell)
         validated = validate_historical_baseline(cell, source)
@@ -861,6 +878,9 @@ def migrate_reusable_results(
             "copied": sum(row["disposition"] == "copied" for row in rows),
             "already_present": sum(
                 row["disposition"] == "already-present" for row in rows
+            ),
+            "skipped_invalid_reuse": sum(
+                row["disposition"] == "skipped-invalid-reuse" for row in rows
             ),
         },
         "cells": rows,
@@ -1561,11 +1581,23 @@ def audit_canonical_results(
             validated = validate_current_baseline(cell, destination)
             if cell["framework"] in HISTORICAL_REUSABLE_FRAMEWORKS:
                 source = historical_result_dir(phase_root, cell)
-                validate_historical_baseline(cell, source)
-                if _tree_inventory(source) != _tree_inventory(destination):
-                    raise HistoricalBaselineError(
-                        "canonical reusable result differs from its legacy source"
-                    )
+                try:
+                    validate_historical_baseline(cell, source)
+                except HistoricalBaselineError:
+                    # History is not reusable for THIS cell (e.g. ordinal
+                    # history predating qwk — the gate's own message says
+                    # "rerun instead of reusing", and preflight classifies
+                    # it invalid-reuse → fresh baseline run). The fresh
+                    # canonical result validated above satisfies the cell;
+                    # demanding it equal a legacy source it was never
+                    # derived from would hold the cell at `pending` forever
+                    # against the sbatch runner's `pending: 0` assert.
+                    pass
+                else:
+                    if _tree_inventory(source) != _tree_inventory(destination):
+                        raise HistoricalBaselineError(
+                            "canonical reusable result differs from its legacy source"
+                        )
             inventory = _tree_inventory(destination)
             rows.append({
                 "cell_id": cell["cell_id"],

@@ -589,6 +589,19 @@ class ExperimentGraph:
                         _entry.setdefault("primary_value", _entry.pop("composite"))
                         _hit = True
                 _meta_block = _node.get("metadata")
+                # The campaign's discovery baseline root stores its fold
+                # vector under metadata.validation_folds (it never passes
+                # through the terminal writer) — node_fold_primary_values
+                # reads that form for exactly this topology, so leaving the
+                # legacy key there would silently widen every child of the
+                # baseline root onto the marginal-SE bar.
+                if isinstance(_meta_block, dict):
+                    for _entry in _meta_block.get("validation_folds") or []:
+                        if isinstance(_entry, dict) and "composite" in _entry:
+                            _entry.setdefault(
+                                "primary_value", _entry.pop("composite")
+                            )
+                            _hit = True
                 if isinstance(_meta_block, dict) and "composite_disagreement" in _meta_block:
                     _meta_block.setdefault(
                         "primary_value_disagreement",

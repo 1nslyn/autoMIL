@@ -217,3 +217,38 @@ def test_non_ordinal_fold_never_carries_qwk(tmp_path, monkeypatch):
     payload = json.loads((tmp_path / "fold_0_result.json").read_text())
     assert "val_qwk" not in payload["metrics"]
     assert "test_qwk" not in payload["held_out"]
+
+
+# ---------------------------------------------------------------------------
+# Fold validity spans held_out too (not just the val-side metrics block)
+# ---------------------------------------------------------------------------
+
+def test_held_out_loss_alone_invalidates_the_fold(tmp_path, monkeypatch):
+    """Val side complete, held_out lost a component (NaN test qwk on a
+    degenerate test fold). If validity only spanned `metrics`, the fold
+    would read 'completed' with a finite primary_value, pass every val-side
+    gate, and die stages later at certification — the outcome the docstring
+    says it prevents. aggregate_folds checks both blocks; this writer must
+    match."""
+    monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
+    result = _minimal_result()
+    result["val_metrics"]["qwk"] = 0.5
+    result["test_metrics"]["qwk"] = float("nan")   # unestimable on test
+    _write_fold_result_json(0, result, ordinal=True)
+
+    payload = json.loads((tmp_path / "fold_0_result.json").read_text())
+    assert payload["metrics"]["val_qwk"] == pytest.approx(0.5)
+    assert payload["held_out"]["test_qwk"] is None
+    assert payload["primary_value"] is None
+
+
+def test_missing_held_out_auc_invalidates_the_fold(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
+    result = _minimal_result()
+    del result["test_metrics"]["auc_roc"]
+    _write_fold_result_json(0, result)
+
+    payload = json.loads((tmp_path / "fold_0_result.json").read_text())
+    assert payload["held_out"]["test_auc"] is None
+    assert payload["metrics"]["val_auc"] == pytest.approx(0.90)
+    assert payload["primary_value"] is None

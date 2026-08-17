@@ -489,3 +489,96 @@ def test_reuse_accepts_a_default_arm_block(tmp_path):
 
     validated = baselines.validate_historical_baseline(cell, source)
     assert validated["folds"]
+
+
+def test_canonical_audit_accepts_fresh_result_when_history_is_unreusable(
+    tmp_path, monkeypatch,
+):
+    """An ordinal reusable-framework cell whose legacy history predates qwk
+    is classified invalid-reuse ("rerun instead of reusing"). The canonical
+    audit must then accept a valid FRESH canonical result — demanding the
+    rerun equal a legacy source it was never derived from holds the cell at
+    `pending` forever against the sbatch runner's `pending: 0` assert."""
+    cell = _cell(task_family="ordinal")
+    legacy = _legacy_result(tmp_path / "legacy", cell)  # no qwk -> unreusable
+
+    monkeypatch.setattr(baselines, "load_manifest", lambda _: {"cells": [cell]})
+    monkeypatch.setattr(
+        baselines, "historical_result_dir", lambda root, c: legacy,
+    )
+    monkeypatch.setattr(
+        baselines,
+        "validate_current_baseline",
+        lambda c, path: {"source": str(path)},
+    )
+    destination = baselines.canonical_result_dir(tmp_path, cell)
+    destination.mkdir(parents=True)
+    (destination / "summary.json").write_text("{}")
+
+    report = baselines.audit_canonical_results(MANIFEST, tmp_path)
+
+    assert report["counts"] == {"complete": 1, "pending": 0}, (
+        f"fresh rerun not accepted: {report['cells']}"
+    )
+
+
+def test_canonical_audit_still_requires_equality_for_reusable_history(
+    tmp_path, monkeypatch,
+):
+    """The fresh-rerun escape must not weaken the reuse path: when the
+    legacy history IS valid, a canonical result that differs from it stays
+    an error (classified pending)."""
+    cell = _cell(task_family="ordinal")
+    legacy = _legacy_result(tmp_path / "legacy", cell, with_qwk=True)
+
+    monkeypatch.setattr(baselines, "load_manifest", lambda _: {"cells": [cell]})
+    monkeypatch.setattr(
+        baselines, "historical_result_dir", lambda root, c: legacy,
+    )
+    monkeypatch.setattr(
+        baselines,
+        "validate_current_baseline",
+        lambda c, path: {"source": str(path)},
+    )
+    destination = baselines.canonical_result_dir(tmp_path, cell)
+    destination.mkdir(parents=True)
+    (destination / "not_the_legacy_tree.json").write_text("{}")
+
+    report = baselines.audit_canonical_results(MANIFEST, tmp_path)
+
+    assert report["counts"] == {"complete": 0, "pending": 1}
+    assert "differs from its legacy source" in report["cells"][0]["reason"]
+
+
+def test_migrate_skips_invalid_reuse_cells_instead_of_refusing(
+    tmp_path, monkeypatch,
+):
+    """One unreusable cell must not block its valid siblings from
+    publishing (preflight classifies per cell for exactly this reason);
+    migrate publishes nothing for it and records the skip."""
+    cell = _cell(task_family="ordinal")
+    preflight_report = {
+        "counts": {"reusable": 1, "will_copy": 0, "verified_existing": 0,
+                   "invalid": 1},
+        "cells": [{
+            "cell_id": cell["cell_id"],
+            "source": "legacy", "destination": "canonical",
+            "status": "invalid-reuse",
+            "reason": "ordinal cell history lacks qwk",
+        }],
+    }
+    monkeypatch.setattr(
+        baselines, "preflight_migration", lambda *a, **k: preflight_report,
+    )
+    monkeypatch.setattr(baselines, "load_manifest", lambda _: {"cells": [cell]})
+    monkeypatch.setattr(
+        baselines, "ensure_prepared_links", lambda *a, **k: [],
+    )
+
+    report = baselines.migrate_reusable_results(MANIFEST, tmp_path)
+
+    assert report["counts"]["skipped_invalid_reuse"] == 1
+    assert report["counts"]["copied"] == 0
+    row = next(r for r in report["cells"] if r["cell_id"] == cell["cell_id"])
+    assert row["disposition"] == "skipped-invalid-reuse"
+    assert "lacks qwk" in row["reason"]

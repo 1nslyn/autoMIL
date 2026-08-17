@@ -107,7 +107,13 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     })
                     refreshed += 1
                     continue
-                if _comp_rec is not None and payload.get("status") == "completed":
+                # Status-independent, like the terminal writer and the refusal
+                # branch below: a partial archive's usable val metrics still
+                # beat its reported scalar — even a quarantined node can
+                # parent a keep bar, so the reported (possibly test-derived)
+                # value must never survive ingest just because the run was
+                # partial.
+                if _comp_rec is not None:
                     gnode["primary_value"] = _comp_rec
                 elif _refused:
                     # Fail-closed (B2/B3), status-independent like every other

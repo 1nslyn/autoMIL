@@ -411,21 +411,28 @@ def write_terminal_state(
     # CR-1b: keep the downstream artifacts (completed/, archive result.json,
     # results.tsv) consistent with the graph's authoritative val-derived
     # primary_value. Rebuilt immutably — never mutating the caller's dict.
+    # The B2/B3 refusal must propagate too: the graph node was scored 0.0
+    # inside the lock, so leaving the refused reported scalar in the
+    # agent-facing artifacts (results.tsv is what the agent tabulates)
+    # would publish exactly the value the framework refused as
+    # untrustworthy, diverging from graph.json with no audit stamp.
     if primary_value_recomputed is not None:
         result = {**result, "primary_value": primary_value_recomputed}
-        if primary_value_disagreement is not None:
-            existing_metadata = (
-                result.get("metadata")
-                if isinstance(result.get("metadata"), Mapping)
-                else {}
-            )
-            result = {
-                **result,
-                "metadata": {
-                    **existing_metadata,
-                    "primary_value_disagreement": primary_value_disagreement,
-                },
-            }
+    elif primary_value_disagreement is not None and primary_value_disagreement.get("refused"):
+        result = {**result, "primary_value": 0.0}
+    if primary_value_disagreement is not None:
+        existing_metadata = (
+            result.get("metadata")
+            if isinstance(result.get("metadata"), Mapping)
+            else {}
+        )
+        result = {
+            **result,
+            "metadata": {
+                **existing_metadata,
+                "primary_value_disagreement": primary_value_disagreement,
+            },
+        }
 
     # Step 4 — completed/<node>.json (atomic write)
     completion = {

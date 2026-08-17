@@ -2865,6 +2865,12 @@ class ExperimentOrchestrator:
 
     _TSV_TRAILING = ("primary_value", "primary_se", "vram_gb", "elapsed_min",
                      "status", "description")
+    #: Pre-rename trailing names -> their schema-3 successors. A results.tsv
+    #: written before the composite retirement carries these in its header;
+    #: without the map they read as METRIC columns and the file keeps a
+    #: phantom metric named after the retired concept forever.
+    _TSV_LEGACY_TRAILING = {"composite": "primary_value",
+                            "composite_se": "primary_se"}
 
     def _append_results_tsv(self, node_id: str, result: dict, description: str = ""):
         """Append a row to results.tsv (sole writer, no locking needed).
@@ -2905,10 +2911,12 @@ class ExperimentOrchestrator:
         if self.results_tsv.exists() and self.results_tsv.stat().st_size:
             lines = self.results_tsv.read_text().splitlines()
             disk_header = lines[0].split("\t")
-            # Old trailing names are a subset of the current tuple, so this
-            # extraction stays correct across a trailing-schema widening.
+            # Trailing names not in the current tuple are either retired
+            # (mapped by _TSV_LEGACY_TRAILING into their successors during
+            # the rewrite below) or genuinely unknown; neither is a metric.
             metric_cols = [c for c in disk_header
-                           if c != "node_id" and c not in set(trailing)]
+                           if c != "node_id" and c not in set(trailing)
+                           and c not in self._TSV_LEGACY_TRAILING]
             existing_rows = [ln.split("\t") for ln in lines[1:] if ln]
         else:
             metric_cols = []
@@ -2925,6 +2933,12 @@ class ExperimentOrchestrator:
             rebuilt = ["\t".join(canonical_header)]
             for row in existing_rows:
                 by_name = dict(zip(disk_header, row))
+                # Carry retired trailing columns' data into their successors
+                # (the legacy column itself is absent from canonical_header,
+                # so its cell would otherwise be dropped on rewrite).
+                for _old, _new in self._TSV_LEGACY_TRAILING.items():
+                    if by_name.get(_old) and not by_name.get(_new):
+                        by_name[_new] = by_name[_old]
                 rebuilt.append("\t".join(by_name.get(c, "") for c in canonical_header))
             self._write_tsv_atomic("\n".join(rebuilt) + "\n")
 

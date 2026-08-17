@@ -171,8 +171,9 @@ def test_d208_clause_07_framework_purity_grep_gate():
     assert "_orchestrator_daemon.py:" in test_src  # file is tracked in allowlist
     assert "Consumer-specific vars (e.g. AUTOBENCH_*_ROOT)" in test_src  # content anchor
     assert "src/automil/cli/lifecycle/verify_repro.py:84" in test_src
-    # Iter-2 / F-01 fix: revert_baseline.py:87 default-help allowlist entry.
-    assert "src/automil/cli/lifecycle/revert_baseline.py:87" in test_src
+    # Iter-2 / F-01 fix: revert_baseline.py default-help allowlist entry
+    # (line 89 since the base-tree probe fix added os/tempfile imports).
+    assert "src/automil/cli/lifecycle/revert_baseline.py:89" in test_src
 
     out = _pytest("tests/test_framework_purity.py")
     assert out.returncode == 0, (

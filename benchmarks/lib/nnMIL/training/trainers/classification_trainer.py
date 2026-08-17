@@ -288,7 +288,12 @@ class ClassificationTrainer(BaseTrainer):
             # Early stopping - extract metrics from val_metrics
             # Note: evaluate() returns prefixed metrics like "val_val/bacc" (split='val' + prefix='val')
             # Check both prefixed and unprefixed keys for compatibility
-            val_loss = val_metrics.get('val_val/loss', val_metrics.get('val/loss', 0.0))
+            # val/loss is only emitted when val probs are finite and the val
+            # split has >1 class; absent must read as NaN so the non-finite
+            # guard skips the epoch — a 0.0 default would be a PERFECT loss
+            # (score -0.0 beats every real loss) and would permanently
+            # capture the checkpoint.
+            val_loss = val_metrics.get('val_val/loss', val_metrics.get('val/loss', float('nan')))
             val_bacc = val_metrics.get('val_val/bacc', val_metrics.get('val/bacc', 0.0))
             val_f1 = val_metrics.get('val_val/weighted_f1', val_metrics.get('val/weighted_f1', 0.0))
             val_auc = val_metrics.get('val_val/auroc', val_metrics.get('val/auroc', 0.0))

@@ -684,3 +684,40 @@ class TestSchema3CompositeRetirementMigration:
         assert raw["schema_version"] == 3
         assert raw["nodes"]["node_0005"]["primary_value"] == 0.8074
         assert "composite" not in raw["nodes"]["node_0005"]
+
+    def test_baseline_root_metadata_validation_folds_migrate(self, tmp_path):
+        """The discovery baseline root stores its fold vector under
+        metadata.validation_folds (it never passes through the terminal
+        writer) and node_fold_primary_values reads that form for exactly
+        that topology. A migration that skips it leaves the vector
+        unreadable, so every child of the baseline root silently screens
+        against the wider marginal-SE bar instead of the paired one."""
+        import json
+        from automil.graph import ExperimentGraph, node_fold_primary_values
+        legacy = {
+            "schema_version": 2,
+            "meta": {"total_executed": 1, "total_proposed": 0, "next_id": 2,
+                     "scoring": {}},
+            "nodes": {"node_0001": {
+                "id": "node_0001", "type": "executed", "status": "keep",
+                "composite": 0.75,
+                "metadata": {"validation_folds": [
+                    {"fold_index": 0, "composite": 0.70,
+                     "metrics": {"val_auc": 0.70}},
+                    {"fold_index": 1, "composite": 0.80,
+                     "metrics": {"val_auc": 0.80}},
+                ]},
+            }},
+            "technique_stats": {},
+        }
+        path = tmp_path / "graph.json"
+        path.write_text(json.dumps(legacy))
+        g = ExperimentGraph(path=str(path))
+        node = g.get_node("node_0001")
+        assert node_fold_primary_values(node) == {0: 0.70, 1: 0.80}, (
+            "metadata.validation_folds fold entries must migrate or the "
+            "paired keep-margin silently degrades to the marginal basis"
+        )
+        for entry in node["metadata"]["validation_folds"]:
+            assert "composite" not in entry
+            assert "primary_value" in entry

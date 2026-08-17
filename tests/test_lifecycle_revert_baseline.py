@@ -393,3 +393,74 @@ def test_untracked_protected_file_created_by_agent_is_cleared(
     result = cli_runner.invoke(main, ["revert-baseline"])
     assert result.exit_code == 0, result.output
     assert not (tmp_path / "src" / "not_born_yet.py").exists()
+
+
+def test_pattern_tracked_at_head_but_absent_at_base_is_skipped(
+    tmp_path, cli_runner, monkeypatch,
+):
+    """A protected file committed AFTER base_commit is in the live index but
+    not in base_commit's tree. `git checkout <base> -- <path>` matches
+    against the TREE, so such a pathspec aborts the whole all-or-nothing
+    checkout — the exact state every pre-existing template hits when a new
+    protected file lands in the same PR that protects it. The probe must
+    therefore query base_commit's tree, not the index (`ls-files
+    --with-tree` lists the union and reproduces the abort)."""
+    adir, base = _setup_with_protected(tmp_path, ["src/lib.py", "src/newer.py"])
+    monkeypatch.chdir(tmp_path)
+    # Commit a protected file AFTER the base commit: tracked at HEAD,
+    # absent from base's tree.
+    (tmp_path / "src" / "newer.py").write_text("# born after base\n")
+    subprocess.run(["git", "add", "src/newer.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "newer"], cwd=tmp_path,
+                   check=True, capture_output=True)
+    # Dirty both protected files.
+    (tmp_path / "src" / "lib.py").write_text("# v2\n")
+    (tmp_path / "src" / "newer.py").write_text("# dirty\n")
+
+    from automil.cli import main
+    result = cli_runner.invoke(main, ["revert-baseline"])
+    assert result.exit_code == 0, result.output
+    # The revertable pattern actually reverted (the old probe let newer.py
+    # into the checkout, which aborted and left lib.py dirty).
+    assert (tmp_path / "src" / "lib.py").read_text() == "# v1\n"
+    assert "Skipped" in result.output
+    assert "src/newer.py" in result.output
+    # newer.py has no base state; its dirt went into the stash and the file
+    # reverted to its committed (HEAD) content.
+    assert (tmp_path / "src" / "newer.py").read_text() == "# born after base\n"
+
+
+def test_glob_pattern_matching_base_tree_is_reverted(
+    tmp_path, cli_runner, monkeypatch,
+):
+    """Glob patterns (`dir/**`) must survive the probe. `git ls-tree`'s path
+    arguments are NOT pathspecs — probing with it silently skips every glob
+    pattern and turns the revert into a no-op. The probe must run git's own
+    pathspec engine against base_commit's tree."""
+    adir, base = _setup_with_protected(tmp_path, ["src/**"])
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src" / "lib.py").write_text("# v2\n")
+
+    from automil.cli import main
+    result = cli_runner.invoke(main, ["revert-baseline"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "src" / "lib.py").read_text() == "# v1\n"
+    assert "Skipped" not in result.output
+
+
+def test_all_patterns_skipped_does_not_claim_success(
+    tmp_path, cli_runner, monkeypatch,
+):
+    """When every protected pattern lacks base state, nothing is checked out
+    — the output must say so instead of printing the 'Reverted protected
+    paths' success line over an empty pattern list."""
+    adir, base = _setup_with_protected(tmp_path, ["src/not_born_yet.py"])
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src" / "not_born_yet.py").write_text("# rogue\n")
+
+    from automil.cli import main
+    result = cli_runner.invoke(main, ["revert-baseline"])
+    assert result.exit_code == 0, result.output
+    assert "Reverted protected paths" not in result.output
+    assert "nothing checked out" in result.output
+    assert "Skipped" in result.output

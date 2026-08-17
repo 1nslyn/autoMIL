@@ -235,3 +235,47 @@ def test_selector_miss_fails_the_node_closed(tmp_path):
     node = g.get_node(nid)
     assert node["primary_value"] == 0.0
     assert node["metadata"]["primary_value_disagreement"]["refused"] is True
+
+
+def test_selector_miss_refusal_reaches_every_agent_facing_artifact(tmp_path):
+    """The refusal must not stop at the graph node: completed/<node>.json,
+    archive result.json, and the results.tsv row are what the agent (and
+    reconcile) read back — leaving the refused 0.99 there would publish
+    exactly the scalar the framework refused, diverging from graph.json."""
+    import json
+
+    adir = tmp_path / "automil"
+    adir.mkdir()
+    graph = ExperimentGraph(path=str(adir / "graph.json"))
+    graph.meta.setdefault("scoring", {})["formula"] = "val_auc"
+    nid = graph.add_proposed("root", "exp", [], kind="hp")
+    graph.save()
+
+    completed = adir / "orchestrator" / "completed"
+    archive = adir / "orchestrator" / "archive" / nid
+    completed.mkdir(parents=True)
+    archive.mkdir(parents=True)
+
+    tsv_rows = []
+    write_terminal_state(
+        node_id=nid,
+        result={
+            "status": "completed",
+            "primary_value": 0.99,
+            "metrics": {"val_bacc": 0.80},     # selector key stripped
+        },
+        graph=graph,
+        completed_dir=completed, archive_dir=archive,
+        results_tsv_writer=lambda n, r, **k: tsv_rows.append((n, r)),
+        spec={}, elapsed_s=1.0, gpu_id=0,
+    )
+
+    completion = json.loads((completed / f"{nid}.json").read_text())
+    assert completion["primary_value"] == 0.0
+
+    archived = json.loads((archive / "result.json").read_text())
+    assert archived["primary_value"] == 0.0
+    assert archived["metadata"]["primary_value_disagreement"]["refused"] is True
+
+    assert len(tsv_rows) == 1
+    assert tsv_rows[0][1]["primary_value"] == 0.0

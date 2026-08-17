@@ -206,3 +206,37 @@ class TestDegenerateInputs:
             "0001", _cls(), "line one\nline two",
         )
         assert len(orch.results_tsv.read_text().strip().splitlines()) == 2
+
+
+class TestLegacyCompositeTrailingColumns:
+    """A results.tsv written before the composite retirement carries
+    `composite`/`composite_se` in its trailing block. Those names are no
+    longer in _TSV_TRAILING, so without the legacy map they re-enter the
+    header as METRIC columns — the agent-facing file keeps a phantom metric
+    named after the retired concept forever, and its cells never migrate."""
+
+    def _legacy_file(self, orch):
+        orch.results_tsv.write_text(
+            "node_id\tval_auc\tval_bacc\tcomposite\tcomposite_se\tvram_gb"
+            "\telapsed_min\tstatus\tdescription\n"
+            "0001\t0.85\t0.80\t0.825000\t0.020000\t4.5\t1.0\tcompleted\told row\n"
+        )
+
+    def test_legacy_columns_do_not_become_metrics(self, orch):
+        self._legacy_file(orch)
+        orch._append_results_tsv("0002", _cls(), "new row")
+        header, *_ = _rows(orch.results_tsv)
+        assert "composite" not in header
+        assert "composite_se" not in header
+        assert header.index("primary_value") > header.index("val_bacc"), (
+            "primary_value must stay in the trailing block"
+        )
+
+    def test_legacy_cells_migrate_into_the_renamed_columns(self, orch):
+        self._legacy_file(orch)
+        orch._append_results_tsv("0002", _cls(primary_value=0.9), "new row")
+        header, *rows = _rows(orch.results_tsv)
+        by_id = {r[0]: dict(zip(header, r)) for r in rows}
+        assert by_id["0001"]["primary_value"] == "0.825000"
+        assert by_id["0001"]["primary_se"] == "0.020000"
+        assert by_id["0002"]["primary_value"] == "0.900000"

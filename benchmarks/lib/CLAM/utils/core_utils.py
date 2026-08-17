@@ -180,12 +180,21 @@ def train(datasets, cur, args):
     print('Done!')
 
     print('\nSetup EarlyStopping...', end=' ')
-    if args.early_stopping:
-        early_stopping = EarlyStopping(patience=getattr(args, 'patience', 20), stop_epoch=getattr(args, 'stop_epoch', 50), verbose=True)
-
-    else:
-        early_stopping = None
+    # Protocol v3: the val-loss checkpoint tracker runs UNCONDITIONALLY;
+    # `args.early_stopping` (a legal tunable knob) only decides whether the
+    # patience signal may END TRAINING early — the same split every other
+    # arm uses. Upstream coupled the two: flag off meant no per-epoch
+    # checkpointing at all, so the FINAL epoch's weights were scored and a
+    # search proposal could silently opt this arm out of the frozen
+    # selection rule.
+    early_stopping = EarlyStopping(patience=getattr(args, 'patience', 20), stop_epoch=getattr(args, 'stop_epoch', 50), verbose=True)
     print('Done!')
+
+    ckpt_path = os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))
+    # A checkpoint left by a prior attempt in the same results_dir must not
+    # be restorable as this run's selection (existence is not authorship).
+    if os.path.exists(ckpt_path):
+        os.remove(ckpt_path)
 
     last_epoch = -1  # stays -1 when max_epochs == 0: the loop never binds `epoch`
     for epoch in range(args.max_epochs):
@@ -200,22 +209,27 @@ def train(datasets, cur, args):
             stop, val_metrics = validate(cur, epoch, model, val_loader, args.n_classes,
                 early_stopping, writer, loss_fn, args.results_dir)
 
+        if not args.early_stopping:
+            # Flag off = run every epoch; the tracker above still checkpoints.
+            stop = False
         if policy_runtime is not None:
             # A2 (claims-alignment): validation metrics, same as every other arm.
             stop = policy_runtime.should_stop(stop, epoch=epoch, metrics=val_metrics)
         if stop:
             break
 
-    if args.early_stopping:
-        model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
+    if os.path.exists(ckpt_path):
+        model.load_state_dict(torch.load(ckpt_path))
         selected_epoch, selected_source = early_stopping.best_epoch, 'best'
     else:
-        torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+        # No epoch ever checkpointed (max_epochs == 0): score the current
+        # weights so summary() below has something coherent to evaluate.
+        torch.save(model.state_dict(), ckpt_path)
         selected_epoch, selected_source = last_epoch, 'final'
 
     # A3: the epoch whose weights are scored below — EarlyStopping's best
-    # checkpoint when enabled (source=best), else the final epoch's own
-    # weights, no restore (source=final; epoch=-1 when max_epochs == 0).
+    # val-loss checkpoint whenever one was saved (source=best), else the
+    # current weights, no restore (source=final; epoch=-1 when max_epochs == 0).
     print('[selected] epoch={} source={}'.format(selected_epoch, selected_source), flush=True)
 
     _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)

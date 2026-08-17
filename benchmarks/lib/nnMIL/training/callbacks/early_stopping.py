@@ -6,6 +6,26 @@ import torch
 import numpy as np
 
 
+def _discard_stale_best_checkpoint(save_dir, model_type, logger=None):
+    """Delete a ``best_<model>.pth`` left behind by a PRIOR attempt.
+
+    The end-of-training restore checks file existence, not authorship; under
+    the orchestrator a same-node relaunch reuses the results dir, so without
+    this a run whose every epoch was degenerate ("no checkpoint saved") would
+    restore — and certify — the previous attempt's weights as source=best.
+    """
+    if not save_dir or not model_type:
+        return
+    stale = os.path.join(save_dir, f"best_{model_type}.pth")
+    if os.path.exists(stale):
+        os.remove(stale)
+        msg = f"EarlyStopping: removed stale checkpoint from a prior attempt: {stale}"
+        if logger:
+            logger.info(msg)
+        else:
+            print(msg)
+
+
 class EarlyStopping:
     """Early stopping with metric from plan file for classification"""
     def __init__(self, patience=7, verbose=False, delta=0, metric='bacc', save_dir=None, model_type=None, logger=None):
@@ -37,6 +57,7 @@ class EarlyStopping:
         # callers that do not (one __call__ per epoch).
         self.best_epoch = -1
         self._epochs_seen = 0
+        _discard_stale_best_checkpoint(save_dir, model_type, logger)
 
         # Use metric from plan file (no hardcoding)
         metric_lower = metric.lower()
@@ -175,7 +196,8 @@ class RegressionEarlyStopping:
         self.save_dir = save_dir
         self.model_type = model_type
         self.logger = logger
-        
+        _discard_stale_best_checkpoint(save_dir, model_type, logger)
+
         # Use metric from plan file
         metric_lower = metric.lower()
         if 'pearson' in metric_lower or 'corr' in metric_lower:
@@ -300,6 +322,7 @@ class EarlyStoppingSurvival:
         # checkpoint is saved, never inferred from counter == 0.
         self.best_epoch = -1
         self._epochs_seen = 0
+        _discard_stale_best_checkpoint(save_dir, model_type, logger)
 
         # Monitored quantity depends on mode: val loss (min) or c-index (max).
         self.primary_metric = "val_loss" if mode == 'min' else "C-index"

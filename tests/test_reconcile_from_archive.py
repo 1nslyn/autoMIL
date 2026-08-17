@@ -238,3 +238,47 @@ def test_default_reconcile_unchanged(cli_runner, tmp_path: Path, monkeypatch) ->
     assert result.exit_code == 0, (
         f"Baseline broken: default reconcile failed: {result.output}"
     )
+
+
+def test_from_archive_partial_node_still_gets_the_val_recomputed_value(
+    cli_runner, tmp_path: Path, monkeypatch,
+) -> None:
+    """The val-recompute is status-independent, like the terminal writer and
+    the refusal branch beside it: a `partial` archive with usable val
+    metrics must NOT keep its reported (possibly test-derived) scalar —
+    even a quarantined node can parent a keep bar."""
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    cli_runner.invoke(main, ["init"])
+
+    from automil.graph import ExperimentGraph
+    graph_path = tmp_path / "automil" / "graph.json"
+    graph = ExperimentGraph(path=str(graph_path))
+    graph.meta.setdefault("scoring", {})["formula"] = "val_auc"
+    node_id = graph.add_executed(
+        parent_id=None,
+        description="partial run",
+        techniques=[],
+        metrics={"primary_value": 0.5},
+        status="partial",
+    )
+    graph.save()
+
+    archive_dir = tmp_path / "automil" / "orchestrator" / "archive" / node_id
+    archive_dir.mkdir(parents=True)
+    (archive_dir / "result.json").write_text(json.dumps({
+        "primary_value": 0.99,                  # reported — must not survive
+        "status": "partial",
+        "metrics": {"val_auc": 0.70},       # usable val evidence
+    }))
+
+    result = cli_runner.invoke(main, ["reconcile", "--from-archive", node_id])
+    assert result.exit_code == 0, result.output
+
+    node = ExperimentGraph(path=str(graph_path)).get_node(node_id)
+    assert node is not None
+    assert abs(node.get("primary_value", 0.0) - 0.70) < 1e-9, (
+        f"partial archive kept its reported scalar {node.get('primary_value')} "
+        "instead of the val-recomputed 0.70 — the status gate is back"
+    )
+    assert node.get("status") == "partial"  # D-01 quarantine unchanged

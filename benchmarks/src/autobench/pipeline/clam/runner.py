@@ -104,11 +104,16 @@ def _write_fold_result_json(
     # val_auc / val_c_index); companions stay recorded but no longer vote —
     # see run_experiment._primary_components, the aggregate-side authority
     # this per-fold value must mirror. A fold that lost ANY recorded
-    # component (companion included) carries a null primary_value: fold validity
-    # spans the full evidence set, matching _per_fold_primary_values and the
-    # campaign's ingest validator.
+    # component (companion and held_out included) carries a null
+    # primary_value: fold validity spans the FULL evidence set — the
+    # sealed side too, matching aggregate_folds (whose offender check loops
+    # over both blocks) — or a fold with a null test_qwk sails through every
+    # val-side gate as "completed" and dies stages later at certification.
     primary_value = (
-        None if any(value is None for value in metrics.values())
+        None
+        if any(value is None
+               for block in (metrics, held_out)
+               for value in block.values())
         else metrics[primary]
     )
 
