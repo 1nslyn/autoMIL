@@ -75,8 +75,11 @@ def evaluate_dtfd(
     ordinal: bool = False,
     predictions_path: str | None = None,
     return_probs: bool = False,
-) -> dict[str, float]:
+) -> "dict[str, float] | tuple[dict[str, float], np.ndarray, np.ndarray]":
     """Evaluate a split → shared-schema metrics dict.
+
+    ``return_probs=True`` additionally returns ``(y_true, y_probs)`` for the
+    protocol-v3 selection loss, leaving the metrics dict schema untouched.
 
     Returns exactly the keys ``compute_extended_metrics`` emits
     (auc_roc, accuracy, balanced_accuracy, f1, plus sensitivity/specificity

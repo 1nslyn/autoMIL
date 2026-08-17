@@ -1,6 +1,7 @@
 """Single-fold training for the TITAN linear probe.
 
-Standard CE + Adam on frozen slide embeddings, early-stopping on val AUC,
+Standard CE + Adam on frozen slide embeddings, early-stopping on val CE
+loss (protocol v3; AUC reported at the selected checkpoint, not voting),
 final evaluation via the SAME ``compute_extended_metrics`` every other arm
 uses -- so ``test_auc``/``test_bacc`` are computed by identical code
 across all four models (design spec §4, §7).
@@ -26,6 +27,7 @@ from autobench.pipeline.evaluate import (
     write_predictions_csv,
 )
 from autobench.pipeline.policy_dispatch import PolicyRuntime
+from autobench.pipeline.val_loss import ce_loss
 from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSlideDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
@@ -39,8 +41,14 @@ def _evaluate(
     n_classes: int,
     ordinal: bool = False,
     predictions_path: str | None = None,
-) -> dict[str, float]:
-    """Run the probe over a split and compute the shared extended metrics."""
+    return_probs: bool = False,
+) -> "dict[str, float] | tuple[dict[str, float], np.ndarray, np.ndarray]":
+    """Run the probe over a split and compute the shared extended metrics.
+
+    ``return_probs=True`` additionally returns ``(y_true, y_probs)`` so the
+    training loop can compute the protocol-v3 selection loss without touching
+    the shared-schema metrics dict.
+    """
     model.eval()
     all_probs: list[np.ndarray] = []
     all_labels: list[int] = []
@@ -61,7 +69,10 @@ def _evaluate(
         # carry through -- so rows fall back to positional sample_<i>. Still
         # enough for any confusion-matrix metric; just not joinable by slide.
         write_predictions_csv(predictions_path, None, y_true, y_probs, y_pred)
-    return compute_extended_metrics(y_true, y_probs, y_pred, n_classes, ordinal=ordinal)
+    metrics = compute_extended_metrics(y_true, y_probs, y_pred, n_classes, ordinal=ordinal)
+    if return_probs:
+        return metrics, y_true, y_probs
+    return metrics
 
 
 def train_titan_fold(
@@ -121,7 +132,7 @@ def train_titan_fold(
     val_loader = DataLoader(val_ds, batch_size=max(1, len(val_ds)), shuffle=False)
     test_loader = DataLoader(test_ds, batch_size=max(1, len(test_ds)), shuffle=False)
 
-    best_val_auc = -float("inf")
+    best_val_loss = float("inf")
     best_state = copy.deepcopy(model.state_dict())
     best_epoch = -1  # -1: never improved; the pre-training snapshot is kept
     epochs_without_improvement = 0
@@ -139,15 +150,20 @@ def train_titan_fold(
             loss.backward()
             optimizer.step()
 
-        val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,
-                            predictions_path=os.path.join(fold_dir, "predictions_val.csv"))
+        val_metrics, y_true_v, y_probs_v = _evaluate(
+            model, val_loader, torch_device, n_classes, ordinal=ordinal,
+            predictions_path=os.path.join(fold_dir, "predictions_val.csv"),
+            return_probs=True,
+        )
         val_auc = val_metrics["auc_roc"]
-        # NaN AUC (e.g. a val split missing a class) can't drive early
-        # stopping -- treat it as "no improvement" rather than crashing.
-        improved = not np.isnan(val_auc) and val_auc > best_val_auc
+        # Protocol v3: the checkpoint is selected on continuous val CE loss;
+        # AUC is reported at that checkpoint, not voting. ce_loss maps any
+        # non-finite probabilities to +inf, so a degenerate epoch never wins.
+        val_loss = ce_loss(y_true_v, y_probs_v)
+        improved = val_loss < best_val_loss
 
         if improved:
-            best_val_auc = val_auc
+            best_val_loss = val_loss
             best_state = copy.deepcopy(model.state_dict())
             best_epoch = _epoch
             epochs_without_improvement = 0
@@ -159,7 +175,7 @@ def train_titan_fold(
             and epochs_without_improvement >= head_cfg.patience
         )
         if policy_runtime.should_stop(
-            default_stop, epoch=_epoch, metrics={"val_auc": val_auc},
+            default_stop, epoch=_epoch, metrics={"val_auc": val_auc, "val_loss": val_loss},
         ):
             break
 

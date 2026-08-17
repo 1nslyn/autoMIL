@@ -14,7 +14,8 @@ class EarlyStopping:
             patience: Early stopping patience
             verbose: Verbose output
             delta: Minimum change to qualify as improvement
-            metric: Primary metric from plan file ('auc', 'bacc', 'f1', 'kappa', etc.)
+            metric: Plan-file metric, REPORTED at the selected checkpoint
+                only (protocol v3 selects on continuous validation loss).
             save_dir: Directory to save best model
             model_type: Model type name for saving
             logger: Optional logger for logging messages
@@ -51,7 +52,8 @@ class EarlyStopping:
             # Default to BACC for classification
             self.primary_metric = "BACC"
         
-        msg = f"EarlyStopping: Using {self.primary_metric} as primary metric (from plan: {metric})"
+        msg = (f"EarlyStopping: Using VAL_LOSS as selection metric (v3); "
+               f"plan metric {self.primary_metric} (from plan: {metric}) reported, not voting")
         if self.logger:
             self.logger.info(msg)
         else:
@@ -77,10 +79,27 @@ class EarlyStopping:
         if np.isnan(score) or np.isinf(score):
             score = float("-inf")
             
-        if self.best_score is None:
+        if self.best_score is None and score == float("-inf"):
+            # Non-finite val loss with no checkpoint yet: nothing worth
+            # saving. Count toward patience; an all-non-finite run ends with
+            # no checkpoint at all rather than certifying epoch-0 garbage.
+            self.counter += 1
+            msg = (f'EarlyStopping: non-finite VAL_LOSS at epoch {current_epoch}; '
+                   f'no checkpoint saved ({self.counter}/{self.patience})')
+            if self.counter >= self.patience:
+                self.early_stop = True
+            if self.logger:
+                self.logger.info(msg)
+            else:
+                print(msg)
+            return
+        elif self.best_score is None:
             self.best_score = score
             self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_bacc, val_f1, val_auc, model, val_kappa)
+            # Degenerate epochs may have accumulated patience before the first
+            # valid checkpoint; a real save starts the count fresh.
+            self.counter = 0
             msg = f'EarlyStopping: Initial VAL_LOSS = {val_loss:.4f} (v3 loss-selected; plan metric {self.primary_metric} reported, not voting)'
             if self.logger:
                 self.logger.info(msg)
@@ -116,7 +135,7 @@ class EarlyStopping:
                 print(msg)
 
     def save_checkpoint(self, val_loss, val_bacc, val_f1, val_auc, model, val_kappa=None):
-        msg = f'Validation {self.primary_metric} improved. Saving model...'
+        msg = 'Checkpoint selection score improved. Saving model...'
         if self.logger:
             self.logger.info(msg)
         else:
@@ -232,7 +251,7 @@ class RegressionEarlyStopping:
                 print(msg)
 
     def save_checkpoint(self, val_mse, val_pearson, val_r2, model):
-        msg = f'Validation {self.primary_metric} improved. Saving model...'
+        msg = 'Checkpoint selection score improved. Saving model...'
         if self.logger:
             self.logger.info(msg)
         elif self.verbose:
@@ -295,17 +314,35 @@ class EarlyStoppingSurvival:
         current_epoch = self._epochs_seen if epoch is None else epoch
         self._epochs_seen += 1
 
-        score = val_loss if self.mode == 'min' else val_c_index
-
-        # Handle NaN/inf scores: treat as the worst possible so they never win.
-        if np.isnan(score) or np.isinf(score):
-            score = float('inf') if self.mode == 'min' else 0.0
+        raw = val_loss if self.mode == 'min' else val_c_index
+        # Degeneracy is a property of the RAW observation; a legitimate finite
+        # C-index of exactly 0.0 is a (terrible) real score, not a NaN.
+        degenerate = np.isnan(raw) or np.isinf(raw)
+        # Map non-finite to the worst possible value so it never wins a
+        # comparison against an existing checkpoint either.
+        score = raw
+        if degenerate:
+            score = float('inf') if self.mode == 'min' else -float('inf')
+        if self.best_score is None and degenerate:
+            # Non-finite first observation: nothing worth saving; count toward
+            # patience so an all-degenerate run ends with no checkpoint.
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+            msg = (f'EarlyStopping: degenerate {self.primary_metric} at epoch '
+                   f'{current_epoch}; no checkpoint saved ({self.counter}/{self.patience})')
+            if self.logger:
+                self.logger.info(msg)
+            elif self.verbose:
+                print(msg)
+            return
 
         if self.best_score is None:
             self.best_score = score
             self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_c_index, model)
-            msg = f'EarlyStopping: Initial VAL_LOSS = {val_loss:.4f} (v3 loss-selected; plan metric {self.primary_metric} reported, not voting)'
+            self.counter = 0  # degenerate epochs before the first save don't linger
+            msg = f'EarlyStopping: Initial {self.primary_metric} = {score:.4f} ({self.mode}-selected)'
             if self.logger:
                 self.logger.info(msg)
             elif self.verbose:

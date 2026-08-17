@@ -2,8 +2,9 @@
 
 Unlike DTFD's two-tier pseudo-bag distillation, ABMIL is a STANDARD one-tier
 MIL trainer: one forward per slide (full bag, no pseudo-bag split), one
-CrossEntropy loss, one Adam optimizer. Early stopping is on val AUC (shared
-val CE loss, v3) with best-state restore -- same discipline as ``dtfd/train.py``.
+CrossEntropy loss, one Adam optimizer. Early stopping selects the checkpoint
+on val CE loss (protocol v3; AUC is reported there, not voting) with
+best-state restore -- same discipline as ``dtfd/train.py``.
 """
 
 from __future__ import annotations
@@ -70,8 +71,11 @@ def _evaluate(
     ordinal: bool = False,
     predictions_path: str | None = None,
     return_probs: bool = False,
-) -> dict[str, float]:
+) -> "dict[str, float] | tuple[dict[str, float], np.ndarray, np.ndarray]":
     """Evaluate a split -> shared-schema metrics dict.
+
+    ``return_probs=True`` additionally returns ``(y_true, y_probs)`` for the
+    protocol-v3 selection loss, leaving the metrics dict schema untouched.
 
     ``predictions_path`` persists the per-slide predictions so any
     confusion-matrix-derived metric added later is a recomputation rather than a

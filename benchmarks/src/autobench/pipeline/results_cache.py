@@ -86,6 +86,12 @@ def fingerprint_payload(
             so a change there must invalidate the cache just the same.
     """
     payload = exp_cfg.to_dict()
+    # Protocol discriminator: the checkpoint-selection rule is part of what a
+    # cached metrics.json MEANS. Without this, results selected under an older
+    # protocol (e.g. preprint-v2's per-arm metric-max rules) silently resume
+    # as if they were comparable to v3 loss-selected runs.
+    from autobench.campaign import PROTOCOL_VERSION  # local: avoid import cycle
+    payload["protocol_version"] = PROTOCOL_VERSION
     task = payload.get("task")
     if isinstance(task, dict):
         for key in _TASK_KEYS_NOT_IN_FINGERPRINT:
