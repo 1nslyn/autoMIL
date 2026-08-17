@@ -29,7 +29,7 @@ def _write_result(*, status: str, partial: bool, variant_dispatched: str | None 
     """Write result.json conforming to automil/schemas/result.schema.json."""
     payload: dict = {
         "status": status,
-        "composite": float(_state["accuracy"]),
+        "primary_value": float(_state["accuracy"]),
         "metrics": {
             "accuracy": float(_state["accuracy"]),
             "f1": float(_state["f1"]),

@@ -8,7 +8,7 @@ CPTAC-PDAC n=105) a discovery sweep screening ~60 candidates keeps the maximum
 of 60 draws from that noise distribution — an apparent lift that does not
 survive to the sealed test block.
 
-CR-4 emits the cross-fold SE of the composite (``composite_se``) alongside it and
+CR-4 emits the cross-fold SE of the primary_value (``primary_se``) alongside it and
 makes the margin actually applied ``max(predeclared δ, se_multiplier × parent SE)``.
 Two invariants the tests below pin down:
 
@@ -31,7 +31,7 @@ from automil.graph import (
     _accept_margin,
     _se_multiplier,
     effective_accept_margin,
-    node_composite_se,
+    node_primary_se,
 )
 from automil.scoring import cross_fold_se
 
@@ -62,19 +62,19 @@ def test_cross_fold_se_of_identical_folds_is_zero_not_none():
     assert cross_fold_se([0.70, 0.70, 0.70]) == 0.0
 
 
-# --- node_composite_se / _se_multiplier: the readers ------------------------
+# --- node_primary_se / _se_multiplier: the readers ------------------------
 
-def test_node_composite_se_reads_top_level_key():
-    assert node_composite_se({"composite_se": 0.04}) == 0.04
+def test_node_primary_value_se_reads_top_level_key():
+    assert node_primary_se({"primary_se": 0.04}) == 0.04
 
 
-def test_node_composite_se_is_none_for_legacy_or_degenerate_nodes():
-    assert node_composite_se(None) is None
-    assert node_composite_se({}) is None                       # legacy node
-    assert node_composite_se({"composite_se": None}) is None   # <2 valid folds
-    assert node_composite_se({"composite_se": "bad"}) is None
-    assert node_composite_se({"composite_se": float("nan")}) is None
-    assert node_composite_se({"composite_se": -0.01}) is None  # nonsense → unmeasured
+def test_node_primary_value_se_is_none_for_legacy_or_degenerate_nodes():
+    assert node_primary_se(None) is None
+    assert node_primary_se({}) is None                       # legacy node
+    assert node_primary_se({"primary_se": None}) is None   # <2 valid folds
+    assert node_primary_se({"primary_se": "bad"}) is None
+    assert node_primary_se({"primary_se": float("nan")}) is None
+    assert node_primary_se({"primary_se": -0.01}) is None  # nonsense → unmeasured
 
 
 def test_se_multiplier_defaults_and_safety():
@@ -92,35 +92,35 @@ def test_se_multiplier_defaults_and_safety():
 
 def test_effective_margin_raises_predeclared_delta_to_the_noise_floor():
     meta = {"scoring": {"accept_margin": 0.015, "se_multiplier": 1.0}}
-    assert effective_accept_margin(meta, {"composite_se": 0.04}) == pytest.approx(0.04)
+    assert effective_accept_margin(meta, {"primary_se": 0.04}) == pytest.approx(0.04)
 
 
 def test_effective_margin_is_monotone_never_below_predeclared_delta():
     """A tight parent CV must NOT relax a predeclared campaign margin."""
     meta = {"scoring": {"accept_margin": 0.05, "se_multiplier": 1.0}}
-    assert effective_accept_margin(meta, {"composite_se": 0.002}) == pytest.approx(0.05)
-    assert effective_accept_margin(meta, {"composite_se": 0.0}) == pytest.approx(0.05)
+    assert effective_accept_margin(meta, {"primary_se": 0.002}) == pytest.approx(0.05)
+    assert effective_accept_margin(meta, {"primary_se": 0.0}) == pytest.approx(0.05)
 
 
 def test_effective_margin_falls_back_to_delta_when_se_unmeasured():
     """Legacy / partial parent → predeclared δ, never 0.0-by-accident."""
     meta = {"scoring": {"accept_margin": 0.05, "se_multiplier": 1.0}}
     assert effective_accept_margin(meta, {}) == pytest.approx(0.05)
-    assert effective_accept_margin(meta, {"composite_se": None}) == pytest.approx(0.05)
+    assert effective_accept_margin(meta, {"primary_se": None}) == pytest.approx(0.05)
     assert effective_accept_margin(meta, None) == pytest.approx(0.05)
 
 
 def test_effective_margin_scales_with_se_multiplier():
     meta = {"scoring": {"accept_margin": 0.0, "se_multiplier": 2.0}}
-    assert effective_accept_margin(meta, {"composite_se": 0.03}) == pytest.approx(0.06)
+    assert effective_accept_margin(meta, {"primary_se": 0.03}) == pytest.approx(0.06)
     meta_off = {"scoring": {"accept_margin": 0.0, "se_multiplier": 0.0}}
-    assert effective_accept_margin(meta_off, {"composite_se": 0.03}) == 0.0
+    assert effective_accept_margin(meta_off, {"primary_se": 0.03}) == 0.0
 
 
 def test_effective_margin_defaults_to_one_se_without_config():
     """se_multiplier absent → 1.0 (one SE), not 0 (feature silently off)."""
     assert effective_accept_margin({"scoring": {"accept_margin": 0.0}},
-                                   {"composite_se": 0.03}) == pytest.approx(0.03)
+                                   {"primary_se": 0.03}) == pytest.approx(0.03)
 
 
 # --- integration: keep/discard actually moves --------------------------------
@@ -130,41 +130,41 @@ def graph(tmp_path):
     return ExperimentGraph(tmp_path / "graph.json")
 
 
-def _executed(g, parent_id, composite, composite_se=None, status="keep"):
-    metrics = {"composite": composite}
-    if composite_se is not None:
-        metrics["composite_se"] = composite_se
+def _executed(g, parent_id, primary_value, primary_se=None, status="keep"):
+    metrics = {"primary_value": primary_value}
+    if primary_se is not None:
+        metrics["primary_se"] = primary_se
     return g.add_executed(parent_id=parent_id, description="x", techniques=[],
                           status=status, metrics=metrics)
 
 
-def test_add_executed_records_composite_se_top_level(graph):
-    nid = _executed(graph, None, 0.80, composite_se=0.04)
-    assert graph.get_node(nid)["composite_se"] == 0.04
+def test_add_executed_records_primary_value_se_top_level(graph):
+    nid = _executed(graph, None, 0.80, primary_se=0.04)
+    assert graph.get_node(nid)["primary_se"] == 0.04
 
 
 def test_add_executed_records_none_when_se_absent(graph):
     nid = _executed(graph, None, 0.80)
-    assert graph.get_node(nid)["composite_se"] is None
+    assert graph.get_node(nid)["primary_se"] is None
 
 
 def test_noise_floor_discards_a_within_se_child(graph):
     """THE DEFECT: at δ=0.0 a +0.02 child on a ±0.04-SE parent was kept."""
-    parent = _executed(graph, None, 0.80, composite_se=0.04)
-    child = _executed(graph, parent, 0.82, composite_se=0.04)
+    parent = _executed(graph, None, 0.80, primary_se=0.04)
+    child = _executed(graph, parent, 0.82, primary_se=0.04)
     graph._reevaluate_descendants(parent)
     assert graph.get_node(child)["status"] == "discard"   # +0.02 < 1 SE = 0.04
 
 
 def test_noise_floor_still_keeps_a_beyond_se_child(graph):
-    parent = _executed(graph, None, 0.80, composite_se=0.04)
-    child = _executed(graph, parent, 0.86, composite_se=0.04)
+    parent = _executed(graph, None, 0.80, primary_se=0.04)
+    child = _executed(graph, parent, 0.86, primary_se=0.04)
     graph._reevaluate_descendants(parent)
     assert graph.get_node(child)["status"] == "keep"      # +0.06 > 1 SE = 0.04
 
 
 def test_legacy_parent_without_se_keeps_prior_behaviour(graph):
-    """Nodes already on disk carry no composite_se → gate is unchanged (δ)."""
+    """Nodes already on disk carry no primary_se → gate is unchanged (δ)."""
     parent = _executed(graph, None, 0.80)
     child = _executed(graph, parent, 0.81)
     graph._reevaluate_descendants(parent)
@@ -178,16 +178,16 @@ def test_child_se_cannot_lower_its_own_bar(graph):
     screened candidates would also be an argmin over their margins — selecting
     on the gate itself. Pin the bar to the parent.
     """
-    parent = _executed(graph, None, 0.80, composite_se=0.04)
-    child = _executed(graph, parent, 0.82, composite_se=0.0001)
+    parent = _executed(graph, None, 0.80, primary_se=0.04)
+    child = _executed(graph, parent, 0.82, primary_se=0.0001)
     graph._reevaluate_descendants(parent)
     assert graph.get_node(child)["status"] == "discard"
 
 
 def test_predeclared_delta_wins_over_a_tight_parent_cv(graph):
     graph.meta["scoring"]["accept_margin"] = 0.05
-    parent = _executed(graph, None, 0.80, composite_se=0.001)
-    child = _executed(graph, parent, 0.83, composite_se=0.001)
+    parent = _executed(graph, None, 0.80, primary_se=0.001)
+    child = _executed(graph, parent, 0.83, primary_se=0.001)
     graph._reevaluate_descendants(parent)
     assert graph.get_node(child)["status"] == "discard"   # +0.03 < δ=0.05
 

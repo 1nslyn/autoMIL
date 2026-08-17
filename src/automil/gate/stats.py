@@ -21,7 +21,7 @@ def paired_wilcoxon_with_bootstrap(
     """Paired one-sided Wilcoxon + BCa bootstrap CI on per-cell deltas.
 
     Args:
-        deltas: 1-D ndarray of (candidate_composite_i - parent_composite_i)
+        deltas: 1-D ndarray of (candidate_primary_value_i - parent_primary_value_i)
             paired by held-out cell_id.
         p_threshold: Bonferroni-corrected alpha — caller pre-divides by K
             via bonferroni_correct(). Compare scipy's raw pvalue against this.

@@ -15,7 +15,7 @@ GOOD_VARIANT = '''"""v0001 variant.
 
 Parent: clam_mb
 Base commit: abc1234
-Composite: 0.5
+Primary_value: 0.5
 Node ID: node_0001
 Mutations:
 """
@@ -24,7 +24,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="v0001", kind="model", parent="clam_mb",
-    base_commit="abc1234", composite=0.5, node_id="node_0001",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0001",
     created_at="2026-05-02T10:00:00Z",
 ))
 class V0001(ModelVariant):
@@ -40,7 +40,7 @@ DOCSTRING_MISMATCH_VARIANT = '''"""v_mismatch variant.
 
 Parent: clam_mb
 Base commit: abc1234
-Composite: 0.81
+Primary_value: 0.81
 Node ID: node_0001
 Mutations:
 """
@@ -49,7 +49,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="v_mismatch", kind="model", parent="clam_mb",
-    base_commit="abc1234", composite=0.5, node_id="node_0001",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0001",
     created_at="2026-05-02T10:00:00Z",
 ))
 class VMismatch(ModelVariant):
@@ -152,7 +152,7 @@ def test_registry_consistency_happy(tmp_path, cli_runner, monkeypatch):
     manifest_data = {
         "spec": {
             "name": "v0001", "kind": "model", "parent": "clam_mb",
-            "base_commit": "abc1234", "composite": 0.5, "node_id": "node_0001",
+            "base_commit": "abc1234", "primary_value": 0.5, "node_id": "node_0001",
             "created_at": "2026-05-02T10:00:00Z", "mutations": [],
         },
         "source_node": "node_0001",
@@ -191,7 +191,7 @@ def test_registry_manifest_mismatch_issue(tmp_path, cli_runner, monkeypatch):
     manifest_data = {
         "spec": {
             "name": "v_mismatch", "kind": "model", "parent": "clam_mb",
-            "base_commit": "abc1234", "composite": 0.5, "node_id": "node_0001",
+            "base_commit": "abc1234", "primary_value": 0.5, "node_id": "node_0001",
             "created_at": "2026-05-02T10:00:00Z", "mutations": [],
         },
         "source_node": "node_0001",
@@ -203,7 +203,7 @@ def test_registry_manifest_mismatch_issue(tmp_path, cli_runner, monkeypatch):
 
     from automil.cli import main
     result = cli_runner.invoke(main, ["check"])
-    # docstring composite=0.81, manifest=0.5 -> mismatch.
+    # docstring primary_value=0.81, manifest=0.5 -> mismatch.
     assert "mismatches docstring" in result.output
 
 

@@ -10,7 +10,7 @@ Two log contracts, both born from the canary diagnosis:
 2. ``[selected] epoch=<k> source=<best|final|untrained>`` — exactly once per
    fold, at the point the selected weights are fixed, so any epoch-selection-
    coupled axis can be judged with the logged selected epochs rather than the
-   headline composite alone. The ``source`` token is one convention across
+   headline primary_value alone. The ``source`` token is one convention across
    ALL arms and both vendored libs, because ``epoch=-1`` alone is ambiguous:
      - ``source=best``      a val-selected checkpoint was restored;
      - ``source=final``     the final trained weights were kept (no restore);

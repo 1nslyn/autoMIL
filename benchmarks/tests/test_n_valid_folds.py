@@ -101,8 +101,8 @@ def test_ordinal_held_out_carries_clamp_then_mean_test_qwk():
     # give 0.1333 — the wrong function.
     assert r["held_out"]["test_qwk"] == pytest.approx(0.20)
     assert r["metrics"]["val_qwk"] == pytest.approx(0.20)
-    # qwk is recorded evidence, never a vote: composite is still val_auc.
-    assert r["composite"] == pytest.approx((0.70 + 0.72 + 0.68) / 3)
+    # qwk is recorded evidence, never a vote: primary_value is still val_auc.
+    assert r["primary_value"] == pytest.approx((0.70 + 0.72 + 0.68) / 3)
 
 
 def test_non_ordinal_summary_never_carries_test_qwk():
@@ -160,19 +160,19 @@ def test_validation_fold_evidence_is_public_and_fold_indexed():
         {
             "fold_index": 0,
             "metrics": {"val_auc": 0.70, "val_bacc": 0.6},
-            "composite": pytest.approx(0.70),
+            "primary_value": pytest.approx(0.70),
             "val_predictions_sha256": None,
         },
         {
             "fold_index": 1,
             "metrics": {"val_auc": 0.72, "val_bacc": 0.6},
-            "composite": pytest.approx(0.72),
+            "primary_value": pytest.approx(0.72),
             "val_predictions_sha256": None,
         },
         {
             "fold_index": 2,
             "metrics": {"val_auc": 0.68, "val_bacc": 0.6},
-            "composite": pytest.approx(0.68),
+            "primary_value": pytest.approx(0.68),
             "val_predictions_sha256": None,
         },
     ]
@@ -180,11 +180,11 @@ def test_validation_fold_evidence_is_public_and_fold_indexed():
                for fold in result["validation_folds"])
 
 
-def test_invalid_fold_is_visible_but_never_given_a_numeric_composite():
+def test_invalid_fold_is_visible_but_never_given_a_numeric_primary_value():
     m = _load_run_experiment()
     result = m.summary_to_result_json(_cls_summary([0.70, NAN]), 10.0)
     assert result["validation_folds"][1]["fold_index"] == 1
-    assert result["validation_folds"][1]["composite"] is None
+    assert result["validation_folds"][1]["primary_value"] is None
 
 
 def test_survival_selection_uses_fold_mean_not_pooled_stage_value():
@@ -199,7 +199,7 @@ def test_survival_selection_uses_fold_mean_not_pooled_stage_value():
         "fold_indices": [3, 4],
     }
     result = m.summary_to_result_json(summary, 5.0)
-    assert result["composite"] == pytest.approx(0.60)
-    assert [fold["composite"] for fold in result["validation_folds"]] == [
+    assert result["primary_value"] == pytest.approx(0.60)
+    assert [fold["primary_value"] for fold in result["validation_folds"]] == [
         pytest.approx(0.55), pytest.approx(0.65),
     ]

@@ -2,9 +2,9 @@
 
 DTFD-MIL's source uses **bare** module names: its ``utils.py`` is imported as
 ``import utils`` and ``Model/Attention.py`` does ``from Model.network import
-Classifier_1fc``. Both ``clam/_imports.py`` and ``smmile/_imports.py`` register
+Classifier_1fc``. ``clam/_imports.py`` registers
 a *different* ``utils`` package (``utils.utils``, ``utils.core_utils``) on
-``sys.path``. Under ``max_tasks_per_child > 1`` a CLAM/SMMILe experiment can run
+``sys.path``. Under ``max_tasks_per_child > 1`` a CLAM experiment can run
 before a DTFD one in the same process, leaving ``sys.modules['utils']`` pointing
 at the wrong package -- so a naive ``sys.path.insert`` + ``import utils`` would
 silently bind the wrong module (no ``get_cam_1d``) and corrupt the arm.
@@ -46,7 +46,7 @@ def _load_dtfd_modules() -> dict[str, object]:
     ``Model.Attention``'s ``from Model.network import Classifier_1fc`` resolve to
     DTFD's own network during load. We snapshot and restore any pre-existing
     ``Model``/``Model.network``/``Model.Attention``/``utils`` entries so a
-    CLAM/SMMILe run in the same process is left exactly as we found it.
+    CLAM run in the same process is left exactly as we found it.
     """
     guarded = ("Model", "Model.network", "Model.Attention", "utils")
     saved = {key: sys.modules.get(key) for key in guarded}
@@ -59,7 +59,7 @@ def _load_dtfd_modules() -> dict[str, object]:
         network = _load_module_from_path("Model.network", _MODEL_DIR / "network.py")
         attention = _load_module_from_path("Model.Attention", _MODEL_DIR / "Attention.py")
         # DTFD's top-level utils.py — loaded under a private name so it never
-        # collides with CLAM/SMMILe's ``utils`` package.
+        # collides with CLAM's ``utils`` package.
         dtfd_utils = _load_module_from_path("_autobench_dtfd_utils", _DTFD_DIR / "utils.py")
 
         return {

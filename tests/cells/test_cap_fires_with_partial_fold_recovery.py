@@ -1,7 +1,7 @@
 """Pitfall-4 anti-acceptance gate (CAP-03, CAP-04 / D-126).
 
 Goal-backward verifier for Phase 4: cap-firing must produce a usable
-partial composite, NOT corrupt results.tsv. budget_seconds=60 here is
+partial primary_value, NOT corrupt results.tsv. budget_seconds=60 here is
 a TEST-ONLY value chosen to make the test executable in seconds — the
 framework property is the *mechanism*, not the *value*
 (paper_campaign_vs_framework rule; Leo's paper campaign uses its own
@@ -12,7 +12,7 @@ Composes the full chain end-to-end:
   -> aggregate_folds -> reconcile_budget_kill -> graph._reevaluate_descendants
 
 Fragile Invariant #6 defence (CONCERNS.md): descendants are recomputed
-against the PARTIAL composite (0.82), NOT zero. A descendant that beats
+against the PARTIAL primary_value (0.82), NOT zero. A descendant that beats
 0.82 stays "keep"; one that beats zero but loses to 0.82 flips to "discard".
 """
 from __future__ import annotations
@@ -68,7 +68,7 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
                 "fold_index": i, "fold_count": 5, "status": "completed",
                 "metrics": {"val_auc": comp, "val_bacc": comp,
                             "test_auc": comp, "test_bacc": comp},
-                "composite": comp, "elapsed_seconds": 1, "peak_vram_mb": 1000,
+                "primary_value": comp, "elapsed_seconds": 1, "peak_vram_mb": 1000,
             }
             (sealed / f"fold_{i}_result.json").write_text(json.dumps(payload))
             sys.stdout.flush()
@@ -138,11 +138,11 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
     assert result["status"] == "partial", f"expected partial, got {result['status']}"
     assert result["partial_folds"] == 3
     assert result["expected_folds"] == 5
-    assert result["composite"] > 0.0, (
-        "composite must NOT be zero (Fragile Invariant #6 defence)"
+    assert result["primary_value"] > 0.0, (
+        "primary_value must NOT be zero (Fragile Invariant #6 defence)"
     )
-    assert abs(result["composite"] - 0.82) < 0.01, (
-        "composite must be mean of [0.80, 0.82, 0.84]"
+    assert abs(result["primary_value"] - 0.82) < 0.01, (
+        "primary_value must be mean of [0.80, 0.82, 0.84]"
     )
 
     # 7. Simulate the daemon's reconcile pathway end-to-end via reconcile_budget_kill.
@@ -159,7 +159,7 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
 
     assert payload["status"] == "partial"
     assert payload["partial_folds"] == 3
-    assert payload["composite"] > 0.0
+    assert payload["primary_value"] > 0.0
     assert payload.get("metadata", {}).get("budget_killed") is True
 
     # 8. D-10 (REC-02): reconcile_budget_kill no longer rewrites result.json —
@@ -168,7 +168,7 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
     assert payload.get("metadata", {}).get("budget_killed") is True
 
     # 9. Fragile Invariant #6 defence: real-graph descendant cascade against the
-    #    PARTIAL composite (0.82), NOT zero. This is what makes Pitfall-4 single-file
+    #    PARTIAL primary_value (0.82), NOT zero. This is what makes Pitfall-4 single-file
     #    load-bearing — without this step, only the SIGTERM/reconcile chain is verified.
     #
     #    PINNED API (verified against src/automil/graph.py at planning time):
@@ -183,40 +183,40 @@ def test_cap_fires_with_partial_fold_recovery(tmp_path: Path):
 
     eg = ExperimentGraph(tmp_path / "descendant_graph.json")
 
-    # Parent node with weak composite/AUC/BACC (0.50)
+    # Parent node with weak primary_value/AUC/BACC (0.50)
     parent_nid = eg.add_executed(
         parent_id=None, description="parent", techniques=[],
-        metrics={"composite": 0.50, "test_auc": 0.50, "test_bacc": 0.50},
+        metrics={"primary_value": 0.50, "test_auc": 0.50, "test_bacc": 0.50},
         status="keep",
     )
-    # Cap-killed node registered with the PARTIAL composite (0.82)
+    # Cap-killed node registered with the PARTIAL primary_value (0.82)
     capkill_nid = eg.add_executed(
         parent_id=parent_nid, description="cap-killed (partial)", techniques=[],
-        metrics={"composite": 0.82, "test_auc": 0.82, "test_bacc": 0.82},
+        metrics={"primary_value": 0.82, "test_auc": 0.82, "test_bacc": 0.82},
         status="keep",
     )
-    # Descendant that BEATS the partial composite/AUC/BACC (0.85) — must stay "keep"
+    # Descendant that BEATS the partial primary_value/AUC/BACC (0.85) — must stay "keep"
     better_nid = eg.add_executed(
         parent_id=capkill_nid, description="better than partial", techniques=[],
-        metrics={"composite": 0.85, "test_auc": 0.85, "test_bacc": 0.85},
+        metrics={"primary_value": 0.85, "test_auc": 0.85, "test_bacc": 0.85},
         status="keep",
     )
-    # Descendant that LOSES to partial composite (0.70 < 0.82) but beats zero —
-    # must flip to "discard" if cascade ran against partial composite correctly.
+    # Descendant that LOSES to partial primary_value (0.70 < 0.82) but beats zero —
+    # must flip to "discard" if cascade ran against partial primary_value correctly.
     # If it stays "keep", the cascade ran against zero — Fragile Invariant #6 broken.
     worse_nid = eg.add_executed(
         parent_id=capkill_nid,
         description="worse than partial, beats zero",
         techniques=[],
-        metrics={"composite": 0.70, "test_auc": 0.70, "test_bacc": 0.70},
+        metrics={"primary_value": 0.70, "test_auc": 0.70, "test_bacc": 0.70},
         status="keep",
     )
     eg._reevaluate_descendants(capkill_nid)
 
     assert eg.get_node(better_nid)["status"] == "keep", (
-        "Descendant beating partial composite 0.82 should remain 'keep'."
+        "Descendant beating partial primary_value 0.82 should remain 'keep'."
     )
     assert eg.get_node(worse_nid)["status"] == "discard", (
-        "Descendant losing to partial composite 0.82 should flip to 'discard'. "
+        "Descendant losing to partial primary_value 0.82 should flip to 'discard'. "
         "If it stayed 'keep', the cascade ran against zero — Fragile Invariant #6 broken."
     )

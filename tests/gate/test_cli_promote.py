@@ -66,7 +66,7 @@ def project_with_candidate(tmp_path):
                 "parent_id": None,
                 "type": "executed",
                 "status": "keep",
-                "composite": _PARENT_COMPOSITE,
+                "primary_value": _PARENT_COMPOSITE,
                 "description": "parent node",
                 "overlay_dir": str(tmp_path / "archive" / "node_0001"),
             },
@@ -75,7 +75,7 @@ def project_with_candidate(tmp_path):
                 "parent_id": "node_0001",
                 "type": "executed",
                 "status": "candidate",
-                "composite": _CANDIDATE_COMPOSITE,
+                "primary_value": _CANDIDATE_COMPOSITE,
                 "description": "candidate node",
                 "overlay_dir": str(tmp_path / "archive" / "node_0002"),
             },
@@ -94,7 +94,7 @@ def project_with_candidate(tmp_path):
         K=_MANIFEST_K,
         p_threshold=_MANIFEST_P_THRESHOLD,
         bootstrap_reps=100,  # small for speed in tests
-        win_definition="delta_composite > 0 AND p < p_threshold",
+        win_definition="delta_primary_value > 0 AND p < p_threshold",
         schema_version="gate-v1",
     )
     write_manifest(manifest, manifests_dir)
@@ -135,8 +135,8 @@ def _make_fake_evaluate(deltas: list[float], skipped: list[str] | None = None):
                 "encoder": "uni_v2",
                 "task": "high_grade",
                 "child_node_id": f"child_{i:04d}",
-                "candidate_composite": _PARENT_COMPOSITE + d,
-                "parent_composite": _PARENT_COMPOSITE,
+                "candidate_primary_value": _PARENT_COMPOSITE + d,
+                "parent_primary_value": _PARENT_COMPOSITE,
                 "delta": d,
                 "status": "completed",
             }

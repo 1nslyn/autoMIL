@@ -107,8 +107,8 @@ def quadratic_weighted_kappa(
 
     Returns the RAW value, which lives in [-1, 1] and is negative when
     agreement is worse than chance. Clamping is a selection-policy decision and
-    belongs to the caller that builds the composite (see run_experiment.py), not
-    to the measurement -- the campaign's fold-composite validator requires
+    belongs to the caller that builds the primary_value (see run_experiment.py), not
+    to the measurement -- the campaign's fold-primary_value validator requires
     [0, 1], but a diagnostic should still be able to say "worse than chance".
 
     NaN when kappa is undefined (a fold where every sample, true and predicted,
@@ -185,10 +185,10 @@ def _macro_sensitivity_specificity(cm: np.ndarray) -> tuple[float, float]:
 
     These were ``float("nan")`` for every multi-class task until 2026-08-10. The
     NaN itself was contained -- these are diagnostics, never in ``metrics`` and
-    never in ``composite`` -- but it serialized into result.json as a bare ``NaN``
+    never in ``primary_value`` -- but it serialized into result.json as a bare ``NaN``
     token, which the orchestrator's ingestion parser rejects outright (CR-1a).
     Every 3-class run (CPTAC-PDAC, TCGA-HNSC) was therefore recorded as a crash
-    despite carrying a perfectly good validation composite. Note the SERIALIZER
+    despite carrying a perfectly good validation primary_value. Note the SERIALIZER
     fix is what repaired that; naming these honestly is a separate concern.
 
     A class absent from ``y_true`` has an undefined recall, and one that consumes
@@ -372,7 +372,7 @@ def compute_confidence_intervals(
     ``mean``, ``std`` (ddof=1)
         Unchanged by the method switch. ``mean`` is what
         ``run_experiment.py::summary_to_result_json`` reads, so no selection
-        signal, composite, or keep/discard decision moves because of H-5a.
+        signal, primary_value, or keep/discard decision moves because of H-5a.
     ``ci_low``, ``ci_high``
         The interval. Widens ~1.6x relative to the old percentile bootstrap.
     ``method``

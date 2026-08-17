@@ -2,13 +2,13 @@
 
 Locked decisions enforced verbatim:
 - D-10: walk only nodes where type == "executed" AND status == "keep".
-- D-11: composite formula = existing per-node `composite` field (Phase 0 does not
+- D-11: primary_value formula = existing per-node `primary_value` field (Phase 0 does not
   redefine; Phase 8/DEC-04 owns).
 - D-12: tie-break is lexicographic min on node_id.
 - D-13: --dry-run prints same line, does NOT write graph.json. Output uses literal
   Unicode `→` arrow (NOT ASCII `->`).
 - D-14: existing `automil reconcile` (no flag) behaviour unchanged.
-- D-19: `meta.best_node_id` and `meta.best_composite` are the only mutation targets.
+- D-19: `meta.best_node_id` and `meta.best_primary_value` are the only mutation targets.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from automil.graph import ExperimentGraph
 def _make_graph(graph_dir: Path, nodes: list[dict]) -> ExperimentGraph:
     """Build a graph at <graph_dir>/graph.json with the supplied node specs.
 
-    Each spec dict has keys: id, type, status, composite (and optionally others).
+    Each spec dict has keys: id, type, status, primary_value (and optionally others).
     Returns an ExperimentGraph loaded from the freshly-written file.
     """
     graph_dir.mkdir(parents=True, exist_ok=True)
@@ -34,12 +34,12 @@ def _make_graph(graph_dir: Path, nodes: list[dict]) -> ExperimentGraph:
     data = {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "best_node_id": None,
             "total_executed": 0,
             "total_proposed": 0,
             "next_id": 1,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": {},
@@ -50,7 +50,7 @@ def _make_graph(graph_dir: Path, nodes: list[dict]) -> ExperimentGraph:
             "id": n["id"],
             "type": n["type"],
             "status": n["status"],
-            "composite": n.get("composite", 0.0),
+            "primary_value": n.get("primary_value", 0.0),
             "metrics": n.get("metrics", {}),
             "techniques": n.get("techniques", []),
         }
@@ -63,23 +63,23 @@ def _make_graph(graph_dir: Path, nodes: list[dict]) -> ExperimentGraph:
 
 def test_basic_walk_picks_max_keep(tmp_path):
     g = _make_graph(tmp_path, [
-        {"id": "node_0001", "type": "executed", "status": "keep", "composite": 0.70},
-        {"id": "node_0002", "type": "executed", "status": "keep", "composite": 0.85},
-        {"id": "node_0003", "type": "executed", "status": "keep", "composite": 0.60},
+        {"id": "node_0001", "type": "executed", "status": "keep", "primary_value": 0.70},
+        {"id": "node_0002", "type": "executed", "status": "keep", "primary_value": 0.85},
+        {"id": "node_0003", "type": "executed", "status": "keep", "primary_value": 0.60},
     ])
     old_id, old_c, new_id, new_c = g.recompute_best()
     assert new_id == "node_0002"
     assert new_c == pytest.approx(0.85)
     assert g.meta["best_node_id"] == "node_0002"
-    assert g.meta["best_composite"] == pytest.approx(0.85)
+    assert g.meta["best_primary_value"] == pytest.approx(0.85)
 
 
 def test_excludes_non_keep_status(tmp_path):
     g = _make_graph(tmp_path, [
-        {"id": "node_0001", "type": "executed", "status": "keep", "composite": 0.70},
-        {"id": "node_0002", "type": "executed", "status": "discard", "composite": 0.95},
-        {"id": "node_0003", "type": "executed", "status": "crash", "composite": 0.99},
-        {"id": "node_0004", "type": "executed", "status": "cancelled", "composite": 0.98},
+        {"id": "node_0001", "type": "executed", "status": "keep", "primary_value": 0.70},
+        {"id": "node_0002", "type": "executed", "status": "discard", "primary_value": 0.95},
+        {"id": "node_0003", "type": "executed", "status": "crash", "primary_value": 0.99},
+        {"id": "node_0004", "type": "executed", "status": "cancelled", "primary_value": 0.98},
     ])
     _, _, new_id, new_c = g.recompute_best()
     assert new_id == "node_0001"
@@ -88,18 +88,18 @@ def test_excludes_non_keep_status(tmp_path):
 
 def test_excludes_proposed_type(tmp_path):
     g = _make_graph(tmp_path, [
-        {"id": "node_0001", "type": "proposed", "status": "pending", "composite": 0.99},
-        {"id": "node_0002", "type": "executed", "status": "keep", "composite": 0.50},
+        {"id": "node_0001", "type": "proposed", "status": "pending", "primary_value": 0.99},
+        {"id": "node_0002", "type": "executed", "status": "keep", "primary_value": 0.50},
     ])
     _, _, new_id, _ = g.recompute_best()
     assert new_id == "node_0002"
 
 
 def test_lex_tiebreak_picks_min_node_id(tmp_path):
-    """D-12: equal composites resolve to the lexicographically smaller node_id."""
+    """D-12: equal primary_values resolve to the lexicographically smaller node_id."""
     g = _make_graph(tmp_path, [
-        {"id": "node_0125", "type": "executed", "status": "keep", "composite": 0.80},
-        {"id": "node_0048", "type": "executed", "status": "keep", "composite": 0.80},
+        {"id": "node_0125", "type": "executed", "status": "keep", "primary_value": 0.80},
+        {"id": "node_0048", "type": "executed", "status": "keep", "primary_value": 0.80},
     ])
     _, _, new_id, new_c = g.recompute_best()
     assert new_id == "node_0048"
@@ -108,26 +108,26 @@ def test_lex_tiebreak_picks_min_node_id(tmp_path):
 
 def test_no_keep_nodes_resets_meta(tmp_path):
     g = _make_graph(tmp_path, [
-        {"id": "node_0001", "type": "proposed", "status": "pending", "composite": 0.0},
-        {"id": "node_0002", "type": "executed", "status": "discard", "composite": 0.95},
+        {"id": "node_0001", "type": "proposed", "status": "pending", "primary_value": 0.0},
+        {"id": "node_0002", "type": "executed", "status": "discard", "primary_value": 0.95},
     ])
     # Pre-existing meta.best from some old state.
     g.meta["best_node_id"] = "node_0002"
-    g.meta["best_composite"] = 0.95
+    g.meta["best_primary_value"] = 0.95
     _, _, new_id, new_c = g.recompute_best()
     assert new_id is None
     assert new_c == 0.0
     assert g.meta["best_node_id"] is None
-    assert g.meta["best_composite"] == 0.0
+    assert g.meta["best_primary_value"] == 0.0
 
 
 def test_already_correct_is_idempotent(tmp_path):
     g = _make_graph(tmp_path, [
-        {"id": "node_0001", "type": "executed", "status": "keep", "composite": 0.70},
-        {"id": "node_0002", "type": "executed", "status": "keep", "composite": 0.85},
+        {"id": "node_0001", "type": "executed", "status": "keep", "primary_value": 0.70},
+        {"id": "node_0002", "type": "executed", "status": "keep", "primary_value": 0.85},
     ])
     g.meta["best_node_id"] = "node_0002"
-    g.meta["best_composite"] = 0.85
+    g.meta["best_primary_value"] = 0.85
     old_id, old_c, new_id, new_c = g.recompute_best()
     assert old_id == new_id == "node_0002"
     assert old_c == pytest.approx(new_c)
@@ -136,7 +136,7 @@ def test_already_correct_is_idempotent(tmp_path):
 def test_recompute_best_does_not_save(tmp_path):
     """recompute_best mutates in-memory only; caller decides whether to save."""
     g = _make_graph(tmp_path, [
-        {"id": "node_0001", "type": "executed", "status": "keep", "composite": 0.85},
+        {"id": "node_0001", "type": "executed", "status": "keep", "primary_value": 0.85},
     ])
     before = json.loads((tmp_path / "graph.json").read_text())
     g.recompute_best()
@@ -158,8 +158,8 @@ def _setup_cli_env(tmp_path: Path) -> tuple[Path, Path]:
     (automil_dir / "config.yaml").write_text("orchestrator: {}\n")
     (tmp_path / ".git").mkdir()
     nodes = [
-        {"id": "node_0001", "type": "executed", "status": "keep", "composite": 0.70},
-        {"id": "node_0002", "type": "executed", "status": "keep", "composite": 0.85},
+        {"id": "node_0001", "type": "executed", "status": "keep", "primary_value": 0.70},
+        {"id": "node_0002", "type": "executed", "status": "keep", "primary_value": 0.85},
     ]
     _make_graph(automil_dir, nodes)  # writes <automil_dir>/graph.json
     return automil_dir, automil_dir / "graph.json"
@@ -171,7 +171,7 @@ def test_cli_recompute_best_writes(tmp_path, monkeypatch):
     # Pre-set meta.best to something incorrect so we can detect the write.
     data = json.loads(graph_path.read_text())
     data["meta"]["best_node_id"] = "node_0001"
-    data["meta"]["best_composite"] = 0.70
+    data["meta"]["best_primary_value"] = 0.70
     graph_path.write_text(json.dumps(data, indent=2))
 
     from automil.cli import main
@@ -182,7 +182,7 @@ def test_cli_recompute_best_writes(tmp_path, monkeypatch):
     # Reload graph: should now be node_0002.
     reloaded = json.loads(graph_path.read_text())
     assert reloaded["meta"]["best_node_id"] == "node_0002"
-    assert reloaded["meta"]["best_composite"] == pytest.approx(0.85)
+    assert reloaded["meta"]["best_primary_value"] == pytest.approx(0.85)
 
 
 def test_cli_recompute_best_dry_run_does_not_write(tmp_path, monkeypatch):
@@ -190,7 +190,7 @@ def test_cli_recompute_best_dry_run_does_not_write(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     data = json.loads(graph_path.read_text())
     data["meta"]["best_node_id"] = "node_0001"  # incorrect
-    data["meta"]["best_composite"] = 0.70
+    data["meta"]["best_primary_value"] = 0.70
     graph_path.write_text(json.dumps(data, indent=2))
     before_mtime = graph_path.stat().st_mtime
     time.sleep(0.05)  # ensure mtime would actually advance if rewritten
@@ -219,15 +219,15 @@ def test_cli_output_format_changed(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     data = json.loads(graph_path.read_text())
     data["meta"]["best_node_id"] = "node_0001"
-    data["meta"]["best_composite"] = 0.70
+    data["meta"]["best_primary_value"] = 0.70
     graph_path.write_text(json.dumps(data, indent=2))
 
     from automil.cli import main
     runner = CliRunner()
     result = runner.invoke(main, ["reconcile", "--recompute-best", "--dry-run"])
     pattern_unicode = (
-        r"best_node_id: \S+ \(composite \d+\.\d{6}\) → "
-        r"\S+ \(composite \d+\.\d{6}\)"
+        r"best_node_id: \S+ \(primary_value \d+\.\d{6}\) → "
+        r"\S+ \(primary_value \d+\.\d{6}\)"
     )
     assert re.search(pattern_unicode, result.output), (
         f"Output did not match D-13 verbatim Unicode format:\n{result.output!r}"
@@ -245,14 +245,14 @@ def test_cli_output_format_unchanged(tmp_path, monkeypatch):
     # Pre-set meta.best CORRECTLY so recompute is a no-op.
     data = json.loads(graph_path.read_text())
     data["meta"]["best_node_id"] = "node_0002"
-    data["meta"]["best_composite"] = 0.85
+    data["meta"]["best_primary_value"] = 0.85
     graph_path.write_text(json.dumps(data, indent=2))
 
     from automil.cli import main
     runner = CliRunner()
     result = runner.invoke(main, ["reconcile", "--recompute-best", "--dry-run"])
     assert re.search(
-        r"best_node_id unchanged: \S+ \(composite \d+\.\d{6}\)",
+        r"best_node_id unchanged: \S+ \(primary_value \d+\.\d{6}\)",
         result.output,
     ), f"Output did not match D-13 unchanged format:\n{result.output!r}"
 
@@ -286,9 +286,9 @@ def test_candidate_and_registered_stay_in_the_best_walk(tmp_path):
 
     g = ExperimentGraph(path=tmp_path / "graph.json")
     low = g.add_executed(parent_id=None, description="low", techniques=[],
-                         metrics={"composite": 0.5}, status="keep")
+                         metrics={"primary_value": 0.5}, status="keep")
     high = g.add_executed(parent_id=None, description="high", techniques=[],
-                          metrics={"composite": 0.9}, status="keep")
+                          metrics={"primary_value": 0.9}, status="keep")
     g.recompute_best()
     assert g.meta["best_node_id"] == high
 

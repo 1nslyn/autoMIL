@@ -1,8 +1,8 @@
 """Helpers for tests/backends/test_node_0176_smoke.py (D-176 acceptance smoke).
 
 Synthesises a CCRCC node_0176-equivalent 1-fold experiment via the named backend.
-Returns the composite metric from result.json. Used by the parametrised
-acceptance smoke test to verify D-179 clause 7 (composite within +-0.005 of
+Returns the primary_value metric from result.json. Used by the parametrised
+acceptance smoke test to verify D-179 clause 7 (primary_value within +-0.005 of
 LocalBackend baseline across all three CI-runnable backends).
 """
 from __future__ import annotations
@@ -38,13 +38,13 @@ def _build_spec(node_id: str, project_root: Path, automil_dir: Path) -> JobSpec:
     )
 
 
-def _read_composite(workdir: Path) -> float:
-    """Read result.json from workdir; return composite. Raise if missing/malformed."""
+def _read_primary_value(workdir: Path) -> float:
+    """Read result.json from workdir; return primary_value. Raise if missing/malformed."""
     rj = workdir / "result.json"
     if not rj.exists():
         raise FileNotFoundError(f"result.json not produced at {rj}")
     payload = json.loads(rj.read_text())
-    return float(payload["composite"])
+    return float(payload["primary_value"])
 
 
 def _run_local(project_root: Path, automil_dir: Path) -> float:
@@ -53,7 +53,7 @@ def _run_local(project_root: Path, automil_dir: Path) -> float:
     This is the W-8 acceptable shortcut documented in the plan: LocalBackend.submit
     writes a queue file that a live daemon would pick up, but the test fixture has no
     live daemon. Instead, we run train.py directly — which is exactly what the daemon
-    would do — to verify the synthetic train.py produces composite=0.502 deterministically.
+    would do — to verify the synthetic train.py produces primary_value=0.502 deterministically.
     """
     workdir = automil_dir / "smoke_local_workdir"
     workdir.mkdir(parents=True, exist_ok=True)
@@ -62,7 +62,7 @@ def _run_local(project_root: Path, automil_dir: Path) -> float:
     train_dst = workdir / "train.py"
     train_dst.write_text(train_src.read_text())
     subprocess.run(["python", "train.py"], cwd=str(workdir), check=True)
-    return _read_composite(workdir)
+    return _read_primary_value(workdir)
 
 
 def _run_slurm_debug(project_root: Path, automil_dir: Path) -> float:
@@ -115,7 +115,7 @@ def _run_slurm_debug(project_root: Path, automil_dir: Path) -> float:
     # Worktree path follows the Runner convention (scoped per automil project).
     from automil.runner import Runner
     worktree_path = Runner(project_root, automil_dir).worktree_path("smoke_slurm_debug")
-    return _read_composite(worktree_path)
+    return _read_primary_value(worktree_path)
 
 
 def _run_ray_local(project_root: Path, automil_dir: Path) -> float:
@@ -160,14 +160,14 @@ def _run_ray_local(project_root: Path, automil_dir: Path) -> float:
         # Worktree path follows the Runner convention (scoped per automil project).
         from automil.runner import Runner
         worktree_path = Runner(project_root, automil_dir).worktree_path("smoke_ray_local")
-        return _read_composite(worktree_path)
+        return _read_primary_value(worktree_path)
     finally:
         if backend._we_started_ray:
             ray.shutdown()
 
 
 def run_node_0176_smoke(backend_name: str, project_root: Path, automil_dir: Path) -> float:
-    """Run the synthetic node_0176-equivalent experiment; return composite (D-176).
+    """Run the synthetic node_0176-equivalent experiment; return primary_value (D-176).
 
     Args:
         backend_name: one of {"local", "slurm-debug", "ray-local"}.
@@ -175,7 +175,7 @@ def run_node_0176_smoke(backend_name: str, project_root: Path, automil_dir: Path
         automil_dir: project_root / "automil" (orchestrator/ subdirs already created).
 
     Returns:
-        The composite metric from result.json.
+        The primary_value metric from result.json.
 
     Raises:
         ValueError on unknown backend_name; RuntimeError on dispatch failure;

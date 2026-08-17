@@ -23,11 +23,10 @@ baseline:
   model: "clam_mb"
   framework: "CLAM"
   test_auc: 0.0
-  composite: 0.0
+  primary_value: 0.0
 
 metrics:
-  primary: "composite"
-  composite_formula: "(test_auc + test_bacc) / 2"
+  primary: "val_auc"
   track: ["val_auc", "val_bacc", "test_auc", "test_bacc"]
 
 training:

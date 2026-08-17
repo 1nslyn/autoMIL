@@ -48,7 +48,7 @@ Coding Agent (Claude Code / Codex / OpenCode / DeepSeek-via-X)
     │  edits any file in the project, runs CLI
     ▼
 automil CLI  ─►  Variant Registry (Phase 1) + Experiment Graph
-    │              with composite-dominance keep/discard (Ladder margin)
+    │              with primary_value-dominance keep/discard (Ladder margin)
     │
     │  snapshots changed files; validates against
     │  registry.protected globs and the variant validator chain
@@ -62,7 +62,7 @@ Backend ABC  ─►  LocalBackend / SLURMBackend / RayBackend
 Isolated Execution  ─►  result.json (JSON-Schema validated at ingest)
     │                    + trajectory.jsonl (OpenTelemetry gen_ai.* + redaction)
     │
-    │  composite dominance / UCB ranking; cell budget tracking;
+    │  primary_value dominance / UCB ranking; cell budget tracking;
     │  generalization gate (paired Wilcoxon + bootstrap CI)
     ▼
 3D Dashboard (live SSE)
@@ -76,7 +76,7 @@ Isolated Execution  ─►  result.json (JSON-Schema validated at ingest)
 
 | Module | LOC | Role |
 |--------|----:|------|
-| `graph.py` | 833 | Experiment tree, UCB ranking, composite-dominance keep/discard, dict-spread metrics storage (D-200) |
+| `graph.py` | 833 | Experiment tree, UCB ranking, primary_value-dominance keep/discard, dict-spread metrics storage (D-200) |
 | `backends/_orchestrator_daemon.py` | 1595 | GPU scheduler daemon: best-fit bin packing, OOM detection, crash recovery, per-backend `running/` namespacing, JSON-Schema ingest validation |
 | `backends/base.py` | 232 | `Backend` ABC: `submit`, `poll`, `list_running`, `cancel`, `log_iter`, `healthcheck`; `JobState` enum; frozen `JobHandle` / `JobSpec` / `HealthReport` dataclasses |
 | `backends/local.py` | 620 | LocalBackend: subprocess + process-group SIGTERM; CUDA / ROCm / CPU healthcheck via `nvidia-smi` / `rocm-smi` / fallback |
@@ -126,12 +126,12 @@ automil/
 | **Variant registry, not runtime config** | 1 | Architectural changes need committed code modules. Config holds values, not callable code. Registry-only path reproduces a node end-to-end via `automil verify-repro`. |
 | **Backend ABC validated against ≥2 implementations IN-phase** | 2 | LocalBackend re-export shim + MockSLURMBackend fixture lock the contract against eventual-consistency status, opaque job IDs, fire-and-forget cancel, BEFORE Phase 6 inherits it. |
 | **Multi-runtime asset reorg with `_shared/` canonical + per-runtime overlays** | 3 | Avoid quadratic duplication across runtimes. `automil show-skill --runtime <r>` renders the merged result; ≥2 runtimes validated end-to-end. |
-| **Configurable per-cell time cap (mechanism, not value)** | 4 | Framework-enforced two-tier state machine (refuse-new at T-buffer, terminate at T) with per-fold checkpoint protocol; SIGTERM with 30s grace is the cap contract honored across all backends. `agent_active` replays Claude Code's native cumulative active-time metric (CLI + user active seconds, idle excluded), scraped from Claude's localhost Prometheus endpoint and bound by synchronous session hooks; `wall_clock` is the portable fallback. The duration and safety buffer are consumer-supplied via `automil/config.yaml` or per-cell CLI overrides. The framework fallback is 6h; the frozen preprint campaign pins 12 agent-active hours and 30 launches. Live cap enforcement trails the native counter by at most one daemon-poll interval; the `SessionEnd` hook captures the final value. Budget-killed runs reconcile to `executed` (with partial composite), never `crash`. |
+| **Configurable per-cell time cap (mechanism, not value)** | 4 | Framework-enforced two-tier state machine (refuse-new at T-buffer, terminate at T) with per-fold checkpoint protocol; SIGTERM with 30s grace is the cap contract honored across all backends. `agent_active` replays Claude Code's native cumulative active-time metric (CLI + user active seconds, idle excluded), scraped from Claude's localhost Prometheus endpoint and bound by synchronous session hooks; `wall_clock` is the portable fallback. The duration and safety buffer are consumer-supplied via `automil/config.yaml` or per-cell CLI overrides. The framework fallback is 6h; the frozen preprint campaign pins 12 agent-active hours and 30 launches. Live cap enforcement trails the native counter by at most one daemon-poll interval; the `SessionEnd` hook captures the final value. Budget-killed runs reconcile to `executed` (with partial primary_value), never `crash`. |
 | **Pre-registered manifest + paired statistical test** | 5 | Held-out cells invisible to the search agent; manual nomination by default; promotion-rate metric exposed via SSE. Pitfall-6 anti-acceptance gate enforces single-file isolation. |
 | **Pluggable backends as opt-in extras** | 6 | `uv sync` (no extras) keeps submitit and ray uninstalled. Per-backend `running/` namespacing prevents cross-backend corruption (D-168). |
 | **Hardware autodetect at init time, not runtime** | 7 | `LocalBackend.healthcheck()` reports detected hardware; `automil init` stamps detected GPU count, VRAM (`numpy.quantile(.95)` of empirical `vram_gb` when ≥10 rows), and concurrency defaults. Detect-and-warn pattern; never decides for the user. |
 | **Framework purity: zero `autobench` references in `src/automil/`** | 8 | autoMIL is generic; autobench is one consumer. `tests/test_framework_purity.py` enforces a grep gate with a 5-entry content-anchor allowlist. |
-| **Composite-only dominance, dict-spread metrics storage** | 8 | The framework no longer hardcodes the autobench 4-key composite recipe. `node["metrics"] = dict(metrics)`; the scalar `composite` is the single field used for ranking (since CR-1b it is recomputed at ingest from the validation `metrics` block, not trusted as supplied). |
+| **Primary_value-only dominance, dict-spread metrics storage** | 8 | The framework no longer hardcodes the autobench 4-key primary_value recipe. `node["metrics"] = dict(metrics)`; the scalar `primary_value` is the single field used for ranking (since CR-1b it is recomputed at ingest from the validation `metrics` block, not trusted as supplied). |
 | **`env.required` mandatory; no auto-injection** | 8 | `automil check` fails with `Missing required env var: <name>` BEFORE submit. `AUTOBENCH_ROOT` auto-injection removed; consumers declare what they need under `env.passthrough`. |
 
 ### Key innovation: git worktree overlay
@@ -158,8 +158,8 @@ exploitation (build on best results) with exploration (try under-explored
 branches). The agent uses `automil rank` to pick diverse experiments
 across branches.
 
-Keep/discard is computed by the framework via composite dominance gated by
-the Ladder keep-margin, over a `composite` the framework recomputes at
+Keep/discard is computed by the framework via primary_value dominance gated by
+the Ladder keep-margin, over a `primary_value` the framework recomputes at
 ingest (CR-1b); metrics are stored generically as
 `node["metrics"] = dict(metrics)` so the framework imposes no hardcoded
 key set.
@@ -179,12 +179,12 @@ states:
 
 Per-fold checkpoints (`fold_<i>_result.json`) ensure that SIGTERM during
 training preserves completed-fold work; budget-killed runs reconcile to
-`JobState.BUDGET_KILLED` with a partial composite, never `crash`.
+`JobState.BUDGET_KILLED` with a partial primary_value, never `crash`.
 
 ### Generalization gate (Phase 5)
 
 Stage A is exploration: the search agent submits to live cells, scoring
-against UCB / composite dominance. Promising nodes are nominated as candidates
+against UCB / primary_value dominance. Promising nodes are nominated as candidates
 (`automil nominate`); manual nomination is the v1.0 default to keep the
 gate honest. Stage B is generalization: a pre-registered held-out manifest
 (`gate_manifest.json`, git-committed BEFORE search starts via

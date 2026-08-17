@@ -12,7 +12,7 @@ autoMIL is an autonomous experiment framework that automates the **research iter
 autoMIL overlays an `automil/` subdirectory onto an existing git repo. It does NOT create train.py or prepare.py. The agent scopes the full codebase and determines what to edit.
 
 **Core modules:**
-- `graph.py` - Experiment tree tracking with UCB-inspired scoring and composite-score dominance (Ladder keep-margin) for keep/discard; the composite is validation-only (val-firewall)
+- `graph.py` - Experiment tree tracking with UCB-inspired scoring and primary-value dominance (Ladder keep-margin) for keep/discard; the primary_value is validation-only (val-firewall)
 - `runner.py` - Git worktree overlay for isolated parallel experiment execution
 - `backends/_orchestrator_daemon.py` - GPU scheduler daemon with best-fit bin packing (entrypoint at `orchestrator.py`)
 - `cli/` - Click-based CLI wrapping all operations
@@ -23,7 +23,7 @@ autoMIL overlays an `automil/` subdirectory onto an existing git repo. It does N
 - Experiments are tracked as a directed tree in `graph.json`, not a flat log
 - Each experiment stores only its changed files (overlay), not the full repo
 - The orchestrator runs experiments in git worktrees, overlaying modified files on a base commit
-- Keep/discard is decided by the framework via single-axis composite-score comparison, gated by a predeclared Ladder keep-margin (child kept iff `child.composite > parent.composite + margin`, where `margin = max(accept_margin, se_multiplier x the parent's composite_se)`; δ defaults to 0.0 in `meta.scoring`, seeded from `config.yaml`'s `scoring.accept_margin`). The composite is the **validation** selection signal (the val-firewall: test never drives selection), carried in `result.json` and recomputed by the framework at ingest from the validation `metrics` block (CR-1b), with `composite_se` recomputed from `validation_folds` when present (see D-200); held-out-named keys inside `metrics` fail the node closed
+- Keep/discard is decided by the framework via single-axis primary-value comparison, gated by a predeclared Ladder keep-margin (child kept iff `child.primary_value > parent.primary_value + margin`, where `margin = max(accept_margin, se_multiplier x the parent's primary_se)`; δ defaults to 0.0 in `meta.scoring`, seeded from `config.yaml`'s `scoring.accept_margin`). The primary_value is the **validation** selection signal (the val-firewall: test never drives selection), carried in `result.json` and recomputed by the framework at ingest from the validation `metrics` block (CR-1b), with `primary_se` recomputed from `validation_folds` when present (see D-200); held-out-named keys inside `metrics` fail the node closed
 - `results.tsv` is written solely by the orchestrator from `result.json`, never by train.py
 - `_recover_orphans()` only runs in the daemon loop (`run()`), never on construction (to prevent `status`/`stop` from corrupting live runs)
 - Viz dashboard binds 127.0.0.1 by default; opt in to LAN access via `viz.host` in config.yaml (no auth on the SSE stream)
@@ -96,7 +96,7 @@ Grouped by area: `test_graph*.py` (graph API, scoring, reconciliation),
 ## Result Contract
 
 Training scripts must write `result.json` to their working directory. `metrics`
-is the agent-facing **validation** block and `composite` is computed from it (the
+is the agent-facing **validation** block and `primary_value` is computed from it (the
 selection signal); test metrics go in a sealed `held_out` block that the
 orchestrator quarantines to `archive/<node>/certify.json` and reveals once via
 `automil certify` — never surfaced to any agent during search (the val-firewall):
@@ -105,7 +105,7 @@ orchestrator quarantines to `archive/<node>/certify.json` and reveals once via
   "status": "completed",
   "metrics": {"val_auc": 0.87, "val_bacc": 0.81},
   "held_out": {"test_auc": 0.87, "test_bacc": 0.83},
-  "composite": 0.84,
+  "primary_value": 0.84,
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500
 }
@@ -129,7 +129,7 @@ autoMIL/
 │   ├── datasets/         # Per-dataset YAML configs, grouped: tcga/ cptac/ other/ templates/
 │   ├── scripts/          # CLI: run_benchmark.py --dataset <name>
 │   ├── experiments/      # autoMIL overlays per dataset
-│   ├── lib/              # External deps (CLAM, nnMIL, SMMILe, TRIDENT)
+│   ├── lib/              # External deps (CLAM, nnMIL, TRIDENT)
 │   └── tests/            # autobench tests
 └── pyproject.toml        # Workspace root
 ```

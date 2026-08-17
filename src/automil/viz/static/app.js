@@ -81,7 +81,7 @@ function updateStats() {
     if (!graphData || !graphData.meta) return;
     document.getElementById('stat-executed').textContent = graphData.meta.total_executed || 0;
     document.getElementById('stat-proposed').textContent = graphData.meta.total_proposed || 0;
-    document.getElementById('stat-best').textContent = (graphData.meta.best_composite || 0).toFixed(3);
+    document.getElementById('stat-best').textContent = (graphData.meta.best_primary_value || 0).toFixed(3);
 }
 
 // ---------------------------------------------------------------------------
@@ -218,8 +218,8 @@ function renderDetailPanel() {
 
     document.getElementById('detail-id').textContent = node.id;
     document.getElementById('detail-status').innerHTML = statusBadge(node.status);
-    document.getElementById('detail-composite').textContent =
-        node.composite !== undefined ? node.composite.toFixed(4) : '-';
+    document.getElementById('detail-primary-value').textContent =
+        node.primary_value !== undefined ? node.primary_value.toFixed(4) : '-';
     document.getElementById('detail-type').textContent = node.type || '-';
 
     // Metrics
@@ -314,7 +314,7 @@ function buildGraphData(nodes) {
         graphNodes.push({
             id: n.id,
             status: n.status || 'discard',
-            composite: n.composite || 0,
+            primary_value: n.primary_value || 0,
             description: n.description || n.id,
             type: n.type || 'executed',
             isSpine: keepSpine.has(n.id),
@@ -343,7 +343,7 @@ function computeTreeFingerprint(gData) {
     gData.nodes.forEach(function (n) { byId[n.id] = n; });
     ids.forEach(function (id) {
         var n = byId[id];
-        parts.push(id + ':' + n.status + ':' + (n.composite || 0).toFixed(4) + ':' + (n.isSpine ? '1' : '0'));
+        parts.push(id + ':' + n.status + ':' + (n.primary_value || 0).toFixed(4) + ':' + (n.isSpine ? '1' : '0'));
     });
     var linkSig = gData.links.map(function (l) {
         var s = typeof l.source === 'object' ? l.source.id : l.source;
@@ -385,7 +385,7 @@ function renderTree3D() {
                 .showNavInfo(false)
                 .nodeRelSize(4)
                 .nodeVal(function (node) {
-                    return Math.max(1, (node.composite || 0) * 10 + 1);
+                    return Math.max(1, (node.primary_value || 0) * 10 + 1);
                 })
                 .nodeColor(function (node) {
                     return STATUS_COLORS[node.status] || '#475569';
@@ -394,8 +394,8 @@ function renderTree3D() {
                 .nodeThreeObject(function (node) {
                     var group = new THREE.Group();
 
-                    // Sphere — running/pending nodes lack composite, give them a visible floor
-                    var baseRadius = 2 + (node.composite || 0) * 8;
+                    // Sphere — running/pending nodes lack primary_value, give them a visible floor
+                    var baseRadius = 2 + (node.primary_value || 0) * 8;
                     if (node.status === 'running' || node.status === 'pending') {
                         baseRadius = Math.max(baseRadius, 4);
                     }
@@ -473,7 +473,7 @@ function renderTree3D() {
                     }
                 })
                 .nodeLabel(function (node) {
-                    var score = node.composite ? node.composite.toFixed(4) : '-';
+                    var score = node.primary_value ? node.primary_value.toFixed(4) : '-';
                     var statusColor = STATUS_COLORS[node.status] || '#475569';
                     return '<div class="graph-tooltip">' +
                         '<div class="tt-title">' + truncate(node.description, 40) + '</div>' +
@@ -536,7 +536,7 @@ function renderTree3D() {
 // ---------------------------------------------------------------------------
 function renderLeaderboard() {
     var nodes = getNodes().filter(function (n) { return n.type === 'executed'; });
-    nodes.sort(function (a, b) { return (b.composite || 0) - (a.composite || 0); });
+    nodes.sort(function (a, b) { return (b.primary_value || 0) - (a.primary_value || 0); });
     nodes = nodes.slice(0, 20);
 
     var tbody = document.querySelector('#leaderboard-table tbody');
@@ -555,7 +555,7 @@ function renderLeaderboard() {
         html += '<tr class="' + selected + '" data-node-id="' + node.id + '">' +
             '<td>' + (i + 1) + '</td>' +
             '<td>' + truncate(node.description || '-', 40) + '</td>' +
-            '<td>' + (node.composite || 0).toFixed(4) + '</td>' +
+            '<td>' + (node.primary_value || 0).toFixed(4) + '</td>' +
             '<td>' + formatDelta(node.parent_delta) + '</td>' +
             '<td>' + formatDelta(node.global_delta) + '</td>' +
             '<td>' + statusBadge(node.status) + '</td>' +

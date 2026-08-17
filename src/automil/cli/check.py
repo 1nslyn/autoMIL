@@ -211,8 +211,7 @@ def check():
                 f"scoring.formula {_formula!r} is not a known reducer "
                 "(mean | max | min | trust_reported) or a 'val_'-prefixed "
                 "metric selector (val_auc | val_c_index | ...). Arithmetic "
-                "expressions are not evaluated; document the recipe in "
-                "metrics.composite_formula instead."
+                "expressions are not evaluated."
             )
 
         # An existing graph.json FREEZES meta.scoring at seeding (setdefault
@@ -284,9 +283,9 @@ def check():
                     break  # one warning per editable root is sufficient
 
         # Check baseline
-        baseline_comp = config.get("baseline", {}).get("composite", 0)
+        baseline_comp = config.get("baseline", {}).get("primary_value", 0)
         if baseline_comp == 0:
-            warnings.append("baseline.composite is 0. Set this after running your first experiment.")
+            warnings.append("baseline.primary_value is 0. Set this after running your first experiment.")
 
         # P2.3: surface the resolved cell budget so the operator sees it at setup.
         from automil.cells import format_duration  # noqa: PLC0415

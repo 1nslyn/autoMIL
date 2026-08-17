@@ -367,7 +367,7 @@ def test_smoke_full_cycle_each_runtime(
             "test_auc":  0.87,
             "test_bacc": 0.83,
         },
-        "composite":       0.85,
+        "primary_value":       0.85,
         "elapsed_seconds": 4098,
         "peak_vram_mb":    4500,
     }
@@ -397,7 +397,7 @@ def test_smoke_full_cycle_each_runtime(
     rj = json.loads(result_path.read_text())
     assert rj["status"] == "completed"
     assert "metrics" in rj
-    assert "composite" in rj
+    assert "primary_value" in rj
 
     # trajectory.jsonl first-line metadata tags the correct runtime.
     metadata = read_metadata(traj_path)

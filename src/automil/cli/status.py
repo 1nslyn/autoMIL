@@ -21,7 +21,7 @@ def status():
         graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
         executed = sum(1 for n in graph.nodes.values() if n.get("type") == "executed")
         proposed = sum(1 for n in graph.nodes.values() if n.get("type") == "proposed")
-        best = graph.meta.get("best_composite", 0)
+        best = graph.meta.get("best_primary_value", 0)
         click.echo(f"Executed: {executed}  Proposed: {proposed}  Best: {best:.4f}")
 
         # GTE-06 / D-144: promotion rate + gate-health diagnostic

@@ -4,13 +4,13 @@ They were designed to be load-bearing for each other and it is worth proving,
 because the failure mode is a paper claim rather than a crash:
 
 * **H-4 alone would over-freeze.** Protecting ``pipeline/config.py`` and
-  ``run_experiment.py`` — the split entry point, the composite writer and the
+  ``run_experiment.py`` — the split entry point, the primary_value writer and the
   fold/seed dataclasses — takes away the only route an agent had to change a
   learning rate, because the shared transport was the only hyperparameter
   channel that existed. A search that cannot tune is not a search.
 * **H-3b alone would under-protect.** Giving every arm an explicit
   ``--hparams`` channel does nothing about the *other* channel: free-mode file
-  editing, which reaches ``splits.py`` and the composite writer, and which the
+  editing, which reaches ``splits.py`` and the primary_value writer, and which the
   agent skill actively instructs.
 
 The architecture-preserving campaign now draws the line more narrowly:
@@ -102,7 +102,7 @@ def project(tmp_path, monkeypatch):
 from automil.registry import PolicyVariant, VariantSpec, register
 @register(VariantSpec(
     name="identity", kind="policy", parent=None, base_commit="abc",
-    composite=0.5, node_id="n_0001",
+    primary_value=0.5, node_id="n_0001",
     created_at="2026-08-02T00:00:00+00:00",
 ))
 class Identity(PolicyVariant):

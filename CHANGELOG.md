@@ -8,6 +8,21 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **BREAKING: the "composite" concept is retired — single-metric optimization
+  is the contract.** The selection signal IS the declared primary validation
+  metric; the result-contract field `composite` is now `primary_value` and
+  `composite_se` is `primary_se` (graph nodes, `meta.best_primary_value`,
+  fold entries, results.tsv columns, viz, registry VariantSpec field +
+  `Primary_value:` doc label, and the scoring API follow). The write-only
+  `metrics.composite_formula` config key is deleted outright — the
+  declaration pair is `scoring.formula` + `metrics.primary` — and
+  `automil rank` prints the declared metric's name in its leaderboard
+  header. Training scripts emitting the old field fail loudly at ingest;
+  graph.json files predating the rename are migrated on load (schema 3).
+  SMMILe is removed entirely (pipeline adapter, vendored lib, tests): it
+  was never reachable from `--framework` and is not in the campaign.
+
+
 - **Protocol `preprint-v3`: per-task-family reporting + val-loss checkpoint
   selection.** The campaign's reporting primary is now the field's canonical
   metric per task family (binary/multiclass → `test_auc`, ordinal grade →

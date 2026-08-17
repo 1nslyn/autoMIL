@@ -29,7 +29,7 @@ decision summary (result, p_value, CI, wins).
 
 ## Per-cell deltas (paired vs node_0176's parent)
 
-| cell_id | dataset | encoder | task | parent_composite | candidate_composite | delta | wins |
+| cell_id | dataset | encoder | task | parent_primary_value | candidate_primary_value | delta | wins |
 |---------|---------|---------|------|------------------|---------------------|-------|------|
 | _tbd_   | ccrcc   | _tbd_   | _tbd_ | _tbd_           | _tbd_               | _tbd_ | _tbd_ |
 | _tbd_   | ccrcc   | _tbd_   | _tbd_ | _tbd_           | _tbd_               | _tbd_ | _tbd_ |

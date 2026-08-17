@@ -57,14 +57,14 @@ def _setup_with_protected(tmp_path: Path, protected: list[str]) -> tuple[Path, s
     # Write directly (the file is already tracked after committing automil/).
     graph = {
         "schema_version": 1,
-        "meta": {"best_node_id": "node_0001", "best_composite": 0.5,
+        "meta": {"best_node_id": "node_0001", "best_primary_value": 0.5,
                  "total_executed": 1, "total_proposed": 0,
-                 "next_id": 2, "baseline_composite": 0.0,
+                 "next_id": 2, "baseline_primary_value": 0.0,
                  "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003}},
         "nodes": {
             "node_0001": {
                 "id": "node_0001", "type": "executed", "status": "keep",
-                "composite": 0.5, "base_commit": base_sha,
+                "primary_value": 0.5, "base_commit": base_sha,
                 "created_at": "2026-05-02T10:00:00Z",
             }
         },

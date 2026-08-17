@@ -1477,7 +1477,7 @@ class ExperimentOrchestrator:
         children refuse a still-running parent). It is not marked crashed either
         — nothing ran, so a crash row would poison the failure statistics and,
         via ``completed/``, would have ``reconcile`` promote a phantom executed
-        node with composite 0.0.
+        node with primary_value 0.0.
 
         Specs with no ``metadata.cell_id`` remain valid because ``Backend.submit``
         is a first-class non-cell submission path. A spec that *declares* a cell
@@ -2430,12 +2430,12 @@ class ExperimentOrchestrator:
         self._timed_out.pop(node_id, None)
 
         status_str = result.get("status", "unknown")
-        composite = result.get("composite", 0)
+        primary_value = result.get("primary_value", 0)
         logger.info(
-            "Completed %s: status=%s, composite=%.4f, elapsed=%.1fmin, %s",
+            "Completed %s: status=%s, primary_value=%.4f, elapsed=%.1fmin, %s",
             node_id,
             status_str,
-            composite,
+            primary_value,
             elapsed_s / 60,
             self._execution_label(gpu_id),
         )
@@ -2536,9 +2536,9 @@ class ExperimentOrchestrator:
             ),
         )
         logger.info(
-            "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
+            "Cap-driven cancel reconciled for %s: status=%s primary_value=%.4f "
             "partial_folds=%d/%d",
-            node_id, payload["status"], payload["composite"],
+            node_id, payload["status"], payload["primary_value"],
             payload.get("partial_folds", 0), payload.get("expected_folds", 0),
         )
         # H-2: a budget-killed run that produced folds still yielded a usable
@@ -2588,7 +2588,7 @@ class ExperimentOrchestrator:
                 )
                 result = {
                     "status": "crash",
-                    "composite": 0.0,
+                    "primary_value": 0.0,
                     "metrics": {},
                     "error": (
                         f"result.json failed schema validation: {exc.message} "
@@ -2863,7 +2863,7 @@ class ExperimentOrchestrator:
         # the graph must not wait for a reconcile that may never be run.
         self._mark_node_terminal_in_graph(node_id, "crash", error)
 
-    _TSV_TRAILING = ("composite", "composite_se", "vram_gb", "elapsed_min",
+    _TSV_TRAILING = ("primary_value", "primary_se", "vram_gb", "elapsed_min",
                      "status", "description")
 
     def _append_results_tsv(self, node_id: str, result: dict, description: str = ""):
@@ -2871,7 +2871,7 @@ class ExperimentOrchestrator:
 
         Metric columns come from the keys of ``result["metrics"]`` — no hardcoded
         MIL vocabulary. Header shape is
-        ``node_id, <metric keys sorted>, composite, vram_gb, elapsed_min, status,
+        ``node_id, <metric keys sorted>, primary_value, vram_gb, elapsed_min, status,
         description``.
 
         TSV-1: the header used to be locked by the FIRST row, and any later key it
@@ -2879,7 +2879,7 @@ class ExperimentOrchestrator:
         precisely the breaking case — 65 classification experiments emit
         ``val_auc``/``val_bacc``, 100 survival experiments emit ``val_c_index``,
         and whichever finished first decided which group lost its only metric.
-        ``composite`` still landed, so the file looked populated.
+        ``primary_value`` still landed, so the file looked populated.
 
         A genuinely new key now WIDENS the header and rewrites the file,
         backfilling earlier rows with blanks (they really had no value for that
@@ -2887,7 +2887,7 @@ class ExperimentOrchestrator:
         whose keys the header already covers is a plain append.
         """
         metrics = result.get("metrics", {})
-        composite = result.get("composite", 0.0)
+        primary_value = result.get("primary_value", 0.0)
         status = result.get("status", "completed")
         elapsed_s = result.get("elapsed_seconds", 0)
         vram_mb = result.get("peak_vram_mb", 0)
@@ -2936,15 +2936,15 @@ class ExperimentOrchestrator:
             except (TypeError, ValueError):
                 return str(v)
 
-        composite_se = result.get("composite_se")
-        if isinstance(composite_se, bool) or not isinstance(composite_se, (int, float)):
-            composite_se = None   # blank cell: SE not estimable (<2 finite folds)
+        primary_se = result.get("primary_se")
+        if isinstance(primary_se, bool) or not isinstance(primary_se, (int, float)):
+            primary_se = None   # blank cell: SE not estimable (<2 finite folds)
 
         cells: list[str] = [node_id]
         cells.extend(_fmt(metrics.get(c, "")) for c in metric_cols)
         cells.extend([
-            f"{composite:.6f}",
-            "" if composite_se is None else f"{composite_se:.6f}",
+            f"{primary_value:.6f}",
+            "" if primary_se is None else f"{primary_se:.6f}",
             f"{vram_mb / 1024:.1f}",
             f"{elapsed_s / 60:.1f}",
             status,

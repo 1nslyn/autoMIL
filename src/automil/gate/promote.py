@@ -12,7 +12,7 @@ Outcomes
   inconclusive -> status stays 'candidate' (returns False, D-150)
 
 D-143 Two-Stage Gate composition:
-  Stage A (composite dominance under the Ladder keep-margin on search cells —
+  Stage A (primary_value dominance under the Ladder keep-margin on search cells —
   the former Pareto selection was replaced by D-200 Option B) is enforced
   upstream: nominate() requires status='keep' before transitioning to
   'candidate'. This module enforces Stage B.

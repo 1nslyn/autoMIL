@@ -1,7 +1,7 @@
 """Ladder keep-margin (``accept_margin`` δ) gate — val-firewall.
 
-δ=0.0 (the default) reproduces strict composite dominance; δ>0 requires a child
-to beat its parent's validation composite by more than the margin before it is
+δ=0.0 (the default) reproduces strict primary_value dominance; δ>0 requires a child
+to beat its parent's validation primary_value by more than the margin before it is
 kept — a Ladder-style guard against promoting within-noise improvements over a
 long agentic search. The gate shares one predicate (``_accept``) across every
 keep/discard site (terminal writer, descendant re-eval, both reconcile paths).
@@ -48,9 +48,9 @@ def test_scoring_default_accept_margin_is_zero(graph):
 
 def test_default_margin_keeps_any_improvement(graph):
     parent = graph.add_executed(parent_id=None, description="p", techniques=[],
-                                status="keep", metrics={"composite": 0.80})
+                                status="keep", metrics={"primary_value": 0.80})
     child = graph.add_executed(parent_id=parent, description="c", techniques=[],
-                               status="keep", metrics={"composite": 0.81})
+                               status="keep", metrics={"primary_value": 0.81})
     graph._reevaluate_descendants(parent)
     assert graph.get_node(child)["status"] == "keep"   # +0.01, δ=0 → keep
 
@@ -58,9 +58,9 @@ def test_default_margin_keeps_any_improvement(graph):
 def test_margin_discards_within_noise_child(graph):
     graph.meta["scoring"]["accept_margin"] = 0.05
     parent = graph.add_executed(parent_id=None, description="p", techniques=[],
-                                status="keep", metrics={"composite": 0.80})
+                                status="keep", metrics={"primary_value": 0.80})
     child = graph.add_executed(parent_id=parent, description="c", techniques=[],
-                               status="keep", metrics={"composite": 0.82})
+                               status="keep", metrics={"primary_value": 0.82})
     graph._reevaluate_descendants(parent)
     assert graph.get_node(child)["status"] == "discard"   # +0.02 < δ=0.05 → discard
 

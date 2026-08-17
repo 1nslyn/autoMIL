@@ -10,7 +10,7 @@ node that will never resolve until somebody happens to run ``reconcile``. On a
 daemon-driven campaign that may be never.
 
 **M-7** — ``meta.total_executed`` is the UCB exploration denominator
-(``graph.py`` ``potential = composite + w·sqrt(log(total)/(1+child_count))``).
+(``graph.py`` ``potential = primary_value + w·sqrt(log(total)/(1+child_count))``).
 The CLI paths maintain it and ``mark_failed`` maintains it, but the daemon's
 *success* path (``terminal_writer.write_terminal_state``) never did. A campaign
 driven entirely by the daemon therefore explores against a frozen denominator.
@@ -211,13 +211,13 @@ class TestSuccessPathAlsoMaintainsTheDenominator:
     def test_a_completion_increments_total_executed(self, orch):
         nid = _proposed(orch)
         before = _reload(orch).meta["total_executed"]
-        self._write(orch, nid, {"status": "completed", "composite": 0.8,
+        self._write(orch, nid, {"status": "completed", "primary_value": 0.8,
                                 "metrics": {"val_auc": 0.8, "val_bacc": 0.8}})
         assert _reload(orch).meta["total_executed"] == before + 1
 
     def test_reprocessing_a_completion_does_not_double_count(self, orch):
         nid = _proposed(orch)
-        payload = {"status": "completed", "composite": 0.8,
+        payload = {"status": "completed", "primary_value": 0.8,
                    "metrics": {"val_auc": 0.8, "val_bacc": 0.8}}
         self._write(orch, nid, payload)
         after_first = _reload(orch).meta["total_executed"]

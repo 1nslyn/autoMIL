@@ -20,7 +20,7 @@ POLICY_VARIANTS: dict[str, type[PolicyVariant]] = {}
 
 # SPEC_STORE keeps the VariantSpec for each registered class so Plan 01-08's
 # `automil check` can cross-check the manifest JSON against the docstring
-# header (D-44). Key shape mirrors the natural composite identity:
+# header (D-44). Key shape mirrors the natural primary_value identity:
 #   (kind, parent_or_None, name)
 SPEC_STORE: dict[tuple[str, str | None, str], VariantSpec] = {}
 

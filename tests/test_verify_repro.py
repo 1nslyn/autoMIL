@@ -47,11 +47,11 @@ def _write_graph(adir: Path, nodes: dict, base_commit: str = ""):
         "schema_version": 1,
         "meta": {
             "best_node_id": None,
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "total_executed": 0,
             "total_proposed": 0,
             "next_id": 1,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": nodes,
@@ -91,7 +91,7 @@ def test_happy_path_pass(tmp_path, cli_runner, monkeypatch):
                 "id": "node_0001",
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.5,
+                "primary_value": 0.5,
                 "base_commit": head,
                 "created_at": "2026-05-02T10:00:00Z",
             }
@@ -104,7 +104,7 @@ def test_happy_path_pass(tmp_path, cli_runner, monkeypatch):
     assert result.exit_code == 0, result.output
     manifest = yaml.safe_load((adir / "repro_manifest.yaml").read_text())
     assert manifest["status"] == "pass"
-    assert manifest["actual_composite"] == pytest.approx(0.5)
+    assert manifest["actual_primary_value"] == pytest.approx(0.5)
 
 
 def test_manifest_schema(tmp_path, cli_runner, monkeypatch):
@@ -124,7 +124,7 @@ def test_manifest_schema(tmp_path, cli_runner, monkeypatch):
                 "id": "node_0001",
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.5,
+                "primary_value": 0.5,
                 "base_commit": head,
                 "created_at": "2026-05-02T10:00:00Z",
             }
@@ -136,8 +136,8 @@ def test_manifest_schema(tmp_path, cli_runner, monkeypatch):
     m = yaml.safe_load((adir / "repro_manifest.yaml").read_text())
     for key in (
         "node_id",
-        "expected_composite",
-        "actual_composite",
+        "expected_primary_value",
+        "actual_primary_value",
         "tolerance",
         "status",
         "git_sha",
@@ -164,7 +164,7 @@ def test_tolerance_fail(tmp_path, cli_runner, monkeypatch):
                 "id": "node_0001",
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.7,  # actual will be 0.5
+                "primary_value": 0.7,  # actual will be 0.5
                 "base_commit": head,
                 "created_at": "2026-05-02T10:00:00Z",
             }
@@ -195,7 +195,7 @@ def test_tolerance_override_pass(tmp_path, cli_runner, monkeypatch):
                 "id": "node_0001",
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.7,
+                "primary_value": 0.7,
                 "base_commit": head,
                 "created_at": "2026-05-02T10:00:00Z",
             }
@@ -229,7 +229,7 @@ def test_atomic_write_no_tmp(tmp_path, cli_runner, monkeypatch):
                 "id": "node_0001",
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.5,
+                "primary_value": 0.5,
                 "base_commit": head,
                 "created_at": "2026-05-02T10:00:00Z",
             }
@@ -298,7 +298,7 @@ def test_check_recognises_repro_manifest(tmp_path, cli_runner, monkeypatch):
                 "id": "node_0001",
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.5,
+                "primary_value": 0.5,
                 "base_commit": head,
                 "created_at": "2026-05-02T10:00:00Z",
             }

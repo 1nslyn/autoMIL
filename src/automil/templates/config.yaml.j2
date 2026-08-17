@@ -30,11 +30,10 @@ baseline:
   model: "clam_mb"
   framework: "CLAM"
   val_auc: 0.0
-  composite: 0.0
+  primary_value: 0.0
 
 metrics:
-  primary: "composite"
-  composite_formula: "(val_auc + val_bacc) / 2"
+  primary: "val_auc"
   track: ["val_auc", "val_bacc"]
 
 training:
@@ -144,15 +143,15 @@ env:
   #     - "configs/.env.local"
   dotenv_files: []
 
-# --- Composite scoring (DEC-04 / D-200 / CR-1b) ---
+# --- Primary_value scoring (DEC-04 / D-200 / CR-1b) ---
 # scoring.formula is the reducer or metric selector the framework uses to
-# recompute the composite from the validation `metrics` block at ingest
+# recompute the primary_value from the validation `metrics` block at ingest
 # (CR-1b: the val-firewall does not trust the reported scalar). Valid values:
 #   formula: ""                # default -> "mean" over metrics values; this
 #                              #   reproduces (val_auc + val_bacc) / 2 and a
 #                              #   lone val_c_index exactly
 #   formula: "mean" | "max" | "min"
-#   formula: "val_<metric>"    # METRIC SELECTOR: the composite IS this one
+#   formula: "val_<metric>"    # METRIC SELECTOR: the primary_value IS this one
 #                              #   validation metric (e.g. "val_auc",
 #                              #   "val_c_index"); other metrics stay recorded
 #                              #   but do not vote. The name must exist in
@@ -160,8 +159,7 @@ env:
 #                              #   support the selector fails ingest closed.
 #   formula: "trust_reported"  # explicit opt-out; weakens the val-firewall
 # Anything else (e.g. an arithmetic expression) fails `automil check` and graph
-# seeding — it is NOT evaluated. Document the human-readable recipe in a
-# comment or in metrics.composite_formula (informational) instead.
+# seeding — it is NOT evaluated.
 #
 # scoring.technique_map is a {pattern: tag} dict for description-driven
 # auto-tagging. When `automil submit` / `automil propose` is called WITHOUT
@@ -180,7 +178,7 @@ env:
 scoring:
   formula: ""
   technique_map: {}
-  accept_margin: 0.0   # Ladder keep-margin δ: child kept iff composite > parent + δ. Predeclare per-dataset (0.0 = strict dominance). Read from graph.json meta.scoring.
+  accept_margin: 0.0   # Ladder keep-margin δ: child kept iff primary_value > parent + δ. Predeclare per-dataset (0.0 = strict dominance). Read from graph.json meta.scoring.
   # CR-4: the margin ACTUALLY applied is max(accept_margin, se_multiplier x the
   #   PARENT's measured cross-fold SE). The noise floor can only ever raise the
   #   bar, never lower a predeclared δ, and it is derived from the incumbent —

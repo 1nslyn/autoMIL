@@ -58,7 +58,7 @@ def is_held_out_metric_key(key: str) -> bool:
     The seal strips the ``held_out``/``summary`` blocks, but nothing constrained
     the *names inside* ``metrics`` — a result carrying ``metrics: {"test_auc": …}``
     would flow test into every agent-facing surface and into the recomputed
-    composite (the mean runs over all metric values), i.e. test driving
+    primary_value (the mean runs over all metric values), i.e. test driving
     selection with the firewall's blessing. This predicate deliberately matches
     the campaign controller's freeze-time rule (any key containing ``test``,
     plus the held-out markers) so the two enforcement layers cannot disagree;

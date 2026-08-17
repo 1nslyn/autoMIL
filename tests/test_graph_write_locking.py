@@ -98,7 +98,7 @@ def test_nominate_holds_lock(cli_runner, tmp_path, monkeypatch):
     node = g.get_node(nid)
     node["type"] = "executed"
     node["status"] = "keep"
-    node["composite"] = 0.9
+    node["primary_value"] = 0.9
     g.save()
 
     calls = _spy_lock(monkeypatch)

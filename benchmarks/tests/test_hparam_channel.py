@@ -166,8 +166,8 @@ class TestDeclaredSpaceIsEnforced:
             apply_overrides(DTFDConfig(), {"seed": 7}, arm="dtfd")
 
     def test_unknown_arm_is_not_silently_narrowed(self):
-        """smmile is vendored but unreachable from --framework; enforcing an
-        empty declared space on it would refuse everything."""
+        """An arm outside the declared roster must not be silently narrowed
+        to an empty space (that would refuse every override)."""
         out = apply_overrides(DTFDConfig(), {"numGroup": 8}, arm="")
         assert out.numGroup == 8
 

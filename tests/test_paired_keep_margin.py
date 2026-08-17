@@ -2,7 +2,7 @@
 
 Runs share folds under a locked seed, so the fold effect cancels in the
 per-fold child−parent difference. The margin basis switches to
-``SE(paired deltas)`` whenever both nodes carry composites for the same fold
+``SE(paired deltas)`` whenever both nodes carry primary values for the same fold
 set (and the reducer is ``mean``); otherwise it falls back to the marginal
 parent SE (CR-4).
 
@@ -26,7 +26,7 @@ DELTA = 0.015  # the campaign's predeclared accept_margin
 
 
 def _entries(folds: dict[int, float]) -> list[dict]:
-    return [{"fold_index": i, "composite": c} for i, c in sorted(folds.items())]
+    return [{"fold_index": i, "primary_value": c} for i, c in sorted(folds.items())]
 
 
 def _mean(folds: dict[int, float]) -> float:
@@ -60,43 +60,43 @@ def test_paired_delta_se_uniform_deltas_are_zero_not_none() -> None:
     assert paired_delta_se(child, BASELINE_FOLDS) == 0.0
 
 
-def test_fold_composite_map_skips_junk_entries() -> None:
-    from automil.scoring import fold_composite_map
+def test_fold_primary_value_map_skips_junk_entries() -> None:
+    from automil.scoring import fold_primary_value_map
 
     entries = [
-        {"fold_index": 0, "composite": 0.6},
-        {"fold_index": True, "composite": 0.5},        # bool index
-        {"fold_index": 1, "composite": float("nan")},  # non-finite
-        {"fold_index": 2},                             # missing composite
+        {"fold_index": 0, "primary_value": 0.6},
+        {"fold_index": True, "primary_value": 0.5},        # bool index
+        {"fold_index": 1, "primary_value": float("nan")},  # non-finite
+        {"fold_index": 2},                             # missing primary_value
         "not-a-mapping",
-        {"fold_index": 3, "composite": 0.7},
+        {"fold_index": 3, "primary_value": 0.7},
     ]
-    assert fold_composite_map(entries) == {0: 0.6, 3: 0.7}
-    assert fold_composite_map([]) is None
-    assert fold_composite_map(None) is None
+    assert fold_primary_value_map(entries) == {0: 0.6, 3: 0.7}
+    assert fold_primary_value_map([]) is None
+    assert fold_primary_value_map(None) is None
 
 
-def test_node_fold_composites_reads_both_sources() -> None:
-    from automil.graph import node_fold_composites
+def test_node_fold_primary_values_reads_both_sources() -> None:
+    from automil.graph import node_fold_primary_values
 
-    # Regular ingested node: top-level fold_composites.
-    assert node_fold_composites({"fold_composites": _entries(CHILD_FOLDS)}) == CHILD_FOLDS
+    # Regular ingested node: top-level fold_primary_values.
+    assert node_fold_primary_values({"fold_primary_values": _entries(CHILD_FOLDS)}) == CHILD_FOLDS
     # Baseline root: the campaign controller writes metadata.validation_folds
     # (entries additionally carry a metrics dict — same reader).
     baseline_shaped = {
         "metadata": {
             "validation_folds": [
-                {"fold_index": i, "metrics": {"val_auc": c}, "composite": c}
+                {"fold_index": i, "metrics": {"val_auc": c}, "primary_value": c}
                 for i, c in sorted(BASELINE_FOLDS.items())
             ]
         }
     }
-    assert node_fold_composites(baseline_shaped) == BASELINE_FOLDS
+    assert node_fold_primary_values(baseline_shaped) == BASELINE_FOLDS
     # The top-level field wins when both are present.
-    both = dict(baseline_shaped, fold_composites=_entries(CHILD_FOLDS))
-    assert node_fold_composites(both) == CHILD_FOLDS
-    assert node_fold_composites({}) is None
-    assert node_fold_composites(None) is None
+    both = dict(baseline_shaped, fold_primary_values=_entries(CHILD_FOLDS))
+    assert node_fold_primary_values(both) == CHILD_FOLDS
+    assert node_fold_primary_values({}) is None
+    assert node_fold_primary_values(None) is None
 
 
 def test_effective_accept_margin_canonical_virchow2_numbers() -> None:
@@ -104,32 +104,32 @@ def test_effective_accept_margin_canonical_virchow2_numbers() -> None:
 
     meta = {"scoring": {"accept_margin": DELTA, "se_multiplier": 1.0, "formula": "mean"}}
     parent = {
-        "composite": _mean(BASELINE_FOLDS),
-        "composite_se": 0.07347,
+        "primary_value": _mean(BASELINE_FOLDS),
+        "primary_se": 0.07347,
         "metadata": {"validation_folds": _entries(BASELINE_FOLDS)},
     }
     child = {
-        "composite": _mean(CHILD_FOLDS),
-        "fold_composites": _entries(CHILD_FOLDS),
+        "primary_value": _mean(CHILD_FOLDS),
+        "fold_primary_values": _entries(CHILD_FOLDS),
     }
 
     marginal = effective_accept_margin(meta, parent)
     assert marginal == pytest.approx(0.07347)
-    assert not _accept(child["composite"], parent["composite"], marginal)
+    assert not _accept(child["primary_value"], parent["primary_value"], marginal)
 
     paired = effective_accept_margin(meta, parent, child)
     assert paired == pytest.approx(DELTA)  # max(0.015, 0.0116) — δ floor binds
-    assert _accept(child["composite"], parent["composite"], paired)
+    assert _accept(child["primary_value"], parent["primary_value"], paired)
 
 
 def test_paired_basis_requires_mean_formula() -> None:
     from automil.graph import effective_accept_margin
 
     parent = {
-        "composite_se": 0.07347,
+        "primary_se": 0.07347,
         "metadata": {"validation_folds": _entries(BASELINE_FOLDS)},
     }
-    child = {"fold_composites": _entries(CHILD_FOLDS)}
+    child = {"fold_primary_values": _entries(CHILD_FOLDS)}
     for formula in ("max", "min", "trust_reported"):
         meta = {"scoring": {"accept_margin": DELTA, "se_multiplier": 1.0,
                             "formula": formula}}
@@ -141,41 +141,41 @@ def test_paired_margin_monotone_over_delta_floor() -> None:
     from automil.graph import effective_accept_margin
 
     meta = {"scoring": {"accept_margin": 0.005, "se_multiplier": 1.0, "formula": "mean"}}
-    parent = {"composite": _mean(BASELINE_FOLDS),
+    parent = {"primary_value": _mean(BASELINE_FOLDS),
               "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
-    child = {"composite": _mean(CHILD_FOLDS),
-             "fold_composites": _entries(CHILD_FOLDS)}
+    child = {"primary_value": _mean(CHILD_FOLDS),
+             "fold_primary_values": _entries(CHILD_FOLDS)}
     assert effective_accept_margin(meta, parent, child) == pytest.approx(0.011603, abs=1e-5)
 
 
 def test_paired_basis_engages_under_a_metric_selector() -> None:
-    """`val_*` selectors keep the paired identity — the node composite is the
+    """`val_*` selectors keep the paired identity — the node primary_value is the
     per-key mean over folds, so per-fold selector values average back to it —
     and must therefore use the tight paired basis, not the marginal one."""
     from automil.graph import effective_accept_margin
 
     meta = {"scoring": {"accept_margin": 0.005, "se_multiplier": 1.0,
                         "formula": "val_auc"}}
-    parent = {"composite": _mean(BASELINE_FOLDS), "composite_se": 0.07347,
+    parent = {"primary_value": _mean(BASELINE_FOLDS), "primary_se": 0.07347,
               "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
-    child = {"composite": _mean(CHILD_FOLDS),
-             "fold_composites": _entries(CHILD_FOLDS)}
+    child = {"primary_value": _mean(CHILD_FOLDS),
+             "fold_primary_values": _entries(CHILD_FOLDS)}
     assert effective_accept_margin(meta, parent, child) == pytest.approx(
         0.011603, abs=1e-5)
 
 
-def test_identity_guard_rejects_composite_fold_disagreement() -> None:
-    """The paired basis requires composite == mean(fold composites) on BOTH
-    nodes; a node whose composite disagrees with its own fold vector (sparse-
+def test_identity_guard_rejects_primary_value_fold_disagreement() -> None:
+    """The paired basis requires primary_value == mean(fold primary_values) on BOTH
+    nodes; a node whose primary_value disagrees with its own fold vector (sparse-
     metric recovery aggregate, or a shaped payload) falls back to the marginal
     basis rather than differencing incomparable quantities."""
     from automil.graph import effective_accept_margin
 
     meta = {"scoring": {"accept_margin": DELTA, "se_multiplier": 1.0, "formula": "mean"}}
-    parent = {"composite": _mean(BASELINE_FOLDS), "composite_se": 0.07347,
+    parent = {"primary_value": _mean(BASELINE_FOLDS), "primary_se": 0.07347,
               "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
-    shaped = {"composite": _mean(CHILD_FOLDS) + 0.05,   # disagrees with its folds
-              "fold_composites": _entries(CHILD_FOLDS)}
+    shaped = {"primary_value": _mean(CHILD_FOLDS) + 0.05,   # disagrees with its folds
+              "fold_primary_values": _entries(CHILD_FOLDS)}
     assert effective_accept_margin(meta, parent, shaped) == pytest.approx(0.07347)
 
 
@@ -210,15 +210,15 @@ def _ingest(tmp_path: Path, graph, node_id: str, result: dict) -> None:
 
 def _result_payload(folds: dict[int, float]) -> dict:
     """A result.json exactly as the benchmark runner emits it: per-fold val
-    metrics whose composite is their mean, plus the aggregate metrics block."""
+    metrics whose primary_value is their mean, plus the aggregate metrics block."""
     n = len(folds)
     mean_auc = sum(folds.values()) / n
     return {
         "status": "completed",
-        "composite": mean_auc,
+        "primary_value": mean_auc,
         "metrics": {"val_auc": mean_auc},
         "validation_folds": [
-            {"fold_index": i, "metrics": {"val_auc": c}, "composite": c}
+            {"fold_index": i, "metrics": {"val_auc": c}, "primary_value": c}
             for i, c in sorted(folds.items())
         ],
     }
@@ -236,15 +236,15 @@ def _campaign_graph(tmp_path: Path):
     )
     root_id = graph.add_executed(
         parent_id=None, description="native baseline", techniques=[],
-        metrics={"composite": _mean(BASELINE_FOLDS), "val_auc": _mean(BASELINE_FOLDS)},
+        metrics={"primary_value": _mean(BASELINE_FOLDS), "val_auc": _mean(BASELINE_FOLDS)},
         status="keep",
     )
     root = graph.get_node(root_id)
-    root["composite"] = _mean(BASELINE_FOLDS)
-    root["composite_se"] = 0.07347
+    root["primary_value"] = _mean(BASELINE_FOLDS)
+    root["primary_se"] = 0.07347
     root["metadata"] = {
         "validation_folds": [
-            {"fold_index": i, "metrics": {"val_auc": c}, "composite": c}
+            {"fold_index": i, "metrics": {"val_auc": c}, "primary_value": c}
             for i, c in sorted(BASELINE_FOLDS.items())
         ]
     }
@@ -265,8 +265,8 @@ def test_ingest_keeps_virchow2_best_child_under_paired_margin(tmp_path: Path) ->
 
     node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(child_id)
     assert node["status"] == "keep"          # discarded under the marginal basis
-    assert node["fold_composites"] == _entries(CHILD_FOLDS)
-    assert "fold_composites" not in node.get("metrics", {})
+    assert node["fold_primary_values"] == _entries(CHILD_FOLDS)
+    assert "fold_primary_values" not in node.get("metrics", {})
 
 
 def test_ingest_without_fold_data_falls_back_to_marginal(tmp_path: Path) -> None:
@@ -284,10 +284,10 @@ def test_ingest_without_fold_data_falls_back_to_marginal(tmp_path: Path) -> None
 
     node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(child_id)
     assert node["status"] == "discard"       # marginal bar 0.0735 holds
-    assert node.get("fold_composites") is None
+    assert node.get("fold_primary_values") is None
 
 
-def test_completed_artifact_round_trips_fold_composites(tmp_path: Path) -> None:
+def test_completed_artifact_round_trips_fold_primary_values(tmp_path: Path) -> None:
     """reconcile() rebuilds nodes from completed/<id>.json — without the fold
     projection there, a recovered node would silently revert to the marginal
     basis. The completion is written by the REAL terminal writer; nothing here
@@ -301,11 +301,11 @@ def test_completed_artifact_round_trips_fold_composites(tmp_path: Path) -> None:
     _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
 
     completion = json.loads((tmp_path / "completed" / f"{child_id}.json").read_text())
-    assert completion["fold_composites"] == _entries(CHILD_FOLDS)
+    assert completion["fold_primary_values"] == _entries(CHILD_FOLDS)
 
 
 def test_rank_leaderboard_shows_paired_delta_and_bar(tmp_path: Path, capsys) -> None:
-    """The leaderboard surfaces composite ± SE, paired Δparent ± SE, and the
+    """The leaderboard surfaces primary_value ± SE, paired Δparent ± SE, and the
     required bar — the numbers both canary agents hand-parsed 30 archive
     JSONs to reconstruct."""
     from automil.cli.propose import _print_leaderboard
@@ -348,7 +348,7 @@ def test_reevaluate_descendants_uses_paired_basis(tmp_path: Path) -> None:
 
 def test_rebuilt_from_completed_node_keeps_fold_evidence(tmp_path: Path) -> None:
     """K3: a node whose graph entry is LOST and rebuilt from completed/<id>.json
-    (the real reconcile scan) must carry fold_composites and composite_se, or
+    (the real reconcile scan) must carry fold_primary_values and primary_se, or
     the recovered incumbent screens its children against the wider marginal
     bar with no error anywhere."""
     from automil.graph import ExperimentGraph
@@ -372,19 +372,19 @@ def test_rebuilt_from_completed_node_keeps_fold_evidence(tmp_path: Path) -> None
                         str(tmp_path / "completed"), str(tmp_path / "archive"))
     node = recovered.get_node(child_id)
     assert node is not None
-    assert node["fold_composites"] == _entries(CHILD_FOLDS)
-    assert node["composite_se"] is not None
+    assert node["fold_primary_values"] == _entries(CHILD_FOLDS)
+    assert node["primary_se"] is not None
 
 
 def test_refresh_without_folds_clears_stale_projection(tmp_path: Path) -> None:
     """K4: re-ingest of a result WITHOUT usable validation_folds must CLEAR the
     node's previous fold vector — pairing children against a different run's
-    folds than the composite being compared is neither basis."""
-    from automil.scoring import fold_composite_entries
+    folds than the primary_value being compared is neither basis."""
+    from automil.scoring import fold_primary_value_entries
 
     payload = _result_payload(CHILD_FOLDS)
     del payload["validation_folds"]
-    assert fold_composite_entries(payload, "mean") is None  # projection: none
+    assert fold_primary_value_entries(payload, "mean") is None  # projection: none
 
     from automil.graph import ExperimentGraph
 
@@ -403,4 +403,4 @@ def test_refresh_without_folds_clears_stale_projection(tmp_path: Path) -> None:
     _ingest(tmp_path, reloaded, child_id, payload)
 
     node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(child_id)
-    assert node.get("fold_composites") is None or "fold_composites" not in node
+    assert node.get("fold_primary_values") is None or "fold_primary_values" not in node

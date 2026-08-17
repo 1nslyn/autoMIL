@@ -13,7 +13,7 @@ GOOD_VARIANT = '''"""v0001 variant.
 
 Parent: clam_mb
 Base commit: abc1234
-Composite: 0.5
+Primary_value: 0.5
 Node ID: node_0001
 Mutations:
 """
@@ -22,7 +22,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="v0001", kind="model", parent="clam_mb",
-    base_commit="abc1234", composite=0.5, node_id="node_0001",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0001",
     created_at="2026-05-02T10:00:00Z",
 ))
 class V0001(ModelVariant):
@@ -37,7 +37,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="bad", kind="model", parent="clam_mb",
-    base_commit="abc1234", composite=0.5, node_id="node_0002",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0002",
     created_at="2026-05-02T10:00:00Z",
 ))
 class Bad(ModelVariant):
@@ -51,7 +51,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="bad_iface", kind="model", parent="clam_mb",
-    base_commit="abc1234", composite=0.5, node_id="node_0003",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0003",
     created_at="2026-05-02T10:00:00Z",
 ))
 class Bad(ModelVariant):
@@ -65,7 +65,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="bad_both", kind="model", parent="clam_mb",
-    base_commit="abc1234", composite=0.5, node_id="node_0004",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0004",
     created_at="2026-05-02T10:00:00Z",
 ))
 class Bad(ModelVariant):

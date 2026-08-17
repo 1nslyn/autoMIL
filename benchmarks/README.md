@@ -131,10 +131,9 @@ benchmarks/
 │       ├── nnmil/          # nnMIL framework adapter
 │       ├── abmil/          # AB-MIL framework adapter
 │       ├── dtfd/           # DTFD-MIL framework adapter
-│       ├── titan/          # TITAN slide-encoder arm
-│       └── smmile/         # SMMILe framework adapter
+│       └── titan/          # TITAN slide-encoder arm
 ├── scripts/          # CLI entry points (run_benchmark.py, run_feature_extraction.py, slurm/)
 ├── experiments/      # autoMIL overlays per dataset
-├── lib/              # External dependencies (CLAM, nnMIL, SMMILe, TRIDENT)
+├── lib/              # External dependencies (CLAM, nnMIL, TRIDENT)
 └── tests/            # Test suite
 ```

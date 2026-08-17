@@ -50,7 +50,7 @@ def json_safe(value: object) -> object:
     result.json with a ``parse_constant`` hook that rejects those tokens (CR-1a),
     and rewrites the whole node as a crash.
 
-    That guard is right about ``composite`` — a non-finite selection signal would
+    That guard is right about ``primary_value`` — a non-finite selection signal would
     rig keep/discard — but a result also carries honestly-unestimable
     *diagnostics*: multi-class sensitivity, a cross-fold CI over zero finite
     folds. Those were killing valid runs. ``null`` is JSON's way of saying "no
@@ -58,7 +58,7 @@ def json_safe(value: object) -> object:
     is what gets written.
 
     This does not weaken CR-1a. A hand-written ``NaN`` token still fails at the
-    parse boundary, and a ``null`` where a number belongs (``composite``, any
+    parse boundary, and a ``null`` where a number belongs (``primary_value``, any
     ``metrics`` entry) still fails the schema's ``{"type": "number"}`` — the
     difference is that the failure is now scoped to the field that is actually
     broken instead of condemning the file.

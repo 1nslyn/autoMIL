@@ -44,7 +44,7 @@ _VALID_DICT = {
     "K": 2,
     "p_threshold": 0.05,
     "bootstrap_reps": 100,
-    "win_definition": "delta_composite > 0 AND p < p_threshold",
+    "win_definition": "delta_primary_value > 0 AND p < p_threshold",
     "schema_version": "gate-v1",
 }
 
@@ -58,7 +58,7 @@ def _make_manifest(**overrides) -> GateManifest:
         K=2,
         p_threshold=0.05,
         bootstrap_reps=100,
-        win_definition="delta_composite > 0 AND p < p_threshold",
+        win_definition="delta_primary_value > 0 AND p < p_threshold",
         schema_version="gate-v1",
     )
     defaults.update(overrides)

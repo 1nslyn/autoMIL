@@ -136,7 +136,7 @@ def _write_variant_module(
 
 Parent: {spec.parent or 'None'}
 Base commit: {spec.base_commit}
-Composite: {spec.composite}
+Primary_value: {spec.primary_value}
 Node ID: {spec.node_id}
 Mutations: {", ".join(spec.mutations) if spec.mutations else ""}
 """
@@ -145,7 +145,7 @@ from automil.registry import register, VariantSpec, {abc_name}
 
 @register(VariantSpec(
     name="{spec.name}", kind="{spec.kind}", {parent_field},
-    base_commit="{spec.base_commit}", composite={spec.composite},
+    base_commit="{spec.base_commit}", primary_value={spec.primary_value},
     node_id="{spec.node_id}", created_at="{spec.created_at}",
     mutations={mutations_field},
 ))
@@ -165,7 +165,7 @@ class {class_name}({abc_name}):
 def port_variant(node_id: str, name: str | None, kind: str | None, parent: str | None):
     """Convert a node's overlay into a registered variant module + manifest.
 
-    Workflow: after an experiment produced a good composite, run
+    Workflow: after an experiment produced a good primary_value, run
     `automil port-variant <node_id>` to convert its dirty diff into a
     committed variant module under automil/variants/<kind_dir>/<name>.py
     plus a sibling <name>.json manifest. Auto-names as <parent>_v<short>;
@@ -231,11 +231,11 @@ def port_variant(node_id: str, name: str | None, kind: str | None, parent: str |
     manifest_path = kind_dir / f"{final_name}.json"
 
     # 6. Build VariantSpec from inputs.
-    composite = spec_json.get("composite") or 0.0
-    # If spec.json doesn't carry composite, look up from graph.json node.
-    if not composite:
+    primary_value = spec_json.get("primary_value") or 0.0
+    # If spec.json doesn't carry primary_value, look up from graph.json node.
+    if not primary_value:
         node = _get_node_or_die(adir, node_id)
-        composite = float(node.get("composite", 0.0))
+        primary_value = float(node.get("primary_value", 0.0))
 
     base_commit = spec_json.get("base_commit", "unknown")
     techniques = spec_json.get("graph_metadata", {}).get("techniques", []) or []
@@ -245,7 +245,7 @@ def port_variant(node_id: str, name: str | None, kind: str | None, parent: str |
         kind=final_kind,
         parent=final_parent,
         base_commit=base_commit,
-        composite=float(composite),
+        primary_value=float(primary_value),
         node_id=node_id,
         created_at=datetime.now(tz=timezone.utc).isoformat(),
         mutations=tuple(techniques),

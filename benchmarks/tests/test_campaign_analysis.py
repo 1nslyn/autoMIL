@@ -308,7 +308,7 @@ def _write_certified_state(
             {
                 "fold_index": fold,
                 "metrics": {metric_key: value},
-                "composite": value,
+                "primary_value": value,
             }
             for fold in range(5)
         ]

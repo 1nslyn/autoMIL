@@ -4,9 +4,9 @@ Deterministic torch-free training stub that:
   1. Reads the variant selection from automil/config.yaml.
   2. Resolves the variant via the registry (proves the registry path works).
   3. "Trains" by running the variant's forward on a fixed seed.
-  4. Writes result.json with a deterministic composite.
+  4. Writes result.json with a deterministic primary_value.
 
-The composite formula is `0.5 + 0.001 * sum(features)` over a fixed
+The primary_value formula is `0.5 + 0.001 * sum(features)` over a fixed
 feature vector — same input -> same output, byte-identical re-runs.
 """
 from __future__ import annotations
@@ -52,25 +52,25 @@ def main() -> int:
     parent = model_cfg.get("parent")
     name = model_cfg.get("variant")
 
-    composite: float
+    primary_value: float
     if name and parent:
         cls = resolve_model(parent, name)
-        # The synthetic variant's forward returns the deterministic composite directly.
+        # The synthetic variant's forward returns the deterministic primary_value directly.
         instance = cls()
         # Fixed input vector: features = [1.0, 2.0, 3.0, 4.0]
         features = [1.0, 2.0, 3.0, 4.0]
         out = instance.forward(features=features)
-        # Convention: synthetic variant returns a float that IS the composite.
-        composite = float(out) if out is not None else 0.5
+        # Convention: synthetic variant returns a float that IS the primary_value.
+        primary_value = float(out) if out is not None else 0.5
     else:
-        # No variant configured: use the baseline composite.
-        composite = 0.5
+        # No variant configured: use the baseline primary_value.
+        primary_value = 0.5
 
     # Write result.json.
     result = {
         "status": "completed",
         "metrics": {"val_auc": 0.0, "val_bacc": 0.0, "test_auc": 0.0, "test_bacc": 0.0},
-        "composite": composite,
+        "primary_value": primary_value,
         "elapsed_seconds": 0.001,
         "peak_vram_mb": 0,
     }

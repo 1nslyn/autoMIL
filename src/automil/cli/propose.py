@@ -38,7 +38,7 @@ def rank(n: int, max_per_branch: int, include_held_out: bool):
     # D-139: held-out isolation — filter unless operator explicitly opts in.
     if include_held_out:
         logger.warning(
-            "rank --include-held-out: held-out cell composites now visible; "
+            "rank --include-held-out: held-out cell primary_values now visible; "
             "this MUST NOT be used during the agent search loop (D-139)."
         )
     else:
@@ -72,7 +72,7 @@ def rank(n: int, max_per_branch: int, include_held_out: bool):
 
 
 def _print_leaderboard(graph, top: int = 10) -> None:
-    """Completed-node leaderboard: composite ± SE, paired Δparent ± SE, and the
+    """Completed-node leaderboard: primary_value ± SE, paired Δparent ± SE, and the
     margin each node faced.
 
     This is the noise-floor surface the search loop needs in-band: without it,
@@ -81,8 +81,8 @@ def _print_leaderboard(graph, top: int = 10) -> None:
     charged attempts rediscovering exactly these numbers). Validation-only by
     construction — every value derives from the val ``metrics`` block.
     """
-    from automil.graph import (effective_accept_margin, node_composite_se,
-                               node_fold_composites)
+    from automil.graph import (effective_accept_margin, node_primary_se,
+                               node_fold_primary_values)
     from automil.scoring import paired_delta_se
 
     executed = [
@@ -92,20 +92,31 @@ def _print_leaderboard(graph, top: int = 10) -> None:
     ]
     if not executed:
         return
-    executed.sort(key=lambda node: -float(node.get("composite") or 0.0))
+    executed.sort(key=lambda node: -float(node.get("primary_value") or 0.0))
 
     def _pm(value: float | None) -> str:
         return "±?" if value is None else f"±{value:.4f}"
 
-    click.echo(f"Completed nodes (top {min(top, len(executed))} of {len(executed)} by composite):\n")
+    # Name the metric next to the number: the primary value IS the declared
+    # primary validation metric (scoring.formula, frozen in graph meta), and
+    # the agent reading this table must never have to guess which one.
+    formula = (graph.meta.get("scoring") or {}).get("formula") or "mean"
+    metric_label = (
+        str(formula) if str(formula).startswith("val_")
+        else f"scoring.formula: {formula}"
+    )
+    click.echo(
+        f"Completed nodes (top {min(top, len(executed))} of {len(executed)} "
+        f"by primary value = {metric_label}):\n"
+    )
     for node in executed[:top]:
-        composite = float(node.get("composite") or 0.0)
-        se = node_composite_se(node)
+        primary_value = float(node.get("primary_value") or 0.0)
+        se = node_primary_se(node)
         parent = graph.get_node(node.get("parent_id")) if node.get("parent_id") else None
         if parent is not None:
-            delta = composite - float(parent.get("composite") or 0.0)
+            delta = primary_value - float(parent.get("primary_value") or 0.0)
             pair_se = paired_delta_se(
-                node_fold_composites(node), node_fold_composites(parent)
+                node_fold_primary_values(node), node_fold_primary_values(parent)
             )
             bar = effective_accept_margin(graph.meta, parent, node)
             versus = f"Δparent {delta:+.4f} {_pm(pair_se)} (bar {bar:.4f})"
@@ -113,7 +124,7 @@ def _print_leaderboard(graph, top: int = 10) -> None:
             versus = "root"
         desc = (node.get("description", "") or "")[:60]
         click.echo(
-            f"  {node['id']}  {composite:.4f} {_pm(se)}  {versus}  "
+            f"  {node['id']}  {primary_value:.4f} {_pm(se)}  {versus}  "
             f"[{node.get('status')}]  {desc}"
         )
     click.echo()

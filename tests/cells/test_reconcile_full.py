@@ -1,18 +1,18 @@
 """End-to-end reconcile + descendant cascade tests (CAP-04 / D-123, D-124).
 
 Uses a REAL ExperimentGraph backed by tmp_path/graph.json — NOT mocks —
-to prove that partial composites flow through the Pareto keep/discard logic
+to prove that partial primary values flow through the Pareto keep/discard logic
 correctly (Fragile Invariant #6 defence).
 
 Tests:
     test_reconcile_budget_kill_writes_partial_result_json
         reconcile_budget_kill with 3/5 folds → result.json w/ budget_killed
     test_reconcile_budget_kill_zero_folds_writes_crashed_result_json
-        reconcile_budget_kill with 0 folds → status='crash', composite=0.0 (D-06)
-    test_descendant_cascade_against_partial_composite_keeps_better_descendant
-        descendant that beats partial composite 0.82 stays 'keep'
-    test_descendant_cascade_against_partial_composite_discards_worse_descendant
-        descendant that loses to partial composite 0.82 flips to 'discard'
+        reconcile_budget_kill with 0 folds → status='crash', primary_value=0.0 (D-06)
+    test_descendant_cascade_against_partial_primary_value_keeps_better_descendant
+        descendant that beats partial primary_value 0.82 stays 'keep'
+    test_descendant_cascade_against_partial_primary_value_discards_worse_descendant
+        descendant that loses to partial primary_value 0.82 flips to 'discard'
     test_reconcile_logs_summary_at_info_level
         reconcile_budget_kill emits an INFO log with partial/2/ marker
 """
@@ -37,7 +37,7 @@ from automil.graph import ExperimentGraph
 def _write_fold(
     node_archive: Path,
     idx: int,
-    composite: float = 0.80,
+    primary_value: float = 0.80,
     fold_count: int = 5,
 ) -> None:
     """Write a well-formed fold_<idx>_result.json into node_archive/certify/ (Scope B).
@@ -50,12 +50,12 @@ def _write_fold(
         "fold_count": fold_count,
         "status": "completed",
         "metrics": {
-            "val_auc": composite,
-            "val_bacc": composite,
-            "test_auc": composite,
-            "test_bacc": composite,
+            "val_auc": primary_value,
+            "val_bacc": primary_value,
+            "test_auc": primary_value,
+            "test_bacc": primary_value,
         },
-        "composite": composite,
+        "primary_value": primary_value,
         "elapsed_seconds": 1,
         "peak_vram_mb": 1000,
     }
@@ -68,7 +68,7 @@ def _write_fold(
 
 
 def test_reconcile_budget_kill_writes_partial_result_json(tmp_path: Path):
-    """3/5 folds present → result.json with status='partial', composite≈0.82,
+    """3/5 folds present → result.json with status='partial', primary_value≈0.82,
     metadata.budget_killed=True.
     """
     node_id = "node_partial_test"
@@ -77,7 +77,7 @@ def test_reconcile_budget_kill_writes_partial_result_json(tmp_path: Path):
     node_archive.mkdir(parents=True)
 
     for i, comp in enumerate([0.80, 0.82, 0.84]):
-        _write_fold(node_archive, i, composite=comp)
+        _write_fold(node_archive, i, primary_value=comp)
 
     mock_graph = MagicMock()
     payload = reconcile_budget_kill(
@@ -90,7 +90,7 @@ def test_reconcile_budget_kill_writes_partial_result_json(tmp_path: Path):
     # Verify payload returned
     assert payload["status"] == "partial"
     assert payload["partial_folds"] == 3
-    assert abs(payload["composite"] - 0.82) < 0.01
+    assert abs(payload["primary_value"] - 0.82) < 0.01
     assert payload.get("metadata", {}).get("budget_killed") is True
     # D-10 (REC-02): archive result.json is written solely by terminal_writer, not here.
     # reconcile_budget_kill only returns the payload; the file is written downstream.
@@ -102,7 +102,7 @@ def test_reconcile_budget_kill_writes_partial_result_json(tmp_path: Path):
 
 
 def test_reconcile_budget_kill_zero_folds_writes_crashed_result_json(tmp_path: Path):
-    """Empty archive (0 fold files) → result.json status='crash', composite=0.0,
+    """Empty archive (0 fold files) → result.json status='crash', primary_value=0.0,
     metadata.budget_killed=True.
 
     D-06 (REC-03): canonical status is 'crash', not 'crashed' (drift value removed).
@@ -121,7 +121,7 @@ def test_reconcile_budget_kill_zero_folds_writes_crashed_result_json(tmp_path: P
     )
 
     assert payload["status"] == "crash"  # D-06: was 'crashed' pre-v1.1
-    assert payload["composite"] == 0.0
+    assert payload["primary_value"] == 0.0
     assert payload["partial_folds"] == 0
     assert payload.get("metadata", {}).get("budget_killed") is True
     # D-10 (REC-02): archive result.json is written solely by terminal_writer, not here.
@@ -133,39 +133,39 @@ def test_reconcile_budget_kill_zero_folds_writes_crashed_result_json(tmp_path: P
 # ---------------------------------------------------------------------------
 
 
-def test_descendant_cascade_against_partial_composite_keeps_better_descendant(
+def test_descendant_cascade_against_partial_primary_value_keeps_better_descendant(
     tmp_path: Path,
 ):
-    """Descendant with composite=0.85 > partial composite 0.82 stays 'keep'.
+    """Descendant with primary_value=0.85 > partial primary_value 0.82 stays 'keep'.
 
-    Verifies Fragile Invariant #6: the cascade operates on the partial composite
-    (0.82), not zero.  If a descendant beats the partial composite it should
+    Verifies Fragile Invariant #6: the cascade operates on the partial primary_value
+    (0.82), not zero.  If a descendant beats the partial primary_value it should
     be promoted/kept, proving downstream experiments inherit a useful baseline.
     """
     eg = ExperimentGraph(tmp_path / "graph.json")
 
     parent_nid = eg.add_executed(
         parent_id=None, description="parent", techniques=[],
-        metrics={"composite": 0.50, "test_auc": 0.50, "test_bacc": 0.50},
+        metrics={"primary_value": 0.50, "test_auc": 0.50, "test_bacc": 0.50},
         status="keep",
     )
     capkill_nid = eg.add_executed(
         parent_id=parent_nid, description="cap-killed partial 0.82", techniques=[],
-        metrics={"composite": 0.82, "test_auc": 0.82, "test_bacc": 0.82},
+        metrics={"primary_value": 0.82, "test_auc": 0.82, "test_bacc": 0.82},
         status="keep",
     )
-    # Descendant beats partial composite on all three axes: composite, AUC, BACC
+    # Descendant beats partial primary_value on all three axes: primary_value, AUC, BACC
     better_nid = eg.add_executed(
         parent_id=capkill_nid, description="better than partial 0.85", techniques=[],
-        metrics={"composite": 0.85, "test_auc": 0.85, "test_bacc": 0.85},
+        metrics={"primary_value": 0.85, "test_auc": 0.85, "test_bacc": 0.85},
         status="keep",
     )
 
     eg._reevaluate_descendants(capkill_nid)
 
     assert eg.get_node(better_nid)["status"] == "keep", (
-        "Descendant with composite 0.85 > partial composite 0.82 must remain 'keep' "
-        "after cascade. If it was discarded, the cascade did not use the partial composite."
+        "Descendant with primary_value 0.85 > partial primary_value 0.82 must remain 'keep' "
+        "after cascade. If it was discarded, the cascade did not use the partial primary_value."
     )
 
 
@@ -174,42 +174,42 @@ def test_descendant_cascade_against_partial_composite_keeps_better_descendant(
 # ---------------------------------------------------------------------------
 
 
-def test_descendant_cascade_against_partial_composite_discards_worse_descendant(
+def test_descendant_cascade_against_partial_primary_value_discards_worse_descendant(
     tmp_path: Path,
 ):
-    """Descendant with composite=0.70 < partial composite 0.82 flips to 'discard'.
+    """Descendant with primary_value=0.70 < partial primary_value 0.82 flips to 'discard'.
 
     This is the definitive Fragile Invariant #6 proof: 0.70 beats zero (so if
     the cascade ran against 0.0 it would falsely stay 'keep'), but loses to 0.82
-    (so if the cascade ran against the correct partial composite it flips to
+    (so if the cascade ran against the correct partial primary_value it flips to
     'discard').  Any result other than 'discard' means the cascade is broken.
     """
     eg = ExperimentGraph(tmp_path / "graph.json")
 
     parent_nid = eg.add_executed(
         parent_id=None, description="parent", techniques=[],
-        metrics={"composite": 0.50, "test_auc": 0.50, "test_bacc": 0.50},
+        metrics={"primary_value": 0.50, "test_auc": 0.50, "test_bacc": 0.50},
         status="keep",
     )
     capkill_nid = eg.add_executed(
         parent_id=parent_nid, description="cap-killed partial 0.82", techniques=[],
-        metrics={"composite": 0.82, "test_auc": 0.82, "test_bacc": 0.82},
+        metrics={"primary_value": 0.82, "test_auc": 0.82, "test_bacc": 0.82},
         status="keep",
     )
-    # 0.70 < 0.82 → should be discarded against partial composite
+    # 0.70 < 0.82 → should be discarded against partial primary_value
     # 0.70 > 0.00 → would be kept if cascade ran against zero (Fragile Invariant #6 break)
     worse_nid = eg.add_executed(
         parent_id=capkill_nid,
         description="worse than partial 0.70, beats zero",
         techniques=[],
-        metrics={"composite": 0.70, "test_auc": 0.70, "test_bacc": 0.70},
+        metrics={"primary_value": 0.70, "test_auc": 0.70, "test_bacc": 0.70},
         status="keep",
     )
 
     eg._reevaluate_descendants(capkill_nid)
 
     assert eg.get_node(worse_nid)["status"] == "discard", (
-        "Descendant with composite 0.70 < partial composite 0.82 must be 'discard'. "
+        "Descendant with primary_value 0.70 < partial primary_value 0.82 must be 'discard'. "
         "If it stayed 'keep', the cascade ran against zero — Fragile Invariant #6 broken."
     )
 
@@ -234,7 +234,7 @@ def test_reconcile_logs_summary_at_info_level(
 
     # Write 2 fold files
     for i, comp in enumerate([0.80, 0.82]):
-        _write_fold(node_archive, i, composite=comp)
+        _write_fold(node_archive, i, primary_value=comp)
 
     mock_graph = MagicMock()
     with caplog.at_level(logging.INFO, logger="automil.cells.reconcile"):

@@ -3,7 +3,7 @@ frameworks — nnMIL and CLAM.
 
 Covers the autobench wrapper layer — config/grid (per-framework survival
 combos), task-CSV creation, status-stratified splits, nnMIL plan generation per
-loss, trainer selection, metric normalization, the survival composite — plus a
+loss, trainer selection, metric normalization, the survival primary_value — plus a
 CPU model+loss+c-index smoke for both frameworks' survival models. Full training
 runs on real features live elsewhere (gated).
 """
@@ -437,11 +437,11 @@ class TestSurvivalNormalize:
 
 
 # ---------------------------------------------------------------------------
-# Composite (per-fold archive writer)
+# Primary_value (per-fold archive writer)
 # ---------------------------------------------------------------------------
 
 
-class TestSurvivalComposite:
+class TestSurvivalPrimary_value:
     def test_fold_result_uses_c_index(self, tmp_path, monkeypatch):
         monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
         monkeypatch.setenv("AUTOMIL_FOLD_COUNT", "3")
@@ -451,7 +451,7 @@ class TestSurvivalComposite:
         }
         _write_fold_result_json(0, result)
         payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-        assert payload["composite"] == 0.6  # val_c_index (selection signal), not test's 0.7
+        assert payload["primary_value"] == 0.6  # val_c_index (selection signal), not test's 0.7
         assert payload["held_out"]["test_c_index"] == 0.7  # sealed (val-firewall)
         assert payload["metrics"]["val_c_index"] == 0.6
         assert "test_c_index" not in payload["metrics"]
@@ -465,7 +465,7 @@ class TestSurvivalComposite:
         }
         _write_fold_result_json(0, result)
         payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-        assert payload["composite"] == pytest.approx(0.75)  # val_auc (selection signal)
+        assert payload["primary_value"] == pytest.approx(0.75)  # val_auc (selection signal)
         assert payload["held_out"]["test_auc"] == 0.8  # sealed (val-firewall)
 
 

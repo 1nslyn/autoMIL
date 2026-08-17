@@ -10,8 +10,8 @@ data:
   seed: 42
 
 # DEC-04 / D-200: scoring.formula is documentation-only; the framework does
-# not evaluate it. The consumer's train.py writes the composite scalar in
-# result.json directly. For sklearn-iris, composite == accuracy.
+# not evaluate it. The consumer's train.py writes the primary_value scalar in
+# result.json directly. For sklearn-iris, primary_value == accuracy.
 scoring:
   formula: "accuracy"
 
@@ -21,9 +21,9 @@ env:
   required: []
   passthrough: []
 
-# Baseline composite is updated by the agent after the first experiment.
+# Baseline primary_value is updated by the agent after the first experiment.
 baseline:
-  composite: 0.0
+  primary_value: 0.0
 
 # Cap configuration: consumer-supplied. iris is CPU-only and fast.
 cap:

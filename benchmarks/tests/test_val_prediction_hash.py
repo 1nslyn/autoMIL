@@ -110,7 +110,7 @@ class TestHashFlowsThroughRealAbmilRun:
             assert entry["val_predictions_sha256"] == digest
             # ENTRY level only: the campaign controller exact-key-locks
             # `metrics`, and CR-1b folds every value in there into the
-            # composite. A hash inside metrics would corrupt selection.
+            # primary_value. A hash inside metrics would corrupt selection.
             assert "val_predictions_sha256" not in entry["metrics"]
 
     def test_fold_metrics_json_carries_the_hash(self, real_run):

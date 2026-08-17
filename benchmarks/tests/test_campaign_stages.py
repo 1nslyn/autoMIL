@@ -64,7 +64,7 @@ CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
 
 
 def _folds(indices, base=0.6, *, ordinal=False):
-    # Fold composite IS the primary validation metric (scoring.formula:
+    # Fold primary_value IS the primary validation metric (scoring.formula:
     # val_auc); val_bacc (and val_qwk on ordinal cells) ride along as
     # recorded companions that never vote.
     return [
@@ -75,7 +75,7 @@ def _folds(indices, base=0.6, *, ordinal=False):
                 "val_bacc": base,
                 **({"val_qwk": base} if ordinal else {}),
             },
-            "composite": base + index / 100,
+            "primary_value": base + index / 100,
         }
         for index in indices
     ]
@@ -92,13 +92,13 @@ def _set_fold_prediction_hashes(result_path: Path, seed: str) -> None:
 
 
 def _twin_fold_evidence(archive_root: Path, donor: str, twin: str) -> Path:
-    """Copy donor's public fold evidence onto twin: tied composite vectors
+    """Copy donor's public fold evidence onto twin: tied primary_value vectors
     for two genuinely different configs."""
     donor_result = json.loads((archive_root / donor / "result.json").read_text())
     twin_path = archive_root / twin / "result.json"
     twin_result = json.loads(twin_path.read_text())
     twin_result["validation_folds"] = donor_result["validation_folds"]
-    twin_result["composite"] = donor_result["composite"]
+    twin_result["primary_value"] = donor_result["primary_value"]
     twin_result["metrics"] = donor_result["metrics"]
     twin_path.write_text(json.dumps(twin_result))
     return twin_path
@@ -238,7 +238,7 @@ def _baseline(
     sealed.mkdir(parents=True)
     result = {
         "status": "completed",
-        "composite": 0.62,
+        "primary_value": 0.62,
         "metrics": {
             "val_auc": 0.62, "val_bacc": 0.60,
             **({"val_qwk": 0.60} if ordinal_val else {}),
@@ -365,7 +365,7 @@ def _attempts(
         if index < completed:
             result = {
                 "status": "completed",
-                "composite": 0.5 + index / 100,
+                "primary_value": 0.5 + index / 100,
                 "metrics": {"val_auc": 0.5, "val_bacc": 0.5},
                 "validation_folds": _folds(
                     STAGE_FOLDS["discovery"], 0.5 + index / 100,
@@ -382,7 +382,7 @@ def _attempts(
                     },
                 }))
         else:
-            result = {"status": "crash", "composite": 0.0, "metrics": {}}
+            result = {"status": "crash", "primary_value": 0.0, "metrics": {}}
         (archive / "result.json").write_text(json.dumps(result))
 
 
@@ -437,7 +437,7 @@ def test_baseline_registration_hashes_but_does_not_parse_sealed_test(staged_cell
     root = graph["nodes"][root_id]
     assert root["parent_id"] is None
     assert root["status"] == "keep"
-    assert root["composite"] == pytest.approx(0.61)
+    assert root["primary_value"] == pytest.approx(0.61)
     assert root["metadata"]["cell_id"] == cell["budget_identity"]["cell_id"]
     assert [
         fold["fold_index"] for fold in root["metadata"]["validation_folds"]
@@ -498,7 +498,7 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
         )
         public = {
             "status": "completed",
-            "composite": 0.62,
+            "primary_value": 0.62,
             "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
             "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60),
         }
@@ -697,7 +697,7 @@ def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
         f"node_{index:04d}" for index in range(12, 2, -1)
     ]
     assert all(set(candidate["validation_folds"][0]) == {
-        "fold_index", "metrics", "composite",
+        "fold_index", "metrics", "primary_value",
     } for candidate in promoted)
     assert all(len(candidate["sealed_fold_sha256"]) == 3 for candidate in promoted)
 
@@ -744,7 +744,7 @@ def test_discovery_excludes_out_of_range_validation_metrics(staged_cell):
     _attempts(adir, cell["cell_id"], completed=1)
     result_path = adir / "orchestrator/archive/node_0001/result.json"
     result = json.loads(result_path.read_text())
-    result["validation_folds"][0]["composite"] = 1.01
+    result["validation_folds"][0]["primary_value"] = 1.01
     result_path.write_text(json.dumps(result))
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
 
@@ -793,11 +793,11 @@ def test_discovery_deduplicates_semantically_identical_hparams(staged_cell):
 def test_discovery_deduplicates_outcome_identical_candidates(staged_cell):
     """LEGACY FALLBACK — hashless artifacts only. Runs are bit-deterministic
     under the locked seed: two DISTINCT configs with identical per-fold
-    composites are one measurement wearing two names (uni_v2 canary: a
+    primary values are one measurement wearing two names (uni_v2 canary: a
     weight-decay value inside the logit-scaling invariant regime reproduced
     its parent to 16 digits and occupied a second promotion slot). When
     neither candidate carries val_predictions_sha256 (pre-hash artifacts,
-    e.g. the live canary cells), the composite-tuple rule still dedups.
+    e.g. the live canary cells), the primary_value-tuple rule still dedups.
     Hash-bearing candidates are covered by the tests below."""
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
@@ -828,10 +828,10 @@ def test_discovery_deduplicates_outcome_identical_candidates(staged_cell):
     )
 
 
-def test_discovery_keeps_tied_composites_with_distinct_prediction_hashes(
+def test_discovery_keeps_tied_primary_values_with_distinct_prediction_hashes(
     staged_cell,
 ):
-    """Quantized composites can tie for genuinely different configs. With
+    """Quantized primary_values can tie for genuinely different configs. With
     complete per-fold hash vectors on BOTH candidates, the byte discriminator
     decides: different predictions => two real candidates, both promoted."""
     cell_root, adir, cell, _, _ = staged_cell
@@ -907,9 +907,9 @@ def test_discovery_deduplicates_equal_prediction_hash_vectors(staged_cell):
     ]
 
 
-def test_discovery_mixed_hash_presence_never_composite_dedups(staged_cell):
+def test_discovery_mixed_hash_presence_never_primary_value_dedups(staged_cell):
     """A hash-bearing candidate must not dedup against a hashless one on
-    composites alone: the tie is only suspicious, never proven identical."""
+    primary values alone: the tie is only suspicious, never proven identical."""
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
@@ -1054,14 +1054,14 @@ def _finish_promotion(
         result = (
             {
                 "status": "completed",
-                "composite": job_base,
+                "primary_value": job_base,
                 "metrics": {"val_auc": 0.7, "val_bacc": 0.7},
                 "validation_folds": _folds(
                     STAGE_FOLDS["promotion"], job_base,
                 ),
             }
             if index < completed else
-            {"status": "crash", "composite": 0.0, "metrics": {}}
+            {"status": "crash", "primary_value": 0.0, "metrics": {}}
         )
         (archive / "result.json").write_text(json.dumps(result))
         if index < completed:
@@ -1301,7 +1301,7 @@ def test_fivefold_validation_mean_can_select_searched_candidate(staged_cell):
         0, 1, 2, 3, 4,
     ]
     assert winner["validation_mean"] == pytest.approx(
-        sum(fold["composite"] for fold in winner["validation_folds"]) / 5
+        sum(fold["primary_value"] for fold in winner["validation_folds"]) / 5
     )
     assert winner["lift_over_baseline"] > 0
 
@@ -1340,7 +1340,7 @@ def test_exact_validation_tie_prefers_native_baseline(staged_cell):
     )
     freeze_discovery(cell_root)
     materialize_promotion(cell_root, repo_root=repo_root)
-    # Rank-1 source node_0012 has discovery composites .610/.620/.630.
+    # Rank-1 source node_0012 has discovery primary values .610/.620/.630.
     # Promotion .615/.625 makes the exact five-fold mean .620, baseline's mean.
     _finish_promotion(cell_root, completed=1, promotion_base=0.585)
     freeze_promotion(cell_root)
@@ -1359,7 +1359,7 @@ def test_searched_tie_uses_stable_discovery_node_id(staged_cell):
     )
     freeze_discovery(cell_root)
     materialize_promotion(cell_root, repo_root=repo_root)
-    # node_0012 has .03 more discovery-composite mass than node_0011;
+    # node_0012 has .03 more discovery-primary_value mass than node_0011;
     # adding .015 to each of node_0011's two promotion folds makes them tie.
     bases = [0.75, 0.765] + [0.5] * 8
     _finish_promotion(

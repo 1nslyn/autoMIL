@@ -195,13 +195,13 @@ def test_terminal_writer_backfills_cell_id_from_the_spec(tmp_path: Path):
     graph = ExperimentGraph(path=graph_path)
     graph.nodes["node_0001"] = {
         "id": "node_0001", "type": "running", "status": "running",
-        "description": "backend-submitted", "techniques": [], "composite": 0.0,
+        "description": "backend-submitted", "techniques": [], "primary_value": 0.0,
     }
     graph.save()
 
     write_terminal_state(
         node_id="node_0001",
-        result={"status": "completed", "composite": 0.7, "metrics": {"val_auc": 0.7}},
+        result={"status": "completed", "primary_value": 0.7, "metrics": {"val_auc": 0.7}},
         graph=graph,
         completed_dir=tmp_path / "completed",
         archive_dir=tmp_path / "archive" / "node_0001",
@@ -224,14 +224,14 @@ def test_terminal_writer_does_not_overwrite_an_existing_cell_id(tmp_path: Path):
     graph = ExperimentGraph(path=graph_path)
     graph.nodes["node_0001"] = {
         "id": "node_0001", "type": "running", "status": "running",
-        "description": "x", "techniques": [], "composite": 0.0,
+        "description": "x", "techniques": [], "primary_value": 0.0,
         "cell_id": "original",
     }
     graph.save()
 
     write_terminal_state(
         node_id="node_0001",
-        result={"status": "completed", "composite": 0.7, "metrics": {"val_auc": 0.7}},
+        result={"status": "completed", "primary_value": 0.7, "metrics": {"val_auc": 0.7}},
         graph=graph,
         completed_dir=tmp_path / "completed",
         archive_dir=tmp_path / "archive" / "node_0001",

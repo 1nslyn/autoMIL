@@ -118,7 +118,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         "attestation_sha256": baseline_attestation["attestation_sha256"],
         "validation_mean": 0.5,
         "validation_folds": [
-            {"fold_index": fold, "composite": 0.5, "metrics": {}}
+            {"fold_index": fold, "primary_value": 0.5, "metrics": {}}
             for fold in range(5)
         ],
         "result_status": "completed",

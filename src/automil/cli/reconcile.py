@@ -40,8 +40,8 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
     """Sync experiment graph with orchestrator state.
 
     With ``--recompute-best``: walks ``executed/keep`` nodes, picks the
-    max-composite node (lex tie-break on ``node_id``), updates
-    ``meta.best_node_id`` and ``meta.best_composite``, and prints a
+    max-primary_value node (lex tie-break on ``node_id``), updates
+    ``meta.best_node_id`` and ``meta.best_primary_value``, and prints a
     one-line summary. ``--dry-run`` prints the same summary without
     writing.
     """
@@ -82,10 +82,10 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     click.echo(f"  skip {nid}: malformed archive result.json ({exc})")
                     continue
                 # B6 (claims-alignment): same ingest sanitation as the terminal
-                # writer — key-guard, then prefer the val-recomputed composite
+                # writer — key-guard, then prefer the val-recomputed primary_value
                 # and fold-derived SE over the reported values.
                 from automil.scoring import ingest_signal as _ingest_signal
-                from automil.graph import node_composite_se as _node_se
+                from automil.graph import node_primary_se as _node_se
                 _leaking, _comp_rec, _se_rec, _refused = _ingest_signal(
                     payload, (g.meta.get("scoring") or {}).get("formula")
                 )
@@ -93,13 +93,13 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     # Ingest as crash (the ingest_signal contract), not skip:
                     # this is the ONE tool that refreshes existing executed
                     # nodes, so it is also the repair path for a node whose
-                    # composite was contaminated before the A6 guard existed.
+                    # primary_value was contaminated before the A6 guard existed.
                     click.echo(
                         f"  {nid}: val-firewall violation — held-out-named "
                         f"metrics key(s) {', '.join(_leaking)}; ingesting as crash"
                     )
                     gnode["status"] = "crash"
-                    gnode["composite"] = 0.0
+                    gnode["primary_value"] = 0.0
                     gnode["metrics"] = {}
                     gnode["metadata"] = merged_metadata(gnode, {
                         "result_status": payload.get("status"),
@@ -108,7 +108,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     refreshed += 1
                     continue
                 if _comp_rec is not None and payload.get("status") == "completed":
-                    gnode["composite"] = _comp_rec
+                    gnode["primary_value"] = _comp_rec
                 elif _refused:
                     # Fail-closed (B2/B3), status-independent like every other
                     # ingest mouth: metrics present but unable to support the
@@ -116,28 +116,28 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     # a quarantined node can still parent a keep bar).
                     click.echo(
                         f"  {nid}: metrics cannot support the declared "
-                        "scoring.formula; refusing the reported composite "
+                        "scoring.formula; refusing the reported primary_value "
                         "(scored 0.0)"
                     )
-                    gnode["composite"] = 0.0
+                    gnode["primary_value"] = 0.0
                 else:
-                    gnode["composite"] = payload.get("composite", gnode.get("composite", 0.0))
+                    gnode["primary_value"] = payload.get("primary_value", gnode.get("primary_value", 0.0))
                 _se_final = _se_rec if _se_rec is not None else _node_se(payload)
                 if _se_final is not None:
-                    gnode["composite_se"] = _se_final
+                    gnode["primary_se"] = _se_final
                 # Paired margin: refresh the fold projection from the archive
                 # result so the keep/discard below (and this node's future role
                 # as a parent) uses the paired basis. Assign-or-CLEAR — the
                 # refresh is authoritative; keeping a previous run's folds
-                # beside a refreshed composite would pair across runs.
-                from automil.scoring import fold_composite_entries as _fold_entries
+                # beside a refreshed primary_value would pair across runs.
+                from automil.scoring import fold_primary_value_entries as _fold_entries
                 _folds_refresh = _fold_entries(
                     payload, (g.meta.get("scoring") or {}).get("formula")
                 )
                 if _folds_refresh is not None:
-                    gnode["fold_composites"] = _folds_refresh
+                    gnode["fold_primary_values"] = _folds_refresh
                 else:
-                    gnode.pop("fold_composites", None)
+                    gnode.pop("fold_primary_values", None)
 
                 # CR-03 fix: result.json status enum (completed/budget_killed/crash/
                 # partial/cancelled) must NOT be written directly into gnode["status"].
@@ -149,7 +149,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                 #
                 # Mapping: crash/partial/cancelled pass through unchanged.
                 # completed/budget_killed are treated like a normal completion: compare
-                # the refreshed composite against the parent's composite to determine
+                # the refreshed primary_value against the parent's primary_value to determine
                 # keep vs discard (same logic as terminal_writer.write_terminal_state).
                 raw_result_status = payload.get("status")
                 if raw_result_status is not None:
@@ -195,7 +195,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
         if old_id == new_id:
             # D-13 verbatim: unchanged-best line.
             click.echo(
-                f"best_node_id unchanged: {new_id_str} (composite {new_c:.6f})"
+                f"best_node_id unchanged: {new_id_str} (primary_value {new_c:.6f})"
             )
         else:
             # D-13 verbatim: changed-best line with literal Unicode → (U+2192).
@@ -203,8 +203,8 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
             # decision is not allowed. stdout encoding is UTF-8 on Linux
             # (project is Linux-only per PROJECT.md).
             click.echo(
-                f"best_node_id: {old_id_str} (composite {old_c:.6f}) "
-                f"→ {new_id_str} (composite {new_c:.6f})"
+                f"best_node_id: {old_id_str} (primary_value {old_c:.6f}) "
+                f"→ {new_id_str} (primary_value {new_c:.6f})"
             )
 
         return

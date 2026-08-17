@@ -25,8 +25,8 @@ def _write_graph(adir, nodes):
         "meta": {
             "total_executed": len(nodes),
             "best_node_id": list(nodes.keys())[0],
-            "best_composite": 0.9,
-            "baseline_composite": 0.0,
+            "best_primary_value": 0.9,
+            "baseline_primary_value": 0.0,
             "total_proposed": 0,
             "next_id": len(nodes) + 1,
             "scoring": {
@@ -50,20 +50,20 @@ def rank_project(tmp_path, monkeypatch):
         "node_0001": {
             "id": "node_0001", "type": "proposed", "status": "pending",
             "parent_id": "root",
-            "composite": 0.9, "potential": 0.5,
+            "primary_value": 0.9, "potential": 0.5,
             "description": "search-cell win",
         },
         "node_0002": {
             "id": "node_0002", "type": "proposed", "status": "pending",
             "parent_id": "root",
-            "composite": 0.85, "potential": 0.4,
+            "primary_value": 0.85, "potential": 0.4,
             "description": "held-out eval",
             "metadata": {"held_out": True},
         },
         "node_0003": {
             "id": "node_0003", "type": "proposed", "status": "pending",
             "parent_id": "root",
-            "composite": 0.88, "potential": 0.45,
+            "primary_value": 0.88, "potential": 0.45,
             "description": "another search-cell",
         },
     }
@@ -140,7 +140,7 @@ def test_rank_filter_handles_missing_metadata(tmp_path, monkeypatch):
         "node_0010": {
             "id": "node_0010", "type": "proposed", "status": "pending",
             "parent_id": "root",
-            "composite": 0.9, "potential": 0.5,
+            "primary_value": 0.9, "potential": 0.5,
             "description": "no-metadata node",
         },
     }

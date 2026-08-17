@@ -54,7 +54,7 @@ def _make_spec(kind: str, name: str, parent: str | None = None) -> VariantSpec:
         kind=kind,
         parent=parent,
         base_commit="abc123",
-        composite=0.85,
+        primary_value=0.85,
         node_id="node_0001",
         created_at="2026-06-11T00:00:00+00:00",
     )
@@ -273,9 +273,9 @@ def test_error_raised_before_config_mutation(tmp_path, monkeypatch):
     graph = {
         "schema_version": 1,
         "meta": {
-            "best_node_id": None, "best_composite": 0.0,
+            "best_node_id": None, "best_primary_value": 0.0,
             "total_executed": 0, "total_proposed": 0,
-            "next_id": 1, "baseline_composite": 0.0,
+            "next_id": 1, "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": {
@@ -283,7 +283,7 @@ def test_error_raised_before_config_mutation(tmp_path, monkeypatch):
                 "id": "node_0001",
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.5,
+                "primary_value": 0.5,
                 "variant_spec": {"kind": "loss", "name": loss_name, "parent": None},
             }
         },

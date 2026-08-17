@@ -9,7 +9,7 @@ Without this test green, Phase 5 has not delivered "the gate enforces held-out s
 D-149 assertions (9 total):
   1.  Synthetic 3-cell graph (1 search + 2 held-out)
   2.  Manifest registered declaring the 2 held-out cells
-  3.  Synthetic search loop proposes 3 candidates with composites on search cell only
+  3.  Synthetic search loop proposes 3 candidates with primary values on search cell only
   4.  Agent's view (rank output + trajectory.jsonl) contains zero held-out cell IDs
   5.  Operator nominates candidate #2; calls promote
   6.  2 gate_eval nodes spawned via Backend.submit() with correct metadata
@@ -51,22 +51,22 @@ class _RecordingBackend(Backend):
 
     Usage::
         backend = _RecordingBackend()
-        backend.set_composite(held_out_a_id, 0.92)  # candidate beats parent
+        backend.set_primary_value(held_out_a_id, 0.92)  # candidate beats parent
         # monkeypatch automil.cli.promote._resolve_backend -> backend
     """
 
     def __init__(self) -> None:
         self.submitted_specs: list[JobSpec] = []
-        self._composites: dict[str, float] = {}  # cell_id -> composite to stamp on graph
+        self._primary_values: dict[str, float] = {}  # cell_id -> primary_value to stamp on graph
         self._counter = 0
         # opaque_id -> state
         self._jobs: dict[str, JobState] = {}
         # Map node_id -> opaque_id for cancel
         self._node_to_opaque: dict[str, str] = {}
 
-    def set_composite(self, cell_id: str, composite: float) -> None:
-        """Pre-configure the composite score for a held-out cell."""
-        self._composites[cell_id] = composite
+    def set_primary_value(self, cell_id: str, primary_value: float) -> None:
+        """Pre-configure the primary-metric value for a held-out cell."""
+        self._primary_values[cell_id] = primary_value
 
     def submit(self, spec: JobSpec) -> JobHandle:
         """Record spec; immediately move job to COMPLETED so poll() returns terminal."""
@@ -164,7 +164,7 @@ def pitfall6_project(tmp_path):
     held_out_e_id  = "held_out_cell_aabb9988cc55"
 
     # D-149 assertion 3: parent node (search cell) + 3 candidate proposals
-    # Each candidate has composite from SEARCH CELL ONLY at proposal time.
+    # Each candidate has primary_value from SEARCH CELL ONLY at proposal time.
     search_node_id = "node_0001"
     cand_1_id = "node_0002"
     cand_2_id = "node_0003"  # the one the operator nominates
@@ -174,12 +174,12 @@ def pitfall6_project(tmp_path):
     graph_data = {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "best_node_id": None,
             "total_executed": 4,
             "total_proposed": 0,
             "next_id": 5,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": {
@@ -188,7 +188,7 @@ def pitfall6_project(tmp_path):
                 "parent_id": None,
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.85,
+                "primary_value": 0.85,
                 "description": "search cell baseline",
                 "metadata": {
                     "held_out": False,
@@ -204,7 +204,7 @@ def pitfall6_project(tmp_path):
                 "parent_id": search_node_id,
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.86,
+                "primary_value": 0.86,
                 "description": "candidate 1 — search cell only",
                 "metadata": {"held_out": False},
                 "commit": "abc1234",
@@ -217,7 +217,7 @@ def pitfall6_project(tmp_path):
                 "parent_id": search_node_id,
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.88,
+                "primary_value": 0.88,
                 "description": "candidate 2 — NOMINATED by operator",
                 "metadata": {"held_out": False},
                 "commit": "abc1234",
@@ -230,7 +230,7 @@ def pitfall6_project(tmp_path):
                 "parent_id": search_node_id,
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.87,
+                "primary_value": 0.87,
                 "description": "candidate 3 — search cell only",
                 "metadata": {"held_out": False},
                 "commit": "abc1234",
@@ -293,7 +293,7 @@ def _register_manifest(
         K=5,
         p_threshold=0.2,   # Bonferroni: 0.2/5 = 0.04 > Wilcoxon min-p 0.031 -> PASS
         bootstrap_reps=100,  # small for test speed
-        win_definition="delta_composite > 0 AND p < p_threshold",
+        win_definition="delta_primary_value > 0 AND p < p_threshold",
         schema_version=SCHEMA_VERSION,
     )
     write_manifest_committed(manifest, gate_dir, git_root)
@@ -371,12 +371,12 @@ def test_pitfall6_held_out_isolation_pass_path(pitfall6_project, monkeypatch):
         f"Pitfall-6 assertion 2: gate manifest must be committed to git; log={log!r}"
     )
 
-    # === D-149 assertion 3: 3 candidates exist with composites from search cell only ===
+    # === D-149 assertion 3: 3 candidates exist with primary values from search cell only ===
     for cid in [cand_1_id, cand_2_id, cand_3_id]:
         node = graph_data["nodes"][cid]
-        # Each candidate has composite > 0 (from search cell context only)
-        assert float(node.get("composite", 0.0)) > 0.0, (
-            f"Pitfall-6 assertion 3: candidate {cid} must have a composite from search cell"
+        # Each candidate has primary_value > 0 (from search cell context only)
+        assert float(node.get("primary_value", 0.0)) > 0.0, (
+            f"Pitfall-6 assertion 3: candidate {cid} must have a primary_value from search cell"
         )
         # No held_out flag on search-loop candidates
         assert not node.get("metadata", {}).get("held_out", False), (
@@ -418,7 +418,7 @@ def test_pitfall6_held_out_isolation_pass_path(pitfall6_project, monkeypatch):
         "type": "gate_eval",
         "status": "pending",
         "metadata": {"held_out": True, "gate_eval": True, "cell_id": held_out_a_id},
-        "composite": 0.0,
+        "primary_value": 0.0,
     }
     graph_path.write_text(json.dumps(graph_data_loaded, indent=2))
 
@@ -469,11 +469,11 @@ def test_pitfall6_held_out_isolation_pass_path(pitfall6_project, monkeypatch):
     # 5 strongly positive deltas (0.05..0.09 above parent=0.85):
     # Wilcoxon p=0.031 <= Bonferroni-corrected alpha=0.04 -> PASS
     backend = _RecordingBackend()
-    backend.set_composite(held_out_a_id,  0.90)  # delta +0.05
-    backend.set_composite(held_out_b_id,  0.91)  # delta +0.06
-    backend.set_composite(held_out_c_id,  0.92)  # delta +0.07
-    backend.set_composite(held_out_d_id,  0.93)  # delta +0.08
-    backend.set_composite(held_out_e_id,  0.94)  # delta +0.09
+    backend.set_primary_value(held_out_a_id,  0.90)  # delta +0.05
+    backend.set_primary_value(held_out_b_id,  0.91)  # delta +0.06
+    backend.set_primary_value(held_out_c_id,  0.92)  # delta +0.07
+    backend.set_primary_value(held_out_d_id,  0.93)  # delta +0.08
+    backend.set_primary_value(held_out_e_id,  0.94)  # delta +0.09
 
     # Monkeypatch _resolve_backend so promote_cmd uses our recording backend
     monkeypatch.setattr(
@@ -481,30 +481,30 @@ def test_pitfall6_held_out_isolation_pass_path(pitfall6_project, monkeypatch):
         lambda _name, _adir: backend,
     )
 
-    # Also we need to stamp composite on graph nodes when backend submits,
-    # so _read_eval_composite finds the right value.
+    # Also we need to stamp primary_value on graph nodes when backend submits,
+    # so _read_eval_primary_value finds the right value.
     # We override evaluate_candidate at the promote module level to do this inline.
     # Actually, let's use the real evaluate_candidate path but pre-stamp graph nodes.
-    # The backend.submit records the spec; _read_eval_composite reads graph.nodes[child_id].
-    # We need to stamp after submit. Use a monkeypatch on _poll_handles to stamp composites.
+    # The backend.submit records the spec; _read_eval_primary_value reads graph.nodes[child_id].
+    # We need to stamp after submit. Use a monkeypatch on _poll_handles to stamp primary values.
     import automil.gate.evaluate as _eval_mod
 
-    _orig_read_eval_composite = _eval_mod._read_eval_composite
+    _orig_read_eval_primary_value = _eval_mod._read_eval_primary_value
 
-    def _patched_read_eval_composite(handle, _backend, graph, child_id,
-                                     fallback_composite, state_str):
+    def _patched_read_eval_primary_value(handle, _backend, graph, child_id,
+                                     fallback_primary_value, state_str):
         # Find the cell_id from the graph node's metadata
         node = graph.nodes.get(child_id, {})
         cell_id = node.get("metadata", {}).get("cell_id", "")
-        configured = backend._composites.get(cell_id)
+        configured = backend._primary_values.get(cell_id)
         if configured is not None:
-            # Stamp composite so the pairing logic works
-            graph.nodes[child_id]["composite"] = configured
-        return _orig_read_eval_composite(
-            handle, _backend, graph, child_id, fallback_composite, state_str
+            # Stamp primary_value so the pairing logic works
+            graph.nodes[child_id]["primary_value"] = configured
+        return _orig_read_eval_primary_value(
+            handle, _backend, graph, child_id, fallback_primary_value, state_str
         )
 
-    monkeypatch.setattr(_eval_mod, "_read_eval_composite", _patched_read_eval_composite)
+    monkeypatch.setattr(_eval_mod, "_read_eval_primary_value", _patched_read_eval_primary_value)
 
     # Also patch get_cell to return None (no cap-exhausted cells) for evaluate
     monkeypatch.setattr("automil.gate.evaluate.get_cell", lambda cid: None)
@@ -565,7 +565,7 @@ def test_pitfall6_held_out_isolation_pass_path(pitfall6_project, monkeypatch):
         fake_post_promote_event = {
             "gen_ai.event.name": "tool_result",
             "content": (
-                f"gate eval result: {gate_eval_nid} composite=0.92 "
+                f"gate eval result: {gate_eval_nid} primary_value=0.92 "
                 f"cell={held_out_a_id}"
             ),
         }
@@ -662,13 +662,13 @@ def test_pitfall6_fail_path_reverts_to_keep(pitfall6_project, monkeypatch):
     assert nominate_result.exit_code == 0
 
     # Configure backend: NEGATIVE deltas => FAIL path
-    # Parent composite = 0.85; held-out composites < 0.85 -> delta negative
+    # Parent primary_value = 0.85; held-out primary values < 0.85 -> delta negative
     backend = _RecordingBackend()
-    backend.set_composite(held_out_a_id, 0.78)  # delta = 0.78 - 0.85 = -0.07
-    backend.set_composite(held_out_b_id, 0.79)  # delta = 0.79 - 0.85 = -0.06
-    backend.set_composite(held_out_c_id, 0.77)  # delta = -0.08
-    backend.set_composite(held_out_d_id, 0.76)  # delta = -0.09
-    backend.set_composite(held_out_e_id, 0.75)  # delta = -0.10
+    backend.set_primary_value(held_out_a_id, 0.78)  # delta = 0.78 - 0.85 = -0.07
+    backend.set_primary_value(held_out_b_id, 0.79)  # delta = 0.79 - 0.85 = -0.06
+    backend.set_primary_value(held_out_c_id, 0.77)  # delta = -0.08
+    backend.set_primary_value(held_out_d_id, 0.76)  # delta = -0.09
+    backend.set_primary_value(held_out_e_id, 0.75)  # delta = -0.10
 
     monkeypatch.setattr(
         "automil.cli.promote._resolve_backend",
@@ -676,19 +676,19 @@ def test_pitfall6_fail_path_reverts_to_keep(pitfall6_project, monkeypatch):
     )
     monkeypatch.setattr("automil.gate.evaluate.get_cell", lambda cid: None)
 
-    # Patch _read_eval_composite to return our configured composites
+    # Patch _read_eval_primary_value to return our configured primary values
     import automil.gate.evaluate as _eval_mod
-    _orig = _eval_mod._read_eval_composite
+    _orig = _eval_mod._read_eval_primary_value
 
-    def _patched(handle, _backend, graph, child_id, fallback_composite, state_str):
+    def _patched(handle, _backend, graph, child_id, fallback_primary_value, state_str):
         node = graph.nodes.get(child_id, {})
         cell_id = node.get("metadata", {}).get("cell_id", "")
-        configured = backend._composites.get(cell_id)
+        configured = backend._primary_values.get(cell_id)
         if configured is not None:
-            graph.nodes[child_id]["composite"] = configured
-        return _orig(handle, _backend, graph, child_id, fallback_composite, state_str)
+            graph.nodes[child_id]["primary_value"] = configured
+        return _orig(handle, _backend, graph, child_id, fallback_primary_value, state_str)
 
-    monkeypatch.setattr(_eval_mod, "_read_eval_composite", _patched)
+    monkeypatch.setattr(_eval_mod, "_read_eval_primary_value", _patched)
 
     promote_result = runner.invoke(main, ["promote", cand_2_id], catch_exceptions=False)
     assert promote_result.exit_code == 0, (
@@ -751,7 +751,7 @@ def test_pitfall6_redactor_isolation_pre_and_post(pitfall6_project, monkeypatch)
                 "gate_eval": True,
                 "cell_id": cid,
             },
-            "composite": 0.92,
+            "primary_value": 0.92,
         }
 
     graph_path.write_text(json.dumps(graph_data, indent=2))
@@ -763,7 +763,7 @@ def test_pitfall6_redactor_isolation_pre_and_post(pitfall6_project, monkeypatch)
         "content": (
             f"Results: {fake_node_a} scored 0.92, "
             f"{fake_node_b} scored 0.93, "
-            f"{cand_2_id} search composite=0.88"
+            f"{cand_2_id} search primary_value=0.88"
         ),
     }
     redacted = redact_event(event)

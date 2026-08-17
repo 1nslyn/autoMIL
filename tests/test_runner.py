@@ -145,7 +145,7 @@ class TestResultCollection:
             cwd=project_repo, capture_output=True, text=True, check=True,
         ).stdout.strip()
         wt_path = runner.create_worktree(base_commit=base, node_id="node_0004")
-        result = {"status": "completed", "composite": 0.85, "metrics": {"test_auc": 0.87}}
+        result = {"status": "completed", "primary_value": 0.85, "metrics": {"test_auc": 0.87}}
         (wt_path / "result.json").write_text(json.dumps(result))
         archive_dir = project_repo / "orchestrator" / "archive" / "node_0004"
         archive_dir.mkdir(parents=True)
@@ -186,10 +186,10 @@ class TestResultCollection:
         sealed_dir.mkdir(parents=True)
 
         full_payload = {
-            "status": "completed", "composite": 0.845,
+            "status": "completed", "primary_value": 0.845,
             "metrics": {"val_auc": 0.88}, "held_out": {"test_auc": 0.87},
         }
-        stripped_payload = {"status": "completed", "composite": 0.845, "metrics": {"val_auc": 0.88}}
+        stripped_payload = {"status": "completed", "primary_value": 0.845, "metrics": {"val_auc": 0.88}}
         (sealed_dir / "result.json").write_text(json.dumps(full_payload))
         (wt_path / "result.json").write_text(json.dumps(stripped_payload))
 
@@ -220,7 +220,7 @@ class TestResultCollection:
         archive_dir.mkdir(parents=True)
 
         full_payload = {
-            "status": "completed", "composite": 0.845,
+            "status": "completed", "primary_value": 0.845,
             "metrics": {"val_auc": 0.88}, "held_out": {"test_auc": 0.87},
         }
         (wt_path / "result.json").write_text(json.dumps(full_payload))

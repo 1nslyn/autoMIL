@@ -30,7 +30,7 @@ def _run_consumer_program(
     node_id: str,
     base_commit: str,
 ) -> tuple[float, float]:
-    """Run the consumer's program.py in a tmp worktree; return (composite, runtime_s).
+    """Run the consumer's program.py in a tmp worktree; return (primary_value, runtime_s).
 
     Phase 1 simple path: use a tempfile worktree via subprocess git, run
     `python program.py` with CUDA_VISIBLE_DEVICES not set, read result.json.
@@ -116,8 +116,8 @@ def _run_consumer_program(
             )
 
         result = json.loads(result_path.read_text())
-        composite = float(result.get("composite", 0.0))
-        return composite, runtime_s
+        primary_value = float(result.get("primary_value", 0.0))
+        return primary_value, runtime_s
 
     finally:
         # Cleanup worktree.
@@ -147,8 +147,8 @@ def verify_repro(node_id: str, tolerance: Optional[float]):
 
     Workflow: after porting a node's variant via `automil port-variant` and
     setting it active via `automil apply`, run `automil verify-repro <node_id>`
-    to re-execute the recipe in a clean worktree and confirm the new composite
-    matches the recorded composite within tolerance. Writes
+    to re-execute the recipe in a clean worktree and confirm the new primary_value
+    matches the recorded primary_value within tolerance. Writes
     automil/repro_manifest.yaml with {expected, actual, tolerance, status:
     pass | fail}.
 
@@ -167,10 +167,10 @@ def verify_repro(node_id: str, tolerance: Optional[float]):
     tol = tolerance if tolerance is not None else cfg.repro_tolerance
 
     node = _get_node_or_die(adir, node_id)
-    expected = float(node.get("composite", 0.0))
+    expected = float(node.get("primary_value", 0.0))
     base_commit = node.get("base_commit", "HEAD")
 
-    click.echo(f"verify-repro {node_id}: expected composite={expected:.6f}, tolerance=\xb1{tol}")
+    click.echo(f"verify-repro {node_id}: expected primary_value={expected:.6f}, tolerance=\xb1{tol}")
     click.echo(f"Running consumer program in worktree at {base_commit[:8]}...")
 
     actual, runtime_s = _run_consumer_program(git_root, adir, node_id, base_commit)
@@ -188,8 +188,8 @@ def verify_repro(node_id: str, tolerance: Optional[float]):
 
     manifest = {
         "node_id": node_id,
-        "expected_composite": expected,
-        "actual_composite": actual,
+        "expected_primary_value": expected,
+        "actual_primary_value": actual,
         "tolerance": tol,
         "status": status,
         "git_sha": git_sha,
@@ -200,13 +200,13 @@ def verify_repro(node_id: str, tolerance: Optional[float]):
     manifest_path = adir / "repro_manifest.yaml"
     _atomic_write_text(manifest_path, yaml.safe_dump(manifest, sort_keys=False))
 
-    click.echo(f"Actual composite: {actual:.6f} (diff {diff:.6f})")
+    click.echo(f"Actual primary_value: {actual:.6f} (diff {diff:.6f})")
     click.echo(f"Status: {status}")
     click.echo(f"Manifest: {manifest_path}")
 
     if status == "fail":
         raise click.ClickException(
-            f"verify-repro: composite drifted beyond tolerance "
+            f"verify-repro: primary_value drifted beyond tolerance "
             f"(|{actual:.6f} - {expected:.6f}| = {diff:.6f} > {tol}). "
             f"Inspect {manifest_path} and the variant module for porting bugs."
         )

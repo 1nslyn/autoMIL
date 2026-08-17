@@ -2,11 +2,11 @@
 
 Verifies the post-refactor storage shape:
   - node["metrics"] is the dict-spread of the consumer's metrics dict.
-  - Framework-owned scalars (composite, parent_delta, global_delta, vram_gb,
+  - Framework-owned scalars (primary_value, parent_delta, global_delta, vram_gb,
     elapsed_min, gpu) stay at top level.
   - The four named autobench keys (val_auc, val_bacc, test_auc, test_bacc)
     NO LONGER live at top level.
-  - Pareto dominance is composite-only (OQ-9 Option B).
+  - Pareto dominance is primary_value-only (OQ-9 Option B).
 
 Pitfall 7 anti-acceptance defenders:
   - test_consumer_extension_keys_round_trip: arbitrary consumer metric names
@@ -37,13 +37,13 @@ def test_add_executed_round_trips_arbitrary_metric_keys(empty_graph: ExperimentG
         description="round-trip",
         techniques=[],
         status="keep",
-        metrics={"composite": 0.7, "top1": 0.7, "top5": 0.93, "custom_score": 1.5},
+        metrics={"primary_value": 0.7, "top1": 0.7, "top5": 0.93, "custom_score": 1.5},
     )
     n = empty_graph.get_node(nid)
     assert n["metrics"]["top1"] == 0.7
     assert n["metrics"]["top5"] == 0.93
     assert n["metrics"]["custom_score"] == 1.5
-    assert n["composite"] == 0.7  # framework-owned scalar at top level
+    assert n["primary_value"] == 0.7  # framework-owned scalar at top level
 
 
 def test_sklearn_iris_two_key_metrics_stored(empty_graph: ExperimentGraph):
@@ -53,7 +53,7 @@ def test_sklearn_iris_two_key_metrics_stored(empty_graph: ExperimentGraph):
         description="iris baseline",
         techniques=[],
         status="keep",
-        metrics={"composite": 0.97, "accuracy": 0.97, "f1": 0.965},
+        metrics={"primary_value": 0.97, "accuracy": 0.97, "f1": 0.965},
     )
     n = empty_graph.get_node(nid)
     assert n["metrics"]["accuracy"] == 0.97
@@ -70,7 +70,7 @@ def test_autobench_four_key_metrics_stored(empty_graph: ExperimentGraph):
         techniques=[],
         status="keep",
         metrics={
-            "composite": 0.502,
+            "primary_value": 0.502,
             "val_auc": 0.81, "val_bacc": 0.78,
             "test_auc": 0.83, "test_bacc": 0.80,
         },
@@ -93,30 +93,30 @@ def test_promote_uses_dict_spread(empty_graph: ExperimentGraph):
     )
     empty_graph.mark_running(pid)
     empty_graph.promote(pid, {
-        "composite": 0.6,
+        "primary_value": 0.6,
         "status": "keep",
         "accuracy": 0.6,
         "custom_metric": 42.0,
     })
     n = empty_graph.get_node(pid)
-    assert n["composite"] == 0.6
+    assert n["primary_value"] == 0.6
     assert n["metrics"]["accuracy"] == 0.6
     assert n["metrics"]["custom_metric"] == 42.0
 
 
-def test_pareto_dominance_is_composite_only(empty_graph: ExperimentGraph):
-    """OQ-9 Option B: child with higher composite is keep, regardless of val_auc."""
+def test_pareto_dominance_is_primary_value_only(empty_graph: ExperimentGraph):
+    """OQ-9 Option B: child with higher primary_value is keep, regardless of val_auc."""
     parent_id = empty_graph.add_executed(
         parent_id=None, description="parent", techniques=[], status="keep",
-        metrics={"composite": 0.5, "val_auc": 0.9, "test_auc": 0.85},
+        metrics={"primary_value": 0.5, "val_auc": 0.9, "test_auc": 0.85},
     )
     child_id = empty_graph.add_executed(
         parent_id=parent_id, description="child", techniques=[], status="keep",
-        metrics={"composite": 0.6, "val_auc": 0.7, "test_auc": 0.7},
+        metrics={"primary_value": 0.6, "val_auc": 0.7, "test_auc": 0.7},
     )
     empty_graph._reevaluate_descendants(parent_id)
     n = empty_graph.get_node(child_id)
-    # Composite-only dominance: 0.6 > 0.5 means keep, even though auc dropped.
+    # Primary_value-only dominance: 0.6 > 0.5 means keep, even though auc dropped.
     assert n["status"] == "keep"
 
 
@@ -124,10 +124,10 @@ def test_node_metrics_no_silent_zero_default(empty_graph: ExperimentGraph):
     """Pitfall 7b: framework does NOT auto-add autobench keys to a minimal payload."""
     nid = empty_graph.add_executed(
         parent_id=None, description="minimal", techniques=[], status="keep",
-        metrics={"composite": 0.3},
+        metrics={"primary_value": 0.3},
     )
     n = empty_graph.get_node(nid)
     assert "val_auc" not in n["metrics"]
     assert "test_auc" not in n["metrics"]
-    # composite IS in node["metrics"] because dict(metrics) spread it.
-    assert n["metrics"].get("composite") == 0.3
+    # primary_value IS in node["metrics"] because dict(metrics) spread it.
+    assert n["metrics"].get("primary_value") == 0.3

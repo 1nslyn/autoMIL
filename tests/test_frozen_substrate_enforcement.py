@@ -190,7 +190,7 @@ class TestTheLiveBenchmarkProjectIsProtected:
         )
 
     @pytest.mark.parametrize("project", PROJECTS)
-    def test_the_split_and_composite_writers_are_protected(self, project):
+    def test_the_split_and_primary_value_writers_are_protected(self, project):
         """The two paths that can rewrite the evaluation protocol or fold test
         into the selection signal."""
         root = Path(__file__).resolve().parents[1]

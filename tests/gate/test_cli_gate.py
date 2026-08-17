@@ -111,7 +111,7 @@ def project(tmp_path):
                 "node_0001": {
                     "id": "node_0001",
                     "status": "keep",
-                    "composite": 0.85,
+                    "primary_value": 0.85,
                 }
             },
         })
@@ -307,7 +307,7 @@ def test_gate_status_no_args_lists_all(project):
     graph_path = project / "automil" / "graph.json"
     graph_data = json.loads(graph_path.read_text())
     graph_data["nodes"]["node_0002"] = {
-        "id": "node_0002", "status": "keep", "composite": 0.87
+        "id": "node_0002", "status": "keep", "primary_value": 0.87
     }
     graph_path.write_text(json.dumps(graph_data))
     # Commit the graph change

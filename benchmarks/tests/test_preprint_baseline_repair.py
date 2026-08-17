@@ -242,8 +242,8 @@ def test_ordinal_conversion_records_clamped_qwk(tmp_path):
     assert public["metrics"]["val_qwk"] == pytest.approx(
         sum(0.30 + fold / 100 for fold in range(5)) / 5
     )
-    # qwk never votes: the composite is still the val_auc fold mean.
-    assert public["composite"] == pytest.approx(
+    # qwk never votes: the primary_value is still the val_auc fold mean.
+    assert public["primary_value"] == pytest.approx(
         sum(0.70 + fold / 100 for fold in range(5)) / 5
     )
 

@@ -45,7 +45,7 @@ class Manifest:
                 "kind": self.spec.kind,
                 "parent": self.spec.parent,
                 "base_commit": self.spec.base_commit,
-                "composite": self.spec.composite,
+                "primary_value": self.spec.primary_value,
                 "node_id": self.spec.node_id,
                 "created_at": self.spec.created_at,
                 "mutations": list(self.spec.mutations),
@@ -97,7 +97,7 @@ class Manifest:
                 )
 
         spec_data = payload["spec"]
-        for k in ("name", "kind", "parent", "base_commit", "composite", "node_id", "created_at"):
+        for k in ("name", "kind", "parent", "base_commit", "primary_value", "node_id", "created_at"):
             if k not in spec_data:
                 raise ValueError(
                     f"manifest at {path}: spec section missing required key {k!r}"
@@ -108,7 +108,7 @@ class Manifest:
             kind=spec_data["kind"],
             parent=spec_data["parent"],
             base_commit=spec_data["base_commit"],
-            composite=float(spec_data["composite"]),
+            primary_value=float(spec_data["primary_value"]),
             node_id=spec_data["node_id"],
             created_at=spec_data["created_at"],
             mutations=tuple(spec_data.get("mutations") or []),
@@ -136,7 +136,7 @@ class Manifest:
         docstring"):
           - first word of the docstring == spec.name
           - ``Parent:`` line (for kind=model) == spec.parent
-          - ``Composite:`` line (exact float) == spec.composite
+          - ``Primary_value:`` line (exact float) == spec.primary_value
           - ``Node ID:`` line == spec.node_id
         """
         if not module_path.exists():
@@ -171,16 +171,26 @@ class Manifest:
                     f"docstring parent {doc_parent!r} != manifest parent {self.spec.parent!r}"
                 )
 
-        # Composite check (exact float comparison — D-44 "no tolerance").
-        doc_composite_str = fields.get("composite")
-        if doc_composite_str is not None:
+        # Primary_value check (exact float comparison — D-44 "no tolerance").
+        # A pre-rename module carrying the legacy `Composite:` label must fail
+        # CLOSED here, not skip the check: silently accepting it turns the
+        # D-44 cross-check into a no-op on exactly the modules most likely to
+        # have drifted.
+        doc_primary_value_str = fields.get("primary_value")
+        if doc_primary_value_str is None and fields.get("composite") is not None:
+            return False, (
+                "docstring carries the retired 'Composite:' label; rename it "
+                "to 'Primary_value:' (the composite concept was retired — "
+                "single-metric optimization)"
+            )
+        if doc_primary_value_str is not None:
             try:
-                doc_c = float(doc_composite_str)
+                doc_c = float(doc_primary_value_str)
             except ValueError:
-                return False, f"docstring composite is not a float: {doc_composite_str!r}"
-            if doc_c != self.spec.composite:
+                return False, f"docstring primary_value is not a float: {doc_primary_value_str!r}"
+            if doc_c != self.spec.primary_value:
                 return False, (
-                    f"docstring composite {doc_c} != manifest composite {self.spec.composite}"
+                    f"docstring primary_value {doc_c} != manifest primary_value {self.spec.primary_value}"
                 )
 
         # Node ID check.

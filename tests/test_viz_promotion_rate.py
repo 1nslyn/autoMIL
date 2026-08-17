@@ -44,7 +44,7 @@ def _build_graph(statuses: list[str]) -> dict:
             "type": "executed",
             "status": status,
             "description": "test fixture",
-            "composite": 0.8,
+            "primary_value": 0.8,
             "history": [_nominated_event()],
         }
     return {"nodes": nodes, "meta": {}, "technique_stats": {}}

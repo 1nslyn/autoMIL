@@ -291,7 +291,7 @@ def test_refusal_cancels_the_graph_node_and_archives_the_spec(tmp_path):
     assert archived["metadata"]["cancel_reason"] == "cap"
 
     # A completed/ record would make `reconcile` promote this to an executed
-    # node with composite 0.0 — it never ran, so there must not be one.
+    # node with primary_value 0.0 — it never ran, so there must not be one.
     assert not (orch.completed_dir / f"{NODE_ID}.json").exists()
 
 
@@ -502,7 +502,7 @@ def test_billed_retry_refused_when_archive_already_measured(tmp_path):
     measured = orch.archive_dir / NODE_ID
     measured.mkdir(parents=True, exist_ok=True)
     (measured / "result.json").write_text(json.dumps(
-        {"status": "completed", "composite": 0.5,
+        {"status": "completed", "primary_value": 0.5,
          "metrics": {"val_auc": 0.5}}))
     _stub_runner(orch, tmp_path)
 
@@ -535,7 +535,7 @@ def test_billed_retry_without_measurement_relaunches_agent_active(tmp_path):
     crashed = orch.archive_dir / NODE_ID
     crashed.mkdir(parents=True, exist_ok=True)
     (crashed / "result.json").write_text(json.dumps(
-        {"status": "crash", "composite": 0.0, "metrics": {}}))
+        {"status": "crash", "primary_value": 0.0, "metrics": {}}))
     _stub_runner(orch, tmp_path)
 
     with patch("automil.backends._orchestrator_daemon.subprocess.Popen",

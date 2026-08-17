@@ -448,7 +448,7 @@ td {
     font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
-.detail-composite {
+.detail-primary-value {
     font-size: 36px;
     font-weight: 700;
     color: #e2e8f0;

@@ -22,7 +22,7 @@ class TestGraphBasics:
         g = ExperimentGraph(path=self.graph_path)
         nid = g.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
+            metrics={"primary_value": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
                      "val_auc": 0.869, "val_bacc": 0.810,
                      "vram_gb": 0.4, "elapsed_min": 56.6, "gpu": 0},
             status="keep",
@@ -31,16 +31,16 @@ class TestGraphBasics:
         node = g.get_node(nid)
         assert node["type"] == "executed"
         assert node["status"] == "keep"
-        assert node["composite"] == 0.814
+        assert node["primary_value"] == 0.814
         assert node["parent_id"] is None
         assert g.meta["total_executed"] == 1
-        assert g.meta["best_composite"] == 0.814
+        assert g.meta["best_primary_value"] == 0.814
 
     def test_add_proposed(self):
         g = ExperimentGraph(path=self.graph_path)
         root = g.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
+            metrics={"primary_value": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
                      "val_auc": 0.869, "val_bacc": 0.810,
                      "vram_gb": 0.4, "elapsed_min": 56.6, "gpu": 0},
             status="keep",
@@ -69,7 +69,7 @@ class TestNodeLifecycle:
         self.g = ExperimentGraph(path=self.graph_path)
         self.root = self.g.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
+            metrics={"primary_value": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
                      "val_auc": 0.869, "val_bacc": 0.810,
                      "vram_gb": 0.4, "elapsed_min": 56.6, "gpu": 0},
             status="keep",
@@ -82,7 +82,7 @@ class TestNodeLifecycle:
         self.g.mark_running(pid)
         assert self.g.get_node(pid)["status"] == "running"
         self.g.promote(pid, {
-            "composite": 0.832, "test_auc": 0.867, "test_bacc": 0.797,
+            "primary_value": 0.832, "test_auc": 0.867, "test_bacc": 0.797,
             "val_auc": 0.866, "val_bacc": 0.768,
             "vram_gb": 0.4, "elapsed_min": 69.5, "gpu": 1,
             "status": "keep",
@@ -90,7 +90,7 @@ class TestNodeLifecycle:
         node = self.g.get_node(pid)
         assert node["type"] == "executed"
         assert node["status"] == "keep"
-        assert node["composite"] == 0.832
+        assert node["primary_value"] == 0.832
         assert abs(node["parent_delta"] - (0.832 - 0.814)) < 1e-6
 
     def test_mark_failed(self):
@@ -117,11 +117,11 @@ class TestNodeLifecycle:
     def test_best_node_updates_on_promote(self):
         pid = self.g.add_proposed(self.root, "better", ["x"], rationale="test")
         self.g.mark_running(pid)
-        self.g.promote(pid, {"composite": 0.900, "status": "keep",
+        self.g.promote(pid, {"primary_value": 0.900, "status": "keep",
                              "test_auc": 0.9, "test_bacc": 0.9,
                              "val_auc": 0.9, "val_bacc": 0.9,
                              "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0})
-        assert self.g.meta["best_composite"] == 0.900
+        assert self.g.meta["best_primary_value"] == 0.900
         assert self.g.meta["best_node_id"] == pid
 
 
@@ -132,7 +132,7 @@ class TestScoring:
         self.g = ExperimentGraph(path=self.graph_path)
         self.root = self.g.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
+            metrics={"primary_value": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
                      "val_auc": 0.869, "val_bacc": 0.810,
                      "vram_gb": 0.4, "elapsed_min": 56.6, "gpu": 0},
             status="keep",
@@ -141,14 +141,14 @@ class TestScoring:
     def test_recalculate_scores_executed(self):
         self.g.add_executed(
             parent_id=self.root, description="second", techniques=["x"],
-            metrics={"composite": 0.790, "test_auc": 0.80, "test_bacc": 0.78,
+            metrics={"primary_value": 0.790, "test_auc": 0.80, "test_bacc": 0.78,
                      "val_auc": 0.80, "val_bacc": 0.78,
                      "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0},
             status="discard",
         )
         self.g.recalculate_scores()
         node = self.g.get_node(self.root)
-        assert node["potential"] > node["composite"]
+        assert node["potential"] > node["primary_value"]
 
     def test_recalculate_scores_proposed(self):
         pid = self.g.add_proposed(self.root, "try focal", ["focal_g1"],
@@ -156,7 +156,7 @@ class TestScoring:
         self.g.recalculate_scores()
         node = self.g.get_node(pid)
         assert node["potential"] > 0
-        assert node["potential"] >= self.g.get_node(self.root)["composite"]
+        assert node["potential"] >= self.g.get_node(self.root)["primary_value"]
 
     def test_rank_proposals_diversity(self):
         self.g.add_proposed(self.root, "a1", ["x"], rationale="test")
@@ -165,7 +165,7 @@ class TestScoring:
 
         child = self.g.add_executed(
             parent_id=self.root, description="child", techniques=["a"],
-            metrics={"composite": 0.820, "test_auc": 0.84, "test_bacc": 0.80,
+            metrics={"primary_value": 0.820, "test_auc": 0.84, "test_bacc": 0.80,
                      "val_auc": 0.86, "val_bacc": 0.78,
                      "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0},
             status="keep",
@@ -184,7 +184,7 @@ class TestScoring:
     def test_technique_stats_updated(self):
         self.g.add_executed(
             parent_id=self.root, description="focal", techniques=["focal_g1"],
-            metrics={"composite": 0.832, "test_auc": 0.867, "test_bacc": 0.797,
+            metrics={"primary_value": 0.832, "test_auc": 0.867, "test_bacc": 0.797,
                      "val_auc": 0.866, "val_bacc": 0.768,
                      "vram_gb": 0.4, "elapsed_min": 69, "gpu": 0},
             status="keep",
@@ -203,7 +203,7 @@ class TestPersistence:
         g = ExperimentGraph(path=self.graph_path)
         g.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
+            metrics={"primary_value": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
                      "val_auc": 0.869, "val_bacc": 0.810,
                      "vram_gb": 0.4, "elapsed_min": 56.6, "gpu": 0},
             status="keep",
@@ -211,7 +211,7 @@ class TestPersistence:
         g.save()
         g2 = ExperimentGraph.load(self.graph_path)
         assert g2.meta["total_executed"] == 1
-        assert g2.get_node("node_0001")["composite"] == 0.814
+        assert g2.get_node("node_0001")["primary_value"] == 0.814
 
     def test_config_hash(self):
         script = "# comment\nx = 1\ny = 2\n"
@@ -235,7 +235,7 @@ class TestPersistence:
         g = ExperimentGraph(path=self.graph_path)
         g.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
+            metrics={"primary_value": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
                      "val_auc": 0.869, "val_bacc": 0.810,
                      "vram_gb": 0.4, "elapsed_min": 56.6, "gpu": 0},
             status="keep", config_hash="abc123",
@@ -258,7 +258,7 @@ class TestReconciliation:
         self.g = ExperimentGraph(path=self.graph_path)
         self.root = self.g.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
+            metrics={"primary_value": 0.814, "test_auc": 0.836, "test_bacc": 0.792,
                      "val_auc": 0.869, "val_bacc": 0.810,
                      "vram_gb": 0.4, "elapsed_min": 56.6, "gpu": 0},
             status="keep",
@@ -269,7 +269,7 @@ class TestReconciliation:
         self.g.mark_running(pid)
         completion = {
             "id": pid, "status": "completed",
-            "composite": 0.832,
+            "primary_value": 0.832,
             # Contract shape: `metrics` is validation-only (B6 ingest guard
             # crashes a completion carrying held-out-named keys).
             "metrics": {"val_auc": 0.867, "val_bacc": 0.797},
@@ -299,7 +299,7 @@ class TestReconciliation:
             json.dump(spec, f)
         completion = {
             "id": node_id, "status": "completed", "tsv_status": "discard",
-            "composite": 0.790, "test_auc_roc": 0.80, "test_bacc": 0.78,
+            "primary_value": 0.790, "test_auc_roc": 0.80, "test_bacc": 0.78,
             "description": "rdrop attempt",
             "elapsed_min": 60, "gpu": 0,
         }
@@ -364,7 +364,7 @@ class TestReconciliation:
         # The sweep must still skip it because a result exists on disk.
         os.makedirs(os.path.join(self.archive_dir, pid), exist_ok=True)
         with open(os.path.join(self.archive_dir, pid, "result.json"), "w") as f:
-            json.dump({"status": "completed", "composite": 0.82,
+            json.dump({"status": "completed", "primary_value": 0.82,
                        "metrics": {"test_auc": 0.85, "test_bacc": 0.79,
                                    "val_auc": 0.85, "val_bacc": 0.79}}, f)
         with open(os.path.join(self.archive_dir, pid, "spec.json"), "w") as f:
@@ -405,7 +405,7 @@ class TestMigration:
 
         self.tsv_path = os.path.join(self.tmpdir, "results.tsv")
         with open(self.tsv_path, "w") as f:
-            f.write("commit\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tcomposite\tdelta\tvram_gb\telapsed_min\tstatus\tdescription\n")
+            f.write("commit\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tprimary_value\tdelta\tvram_gb\telapsed_min\tstatus\tdescription\n")
             f.write("abc123\t0.869\t0.810\t0.836\t0.792\t0.814\t+0.814\t0.4\t56.6\tkeep\tbaseline\n")
             f.write("abc123\t0.846\t0.690\t0.820\t0.681\t0.751\t-0.063\t0.5\t68.3\tdiscard\tL2_norm\n")
             f.write("abc123\t0.864\t0.797\t0.843\t0.810\t0.827\t+0.013\t0.4\t53.4\tkeep\tno_inst_eval\n")
@@ -420,9 +420,9 @@ class TestMigration:
                      "experiments": []},
                     {"id": "rdrop", "name": "R-Drop", "tier": 1,
                      "status": "exhausted", "description": "already tried",
-                     "experiments": [{"desc": "rdrop_a1", "composite": 0.849}]},
+                     "experiments": [{"desc": "rdrop_a1", "primary_value": 0.849}]},
                 ],
-                "meta": {"best_composite": 0.832},
+                "meta": {"best_primary_value": 0.832},
             }, f)
 
     def test_import_from_tsv(self):
@@ -506,12 +506,12 @@ def test_legacy_schema_round_trip(tmp_path):
     legacy_graph = {
         "schema_version": 1,          # legacy schema version
         "meta": {
-            "best_composite": 0.87,
+            "best_primary_value": 0.87,
             "best_node_id": "node_0001",
             "total_executed": 1,
             "total_proposed": 0,
             "next_id": 2,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
         },
         "nodes": {
             "node_0001": {
@@ -521,7 +521,7 @@ def test_legacy_schema_round_trip(tmp_path):
                 "status": "keep",
                 "description": "baseline",
                 "techniques": [],
-                "composite": 0.87,
+                "primary_value": 0.87,
                 "global_delta": 0.0,
                 "parent_delta": 0.0,
                 # PRE-D-200 flat keys — NO "metrics" dict:
@@ -552,7 +552,7 @@ def test_legacy_schema_round_trip(tmp_path):
     # Top-level keys preserved (keep-flat strategy)
     assert node["val_auc"] == 0.85
     # Schema version bumped in-memory
-    assert g._data["schema_version"] == 2
+    assert g._data["schema_version"] == 3
 
 
 def test_legacy_schema_absent_version(tmp_path):
@@ -563,18 +563,18 @@ def test_legacy_schema_absent_version(tmp_path):
     legacy_graph = {
         # NO schema_version key — truly legacy
         "meta": {
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "best_node_id": None,
             "total_executed": 1,
             "total_proposed": 0,
             "next_id": 2,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
         },
         "nodes": {
             "node_0001": {
                 "id": "node_0001", "parent_id": None, "type": "executed",
                 "status": "keep", "description": "x", "techniques": [],
-                "composite": 0.5, "global_delta": 0.0, "parent_delta": 0.0,
+                "primary_value": 0.5, "global_delta": 0.0, "parent_delta": 0.0,
                 "val_auc": 0.5, "val_bacc": 0.5, "test_auc": 0.5, "test_bacc": 0.5,
                 "vram_gb": 1.0, "elapsed_min": 10.0, "gpu": 0,
             }
@@ -585,7 +585,7 @@ def test_legacy_schema_absent_version(tmp_path):
     graph_path.write_text(json.dumps(legacy_graph))
     g = ExperimentGraph(graph_path)
     assert "metrics" in g.nodes["node_0001"], "absent schema_version must trigger migration"
-    assert g._data["schema_version"] == 2
+    assert g._data["schema_version"] == 3
 
 
 def test_post_d200_graph_not_remigrated(tmp_path):
@@ -596,24 +596,24 @@ def test_post_d200_graph_not_remigrated(tmp_path):
     post_graph = {
         "schema_version": 2,
         "meta": {
-            "best_composite": 0.87,
+            "best_primary_value": 0.87,
             "best_node_id": "node_0001",
             "total_executed": 1,
             "total_proposed": 0,
             "next_id": 2,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
         },
         "nodes": {
             "node_0001": {
                 "id": "node_0001", "parent_id": None, "type": "executed",
                 "status": "keep", "description": "baseline", "techniques": [],
-                "composite": 0.87, "global_delta": 0.0, "parent_delta": 0.0,
+                "primary_value": 0.87, "global_delta": 0.0, "parent_delta": 0.0,
                 "metrics": {
                     "val_auc": 0.85,
                     "val_bacc": 0.80,
                     "test_auc": 0.87,
                     "test_bacc": 0.83,
-                    "composite": 0.87,
+                    "primary_value": 0.87,
                 },
                 "vram_gb": 4.5, "elapsed_min": 68.3, "gpu": 0,
             }
@@ -625,7 +625,62 @@ def test_post_d200_graph_not_remigrated(tmp_path):
     g = ExperimentGraph(graph_path)
     # metrics dict unchanged — same object values, no extra keys injected by migration
     assert g.nodes["node_0001"]["metrics"]["val_auc"] == 0.85
-    assert g._data["schema_version"] == 2
+    assert g._data["schema_version"] == 3
     # Confirm migration did NOT add spurious keys to the metrics dict
-    expected_keys = {"val_auc", "val_bacc", "test_auc", "test_bacc", "composite"}
+    expected_keys = {"val_auc", "val_bacc", "test_auc", "test_bacc", "primary_value"}
     assert set(g.nodes["node_0001"]["metrics"].keys()) == expected_keys
+
+
+class TestSchema3CompositeRetirementMigration:
+    """A pre-rename graph must migrate on read, never silently zero out.
+
+    Before schema 3, every node carried `composite`/`composite_se` and meta
+    carried `best_composite`; the renamed readers default missing keys to
+    0.0, which would strand the real best and let the next keep become
+    "best" on a live project.
+    """
+
+    def _legacy(self, tmp_path):
+        import json
+        legacy = {
+            "schema_version": 2,
+            "meta": {"best_composite": 0.8074, "best_node_id": "node_0005",
+                     "baseline_composite": 0.61, "total_executed": 1,
+                     "total_proposed": 1, "next_id": 6, "scoring": {}},
+            "nodes": {"node_0005": {
+                "id": "node_0005", "type": "executed", "status": "keep",
+                "composite": 0.8074, "composite_se": 0.02,
+                "fold_composites": [{"fold_index": 0, "composite": 0.80},
+                                     {"fold_index": 1, "composite": 0.82}],
+                "metrics": {"val_auc": 0.8074},
+                "metadata": {"composite_disagreement": {"reported": 0.9}},
+            }},
+            "technique_stats": {},
+        }
+        path = tmp_path / "graph.json"
+        path.write_text(json.dumps(legacy))
+        return path
+
+    def test_nodes_meta_and_fold_entries_migrate(self, tmp_path):
+        from automil.graph import ExperimentGraph, node_fold_primary_values
+        g = ExperimentGraph(path=str(self._legacy(tmp_path)))
+        node = g.get_node("node_0005")
+        assert node["primary_value"] == 0.8074
+        assert node["primary_se"] == 0.02
+        assert "composite" not in node and "composite_se" not in node
+        assert node_fold_primary_values(node) == {0: 0.80, 1: 0.82}
+        assert g.meta["best_primary_value"] == 0.8074
+        assert g.meta["baseline_primary_value"] == 0.61
+        assert "primary_value_disagreement" in node["metadata"]
+        assert g._data["schema_version"] == 3
+
+    def test_migrated_graph_persists_on_save(self, tmp_path):
+        import json
+        from automil.graph import ExperimentGraph
+        path = self._legacy(tmp_path)
+        g = ExperimentGraph(path=str(path))
+        g.save()
+        raw = json.loads(path.read_text())
+        assert raw["schema_version"] == 3
+        assert raw["nodes"]["node_0005"]["primary_value"] == 0.8074
+        assert "composite" not in raw["nodes"]["node_0005"]

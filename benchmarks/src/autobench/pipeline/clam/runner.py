@@ -46,7 +46,7 @@ def _write_fold_result_json(
 
     An unestimable metric is written as ``null``, never NaN: a NaN token makes
     the file invalid JSON and the aggregator that reads it back
-    (``automil.cells.reconcile.aggregate_folds``) skips a null-composite fold
+    (``automil.cells.reconcile.aggregate_folds``) skips a null-primary_value fold
     rather than averaging a hole into the partial result.
     """
     from pathlib import Path
@@ -77,7 +77,7 @@ def _write_fold_result_json(
     test_m = result.get("test_metrics", {}) or {}
     val_m = result.get("val_metrics", {}) or {}
     if "c_index" in test_m:
-        # Survival: composite is the VALIDATION concordance index (selection signal).
+        # Survival: primary_value is the VALIDATION concordance index (selection signal).
         # Test lives in a sealed ``held_out`` block — never surfaced to the agent
         # during search; read once by ``automil certify`` (val-firewall).
         metrics = {"val_c_index": _unwrap(val_m.get("c_index"))}
@@ -102,12 +102,12 @@ def _write_fold_result_json(
         primary = "val_auc"
     # Selection is the primary validation metric alone (scoring.formula:
     # val_auc / val_c_index); companions stay recorded but no longer vote —
-    # see run_experiment._composite_components, the aggregate-side authority
+    # see run_experiment._primary_components, the aggregate-side authority
     # this per-fold value must mirror. A fold that lost ANY recorded
-    # component (companion included) carries a null composite: fold validity
-    # spans the full evidence set, matching _per_fold_composites and the
+    # component (companion included) carries a null primary_value: fold validity
+    # spans the full evidence set, matching _per_fold_primary_values and the
     # campaign's ingest validator.
-    composite = (
+    primary_value = (
         None if any(value is None for value in metrics.values())
         else metrics[primary]
     )
@@ -118,7 +118,7 @@ def _write_fold_result_json(
         "status":          "completed",
         "metrics":         metrics,
         "held_out":        held_out,
-        "composite":       composite,
+        "primary_value":       primary_value,
         "elapsed_seconds": int(result.get("elapsed_seconds", 0) or 0),
         "peak_vram_mb":    int(result.get("peak_vram_mb", 0) or 0),
         # A4': no-op detector, ENTRY level — never inside `metrics` (the

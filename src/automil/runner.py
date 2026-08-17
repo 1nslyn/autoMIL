@@ -39,8 +39,8 @@ def _worktree_scope(project_root: Path, automil_dir: Path) -> str:
 def _reject_nonfinite_constant(token: str):
     """``parse_constant`` hook: reject ``Infinity`` / ``-Infinity`` / ``NaN`` tokens.
 
-    CR-1a (audit 2026-07-23): result.json is agent-writable and ``composite`` is
-    trusted verbatim as the val-firewall selection signal. A non-finite composite
+    CR-1a (audit 2026-07-23): result.json is agent-writable and ``primary_value`` is
+    trusted verbatim as the val-firewall selection signal. A non-finite primary_value
     would rig selection (``Infinity`` captures best_node and forces keep; ``NaN``
     poisons every ``>`` comparison and persists as an invalid-JSON token). Reject
     such tokens at the parse boundary — the semantic finite check in
@@ -285,7 +285,7 @@ class Runner:
             )
             return {
                 "status": "crash",
-                "composite": 0.0,
+                "primary_value": 0.0,
                 "metrics": {},
                 "error": f"result.json rejected at ingestion: {exc}",
             }

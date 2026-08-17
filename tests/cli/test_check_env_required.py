@@ -160,7 +160,7 @@ def test_template_has_scoring_block():
     REQUIREMENTS.md DEC-04 + ROADMAP Phase 8 success criterion 3 name
     `automil/config.yaml: scoring.formula` verbatim. The framework template
     config.yaml.j2 MUST surface this field so fresh `automil init` outputs
-    document the composite-scoring contract for new consumers.
+    document the primary_value-scoring contract for new consumers.
     """
     template = (_REPO_ROOT / "src" / "automil" / "templates"
                 / "config.yaml.j2").read_text()
@@ -174,7 +174,7 @@ def test_template_has_scoring_block():
     )
     # B2 (claims-alignment): the D-200 "documentation-only" contract is over —
     # CR-1b treats scoring.formula as the reducer used to recompute the
-    # composite from validation metrics, and an unknown value fails
+    # primary_value from validation metrics, and an unknown value fails
     # `automil check` / graph seeding. The comment block must teach the
     # reducer vocabulary and the explicit opt-out so operators cannot follow
     # a stale example into silently disabling the leak detector.

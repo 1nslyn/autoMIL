@@ -66,7 +66,7 @@ class EarlyStopping:
         # reported the max-over-epochs of a ~34-valued statistic on a
         # 47-slide validation set, which made epochs-run the strongest
         # predictor of the reported score (canary 2026-08-16:
-        # corr(epochs_run, composite) = +0.77; the top-10 selected that way
+        # corr(epochs_run, primary value) = +0.77; the top-10 selected that way
         # collapsed onto baseline on held folds, corr(disc, held) = -0.28).
         # The plan metric is still computed and reported AT the selected
         # checkpoint -- it just does not vote. Loss is continuous, so

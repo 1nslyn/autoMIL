@@ -17,7 +17,7 @@ GOOD_MODEL = '''\
 
 Parent: clam_mb
 Base commit: abc1234
-Composite: 0.5
+Primary_value: 0.5
 Node ID: node_NN
 Mutations:
 """
@@ -26,7 +26,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="v_NN", kind="model", parent="clam_mb",
-    base_commit="abc1234", composite=0.5, node_id="node_NN",
+    base_commit="abc1234", primary_value=0.5, node_id="node_NN",
     created_at="2026-05-02T10:00:00Z",
 ))
 class V_NN(ModelVariant):
@@ -41,7 +41,7 @@ from automil.registry import register, VariantSpec, LossVariant
 
 @register(VariantSpec(
     name="l_NN", kind="loss", parent=None,
-    base_commit="abc1234", composite=0.5, node_id="node_NN",
+    base_commit="abc1234", primary_value=0.5, node_id="node_NN",
     created_at="2026-05-02T10:00:00Z",
 ))
 class L_NN(LossVariant):

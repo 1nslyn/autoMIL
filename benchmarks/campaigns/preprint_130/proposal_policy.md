@@ -104,7 +104,7 @@ rewrites, no data-format changes. Log title + arXiv id in
 **DIAGNOSE.** Read `automil/graph.json`, recent
 `automil/orchestrator/archive/<node>/result.json` and `run.log`, and
 `automil/learnings.md`; `automil rank` prints the completed-node leaderboard
-(composite ± SE, paired Δparent ± SE, and the keep-bar each node faced) —
+(primary_value ± SE, paired Δparent ± SE, and the keep-bar each node faced) —
 read it instead of re-deriving those numbers from archives. Name the **one
 primary failure mode** of the current best — overfit · underfit ·
 attention-collapse · poor calibration · class-imbalance — with evidence
@@ -192,7 +192,7 @@ Consequences you must design around, not discover:
 - **Comparisons are paired.** The difference between a child and its parent
   cancels the fold effect — the dominant noise term on splits this small.
   `automil rank` prints each node's paired Δparent ± SE and the keep-bar it
-  faced; the marginal fold spread (`composite_se`) is a property of the
+  faced; the marginal fold spread (`primary_se`) is a property of the
   task, not of your change, and must never be read as the comparison noise.
 - **State the detectable effect before spending.** An attempt whose
   hypothesis predicts a gain well under the current keep-bar cannot change
@@ -214,7 +214,7 @@ Consequences you must design around, not discover:
   build further attempts on an unreplicated proxy finding.
 - **Measurement-coupled axes need trajectory evidence.** Any axis that
   changes evaluation cadence, metric quantization, or the distribution the
-  checkpoint-selection maximum is drawn from can move the composite without
+  checkpoint-selection maximum is drawn from can move the primary_value without
   a better model. Do not blanket-ban such axes and do not ride them blind:
   state the mechanism, read the per-epoch lines and `[selected] epoch=`
   markers in `run.log` for the folds in question, and let the held-back
@@ -263,7 +263,7 @@ from automil.registry import PolicyVariant, VariantSpec, register
 
 @register(VariantSpec(
     name="<name>", kind="policy", parent=None, base_commit="<short-sha>",
-    composite=0.0, node_id="<node-id>", created_at="<iso-8601+tz>",
+    primary_value=0.0, node_id="<node-id>", created_at="<iso-8601+tz>",
 ))
 class MyPolicy(PolicyVariant):
     def wrap_optimizer(self, opt):
@@ -272,12 +272,17 @@ class MyPolicy(PolicyVariant):
 
 ## 5. The val-firewall — validation only, ever
 
-Every `result.json` `metrics` block you can see is validation-only, and
-`composite` (the selection signal) is computed from it per the declared
-`scoring.formula` in `automil/config.yaml` — in this campaign the PRIMARY
-validation metric alone (`val_auc` for classification, `val_c_index` for
-survival); companion metrics stay recorded and are worth reading, but they
-do not vote. Held-out test data is sealed at write time and quarantined
+**Your objective is ONE declared metric.** This cell's primary metric is
+declared in `automil/config.yaml` (`scoring.formula`, mirrored by
+`metrics.primary`): `val_auc` on a classification cell, `val_c_index` on a
+survival cell. Read that declaration at session start and optimize exactly
+that number — it is the only quantity keep/discard, ranking, UCB, and the
+frozen winner ever see, and `automil rank` prints its name in the
+leaderboard header so you never have to guess. Every `result.json`
+`metrics` block you can see is validation-only, and `primary_value` is
+that declared metric recomputed from it by the framework at ingest.
+Companion metrics (`val_bacc`, and `val_qwk` on the ordinal grade task)
+stay recorded and are worth reading for diagnosis, but they do not vote. Held-out test data is sealed at write time and quarantined
 outside your reach until a campaign-wide reveal long after this session
 ends.
 

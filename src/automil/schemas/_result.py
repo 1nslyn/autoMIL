@@ -25,14 +25,14 @@ _VALIDATOR: Draft202012Validator = Draft202012Validator(RESULT_SCHEMA)
 
 # CR-1a (audit 2026-07-23): JSON Schema's ``{"type": "number"}`` accepts the
 # non-finite floats ``inf`` / ``-inf`` / ``nan`` (Python parses the ``Infinity`` /
-# ``NaN`` JSON tokens into them). Because the orchestrator trusts ``composite``
-# verbatim as the val-firewall selection signal, an ``Infinity`` composite would
+# ``NaN`` JSON tokens into them). Because the orchestrator trusts ``primary_value``
+# verbatim as the val-firewall selection signal, an ``Infinity`` primary_value would
 # permanently capture ``best_node`` and force ``keep`` (an agent-writable exploit),
 # and a ``NaN`` poisons every downstream ``>`` comparison and persists as an
 # invalid-JSON token that breaks non-Python readers (viz SSE, jq, serde). The
 # schema cannot express "finite", so we enforce it here, at the same ingestion
 # boundary the schema is validated on.
-_FINITE_NUMBER_FIELDS = ("composite", "elapsed_seconds", "peak_vram_mb")
+_FINITE_NUMBER_FIELDS = ("primary_value", "elapsed_seconds", "peak_vram_mb")
 _FINITE_METRIC_BLOCKS = ("metrics", "held_out")
 
 
@@ -43,7 +43,7 @@ def _require_finite(payload: dict) -> None:
         if isinstance(value, float) and not math.isfinite(value):
             raise ValidationError(
                 f"'{field}' must be a finite number, got {value!r} "
-                f"(non-finite composite/metric values are rejected by the "
+                f"(non-finite primary_value/metric values are rejected by the "
                 f"val-firewall; see automil/schemas/result.schema.json)"
             )
     for block in _FINITE_METRIC_BLOCKS:
@@ -65,7 +65,7 @@ def validate_result(payload: dict) -> None:
 
     Raises:
         ValidationError: payload violates the schema, or carries a non-finite
-            ``composite`` / metric value (CR-1a). ``exc.message`` carries a
+            ``primary_value`` / metric value (CR-1a). ``exc.message`` carries a
             single human-readable cause; ``exc.json_path`` carries the JSON
             Pointer to the offending node. Caller surfaces both plus the literal
             pointer ``automil/schemas/result.schema.json``.

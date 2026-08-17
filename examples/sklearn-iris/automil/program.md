@@ -13,10 +13,10 @@ on the iris dataset. Mutations the agent may try:
 - adjust hyperparameters (max_iter, C, solver)
 - engineer features (e.g. polynomial expansion, scaling)
 
-## Composite definition
+## Primary_value definition
 
-`composite == accuracy` on a 30% held-out test split (seed=42). Higher is
-better. Baseline composite ~0.95 with `LogisticRegression(max_iter=200)`.
+`primary_value == accuracy` on a 30% held-out test split (seed=42). Higher is
+better. Baseline primary_value ~0.95 with `LogisticRegression(max_iter=200)`.
 
 ## Constraints
 

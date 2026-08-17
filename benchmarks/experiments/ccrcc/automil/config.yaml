@@ -36,11 +36,10 @@ baseline:
   framework: "clam"
   test_auc: 0.790
   test_bacc: 0.698
-  composite: 0.744
+  primary_value: 0.744
 
 metrics:
   primary: "val_auc"
-  composite_formula: "val_auc"
   track: ["val_auc", "val_bacc"]
 
 training:
@@ -114,7 +113,7 @@ registry:
 files:
   # H-4: `run_experiment.py` and `pipeline/config.py` were listed here, and the
   # no---files branch auto-detects editable files with NO readonly check at all —
-  # so the split entry point, the composite writer and the fold/seed dataclasses
+  # so the split entry point, the primary_value writer and the fold/seed dataclasses
   # were captured silently. They are now protected instead. Nothing legitimate is
   # lost: hyperparameters travel through --hparams / a variant's HPARAMS (H-3b),
   # and executable policy variants live behind the protected PolicyVariant seam.
@@ -159,7 +158,7 @@ viz:
   port: 8421
   host: "0.0.0.0"
 
-# Selection composite = the primary validation metric alone
+# Selection primary_value = the primary validation metric alone
 # (companions in metrics.track stay recorded but do not vote).
 scoring:
   formula: "val_auc"

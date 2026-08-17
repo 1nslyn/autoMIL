@@ -16,7 +16,7 @@ help text. That string is operator-facing help, not a code path; allowlisted
 by intent.
 
 Allowlist deviations from plan baseline (3 expected -> 5 actual, post-08-04/08-05):
-  - config.yaml.j2:105: migration-note comment for autobench-shaped consumers
+  - config.yaml.j2:128: migration-note comment for autobench-shaped consumers
   - config.yaml.j2:122: inline example comment in scoring.formula block
 Both are informational-only; they contain no functional consumer-namespace code
 path. Allowlisted per deviation Rule 2 (correct allowlist coverage so the test
@@ -66,8 +66,9 @@ _ALLOWLIST: dict[str, str] = {
     #    +4 by the run.mil_model addition to the run: block,
     #    +6 by the H-4 registry block, -2 by CFG-2 (dead cap: duplicates removed),
     #    +9 by CR-4's se_multiplier documentation in the scoring: block,
-    #    +9 by the architecture-preserving command/identity channels.
-    "src/automil/templates/config.yaml.j2:129":
+    #    +9 by the architecture-preserving command/identity channels,
+    #    -1 by the composite_formula key removal (single-metric optimization).
+    "src/automil/templates/config.yaml.j2:128":
         "autobench-shaped consumers",
     # (The former entry 5 — an "autobench consumer" formula example in the
     # scoring block — was removed by B2: the rewritten reducer documentation

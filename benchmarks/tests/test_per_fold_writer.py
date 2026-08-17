@@ -62,9 +62,9 @@ def test_writes_fold_file_when_results_dir_set(tmp_path, monkeypatch):
     assert "test_bacc" not in payload["metrics"]
     assert payload["held_out"]["test_auc"] == pytest.approx(0.85)
     assert payload["held_out"]["test_bacc"] == pytest.approx(0.82)
-    # composite is the VALIDATION selection signal — the primary metric alone
+    # primary_value is the VALIDATION selection signal — the primary metric alone
     # (scoring.formula: val_auc); val 0.90 != test 0.85 proves the val side won
-    assert payload["composite"] == pytest.approx(0.90)
+    assert payload["primary_value"] == pytest.approx(0.90)
     assert payload["elapsed_seconds"] == 100
     assert payload["peak_vram_mb"] == 4500
 
@@ -154,7 +154,7 @@ def test_handles_missing_metrics_gracefully(tmp_path, monkeypatch):
     documents against — ``aggregate_folds`` "must distinguish missing data from
     zero-valued data" (Pitfall 4). Writing 0.0 recorded a fold that produced no
     metrics at all as a genuine zero-AUC result, which then averaged into the
-    partial composite and dragged it down as if the model had scored nothing.
+    partial primary_value and dragged it down as if the model had scored nothing.
     ``null`` is skipped by the aggregator instead, which is what "we have no
     value here" is supposed to mean.
     """
@@ -168,7 +168,7 @@ def test_handles_missing_metrics_gracefully(tmp_path, monkeypatch):
     assert payload["held_out"]["test_bacc"] is None
     assert payload["metrics"]["val_auc"] is None
     assert payload["metrics"]["val_bacc"] is None
-    assert payload["composite"] is None
+    assert payload["primary_value"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -187,12 +187,12 @@ def test_ordinal_fold_records_clamped_qwk_on_both_sides(tmp_path, monkeypatch):
     # Recording clamp: kappa is [-1, 1], sealed consumers require [0, 1].
     assert payload["metrics"]["val_qwk"] == 0.0
     assert payload["held_out"]["test_qwk"] == pytest.approx(0.42)
-    # qwk never votes: composite is still the selection metric alone.
-    assert payload["composite"] == pytest.approx(0.90)
+    # qwk never votes: primary_value is still the selection metric alone.
+    assert payload["primary_value"] == pytest.approx(0.90)
 
 
 def test_ordinal_fold_missing_qwk_is_invalid(tmp_path, monkeypatch):
-    """Declared-but-missing qwk nulls the recorded slot AND the composite —
+    """Declared-but-missing qwk nulls the recorded slot AND the primary_value —
     fold validity spans the full recorded evidence set."""
     monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
 
@@ -201,7 +201,7 @@ def test_ordinal_fold_missing_qwk_is_invalid(tmp_path, monkeypatch):
     payload = json.loads((tmp_path / "fold_0_result.json").read_text())
     assert payload["metrics"]["val_qwk"] is None
     assert payload["held_out"]["test_qwk"] is None
-    assert payload["composite"] is None
+    assert payload["primary_value"] is None
 
 
 def test_non_ordinal_fold_never_carries_qwk(tmp_path, monkeypatch):

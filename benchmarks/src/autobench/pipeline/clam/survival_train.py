@@ -292,7 +292,7 @@ def train_survival_fold(
 
     # CR-3: export the val risk records so the runner can score concordance over
     # the POOLED cross-fold validation set. The per-fold c-index below stays for
-    # reporting; the pooled value is what the selection composite uses.
+    # reporting; the pooled value is what the selection primary_value uses.
     _val_records = _risk_records(val)
     # A4': persist the selected model's val risk scores (the arrays are already
     # in hand) so the fold carries a hashable no-op detector.

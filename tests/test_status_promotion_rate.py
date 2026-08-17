@@ -41,18 +41,18 @@ def _build_graph(statuses: list[str]) -> dict:
             "type": "executed",
             "status": status,
             "description": "test fixture",
-            "composite": 0.8,
+            "primary_value": 0.8,
             "history": [_nominated_event()],
         }
     return {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.8,
+            "best_primary_value": 0.8,
             "best_node_id": "node_0000",
             "total_executed": len(statuses),
             "total_proposed": 0,
             "next_id": len(statuses),
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": nodes,
@@ -131,15 +131,15 @@ def test_status_zero_nominations_handles_gracefully(tmp_path, monkeypatch):
         nodes[nid] = {
             "id": nid, "parent_id": None,
             "type": "executed", "status": "keep",
-            "description": "test fixture", "composite": 0.8,
+            "description": "test fixture", "primary_value": 0.8,
             # No "history" key — legacy format
         }
     graph_data = {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.8, "best_node_id": "node_0000",
+            "best_primary_value": 0.8, "best_node_id": "node_0000",
             "total_executed": 2, "total_proposed": 0, "next_id": 2,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": nodes,

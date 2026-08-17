@@ -2,7 +2,7 @@
 
 Canary evidence (2026-08-16, docs/tutorials/run_agentic_campaign.md §8):
 selecting the checkpoint on plan-BACC reported the max-over-epochs of a
-34-valued statistic on 47 slides — `corr(epochs_run, composite) = +0.77`,
+34-valued statistic on 47 slides — `corr(epochs_run, primary_value) = +0.77`,
 and the uni_v2 top-10 selected that way collapsed onto baseline on held
 folds (mean lift +0.0023, corr(disc, held) = −0.28). Loss is continuous
 and does not reward running longer; the plan metric is still reported at

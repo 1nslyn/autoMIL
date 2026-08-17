@@ -60,7 +60,7 @@ def test_d208_clause_02_result_schema_validation():
     schema_path = _SRC_AUTOMIL / "schemas" / "result.schema.json"
     assert schema_path.exists(), "src/automil/schemas/result.schema.json missing"
     schema = json.loads(schema_path.read_text())
-    assert schema["required"] == ["composite"]
+    assert schema["required"] == ["primary_value"]
     assert schema["additionalProperties"] is True
 
     # Daemon ingest path validates.
@@ -81,16 +81,16 @@ def test_d208_clause_02_result_schema_validation():
 # ---------------------------------------------------------------------------
 
 def test_d208_clause_03_graph_dict_spread():
-    """D-208 #3: graph.py stores opaque consumer metrics; composite-only Pareto."""
+    """D-208 #3: graph.py stores opaque consumer metrics; primary_value-only Pareto."""
     graph_src = (_SRC_AUTOMIL / "graph.py").read_text()
-    # ``composite_se`` became a framework-owned top-level scalar after D-200,
+    # ``primary_se`` became a framework-owned top-level scalar after D-200,
     # so the write path now filters that key instead of blindly copying the
     # entire mapping.  Keep this acceptance gate on the contract, not one stale
     # local-variable spelling.
     assert '"metrics": {k: v for k, v in metrics.items()' in graph_src
     assert 'node["metrics"] = {k: v for k, v in metrics.items()' in graph_src
     assert '"metrics": dict(comp_metrics)' in graph_src
-    assert "composite-only dominance" in graph_src
+    assert "primary_value-only dominance" in graph_src
 
     # Dict-spread tests pass.
     out = _pytest("tests/test_graph_dict_spread.py")

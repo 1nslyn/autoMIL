@@ -436,17 +436,17 @@ def _validation_folds(
         if not isinstance(raw, dict):
             raise CampaignStageError("validation_folds entries must be objects")
         fold_index = raw.get("fold_index")
-        composite = raw.get("composite")
+        primary_value = raw.get("primary_value")
         if type(fold_index) is not int or fold_index in seen:
             raise CampaignStageError("validation fold indices must be unique integers")
         if (
-            isinstance(composite, bool)
-            or not isinstance(composite, (int, float))
-            or not math.isfinite(float(composite))
-            or not 0 <= float(composite) <= 1
+            isinstance(primary_value, bool)
+            or not isinstance(primary_value, (int, float))
+            or not math.isfinite(float(primary_value))
+            or not 0 <= float(primary_value) <= 1
         ):
             raise CampaignStageError(
-                f"fold {fold_index} validation composite is outside [0, 1]"
+                f"fold {fold_index} validation primary_value is outside [0, 1]"
             )
         metrics = raw.get("metrics")
         if (
@@ -472,24 +472,24 @@ def _validation_folds(
         # val_auc / val_c_index): companions stay recorded in `metrics` but no
         # longer vote — bacc's ~1/17-per-slide threshold quantization injected
         # lattice noise at exactly the accept-margin scale, and the canary
-        # cells' composite-vs-auc rankings disagreed throughout.
+        # cells' old multi-metric composite disagreed with auc's ranking throughout.
         if set(metrics) != set(expected_metrics):
             raise CampaignStageError(
                 f"fold {fold_index} validation metric schema differs from "
                 "the cell's task family"
             )
-        expected_composite = float(metrics[expected_metrics[0]])
+        expected_primary_value = float(metrics[expected_metrics[0]])
         if not math.isclose(
-            float(composite), expected_composite, rel_tol=0.0, abs_tol=1e-12,
+            float(primary_value), expected_primary_value, rel_tol=0.0, abs_tol=1e-12,
         ):
             raise CampaignStageError(
-                f"fold {fold_index} composite disagrees with validation metrics"
+                f"fold {fold_index} primary_value disagrees with validation metrics"
             )
         seen.add(fold_index)
         normalized.append({
             "fold_index": fold_index,
             "metrics": metrics,
-            "composite": float(composite),
+            "primary_value": float(primary_value),
         })
     if seen != set(expected_folds):
         raise CampaignStageError(
@@ -500,7 +500,7 @@ def _validation_folds(
 
 
 def _mean(folds: list[Mapping[str, Any]]) -> float:
-    return math.fsum(float(fold["composite"]) for fold in folds) / len(folds)
+    return math.fsum(float(fold["primary_value"]) for fold in folds) / len(folds)
 
 
 def _sealed_fold_hashes(
@@ -554,7 +554,7 @@ def _ensure_discovery_baseline_root(
         raise CampaignStageError("baseline lacks exact discovery-fold evidence")
     discovery_mean = _mean(discovery_folds)
     discovery_se = cross_fold_se(
-        [float(fold["composite"]) for fold in discovery_folds]
+        [float(fold["primary_value"]) for fold in discovery_folds]
     )
     try:
         cell = json.loads(
@@ -578,16 +578,16 @@ def _ensure_discovery_baseline_root(
         if matches:
             node = matches[0]
             metadata = node.get("metadata") or {}
-            recorded_composite = node.get("composite")
-            recorded_baseline = graph.meta.get("baseline_composite")
+            recorded_primary_value = node.get("primary_value")
+            recorded_baseline = graph.meta.get("baseline_primary_value")
             valid = (
                 node.get("parent_id") is None
                 and node.get("type") == "executed"
                 and node.get("status") == "keep"
-                and not isinstance(recorded_composite, bool)
-                and isinstance(recorded_composite, (int, float))
+                and not isinstance(recorded_primary_value, bool)
+                and isinstance(recorded_primary_value, (int, float))
                 and math.isclose(
-                    float(recorded_composite), discovery_mean,
+                    float(recorded_primary_value), discovery_mean,
                     rel_tol=0.0, abs_tol=1e-12,
                 )
                 and metadata.get("cell_id") == budget_cell_id
@@ -617,8 +617,8 @@ def _ensure_discovery_baseline_root(
             description="native upstream baseline (discovery folds 0/1/2)",
             techniques=[],
             metrics={
-                "composite": discovery_mean,
-                "composite_se": discovery_se,
+                "primary_value": discovery_mean,
+                "primary_se": discovery_se,
             },
             status="keep",
             config_hash=baseline["candidate_sha256"],
@@ -632,7 +632,7 @@ def _ensure_discovery_baseline_root(
             "campaign_baseline_sha256": baseline["candidate_sha256"],
             "validation_folds": discovery_folds,
         })
-        graph.meta["baseline_composite"] = discovery_mean
+        graph.meta["baseline_primary_value"] = discovery_mean
         graph.recalculate_scores()
         return node_id
 
@@ -1198,10 +1198,10 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         # identical run twice buys zero information, so the slot goes to the
         # next distinct config. The discriminator is the per-fold
         # val_predictions_sha256 vector when both candidates carry a complete
-        # one — quantized composites can tie for genuinely different configs,
+        # one — quantized primary values can tie for genuinely different configs,
         # and dropping those would silently lose a distinct candidate. Only
         # hashless artifacts (pre-hash cells, e.g. the live canaries) fall
-        # back to the legacy composite-tuple rule, and a hash-bearing
+        # back to the legacy primary_value-tuple rule, and a hash-bearing
         # candidate never dedups against a hashless one.
         hashes = candidate["val_predictions_sha256"]
         if hashes and all(isinstance(value, str) for value in hashes):
@@ -1211,7 +1211,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
             seen_hash_vectors.add(vector)
         else:
             outcome = tuple(
-                (fold["fold_index"], fold["composite"])
+                (fold["fold_index"], fold["primary_value"])
                 for fold in candidate["validation_folds"]
             )
             if outcome in seen_outcomes:

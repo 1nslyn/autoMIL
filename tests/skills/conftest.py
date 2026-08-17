@@ -38,7 +38,7 @@ def tmp_git_repo(tmp_path: Path) -> Path:
         "    result = {\n"
         "        'status': 'completed',\n"
         "        'metrics': {'val_auc': 0.5, 'val_bacc': 0.5, 'test_auc': 0.5, 'test_bacc': 0.5},\n"
-        "        'composite': 0.5,\n"
+        "        'primary_value': 0.5,\n"
         "        'elapsed_seconds': 1,\n"
         "        'peak_vram_mb': 100,\n"
         "    }\n"

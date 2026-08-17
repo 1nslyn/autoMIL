@@ -16,7 +16,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="testmodel", kind="model", parent="testparent",
-    base_commit="abc1234", composite=0.5, node_id="node_0001",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0001",
     created_at="2026-05-02T10:00:00Z",
 ))
 class TestModel(ModelVariant):
@@ -31,7 +31,7 @@ from automil.registry import register, VariantSpec, LossVariant
 
 @register(VariantSpec(
     name="testloss", kind="loss", parent=None,
-    base_commit="abc1234", composite=0.5, node_id="node_0002",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0002",
     created_at="2026-05-02T10:00:00Z",
 ))
 class TestLoss(LossVariant):
@@ -46,7 +46,7 @@ from automil.registry import register, VariantSpec, PolicyVariant
 
 @register(VariantSpec(
     name="testpolicy", kind="policy", parent=None,
-    base_commit="abc1234", composite=0.5, node_id="node_0003",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0003",
     created_at="2026-05-02T10:00:00Z",
 ))
 class TestPolicy(PolicyVariant):
@@ -64,7 +64,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="bad", kind="model", parent="p",
-    base_commit="abc1234", composite=0.5, node_id="node_0004",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0004",
     created_at="2026-05-02T10:00:00Z",
 ))
 class Bad(ModelVariant):
@@ -78,7 +78,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="extraarg", kind="model", parent="p",
-    base_commit="abc1234", composite=0.5, node_id="node_0010",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0010",
     created_at="2026-05-02T10:00:00Z",
 ))
 class ExtraArg(ModelVariant):
@@ -94,7 +94,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="tightdefault", kind="model", parent="p",
-    base_commit="abc1234", composite=0.5, node_id="node_0011",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0011",
     created_at="2026-05-02T10:00:00Z",
 ))
 class TightDefault(ModelVariant):
@@ -109,7 +109,7 @@ from automil.registry import register, VariantSpec, LossVariant
 
 @register(VariantSpec(
     name="x", kind="model", parent="p",
-    base_commit="abc1234", composite=0.5, node_id="node_0005",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0005",
     created_at="2026-05-02T10:00:00Z",
 ))
 class Wrong(LossVariant):
@@ -124,7 +124,7 @@ from automil.registry import register, VariantSpec, ModelVariant, LossVariant
 
 @register(VariantSpec(
     name="m", kind="model", parent="p",
-    base_commit="abc1234", composite=0.5, node_id="node_0006",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0006",
     created_at="2026-05-02T10:00:00Z",
 ))
 class M(ModelVariant):
@@ -133,7 +133,7 @@ class M(ModelVariant):
 
 @register(VariantSpec(
     name="l", kind="loss", parent=None,
-    base_commit="abc1234", composite=0.5, node_id="node_0007",
+    base_commit="abc1234", primary_value=0.5, node_id="node_0007",
     created_at="2026-05-02T10:00:00Z",
 ))
 class L(LossVariant):
@@ -219,7 +219,7 @@ def test_validation_is_idempotent_and_preserves_live_registry(tmp_path):
 
     @register(VariantSpec(
         name="testpolicy", kind="policy", parent=None,
-        base_commit="existing", composite=0.1, node_id="node_existing",
+        base_commit="existing", primary_value=0.1, node_id="node_existing",
         created_at="2026-05-02T10:00:00Z",
     ))
     class ExistingPolicy(PolicyVariant):

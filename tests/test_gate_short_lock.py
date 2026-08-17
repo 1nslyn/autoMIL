@@ -40,7 +40,7 @@ def test_a_concurrent_write_during_evaluation_survives(graph):
     # `graph` was loaded and before the gate applies its outcome.
     with locked_update(str(graph.path)) as g:
         g.add_executed(parent_id=None, description="daemon result", techniques=[],
-                       status="keep", metrics={"composite": 0.9})
+                       status="keep", metrics={"primary_value": 0.9})
 
     _apply_gate_outcome(graph, graph.candidate_id, lambda n: n.__setitem__("status", "registered"))
 

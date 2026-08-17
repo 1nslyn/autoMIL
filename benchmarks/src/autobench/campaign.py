@@ -844,7 +844,7 @@ def materialize_discovery_cells(
         config["data"]["seed"] = PROTOCOL["seed"]
         config.setdefault("encoders", {})["primary"] = cell["encoder"]
         # The agent reads this and hill-climbs on it, so it must match what
-        # run_experiment.py actually computes (_composite_components) and what
+        # run_experiment.py actually computes (_primary_components) and what
         # the framework recomputes at ingest (scoring.formula selector below).
         # Selection is the PRIMARY validation metric ALONE: on few-dozen-slide
         # validation splits bacc/qwk are threshold-quantized companions whose
@@ -857,7 +857,6 @@ def materialize_discovery_cells(
         primary = track[0]
         config["metrics"] = {
             "primary": primary,
-            "composite_formula": primary,
             "track": track,
         }
         # The framework-side selector (CR-1b recompute + per-fold projection):
@@ -1065,31 +1064,27 @@ def audit_materialized_campaign(
             raise CampaignManifestError(f"{cell_id}: attempt timeout drift")
         _expected_track = list(VALIDATION_SCHEMA_BY_FAMILY[cell["task_family"]])
         _expected_formula = _expected_track[0]
-        if (config.get("metrics") or {}).get("track") != _expected_track:
+        # Exact-block lock: a stale materialization carrying a retired key
+        # (e.g. the removed metrics.composite_formula) must fail the audit
+        # loudly, not slide through per-key equality checks.
+        if config.get("metrics") != {
+            "primary": _expected_formula, "track": _expected_track,
+        }:
             raise CampaignManifestError(
-                f"{cell_id}: recorded-evidence drift (metrics.track must be "
-                f"{_expected_track})"
+                f"{cell_id}: metrics block drift (expected exactly "
+                f"primary={_expected_formula!r} + track={_expected_track})"
             )
         if (config.get("scoring") or {}).get("formula") != _expected_formula:
             raise CampaignManifestError(
                 f"{cell_id}: selection-formula drift (expected "
                 f"{_expected_formula})"
             )
-        if (config.get("metrics") or {}).get("primary") != _expected_formula:
-            raise CampaignManifestError(
-                f"{cell_id}: declared objective drift (metrics.primary must "
-                f"match the selection formula)"
-            )
-        if (config.get("metrics") or {}).get("composite_formula") != _expected_formula:
-            raise CampaignManifestError(
-                f"{cell_id}: declared objective drift (metrics.composite_formula "
-                f"must match the selection formula)"
-            )
+        # (metrics.primary is covered by the exact-block lock above.)
         # A graph.json seeded under a DIFFERENT formula silently wins over
         # config.yaml forever after (graph meta uses setdefault freeze
         # semantics — deliberate for accept_margin, inherited by formula).
         # Materialized cells must start graph-less; an existing graph that
-        # froze another formula would recompute every composite on the wrong
+        # froze another formula would recompute every primary_value on the wrong
         # estimand while passing the config audit above.
         graph_path = adir / "graph.json"
         if graph_path.exists():

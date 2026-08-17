@@ -35,7 +35,6 @@ encoders:
 
 metrics:
   primary: "val_auc"
-  composite_formula: "val_auc"
   track: ["val_auc", "val_bacc", "val_qwk"]
 
 # CR-4 / PRELAUNCH_REVIEW O2: the Ladder keep-margin. δ=0.0 (strict dominance) is
@@ -45,7 +44,7 @@ metrics:
 # survive to the sealed test block. O2's recommendation, scaled to the val SE:
 # δ ≈ 0.05 on the small cohorts (GBM n=99, PDAC n=105) vs ≈ 0.015 on the large
 # ones. This is a predeclared placeholder — CR-4 replaces it with a per-cell
-# δ computed as ≥1 SE of the CV composite.
+# δ computed as ≥1 SE of the CV primary_value.
 scoring:
   formula: "val_auc"
   technique_map: {}

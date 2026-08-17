@@ -11,7 +11,7 @@ Runs at instantiate time in ``train.py`` BEFORE the first epoch:
      PATTERNS.md §3 atomic-write pattern (tempfile + rename) and raises
      ValidationError. The training script wrapper catches the exception
      and writes a result.json of {status: "validation_failed",
-     composite: 0.0} so the orchestrator records the attempt without
+     primary_value: 0.0} so the orchestrator records the attempt without
      hanging (D-32).
 
 Torch is imported LAZILY inside check() — the framework remains importable

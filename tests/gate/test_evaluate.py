@@ -33,7 +33,7 @@ from automil.graph import ExperimentGraph
 # Helper: minimal ExperimentGraph built in memory
 # ---------------------------------------------------------------------------
 
-def _make_graph(candidate_composite: float = 0.85, parent_composite: float = 0.80) -> ExperimentGraph:
+def _make_graph(candidate_primary_value: float = 0.85, parent_primary_value: float = 0.80) -> ExperimentGraph:
     """Build a two-node graph (parent → candidate) without touching disk."""
     graph = ExperimentGraph.__new__(ExperimentGraph)
     graph.path = pathlib.Path("/nonexistent/graph.json")
@@ -41,12 +41,12 @@ def _make_graph(candidate_composite: float = 0.85, parent_composite: float = 0.8
     graph._data = {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "best_node_id": None,
             "total_executed": 0,
             "total_proposed": 0,
             "next_id": 1,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": {
@@ -55,7 +55,7 @@ def _make_graph(candidate_composite: float = 0.85, parent_composite: float = 0.8
                 "parent_id": None,
                 "type": "executed",
                 "status": "keep",
-                "composite": parent_composite,
+                "primary_value": parent_primary_value,
                 "commit": "abc1234",
                 "overlay_files": [],
                 "overlay_dir": "archive/node_0001",
@@ -66,7 +66,7 @@ def _make_graph(candidate_composite: float = 0.85, parent_composite: float = 0.8
                 "parent_id": "node_0001",
                 "type": "executed",
                 "status": "candidate",
-                "composite": candidate_composite,
+                "primary_value": candidate_primary_value,
                 "commit": "abc1234",
                 "overlay_files": [],
                 "overlay_dir": "archive/node_0002",
@@ -93,7 +93,7 @@ def _make_manifest(held_out_cells: list[tuple[str, str, str, str]] | None = None
         K=2,
         p_threshold=0.05,
         bootstrap_reps=1000,
-        win_definition="delta_composite > 0 AND p < p_threshold",
+        win_definition="delta_primary_value > 0 AND p < p_threshold",
         schema_version="gate-v1",
     )
 
@@ -303,11 +303,11 @@ def test_evaluate_skips_refusing_cells(graph, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_evaluate_returns_paired_deltas(tmp_path, monkeypatch):
-    """Delta = candidate_composite - parent_composite; paired by cell_id NOT order."""
+    """Delta = candidate_primary_value - parent_primary_value; paired by cell_id NOT order."""
     from automil.gate.evaluate import evaluate_candidate
 
-    # Candidate composite=0.85, parent composite=0.80 (from _make_graph defaults)
-    graph = _make_graph(candidate_composite=0.85, parent_composite=0.80)
+    # Candidate primary_value=0.85, parent primary_value=0.80 (from _make_graph defaults)
+    graph = _make_graph(candidate_primary_value=0.85, parent_primary_value=0.80)
 
     # Two held-out cells: a and b
     manifest = _make_manifest(held_out_cells=[
@@ -326,13 +326,13 @@ def test_evaluate_returns_paired_deltas(tmp_path, monkeypatch):
     assert skipped == []
     assert len(per_cell_results) == 2
 
-    # Both should have parent_composite=0.80 (from parent node)
+    # Both should have parent_primary_value=0.80 (from parent node)
     for r in per_cell_results:
-        assert r["parent_composite"] == pytest.approx(0.80, abs=1e-6), (
-            f"parent_composite mismatch: {r}"
+        assert r["parent_primary_value"] == pytest.approx(0.80, abs=1e-6), (
+            f"parent_primary_value mismatch: {r}"
         )
-        # Delta should be candidate_composite - parent_composite (from graph node composite)
-        # candidate composite = 0.85, parent composite = 0.80 → delta = 0.05
+        # Delta should be candidate_primary_value - parent_primary_value (from graph node primary_value)
+        # candidate primary_value = 0.85, parent primary_value = 0.80 → delta = 0.05
         assert "delta" in r
         assert "cell_id" in r
         assert r["cell_id"] in ("cell_aaa", "cell_bbb")

@@ -60,7 +60,7 @@ CLAM models hold 5 of the top 10 slots. The overall best (h_optimus_1 + clam_mb,
 - **Encoder:** `hoptimus1` (1536d, best HRD encoder)
 - **Model:** `clam_mb` (best HRD MIL model, CLAM framework)
 - **Baseline Test AUC:** 0.865
-- **Optimization target:** composite = (test_auc + test_bacc) / 2
+- **Optimization target:** primary_value = (test_auc + test_bacc) / 2
 
 Available `MODEL_TYPE` options:
 - **nnMIL models:** `vision_transformer`, `ab_mil`, `trans_mil`, `ilra_mil`, etc.
@@ -150,8 +150,8 @@ class in `graph.py`. Each experiment is a node with a parent edge encoding "buil
 
 ### Scoring
 Each node has a `potential` score for prioritization:
-- Executed: `composite + exploration_bonus(child_count)`
-- Proposed: `parent.composite + exploration_bonus(siblings) + technique_novelty`
+- Executed: `primary_value + exploration_bonus(child_count)`
+- Proposed: `parent.primary_value + exploration_bonus(siblings) + technique_novelty`
 The agent uses `graph.rank_proposals(n=6, max_per_branch=2)` to pick diverse
 experiments across multiple branches. Scores are advisory; the agent can override.
 
@@ -168,7 +168,7 @@ When no proposals remain pending, brainstorm new ideas:
 
 DeepHRD (JCO 2024) achieved AUC 0.74 on ovarian HRD from WSI. HRDPath (2025)
 achieved AUC 0.846 with a multi-task dual-model architecture. Our current
-composite of 0.850 is competitive but room for improvement likely exists
+primary_value of 0.850 is competitive but room for improvement likely exists
 through architectural innovation and data augmentation strategies.
 
 ## Output format
@@ -196,10 +196,10 @@ Extract the key metric: `grep "^test_auc_roc:" run.log`
 Results are auto-logged by `train.py` to `results.tsv` (tab-separated):
 
 ```
-commit	val_auc	val_bacc	test_auc	test_bacc	composite	delta	vram_gb	elapsed_min	status	description
+commit	val_auc	val_bacc	test_auc	test_bacc	primary_value	delta	vram_gb	elapsed_min	status	description
 ```
 
-The `status` (keep/discard) and `composite` are computed automatically by train.py.
+The `status` (keep/discard) and `primary_value` are computed automatically by train.py.
 
 ## The experiment loop
 
@@ -226,15 +226,15 @@ uv run automil orchestrator start
    block containing `parent_id`, `techniques`, `config_hash`. Submit up to 6 at once.
 6. **Wait for results**: Check the orchestrator completed directory for completion
    files. Use background tasks, not sleep-poll loops.
-7. **Read results** from `completed/{node_id}.json`: extract status, composite,
+7. **Read results** from `completed/{node_id}.json`: extract status, primary_value,
    delta, test_auc, test_bacc.
 8. **Update graph**: Call `graph.promote(node_id, metrics)` or
    `graph.mark_failed(node_id, status, error)` for each result.
    Call `graph.recalculate_scores()` and `graph.save()`.
 9. **Append to `learnings.md`** with experiment insights.
-10. If composite improved: update `train.py` with the winning config
+10. If primary_value improved: update `train.py` with the winning config
     and `git commit -m "try: <description>"`.
-11. If composite is worse or equal: no git changes needed (experiments ran from
+11. If primary_value is worse or equal: no git changes needed (experiments ran from
     orchestrator archive, not from the working tree).
 12. **Every 5 experiments**: consolidate learnings.md.
 13. **If no proposals remain**: brainstorm and `graph.add_proposed()` on

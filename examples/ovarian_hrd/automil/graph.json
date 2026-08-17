@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "meta": {
-    "best_composite": 0.851295,
+    "best_primary_value": 0.851295,
     "best_node_id": "node_0176",
     "total_executed": 189,
     "total_proposed": 9,
     "next_id": 199,
-    "baseline_composite": 0.0,
+    "baseline_primary_value": 0.0,
     "scoring": {
       "exploration_weight": 0.005,
       "novelty_weight": 0.003
@@ -20,7 +20,7 @@
       "status": "keep",
       "description": "baseline hoptimus1+clam_mb",
       "techniques": [],
-      "composite": 0.814061,
+      "primary_value": 0.814061,
       "global_delta": 0.814061,
       "parent_delta": 0.814061,
       "test_auc": 0.836131,
@@ -45,7 +45,7 @@
       "status": "discard",
       "description": "dropout 0.1",
       "techniques": [],
-      "composite": 0.802108,
+      "primary_value": 0.802108,
       "global_delta": -0.011953,
       "parent_delta": -0.011952999999999991,
       "test_auc": 0.837224,
@@ -70,7 +70,7 @@
       "status": "discard",
       "description": "L2 normalize features",
       "techniques": [],
-      "composite": 0.750583,
+      "primary_value": 0.750583,
       "global_delta": -0.063479,
       "parent_delta": -0.06347800000000003,
       "test_auc": 0.820285,
@@ -95,7 +95,7 @@
       "status": "keep",
       "description": "no instance eval",
       "techniques": [],
-      "composite": 0.826719,
+      "primary_value": 0.826719,
       "global_delta": 0.012657,
       "parent_delta": 0.012657999999999947,
       "test_auc": 0.843343,
@@ -122,7 +122,7 @@
       "techniques": [
         "big_model"
       ],
-      "composite": 0.818304,
+      "primary_value": 0.818304,
       "global_delta": -0.008415,
       "parent_delta": -0.00841499999999995,
       "test_auc": 0.846176,
@@ -147,7 +147,7 @@
       "status": "discard",
       "description": "lr 1e-4, wd 1e-3",
       "techniques": [],
-      "composite": 0.800737,
+      "primary_value": 0.800737,
       "global_delta": -0.025982,
       "parent_delta": -0.02598199999999995,
       "test_auc": 0.837135,
@@ -174,7 +174,7 @@
       "techniques": [
         "big_model"
       ],
-      "composite": 0.808126,
+      "primary_value": 0.808126,
       "global_delta": -0.018593,
       "parent_delta": -0.01859299999999997,
       "test_auc": 0.837603,
@@ -201,7 +201,7 @@
       "techniques": [
         "big_model"
       ],
-      "composite": 0.813597,
+      "primary_value": 0.813597,
       "global_delta": -0.013122,
       "parent_delta": -0.013121999999999967,
       "test_auc": 0.846984,
@@ -228,7 +228,7 @@
       "techniques": [
         "big_model"
       ],
-      "composite": 0.808126,
+      "primary_value": 0.808126,
       "global_delta": -0.018593,
       "parent_delta": -0.01859299999999997,
       "test_auc": 0.837603,
@@ -256,7 +256,7 @@
         "big_model",
         "bag_weight_05"
       ],
-      "composite": 0.80536,
+      "primary_value": 0.80536,
       "global_delta": -0.021359,
       "parent_delta": -0.021359000000000017,
       "test_auc": 0.841742,
@@ -284,7 +284,7 @@
         "big_model",
         "bag_weight_05"
       ],
-      "composite": 0.809122,
+      "primary_value": 0.809122,
       "global_delta": -0.017597,
       "parent_delta": -0.017596999999999974,
       "test_auc": 0.838035,
@@ -312,7 +312,7 @@
         "big_model",
         "bag_weight_05"
       ],
-      "composite": 0.827846,
+      "primary_value": 0.827846,
       "global_delta": 0.001127,
       "parent_delta": 0.0011269999999999891,
       "test_auc": 0.853931,
@@ -341,7 +341,7 @@
         "big_model",
         "bag_weight_05"
       ],
-      "composite": 0.81822,
+      "primary_value": 0.81822,
       "global_delta": -0.009626,
       "parent_delta": -0.009626000000000023,
       "test_auc": 0.84646,
@@ -370,7 +370,7 @@
         "big_model",
         "bag_weight_05"
       ],
-      "composite": 0.819885,
+      "primary_value": 0.819885,
       "global_delta": -0.007962,
       "parent_delta": -0.007960999999999996,
       "test_auc": 0.844329,
@@ -400,7 +400,7 @@
         "big_model",
         "bag_weight_05"
       ],
-      "composite": 0.810924,
+      "primary_value": 0.810924,
       "global_delta": -0.016922,
       "parent_delta": -0.016921999999999993,
       "test_auc": 0.880368,
@@ -427,7 +427,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.812178,
+      "primary_value": 0.812178,
       "global_delta": -0.015668,
       "parent_delta": -0.015668000000000015,
       "test_auc": 0.877416,
@@ -454,7 +454,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.831738,
+      "primary_value": 0.831738,
       "global_delta": 0.003892,
       "parent_delta": 0.0038920000000000066,
       "test_auc": 0.875009,
@@ -481,7 +481,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.734554,
+      "primary_value": 0.734554,
       "global_delta": -0.097185,
       "parent_delta": -0.09718399999999994,
       "test_auc": 0.839804,
@@ -508,7 +508,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.661385,
+      "primary_value": 0.661385,
       "global_delta": -0.170353,
       "parent_delta": -0.17035299999999998,
       "test_auc": 0.795184,
@@ -536,7 +536,7 @@
         "no_inst_eval",
         "focal_g1"
       ],
-      "composite": 0.821346,
+      "primary_value": 0.821346,
       "global_delta": -0.010392,
       "parent_delta": -0.010391999999999957,
       "test_auc": 0.861917,
@@ -563,7 +563,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.815285,
+      "primary_value": 0.815285,
       "global_delta": -0.016453,
       "parent_delta": -0.01645299999999994,
       "test_auc": 0.887202,
@@ -590,7 +590,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.688897,
+      "primary_value": 0.688897,
       "global_delta": -0.142841,
       "parent_delta": -0.142841,
       "test_auc": 0.806177,
@@ -617,7 +617,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.77585,
+      "primary_value": 0.77585,
       "global_delta": -0.055889,
       "parent_delta": -0.05588799999999994,
       "test_auc": 0.85485,
@@ -642,7 +642,7 @@
       "status": "discard",
       "description": "layernorm",
       "techniques": [],
-      "composite": 0.75933,
+      "primary_value": 0.75933,
       "global_delta": -0.072408,
       "parent_delta": -0.07240800000000003,
       "test_auc": 0.823049,
@@ -667,7 +667,7 @@
       "status": "discard",
       "description": "residual",
       "techniques": [],
-      "composite": 0.755689,
+      "primary_value": 0.755689,
       "global_delta": -0.076049,
       "parent_delta": -0.07604899999999992,
       "test_auc": 0.822294,
@@ -692,7 +692,7 @@
       "status": "discard",
       "description": "grad_clip",
       "techniques": [],
-      "composite": 0.814136,
+      "primary_value": 0.814136,
       "global_delta": -0.017603,
       "parent_delta": -0.017602000000000007,
       "test_auc": 0.883466,
@@ -717,7 +717,7 @@
       "status": "discard",
       "description": "noise_aug",
       "techniques": [],
-      "composite": 0.796773,
+      "primary_value": 0.796773,
       "global_delta": -0.034965,
       "parent_delta": -0.034965000000000024,
       "test_auc": 0.875752,
@@ -742,7 +742,7 @@
       "status": "discard",
       "description": "k32",
       "techniques": [],
-      "composite": 0.815491,
+      "primary_value": 0.815491,
       "global_delta": -0.016248,
       "parent_delta": -0.01624700000000001,
       "test_auc": 0.884041,
@@ -767,7 +767,7 @@
       "status": "discard",
       "description": "gc_k32",
       "techniques": [],
-      "composite": 0.812186,
+      "primary_value": 0.812186,
       "global_delta": -0.019552,
       "parent_delta": -0.019552000000000014,
       "test_auc": 0.885765,
@@ -792,7 +792,7 @@
       "status": "discard",
       "description": "gc_warmup10",
       "techniques": [],
-      "composite": 0.804847,
+      "primary_value": 0.804847,
       "global_delta": -0.026891,
       "parent_delta": -0.026890999999999998,
       "test_auc": 0.865628,
@@ -817,7 +817,7 @@
       "status": "discard",
       "description": "gc_lr2e4",
       "techniques": [],
-      "composite": 0.784679,
+      "primary_value": 0.784679,
       "global_delta": -0.04706,
       "parent_delta": -0.04705899999999996,
       "test_auc": 0.870513,
@@ -842,7 +842,7 @@
       "status": "discard",
       "description": "gc_patience20",
       "techniques": [],
-      "composite": 0.814567,
+      "primary_value": 0.814567,
       "global_delta": -0.017171,
       "parent_delta": -0.017170999999999936,
       "test_auc": 0.881742,
@@ -867,7 +867,7 @@
       "status": "discard",
       "description": "gc_lr5e4",
       "techniques": [],
-      "composite": 0.756552,
+      "primary_value": 0.756552,
       "global_delta": -0.075186,
       "parent_delta": -0.07518599999999998,
       "test_auc": 0.868119,
@@ -894,7 +894,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.82016,
+      "primary_value": 0.82016,
       "global_delta": -0.011578,
       "parent_delta": -0.011577999999999977,
       "test_auc": 0.869736,
@@ -921,7 +921,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.771398,
+      "primary_value": 0.771398,
       "global_delta": -0.06034,
       "parent_delta": -0.06033999999999995,
       "test_auc": 0.873674,
@@ -946,7 +946,7 @@
       "status": "discard",
       "description": "gc_k32_p20",
       "techniques": [],
-      "composite": 0.817538,
+      "primary_value": 0.817538,
       "global_delta": -0.0142,
       "parent_delta": -0.01419999999999999,
       "test_auc": 0.881091,
@@ -971,7 +971,7 @@
       "status": "discard",
       "description": "tta",
       "techniques": [],
-      "composite": 0.776239,
+      "primary_value": 0.776239,
       "global_delta": -0.055499,
       "parent_delta": -0.055498999999999965,
       "test_auc": 0.860459,
@@ -996,7 +996,7 @@
       "status": "discard",
       "description": "univ2_clam",
       "techniques": [],
-      "composite": 0.729495,
+      "primary_value": 0.729495,
       "global_delta": -0.102243,
       "parent_delta": -0.10224299999999997,
       "test_auc": 0.841616,
@@ -1021,7 +1021,7 @@
       "status": "discard",
       "description": "bw04",
       "techniques": [],
-      "composite": 0.804402,
+      "primary_value": 0.804402,
       "global_delta": -0.027336,
       "parent_delta": -0.027336000000000027,
       "test_auc": 0.87404,
@@ -1046,7 +1046,7 @@
       "status": "discard",
       "description": "wd5e4",
       "techniques": [],
-      "composite": 0.81303,
+      "primary_value": 0.81303,
       "global_delta": -0.018708,
       "parent_delta": -0.018707999999999947,
       "test_auc": 0.886141,
@@ -1073,7 +1073,7 @@
       "techniques": [
         "grad_clip"
       ],
-      "composite": 0.814041,
+      "primary_value": 0.814041,
       "global_delta": -0.017697,
       "parent_delta": -0.017696999999999963,
       "test_auc": 0.88459,
@@ -1098,7 +1098,7 @@
       "status": "discard",
       "description": "d015",
       "techniques": [],
-      "composite": 0.808156,
+      "primary_value": 0.808156,
       "global_delta": -0.023582,
       "parent_delta": -0.023581999999999992,
       "test_auc": 0.872246,
@@ -1123,7 +1123,7 @@
       "status": "discard",
       "description": "p15",
       "techniques": [],
-      "composite": 0.814998,
+      "primary_value": 0.814998,
       "global_delta": -0.01674,
       "parent_delta": -0.016739999999999977,
       "test_auc": 0.882604,
@@ -1150,7 +1150,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.81489,
+      "primary_value": 0.81489,
       "global_delta": -0.016848,
       "parent_delta": -0.016847999999999974,
       "test_auc": 0.837912,
@@ -1177,7 +1177,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.826719,
+      "primary_value": 0.826719,
       "global_delta": -0.005019,
       "parent_delta": -0.005018999999999996,
       "test_auc": 0.843343,
@@ -1205,7 +1205,7 @@
         "no_inst_eval",
         "focal_g1"
       ],
-      "composite": 0.830965,
+      "primary_value": 0.830965,
       "global_delta": -0.000773,
       "parent_delta": -0.0007730000000000237,
       "test_auc": 0.864289,
@@ -1232,7 +1232,7 @@
       "techniques": [
         "focal_g1"
       ],
-      "composite": 0.826885,
+      "primary_value": 0.826885,
       "global_delta": -0.004853,
       "parent_delta": -0.004852999999999996,
       "test_auc": 0.867633,
@@ -1260,7 +1260,7 @@
         "no_inst_eval",
         "focal_g1"
       ],
-      "composite": 0.797029,
+      "primary_value": 0.797029,
       "global_delta": -0.03471,
       "parent_delta": -0.03470899999999999,
       "test_auc": 0.830087,
@@ -1287,7 +1287,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.804875,
+      "primary_value": 0.804875,
       "global_delta": -0.026863,
       "parent_delta": -0.02686299999999997,
       "test_auc": 0.831742,
@@ -1314,7 +1314,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.829402,
+      "primary_value": 0.829402,
       "global_delta": -0.002336,
       "parent_delta": -0.0023360000000000047,
       "test_auc": 0.870014,
@@ -1342,7 +1342,7 @@
         "no_inst_eval",
         "focal_g1"
       ],
-      "composite": 0.840225,
+      "primary_value": 0.840225,
       "global_delta": 0.008487,
       "parent_delta": 0.008487000000000022,
       "test_auc": 0.865833,
@@ -1370,7 +1370,7 @@
         "no_inst_eval",
         "focal_g1"
       ],
-      "composite": 0.835983,
+      "primary_value": 0.835983,
       "global_delta": -0.004242,
       "parent_delta": -0.004241999999999968,
       "test_auc": 0.866477,
@@ -1398,7 +1398,7 @@
         "no_inst_eval",
         "focal_g1"
       ],
-      "composite": 0.825943,
+      "primary_value": 0.825943,
       "global_delta": -0.014282,
       "parent_delta": -0.014282000000000017,
       "test_auc": 0.858753,
@@ -1425,7 +1425,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.822529,
+      "primary_value": 0.822529,
       "global_delta": -0.017696,
       "parent_delta": -0.017696000000000045,
       "test_auc": 0.868624,
@@ -1452,7 +1452,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.825464,
+      "primary_value": 0.825464,
       "global_delta": -0.014761,
       "parent_delta": -0.014761000000000024,
       "test_auc": 0.855112,
@@ -1480,7 +1480,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.845422,
+      "primary_value": 0.845422,
       "global_delta": 0.005197,
       "parent_delta": 0.005197000000000007,
       "test_auc": 0.872136,
@@ -1507,7 +1507,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.8296,
+      "primary_value": 0.8296,
       "global_delta": -0.015822,
       "parent_delta": -0.015822000000000003,
       "test_auc": 0.866133,
@@ -1534,7 +1534,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.829312,
+      "primary_value": 0.829312,
       "global_delta": -0.016109,
       "parent_delta": -0.016109999999999958,
       "test_auc": 0.865558,
@@ -1561,7 +1561,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.831505,
+      "primary_value": 0.831505,
       "global_delta": -0.013917,
       "parent_delta": -0.013916999999999957,
       "test_auc": 0.865855,
@@ -1586,7 +1586,7 @@
       "status": "discard",
       "description": "g1_bw09",
       "techniques": [],
-      "composite": 0.825775,
+      "primary_value": 0.825775,
       "global_delta": -0.019647,
       "parent_delta": -0.01964699999999997,
       "test_auc": 0.875085,
@@ -1613,7 +1613,7 @@
       "techniques": [
         "no_inst_eval"
       ],
-      "composite": 0.840225,
+      "primary_value": 0.840225,
       "global_delta": -0.005197,
       "parent_delta": -0.005197000000000007,
       "test_auc": 0.865833,
@@ -1640,7 +1640,7 @@
       "techniques": [
         "grad_clip"
       ],
-      "composite": 0.813531,
+      "primary_value": 0.813531,
       "global_delta": -0.031891,
       "parent_delta": -0.031891,
       "test_auc": 0.862378,
@@ -1668,7 +1668,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.83033,
+      "primary_value": 0.83033,
       "global_delta": -0.015091,
       "parent_delta": -0.015091999999999994,
       "test_auc": 0.866092,
@@ -1696,7 +1696,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.834492,
+      "primary_value": 0.834492,
       "global_delta": -0.010929,
       "parent_delta": -0.010929999999999995,
       "test_auc": 0.870968,
@@ -1724,7 +1724,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.821211,
+      "primary_value": 0.821211,
       "global_delta": -0.024211,
       "parent_delta": -0.024210999999999983,
       "test_auc": 0.863304,
@@ -1751,7 +1751,7 @@
       "techniques": [
         "grad_clip"
       ],
-      "composite": 0.819728,
+      "primary_value": 0.819728,
       "global_delta": -0.025694,
       "parent_delta": -0.025693999999999995,
       "test_auc": 0.867876,
@@ -1778,7 +1778,7 @@
       "techniques": [
         "grad_clip"
       ],
-      "composite": 0.825638,
+      "primary_value": 0.825638,
       "global_delta": -0.019784,
       "parent_delta": -0.019784000000000024,
       "test_auc": 0.871937,
@@ -1803,7 +1803,7 @@
       "status": "discard",
       "description": "custom_mh_attn_4h",
       "techniques": [],
-      "composite": 0.77354,
+      "primary_value": 0.77354,
       "global_delta": -0.071882,
       "parent_delta": -0.071882,
       "test_auc": 0.826361,
@@ -1831,7 +1831,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.845422,
+      "primary_value": 0.845422,
       "global_delta": 0.0,
       "parent_delta": 0.0,
       "test_auc": 0.872136,
@@ -1859,7 +1859,7 @@
         "grad_clip",
         "ab_mil"
       ],
-      "composite": 0.808547,
+      "primary_value": 0.808547,
       "global_delta": -0.036875,
       "parent_delta": -0.03687499999999999,
       "test_auc": 0.845447,
@@ -1888,7 +1888,7 @@
         "grad_clip",
         "clam_sb"
       ],
-      "composite": 0.785135,
+      "primary_value": 0.785135,
       "global_delta": -0.060287,
       "parent_delta": -0.06028699999999998,
       "test_auc": 0.813509,
@@ -1916,7 +1916,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.845112,
+      "primary_value": 0.845112,
       "global_delta": -0.00031,
       "parent_delta": -0.00031000000000003247,
       "test_auc": 0.874965,
@@ -1944,7 +1944,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.817027,
+      "primary_value": 0.817027,
       "global_delta": -0.028395,
       "parent_delta": -0.02839500000000006,
       "test_auc": 0.853376,
@@ -1972,7 +1972,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.823052,
+      "primary_value": 0.823052,
       "global_delta": -0.02237,
       "parent_delta": -0.02237,
       "test_auc": 0.862069,
@@ -2001,7 +2001,7 @@
         "grad_clip",
         "noise_aug"
       ],
-      "composite": 0.845532,
+      "primary_value": 0.845532,
       "global_delta": 0.00011,
       "parent_delta": 0.00010999999999994348,
       "test_auc": 0.872357,
@@ -2029,7 +2029,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.817557,
+      "primary_value": 0.817557,
       "global_delta": -0.027975,
       "parent_delta": -0.027974999999999972,
       "test_auc": 0.87158,
@@ -2057,7 +2057,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.836491,
+      "primary_value": 0.836491,
       "global_delta": -0.009041,
       "parent_delta": -0.009040999999999966,
       "test_auc": 0.871517,
@@ -2086,7 +2086,7 @@
         "grad_clip",
         "noise_aug"
       ],
-      "composite": 0.825993,
+      "primary_value": 0.825993,
       "global_delta": -0.019539,
       "parent_delta": -0.019538999999999973,
       "test_auc": 0.865176,
@@ -2115,7 +2115,7 @@
         "grad_clip",
         "uni_v2"
       ],
-      "composite": 0.785738,
+      "primary_value": 0.785738,
       "global_delta": -0.059794,
       "parent_delta": -0.0597939999999999,
       "test_auc": 0.849122,
@@ -2143,7 +2143,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.830744,
+      "primary_value": 0.830744,
       "global_delta": -0.014788,
       "parent_delta": -0.014787999999999912,
       "test_auc": 0.864333,
@@ -2171,7 +2171,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.82249,
+      "primary_value": 0.82249,
       "global_delta": -0.023042,
       "parent_delta": -0.023041999999999896,
       "test_auc": 0.861617,
@@ -2199,7 +2199,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.839085,
+      "primary_value": 0.839085,
       "global_delta": -0.006447,
       "parent_delta": -0.0064469999999999805,
       "test_auc": 0.869013,
@@ -2227,7 +2227,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.837251,
+      "primary_value": 0.837251,
       "global_delta": -0.008281,
       "parent_delta": -0.008280999999999983,
       "test_auc": 0.87224,
@@ -2255,7 +2255,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.831406,
+      "primary_value": 0.831406,
       "global_delta": -0.014126,
       "parent_delta": -0.014125999999999972,
       "test_auc": 0.866452,
@@ -2283,7 +2283,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.789788,
+      "primary_value": 0.789788,
       "global_delta": -0.055744,
       "parent_delta": -0.055743999999999905,
       "test_auc": 0.833858,
@@ -2311,7 +2311,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.82971,
+      "primary_value": 0.82971,
       "global_delta": -0.015822,
       "parent_delta": -0.015822000000000003,
       "test_auc": 0.862265,
@@ -2339,7 +2339,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.780092,
+      "primary_value": 0.780092,
       "global_delta": -0.06544,
       "parent_delta": -0.06543999999999994,
       "test_auc": 0.838029,
@@ -2367,7 +2367,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.834933,
+      "primary_value": 0.834933,
       "global_delta": -0.010599,
       "parent_delta": -0.010598999999999914,
       "test_auc": 0.871849,
@@ -2395,7 +2395,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.594292,
+      "primary_value": 0.594292,
       "global_delta": -0.25124,
       "parent_delta": -0.2512399999999999,
       "test_auc": 0.695481,
@@ -2423,7 +2423,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.838457,
+      "primary_value": 0.838457,
       "global_delta": -0.007075,
       "parent_delta": -0.0070749999999999424,
       "test_auc": 0.868552,
@@ -2451,7 +2451,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.838533,
+      "primary_value": 0.838533,
       "global_delta": -0.006999,
       "parent_delta": -0.0069989999999999775,
       "test_auc": 0.87069,
@@ -2479,7 +2479,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.794668,
+      "primary_value": 0.794668,
       "global_delta": -0.050864,
       "parent_delta": -0.05086399999999991,
       "test_auc": 0.834862,
@@ -2508,7 +2508,7 @@
         "grad_clip",
         "noise_aug"
       ],
-      "composite": 0.835187,
+      "primary_value": 0.835187,
       "global_delta": -0.010345,
       "parent_delta": -0.010344999999999938,
       "test_auc": 0.864886,
@@ -2536,7 +2536,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.819888,
+      "primary_value": 0.819888,
       "global_delta": -0.025644,
       "parent_delta": -0.025644,
       "test_auc": 0.859795,
@@ -2564,7 +2564,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.825594,
+      "primary_value": 0.825594,
       "global_delta": -0.019938,
       "parent_delta": -0.0199379999999999,
       "test_auc": 0.862941,
@@ -2592,7 +2592,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.716389,
+      "primary_value": 0.716389,
       "global_delta": -0.129143,
       "parent_delta": -0.1291429999999999,
       "test_auc": 0.780984,
@@ -2621,7 +2621,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.849258,
+      "primary_value": 0.849258,
       "global_delta": 0.003726,
       "parent_delta": 0.003726000000000007,
       "test_auc": 0.872117,
@@ -2649,7 +2649,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.824304,
+      "primary_value": 0.824304,
       "global_delta": -0.024954,
       "parent_delta": -0.02495399999999992,
       "test_auc": 0.863809,
@@ -2677,7 +2677,7 @@
         "no_inst_eval",
         "grad_clip"
       ],
-      "composite": 0.827867,
+      "primary_value": 0.827867,
       "global_delta": -0.021391,
       "parent_delta": -0.021390999999999938,
       "test_auc": 0.868062,
@@ -2706,7 +2706,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.835929,
+      "primary_value": 0.835929,
       "global_delta": -0.013329,
       "parent_delta": -0.013328999999999924,
       "test_auc": 0.873841,
@@ -2735,7 +2735,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.838648,
+      "primary_value": 0.838648,
       "global_delta": -0.01061,
       "parent_delta": -0.010610000000000008,
       "test_auc": 0.871586,
@@ -2764,7 +2764,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.838073,
+      "primary_value": 0.838073,
       "global_delta": -0.011185,
       "parent_delta": -0.011185,
       "test_auc": 0.870437,
@@ -2793,7 +2793,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.839223,
+      "primary_value": 0.839223,
       "global_delta": -0.010035,
       "parent_delta": -0.010034999999999905,
       "test_auc": 0.872736,
@@ -2823,7 +2823,7 @@
         "rdrop",
         "noise_aug"
       ],
-      "composite": 0.834901,
+      "primary_value": 0.834901,
       "global_delta": -0.014357,
       "parent_delta": -0.014356999999999953,
       "test_auc": 0.871785,
@@ -2852,7 +2852,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.838073,
+      "primary_value": 0.838073,
       "global_delta": -0.011185,
       "parent_delta": -0.011185,
       "test_auc": 0.870437,
@@ -2881,7 +2881,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.83836,
+      "primary_value": 0.83836,
       "global_delta": -0.010898,
       "parent_delta": -0.010897999999999963,
       "test_auc": 0.871012,
@@ -2910,7 +2910,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.834172,
+      "primary_value": 0.834172,
       "global_delta": -0.015086,
       "parent_delta": -0.015085999999999933,
       "test_auc": 0.863496,
@@ -2939,7 +2939,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.819709,
+      "primary_value": 0.819709,
       "global_delta": -0.029549,
       "parent_delta": -0.029548999999999936,
       "test_auc": 0.859505,
@@ -2968,7 +2968,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.834388,
+      "primary_value": 0.834388,
       "global_delta": -0.01487,
       "parent_delta": -0.014869999999999939,
       "test_auc": 0.870759,
@@ -2997,7 +2997,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.83851,
+      "primary_value": 0.83851,
       "global_delta": -0.010748,
       "parent_delta": -0.01074799999999998,
       "test_auc": 0.871312,
@@ -3025,7 +3025,7 @@
         "no_inst_eval",
         "rdrop"
       ],
-      "composite": 0.8286,
+      "primary_value": 0.8286,
       "global_delta": -0.020658,
       "parent_delta": -0.020657999999999954,
       "test_auc": 0.864134,
@@ -3054,7 +3054,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.849258,
+      "primary_value": 0.849258,
       "global_delta": -0.0,
       "parent_delta": 0.0,
       "test_auc": 0.872117,
@@ -3083,7 +3083,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.82287,
+      "primary_value": 0.82287,
       "global_delta": -0.026388,
       "parent_delta": -0.026387999999999967,
       "test_auc": 0.862378,
@@ -3112,7 +3112,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.849258,
+      "primary_value": 0.849258,
       "global_delta": -0.0,
       "parent_delta": 0.0,
       "test_auc": 0.872117,
@@ -3140,7 +3140,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.783258,
+      "primary_value": 0.783258,
       "global_delta": -0.066,
       "parent_delta": -0.06599999999999995,
       "test_auc": 0.827226,
@@ -3168,7 +3168,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.805286,
+      "primary_value": 0.805286,
       "global_delta": -0.043972,
       "parent_delta": -0.04397200000000001,
       "test_auc": 0.864721,
@@ -3196,7 +3196,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.813422,
+      "primary_value": 0.813422,
       "global_delta": -0.035836,
       "parent_delta": -0.03583599999999998,
       "test_auc": 0.858646,
@@ -3224,7 +3224,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.825166,
+      "primary_value": 0.825166,
       "global_delta": -0.024092,
       "parent_delta": -0.024092000000000002,
       "test_auc": 0.860648,
@@ -3252,7 +3252,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.822739,
+      "primary_value": 0.822739,
       "global_delta": -0.026519,
       "parent_delta": -0.02651899999999996,
       "test_auc": 0.864892,
@@ -3281,7 +3281,7 @@
         "rdrop",
         "clam_sb"
       ],
-      "composite": 0.777214,
+      "primary_value": 0.777214,
       "global_delta": -0.072044,
       "parent_delta": -0.072044,
       "test_auc": 0.814908,
@@ -3310,7 +3310,7 @@
         "rdrop",
         "clam_sb"
       ],
-      "composite": 0.777214,
+      "primary_value": 0.777214,
       "global_delta": -0.072044,
       "parent_delta": -0.072044,
       "test_auc": 0.814908,
@@ -3338,7 +3338,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.830059,
+      "primary_value": 0.830059,
       "global_delta": -0.019199,
       "parent_delta": -0.019198999999999966,
       "test_auc": 0.868201,
@@ -3366,7 +3366,7 @@
         "rdrop",
         "trans_mil"
       ],
-      "composite": 0.767799,
+      "primary_value": 0.767799,
       "global_delta": -0.081459,
       "parent_delta": -0.08145899999999995,
       "test_auc": 0.833636,
@@ -3395,7 +3395,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.836933,
+      "primary_value": 0.836933,
       "global_delta": -0.012325,
       "parent_delta": -0.01232499999999992,
       "test_auc": 0.875849,
@@ -3424,7 +3424,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.827578,
+      "primary_value": 0.827578,
       "global_delta": -0.02168,
       "parent_delta": -0.02167999999999992,
       "test_auc": 0.863462,
@@ -3453,7 +3453,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.839223,
+      "primary_value": 0.839223,
       "global_delta": -0.010035,
       "parent_delta": -0.010034999999999905,
       "test_auc": 0.876184,
@@ -3481,7 +3481,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.83606,
+      "primary_value": 0.83606,
       "global_delta": -0.013198,
       "parent_delta": -0.013197999999999932,
       "test_auc": 0.874103,
@@ -3509,7 +3509,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.826862,
+      "primary_value": 0.826862,
       "global_delta": -0.022396,
       "parent_delta": -0.02239599999999997,
       "test_auc": 0.864292,
@@ -3538,7 +3538,7 @@
         "rdrop",
         "ab_mil"
       ],
-      "composite": 0.808318,
+      "primary_value": 0.808318,
       "global_delta": -0.04094,
       "parent_delta": -0.040939999999999976,
       "test_auc": 0.844348,
@@ -3566,7 +3566,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.834582,
+      "primary_value": 0.834582,
       "global_delta": -0.014676,
       "parent_delta": -0.014675999999999911,
       "test_auc": 0.870352,
@@ -3594,7 +3594,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.834877,
+      "primary_value": 0.834877,
       "global_delta": -0.014381,
       "parent_delta": -0.014380999999999977,
       "test_auc": 0.868356,
@@ -3624,7 +3624,7 @@
         "rdrop",
         "hibou_l"
       ],
-      "composite": 0.741468,
+      "primary_value": 0.741468,
       "global_delta": -0.10779,
       "parent_delta": -0.10778999999999994,
       "test_auc": 0.8229,
@@ -3652,7 +3652,7 @@
         "rdrop",
         "uni_v2"
       ],
-      "composite": 0.780433,
+      "primary_value": 0.780433,
       "global_delta": -0.068825,
       "parent_delta": -0.06882499999999991,
       "test_auc": 0.814194,
@@ -3682,7 +3682,7 @@
         "rdrop",
         "uni_v2"
       ],
-      "composite": 0.787451,
+      "primary_value": 0.787451,
       "global_delta": -0.061807,
       "parent_delta": -0.061806999999999945,
       "test_auc": 0.8491,
@@ -3712,7 +3712,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.768021,
+      "primary_value": 0.768021,
       "global_delta": -0.081237,
       "parent_delta": -0.081237,
       "test_auc": 0.822246,
@@ -3742,7 +3742,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.846239,
+      "primary_value": 0.846239,
       "global_delta": -0.003019,
       "parent_delta": -0.003018999999999994,
       "test_auc": 0.873772,
@@ -3773,7 +3773,7 @@
         "rdrop",
         "vision_transformer"
       ],
-      "composite": 0.823873,
+      "primary_value": 0.823873,
       "global_delta": -0.025385,
       "parent_delta": -0.02538499999999999,
       "test_auc": 0.862947,
@@ -3803,7 +3803,7 @@
         "grad_clip",
         "noise_aug"
       ],
-      "composite": 0.841465,
+      "primary_value": 0.841465,
       "global_delta": -0.007793,
       "parent_delta": -0.007792999999999939,
       "test_auc": 0.87722,
@@ -3833,7 +3833,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.847643,
+      "primary_value": 0.847643,
       "global_delta": -0.001615,
       "parent_delta": -0.001614999999999922,
       "test_auc": 0.872335,
@@ -3863,7 +3863,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.835353,
+      "primary_value": 0.835353,
       "global_delta": -0.013905,
       "parent_delta": -0.013904999999999945,
       "test_auc": 0.872689,
@@ -3893,7 +3893,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.839597,
+      "primary_value": 0.839597,
       "global_delta": -0.009661,
       "parent_delta": -0.00966099999999992,
       "test_auc": 0.873484,
@@ -3923,7 +3923,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.840028,
+      "primary_value": 0.840028,
       "global_delta": -0.00923,
       "parent_delta": -0.00922999999999996,
       "test_auc": 0.874346,
@@ -3953,7 +3953,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.819725,
+      "primary_value": 0.819725,
       "global_delta": -0.029533,
       "parent_delta": -0.02953299999999992,
       "test_auc": 0.862985,
@@ -3984,7 +3984,7 @@
         "rdrop",
         "noise_aug"
       ],
-      "composite": 0.835894,
+      "primary_value": 0.835894,
       "global_delta": -0.013364,
       "parent_delta": -0.013363999999999931,
       "test_auc": 0.873772,
@@ -4014,7 +4014,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.839188,
+      "primary_value": 0.839188,
       "global_delta": -0.01007,
       "parent_delta": -0.010069999999999912,
       "test_auc": 0.872666,
@@ -4044,7 +4044,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.832557,
+      "primary_value": 0.832557,
       "global_delta": -0.016701,
       "parent_delta": -0.016700999999999966,
       "test_auc": 0.863714,
@@ -4075,7 +4075,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.850133,
+      "primary_value": 0.850133,
       "global_delta": 0.000875,
       "parent_delta": 0.0008750000000000702,
       "test_auc": 0.870418,
@@ -4106,7 +4106,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.834696,
+      "primary_value": 0.834696,
       "global_delta": -0.015437,
       "parent_delta": -0.015437000000000034,
       "test_auc": 0.867993,
@@ -4137,7 +4137,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.834369,
+      "primary_value": 0.834369,
       "global_delta": -0.015763,
       "parent_delta": -0.015764,
       "test_auc": 0.869925,
@@ -4167,7 +4167,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.838626,
+      "primary_value": 0.838626,
       "global_delta": -0.011507,
       "parent_delta": -0.011507000000000045,
       "test_auc": 0.871542,
@@ -4198,7 +4198,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.844417,
+      "primary_value": 0.844417,
       "global_delta": -0.005715,
       "parent_delta": -0.005716000000000054,
       "test_auc": 0.869332,
@@ -4229,7 +4229,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.834338,
+      "primary_value": 0.834338,
       "global_delta": -0.015795,
       "parent_delta": -0.015795000000000003,
       "test_auc": 0.862391,
@@ -4260,7 +4260,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.833346,
+      "primary_value": 0.833346,
       "global_delta": -0.016787,
       "parent_delta": -0.016786999999999996,
       "test_auc": 0.864652,
@@ -4292,7 +4292,7 @@
         "step_lr",
         "uni_v2"
       ],
-      "composite": 0.802899,
+      "primary_value": 0.802899,
       "global_delta": -0.047234,
       "parent_delta": -0.047234,
       "test_auc": 0.861892,
@@ -4322,7 +4322,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.832332,
+      "primary_value": 0.832332,
       "global_delta": -0.0178,
       "parent_delta": -0.017801000000000067,
       "test_auc": 0.864703,
@@ -4353,7 +4353,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.850133,
+      "primary_value": 0.850133,
       "global_delta": 0.0,
       "parent_delta": 0.0,
       "test_auc": 0.870418,
@@ -4385,7 +4385,7 @@
         "step_lr",
         "ilra_mil"
       ],
-      "composite": 0.785346,
+      "primary_value": 0.785346,
       "global_delta": -0.064786,
       "parent_delta": -0.06478700000000004,
       "test_auc": 0.823904,
@@ -4417,7 +4417,7 @@
         "step_lr",
         "dtfd_mil"
       ],
-      "composite": 0.793331,
+      "primary_value": 0.793331,
       "global_delta": -0.056802,
       "parent_delta": -0.05680200000000002,
       "test_auc": 0.866881,
@@ -4449,7 +4449,7 @@
         "step_lr",
         "vision_transformer"
       ],
-      "composite": 0.769798,
+      "primary_value": 0.769798,
       "global_delta": -0.080335,
       "parent_delta": -0.08033500000000005,
       "test_auc": 0.839463,
@@ -4480,7 +4480,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.850133,
+      "primary_value": 0.850133,
       "global_delta": 0.0,
       "parent_delta": 0.0,
       "test_auc": 0.870418,
@@ -4511,7 +4511,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.836771,
+      "primary_value": 0.836771,
       "global_delta": -0.013362,
       "parent_delta": -0.013361999999999985,
       "test_auc": 0.865246,
@@ -4542,7 +4542,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.821774,
+      "primary_value": 0.821774,
       "global_delta": -0.028358,
       "parent_delta": -0.028359000000000023,
       "test_auc": 0.867083,
@@ -4573,7 +4573,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.83001,
+      "primary_value": 0.83001,
       "global_delta": -0.020123,
       "parent_delta": -0.020123000000000002,
       "test_auc": 0.87321,
@@ -4604,7 +4604,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.833918,
+      "primary_value": 0.833918,
       "global_delta": -0.016215,
       "parent_delta": -0.01621499999999998,
       "test_auc": 0.873266,
@@ -4635,7 +4635,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.831721,
+      "primary_value": 0.831721,
       "global_delta": -0.018411,
       "parent_delta": -0.018411999999999984,
       "test_auc": 0.865647,
@@ -4666,7 +4666,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.837058,
+      "primary_value": 0.837058,
       "global_delta": -0.013075,
       "parent_delta": -0.013075000000000059,
       "test_auc": 0.86582,
@@ -4696,7 +4696,7 @@
         "grad_clip",
         "rdrop"
       ],
-      "composite": 0.819552,
+      "primary_value": 0.819552,
       "global_delta": -0.030581,
       "parent_delta": -0.03058100000000008,
       "test_auc": 0.864428,
@@ -4726,7 +4726,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.825682,
+      "primary_value": 0.825682,
       "global_delta": -0.024451,
       "parent_delta": -0.024451,
       "test_auc": 0.872666,
@@ -4757,7 +4757,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.752649,
+      "primary_value": 0.752649,
       "global_delta": -0.097483,
       "parent_delta": -0.09748400000000002,
       "test_auc": 0.830062,
@@ -4788,7 +4788,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.850133,
+      "primary_value": 0.850133,
       "global_delta": 0.0,
       "parent_delta": 0.0,
       "test_auc": 0.870418,
@@ -4819,7 +4819,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.815882,
+      "primary_value": 0.815882,
       "global_delta": -0.034251,
       "parent_delta": -0.03425100000000003,
       "test_auc": 0.860537,
@@ -4851,7 +4851,7 @@
         "step_lr",
         "variance_pool"
       ],
-      "composite": 0.780382,
+      "primary_value": 0.780382,
       "global_delta": -0.06975,
       "parent_delta": -0.06975100000000001,
       "test_auc": 0.837748,
@@ -4883,7 +4883,7 @@
         "step_lr",
         "aem"
       ],
-      "composite": 0.769597,
+      "primary_value": 0.769597,
       "global_delta": -0.080535,
       "parent_delta": -0.08053600000000005,
       "test_auc": 0.829396,
@@ -4915,7 +4915,7 @@
         "step_lr",
         "psemix"
       ],
-      "composite": 0.801748,
+      "primary_value": 0.801748,
       "global_delta": -0.048385,
       "parent_delta": -0.04838500000000001,
       "test_auc": 0.860774,
@@ -4947,7 +4947,7 @@
         "step_lr",
         "topk_attn"
       ],
-      "composite": 0.564032,
+      "primary_value": 0.564032,
       "global_delta": -0.286101,
       "parent_delta": -0.28610100000000005,
       "test_auc": 0.619575,
@@ -4979,7 +4979,7 @@
         "step_lr",
         "coord_pe"
       ],
-      "composite": 0.851295,
+      "primary_value": 0.851295,
       "global_delta": 0.001162,
       "parent_delta": 0.0011619999999999964,
       "test_auc": 0.872742,
@@ -5011,7 +5011,7 @@
         "step_lr",
         "aem"
       ],
-      "composite": 0.799542,
+      "primary_value": 0.799542,
       "global_delta": -0.051752,
       "parent_delta": -0.05175300000000005,
       "test_auc": 0.848547,
@@ -5043,7 +5043,7 @@
         "step_lr",
         "coord_pe"
       ],
-      "composite": 0.564982,
+      "primary_value": 0.564982,
       "global_delta": -0.286312,
       "parent_delta": -0.28631300000000004,
       "test_auc": 0.629168,
@@ -5075,7 +5075,7 @@
         "step_lr",
         "coord_pe"
       ],
-      "composite": 0.839567,
+      "primary_value": 0.839567,
       "global_delta": -0.011728,
       "parent_delta": -0.011728000000000072,
       "test_auc": 0.87422,
@@ -5107,7 +5107,7 @@
         "step_lr",
         "coord_pe"
       ],
-      "composite": 0.850995,
+      "primary_value": 0.850995,
       "global_delta": -0.0003,
       "parent_delta": -0.000300000000000078,
       "test_auc": 0.872142,
@@ -5140,7 +5140,7 @@
         "coord_pe",
         "bilevel_lr"
       ],
-      "composite": 0.767399,
+      "primary_value": 0.767399,
       "global_delta": -0.083895,
       "parent_delta": -0.08389599999999997,
       "test_auc": 0.827874,
@@ -5173,7 +5173,7 @@
         "coord_pe",
         "maxsoft"
       ],
-      "composite": 0.81579,
+      "primary_value": 0.81579,
       "global_delta": -0.035504,
       "parent_delta": -0.03550500000000001,
       "test_auc": 0.846394,
@@ -5206,7 +5206,7 @@
         "coord_pe",
         "supcon"
       ],
-      "composite": 0.805547,
+      "primary_value": 0.805547,
       "global_delta": -0.045748,
       "parent_delta": -0.04574800000000001,
       "test_auc": 0.872338,
@@ -5239,7 +5239,7 @@
         "coord_pe",
         "attn_temp"
       ],
-      "composite": 0.843722,
+      "primary_value": 0.843722,
       "global_delta": -0.007572,
       "parent_delta": -0.007573000000000052,
       "test_auc": 0.872186,
@@ -5271,7 +5271,7 @@
         "step_lr",
         "coord_pe"
       ],
-      "composite": 0.85072,
+      "primary_value": 0.85072,
       "global_delta": -0.000575,
       "parent_delta": -0.0005749999999999922,
       "test_auc": 0.871593,
@@ -5302,7 +5302,7 @@
         "rdrop",
         "step_lr"
       ],
-      "composite": 0.8395,
+      "primary_value": 0.8395,
       "global_delta": -0.011794,
       "parent_delta": -0.011795,
       "test_auc": 0.869843,
@@ -5334,7 +5334,7 @@
         "step_lr",
         "coord_pe"
       ],
-      "composite": 0.851007,
+      "primary_value": 0.851007,
       "global_delta": -0.000287,
       "parent_delta": -0.000288000000000066,
       "test_auc": 0.872167,
@@ -5366,7 +5366,7 @@
         "coord_pe",
         "poly_loss"
       ],
-      "composite": 0.820794,
+      "primary_value": 0.820794,
       "global_delta": -0.030501,
       "parent_delta": -0.030501,
       "test_auc": 0.866591,
@@ -5391,7 +5391,7 @@
       "status": "discard",
       "description": "orchestrator_test_baseline (verify orchestrator works with current best config)",
       "techniques": [],
-      "composite": 0.851295,
+      "primary_value": 0.851295,
       "global_delta": 0.0,
       "parent_delta": 0.0,
       "test_auc": 0.872742,

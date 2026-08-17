@@ -4,9 +4,9 @@
   "title": "automil result.json contract (D-201, DEC-03)",
   "description": "Contract every training script must honor. Validated at ingestion in src/automil/backends/_orchestrator_daemon.py. additionalProperties is intentional; consumers may extend.",
   "type": "object",
-  "required": ["composite"],
+  "required": ["primary_value"],
   "properties": {
-    "composite": {"type": "number"},
+    "primary_value": {"type": "number"},
     "metrics": {
       "type": "object",
       "description": "Agent-facing metrics (validation only under the val-firewall).",

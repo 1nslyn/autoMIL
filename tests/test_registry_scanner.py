@@ -10,7 +10,7 @@ REGISTER_MODEL_TEMPLATE = '''"""{name} variant.
 
 Parent: {parent}
 Base commit: abc1234
-Composite: 0.5
+Primary_value: 0.5
 Node ID: node_{nodenum}
 Mutations:
 """
@@ -19,7 +19,7 @@ from automil.registry import register, VariantSpec, ModelVariant
 
 @register(VariantSpec(
     name="{name}", kind="model", parent="{parent}",
-    base_commit="abc1234", composite=0.5, node_id="node_{nodenum}",
+    base_commit="abc1234", primary_value=0.5, node_id="node_{nodenum}",
     created_at="2026-05-02T10:00:00Z",
 ))
 class {classname}(ModelVariant):
@@ -33,7 +33,7 @@ from automil.registry import register, VariantSpec, LossVariant
 
 @register(VariantSpec(
     name="{name}", kind="loss", parent=None,
-    base_commit="abc1234", composite=0.5, node_id="node_{nodenum}",
+    base_commit="abc1234", primary_value=0.5, node_id="node_{nodenum}",
     created_at="2026-05-02T10:00:00Z",
 ))
 class {classname}(LossVariant):
@@ -47,7 +47,7 @@ from automil.registry import register, VariantSpec, PolicyVariant
 
 @register(VariantSpec(
     name="{name}", kind="policy", parent=None,
-    base_commit="abc1234", composite=0.5, node_id="node_{nodenum}",
+    base_commit="abc1234", primary_value=0.5, node_id="node_{nodenum}",
     created_at="2026-05-02T10:00:00Z",
 ))
 class {classname}(PolicyVariant):

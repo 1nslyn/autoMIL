@@ -414,7 +414,7 @@ def _converted_artifacts(
     is_survival = task_family == "survival"
     validation_folds: list[dict[str, Any]] = []
     sealed_folds: list[dict[str, Any]] = []
-    composites: list[float] = []
+    primary_values: list[float] = []
     for row in folds:
         fold = int(row["fold_index"])
         val = row["val_metrics"]
@@ -443,15 +443,15 @@ def _converted_artifacts(
                 held_out["test_qwk"] = max(0.0, float(test["qwk"]))
         # Selection is the primary validation metric alone (scoring.formula:
         # val_auc / val_c_index); companions stay recorded but do not vote —
-        # the campaign fold validator requires composite == the primary.
-        composite = float(
+        # the campaign fold validator requires primary_value == the primary.
+        primary_value = float(
             val_metrics["val_c_index"] if is_survival else val_metrics["val_auc"]
         )
-        composites.append(composite)
+        primary_values.append(primary_value)
         validation_folds.append({
             "fold_index": fold,
             "metrics": val_metrics,
-            "composite": composite,
+            "primary_value": primary_value,
         })
         sealed_folds.append({
             "fold_index": fold,
@@ -459,13 +459,13 @@ def _converted_artifacts(
             "status": "completed",
             "metrics": val_metrics,
             "held_out": held_out,
-            "composite": composite,
+            "primary_value": primary_value,
             "elapsed_seconds": int(float(row["elapsed_seconds"])),
             "peak_vram_mb": 0,
         })
-    composite = math.fsum(composites) / len(composites)
+    primary_value = math.fsum(primary_values) / len(primary_values)
     if is_survival:
-        metrics = {"val_c_index": composite}
+        metrics = {"val_c_index": primary_value}
     else:
         # Cross-fold means over the RECORDED per-fold values (for qwk that
         # means mean of clamped values, matching the live writers).
@@ -479,8 +479,8 @@ def _converted_artifacts(
     public_result = {
         "status": "completed",
         "metrics": metrics,
-        "composite": composite,
-        "composite_se": cross_fold_se(composites),
+        "primary_value": primary_value,
+        "primary_se": cross_fold_se(primary_values),
         "elapsed_seconds": round(math.fsum(
             float(row["elapsed_seconds"]) for row in folds
         ), 1),

@@ -28,11 +28,10 @@ baseline:
   model: "clam_mb"
   framework: "CLAM"
   val_auc: 0.0
-  composite: 0.0
+  primary_value: 0.0
 
 metrics:
   primary: "val_auc"
-  composite_formula: "val_auc"
   track: ["val_auc", "val_bacc"]
 
 training:
@@ -121,7 +120,7 @@ env:
   dotenv_files:
     - benchmarks/.env
 
-# Selection composite = the primary validation metric alone
+# Selection primary_value = the primary validation metric alone
 # (companions in metrics.track stay recorded but do not vote).
 scoring:
   formula: "val_auc"

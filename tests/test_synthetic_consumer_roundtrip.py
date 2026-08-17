@@ -23,7 +23,7 @@ from click.testing import CliRunner
 # NotImplementedError stub (D-37: byte-identical port is consumer follow-up;
 # the test plays operator and pastes a deterministic forward).
 DETERMINISTIC_FORWARD_BODY = """    def forward(self, features=None, coords=None):
-        # Deterministic synthetic composite tuned to mid-band of the default
+        # Deterministic synthetic primary_value tuned to mid-band of the default
         # tolerance (0.005). Returns 0.502 regardless of input.
         return 0.502
 """
@@ -72,7 +72,7 @@ def _write_archive_spec(
     overlay: dict,
     parent: str | None,
     base_commit: str,
-    composite: float = 0.502,
+    primary_value: float = 0.502,
 ):
     """Simulate `automil submit` having written archive/<node_id>/spec.json."""
     archive = adir / "orchestrator" / "archive" / node_id
@@ -82,14 +82,14 @@ def _write_archive_spec(
         "base_commit": base_commit,
         "overlay_manifest": overlay,
         "deletions": [],
-        "composite": composite,
+        "primary_value": primary_value,
         "graph_metadata": {"parent_id": parent, "techniques": []},
     }
     (archive / "spec.json").write_text(json.dumps(spec, indent=2))
 
 
 def _write_graph_node_no_variant_spec(
-    adir: Path, node_id: str, *, composite: float, base_commit: str
+    adir: Path, node_id: str, *, primary_value: float, base_commit: str
 ):
     """Realistic state after `automil submit` but BEFORE port-variant:
     the node exists, but variant_spec is NOT populated. port-variant's job
@@ -98,11 +98,11 @@ def _write_graph_node_no_variant_spec(
         "schema_version": 1,
         "meta": {
             "best_node_id": node_id,
-            "best_composite": composite,
+            "best_primary_value": primary_value,
             "total_executed": 1,
             "total_proposed": 0,
             "next_id": 2,
-            "baseline_composite": 0.5,
+            "baseline_primary_value": 0.5,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": {
@@ -110,7 +110,7 @@ def _write_graph_node_no_variant_spec(
                 "id": node_id,
                 "type": "executed",
                 "status": "keep",
-                "composite": composite,
+                "primary_value": primary_value,
                 "base_commit": base_commit,
                 "created_at": "2026-05-02T10:00:00Z",
                 # NO variant_spec — port-variant adds it.
@@ -189,9 +189,9 @@ def test_full_roundtrip_passes(tmp_path, cli_runner, monkeypatch):
         overlay={"variants/synthstub/baseline.py": "sha:..."},
         parent="synthstub",
         base_commit=head,
-        composite=0.502,
+        primary_value=0.502,
     )
-    _write_graph_node_no_variant_spec(adir, node_id, composite=0.502, base_commit=head)
+    _write_graph_node_no_variant_spec(adir, node_id, primary_value=0.502, base_commit=head)
 
     from automil.cli import main
 
@@ -265,13 +265,13 @@ def test_full_roundtrip_passes(tmp_path, cli_runner, monkeypatch):
 
     manifest = yaml.safe_load((adir / "repro_manifest.yaml").read_text())
     assert manifest["status"] == "pass"
-    assert manifest["actual_composite"] == pytest.approx(0.502, abs=0.001)
-    assert manifest["expected_composite"] == pytest.approx(0.502)
+    assert manifest["actual_primary_value"] == pytest.approx(0.502, abs=0.001)
+    assert manifest["expected_primary_value"] == pytest.approx(0.502)
     assert manifest["tolerance"] == pytest.approx(0.005)
 
 
 def test_full_roundtrip_fail_exceeds_tolerance(tmp_path, cli_runner, monkeypatch):
-    """Same REAL pipeline but recorded composite drifts beyond tolerance."""
+    """Same REAL pipeline but recorded primary_value drifts beyond tolerance."""
     proj, adir, head = _setup(tmp_path)
     monkeypatch.chdir(proj)
 
@@ -282,9 +282,9 @@ def test_full_roundtrip_fail_exceeds_tolerance(tmp_path, cli_runner, monkeypatch
         overlay={"variants/synthstub/baseline.py": "sha:..."},
         parent="synthstub",
         base_commit=head,
-        composite=0.700,  # archive thinks 0.700
+        primary_value=0.700,  # archive thinks 0.700
     )
-    _write_graph_node_no_variant_spec(adir, node_id, composite=0.700, base_commit=head)
+    _write_graph_node_no_variant_spec(adir, node_id, primary_value=0.700, base_commit=head)
 
     from automil.cli import main
 
@@ -326,8 +326,8 @@ def test_full_roundtrip_fail_exceeds_tolerance(tmp_path, cli_runner, monkeypatch
     assert result.exit_code != 0  # fail
     manifest = yaml.safe_load((adir / "repro_manifest.yaml").read_text())
     assert manifest["status"] == "fail"
-    assert manifest["actual_composite"] == pytest.approx(0.502)
-    assert manifest["expected_composite"] == pytest.approx(0.700)
+    assert manifest["actual_primary_value"] == pytest.approx(0.502)
+    assert manifest["expected_primary_value"] == pytest.approx(0.700)
 
 
 def test_port_variant_writes_variant_spec_to_graph_json(tmp_path, cli_runner, monkeypatch):
@@ -346,9 +346,9 @@ def test_port_variant_writes_variant_spec_to_graph_json(tmp_path, cli_runner, mo
         overlay={"variants/synthstub/baseline.py": "sha:..."},
         parent="synthstub",
         base_commit=head,
-        composite=0.5,
+        primary_value=0.5,
     )
-    _write_graph_node_no_variant_spec(adir, node_id, composite=0.5, base_commit=head)
+    _write_graph_node_no_variant_spec(adir, node_id, primary_value=0.5, base_commit=head)
 
     from automil.cli import main
 

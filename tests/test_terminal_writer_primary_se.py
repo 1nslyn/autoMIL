@@ -1,11 +1,11 @@
-"""CR-4 (audit 2026-07-23): ``composite_se`` must survive the whole write path.
+"""CR-4 (audit 2026-07-23): ``primary_se`` must survive the whole write path.
 
 The noise-derived keep-margin is only real if the SE actually reaches the graph
 node — the margin a child faces is derived from its PARENT's stored SE, and the
 parent's SE is written by ``terminal_writer`` at the parent's own completion.
 
-Also pinned here: ``composite_se`` stays OUT of ``metrics``. CR-1b recomputes the
-selection composite as the mean of ``metrics``' values, so an SE smuggled in
+Also pinned here: ``primary_se`` stays OUT of ``metrics``. CR-1b recomputes the
+selection primary_value as the mean of ``metrics``' values, so an SE smuggled in
 there would silently corrupt the val-firewall's selection signal.
 """
 from __future__ import annotations
@@ -43,67 +43,67 @@ def _write(tmp_path: Path, graph, node_id: str, result: dict):
     return completed_dir, archive_dir
 
 
-def test_composite_se_lands_on_the_graph_node(tmp_path: Path) -> None:
+def test_primary_value_se_lands_on_the_graph_node(tmp_path: Path) -> None:
     from automil.graph import ExperimentGraph
 
     graph = ExperimentGraph(path=str(tmp_path / "graph.json"))
     node_id = graph.add_executed(parent_id=None, description="root", techniques=[],
-                                 metrics={"composite": 0.50}, status="keep")
+                                 metrics={"primary_value": 0.50}, status="keep")
     graph.nodes[node_id]["status"] = "running"
     graph.save()
 
     _write(tmp_path, graph, node_id, {
-        "status": "completed", "composite": 0.80,
+        "status": "completed", "primary_value": 0.80,
         "metrics": {"val_auc": 0.82, "val_bacc": 0.78},
-        "composite_se": 0.041,
+        "primary_se": 0.041,
     })
 
     reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
     node = reloaded.get_node(node_id)
-    assert node["composite_se"] == 0.041
+    assert node["primary_se"] == 0.041
     # CR-1b guard: the SE must NOT be inside metrics (it would enter the mean).
-    assert "composite_se" not in node["metrics"]
-    assert node["composite"] == 0.80   # (0.82 + 0.78) / 2 — unchanged by the SE
+    assert "primary_se" not in node["metrics"]
+    assert node["primary_value"] == 0.80   # (0.82 + 0.78) / 2 — unchanged by the SE
 
 
-def test_missing_composite_se_records_none_not_zero(tmp_path: Path) -> None:
+def test_missing_primary_value_se_records_none_not_zero(tmp_path: Path) -> None:
     from automil.graph import ExperimentGraph
 
     graph = ExperimentGraph(path=str(tmp_path / "graph.json"))
     node_id = graph.add_executed(parent_id=None, description="root", techniques=[],
-                                 metrics={"composite": 0.50}, status="keep")
+                                 metrics={"primary_value": 0.50}, status="keep")
     graph.nodes[node_id]["status"] = "running"
     graph.save()
 
     _write(tmp_path, graph, node_id, {
-        "status": "completed", "composite": 0.80,
+        "status": "completed", "primary_value": 0.80,
         "metrics": {"val_auc": 0.82, "val_bacc": 0.78},
     })
 
     node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(node_id)
-    assert node.get("composite_se") is None
+    assert node.get("primary_se") is None
 
 
-def test_completed_artifact_carries_composite_se(tmp_path: Path) -> None:
+def test_completed_artifact_carries_primary_value_se(tmp_path: Path) -> None:
     """reconcile() rebuilds nodes from completed/<id>.json — the SE must be there."""
     from automil.graph import ExperimentGraph
 
     graph = ExperimentGraph(path=str(tmp_path / "graph.json"))
     node_id = graph.add_executed(parent_id=None, description="root", techniques=[],
-                                 metrics={"composite": 0.50}, status="keep")
+                                 metrics={"primary_value": 0.50}, status="keep")
     graph.nodes[node_id]["status"] = "running"
     graph.save()
 
     completed_dir, archive_dir = _write(tmp_path, graph, node_id, {
-        "status": "completed", "composite": 0.80,
+        "status": "completed", "primary_value": 0.80,
         "metrics": {"val_auc": 0.80, "val_bacc": 0.80},
-        "composite_se": 0.033,
+        "primary_se": 0.033,
     })
 
     completion = json.loads((completed_dir / f"{node_id}.json").read_text())
-    assert completion["composite_se"] == 0.033
+    assert completion["primary_se"] == 0.033
     archived = json.loads((archive_dir / "result.json").read_text())
-    assert archived["composite_se"] == 0.033
+    assert archived["primary_se"] == 0.033
 
 
 def test_terminal_writer_gates_a_child_on_the_parent_se(tmp_path: Path) -> None:
@@ -112,16 +112,16 @@ def test_terminal_writer_gates_a_child_on_the_parent_se(tmp_path: Path) -> None:
 
     graph = ExperimentGraph(path=str(tmp_path / "graph.json"))
     parent = graph.add_executed(parent_id=None, description="parent", techniques=[],
-                                metrics={"composite": 0.80, "composite_se": 0.04},
+                                metrics={"primary_value": 0.80, "primary_se": 0.04},
                                 status="keep")
     child = graph.add_proposed(parent_id=parent, description="child", techniques=[])
     graph.nodes[child]["status"] = "running"
     graph.save()
 
     _write(tmp_path, graph, child, {
-        "status": "completed", "composite": 0.82,
+        "status": "completed", "primary_value": 0.82,
         "metrics": {"val_auc": 0.82, "val_bacc": 0.82},
-        "composite_se": 0.04,
+        "primary_se": 0.04,
     })
 
     node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(child)
@@ -138,15 +138,15 @@ def test_reconcile_completed_path_applies_the_noise_floor(tmp_path: Path) -> Non
 
     graph = ExperimentGraph(path=str(adir / "graph.json"))
     parent = graph.add_executed(parent_id=None, description="parent", techniques=[],
-                                metrics={"composite": 0.80, "composite_se": 0.04},
+                                metrics={"primary_value": 0.80, "primary_se": 0.04},
                                 status="keep")
     child = graph.add_proposed(parent_id=parent, description="child", techniques=[])
     graph.save()
 
     (adir / "completed" / f"{child}.json").write_text(json.dumps({
-        "id": child, "status": "completed", "composite": 0.82,
+        "id": child, "status": "completed", "primary_value": 0.82,
         "metrics": {"val_auc": 0.82, "val_bacc": 0.82},
-        "composite_se": 0.04,
+        "primary_se": 0.04,
         "graph_metadata": {"parent_id": parent},
     }))
 
@@ -154,8 +154,8 @@ def test_reconcile_completed_path_applies_the_noise_floor(tmp_path: Path) -> Non
                     str(adir / "completed"), str(adir / "archive"))
     node = graph.get_node(child)
     assert node["status"] == "discard"
-    assert node["composite_se"] == 0.04
-    assert "composite_se" not in node["metrics"]
+    assert node["primary_se"] == 0.04
+    assert "primary_se" not in node["metrics"]
 
 
 def test_archive_recovery_path_applies_the_noise_floor(tmp_path: Path) -> None:
@@ -168,7 +168,7 @@ def test_archive_recovery_path_applies_the_noise_floor(tmp_path: Path) -> None:
 
     graph = ExperimentGraph(path=str(adir / "graph.json"))
     parent = graph.add_executed(parent_id=None, description="parent", techniques=[],
-                                metrics={"composite": 0.80, "composite_se": 0.04},
+                                metrics={"primary_value": 0.80, "primary_se": 0.04},
                                 status="keep")
     graph.save()
 
@@ -178,41 +178,41 @@ def test_archive_recovery_path_applies_the_noise_floor(tmp_path: Path) -> None:
         "description": "recovered child", "graph_metadata": {"parent_id": parent},
     }))
     (recovered / "result.json").write_text(json.dumps({
-        "status": "completed", "composite": 0.82,
+        "status": "completed", "primary_value": 0.82,
         "metrics": {"val_auc": 0.82, "val_bacc": 0.82},
-        "composite_se": 0.04,
+        "primary_se": 0.04,
     }))
 
     graph.reconcile(str(adir / "queue"), str(adir / "running"),
                     str(adir / "completed"), str(adir / "archive"))
     node = graph.get_node("node_0099")
     assert node["status"] == "discard"
-    assert node["composite_se"] == 0.04
+    assert node["primary_se"] == 0.04
 
 
 def test_recomputed_se_beats_the_reported_one(tmp_path: Path) -> None:
     """B1 (claims-alignment): the SE that gates the Ladder margin is recomputed
-    from the result's own validation_folds — an under-reported composite_se
+    from the result's own validation_folds — an under-reported primary_se
     (which would collapse the margin to the bare delta) is overridden."""
     from automil.graph import ExperimentGraph
 
     graph = ExperimentGraph(path=tmp_path / "graph.json")
     node_id = graph.add_executed(
         parent_id=None, description="n", techniques=[],
-        metrics={"composite": 0.5}, status="keep",
+        metrics={"primary_value": 0.5}, status="keep",
     )
     graph.nodes[node_id]["status"] = "running"
     graph.save()
 
     result = {
         "status": "completed",
-        "composite": 0.75,
-        "composite_se": 0.000001,  # self-reported, implausibly small
+        "primary_value": 0.75,
+        "primary_se": 0.000001,  # self-reported, implausibly small
         "metrics": {"val_auc": 0.8, "val_bacc": 0.7},
         "validation_folds": [
-            {"fold_index": 0, "composite": 0.70},
-            {"fold_index": 1, "composite": 0.75},
-            {"fold_index": 2, "composite": 0.80},
+            {"fold_index": 0, "primary_value": 0.70},
+            {"fold_index": 1, "primary_value": 0.75},
+            {"fold_index": 2, "primary_value": 0.80},
         ],
     }
     completed_dir, archive_dir = _write(tmp_path, graph, node_id, result)
@@ -220,11 +220,11 @@ def test_recomputed_se_beats_the_reported_one(tmp_path: Path) -> None:
     from automil.scoring import cross_fold_se
     expected = cross_fold_se([0.70, 0.75, 0.80])
     reloaded = ExperimentGraph(path=tmp_path / "graph.json")
-    assert reloaded.get_node(node_id)["composite_se"] == expected
+    assert reloaded.get_node(node_id)["primary_se"] == expected
     archived = json.loads((archive_dir / "result.json").read_text())
-    assert archived["composite_se"] == expected
+    assert archived["primary_se"] == expected
     completed = json.loads((completed_dir / f"{node_id}.json").read_text())
-    assert completed["composite_se"] == expected
+    assert completed["primary_se"] == expected
 
 
 def test_reported_se_survives_without_fold_evidence(tmp_path: Path) -> None:
@@ -234,18 +234,18 @@ def test_reported_se_survives_without_fold_evidence(tmp_path: Path) -> None:
     graph = ExperimentGraph(path=tmp_path / "graph.json")
     node_id = graph.add_executed(
         parent_id=None, description="n", techniques=[],
-        metrics={"composite": 0.5}, status="keep",
+        metrics={"primary_value": 0.5}, status="keep",
     )
     graph.nodes[node_id]["status"] = "running"
     graph.save()
 
     result = {
-        "status": "completed", "composite": 0.75, "composite_se": 0.03,
+        "status": "completed", "primary_value": 0.75, "primary_se": 0.03,
         "metrics": {"val_auc": 0.8, "val_bacc": 0.7},
     }
     _write(tmp_path, graph, node_id, result)
     reloaded = ExperimentGraph(path=tmp_path / "graph.json")
-    assert reloaded.get_node(node_id)["composite_se"] == 0.03
+    assert reloaded.get_node(node_id)["primary_se"] == 0.03
 
 
 def test_aggregate_folds_computes_the_se(tmp_path: Path) -> None:
@@ -259,10 +259,10 @@ def test_aggregate_folds_computes_the_se(tmp_path: Path) -> None:
     for i, comp in enumerate((0.70, 0.80)):
         (node_archive / f"fold_{i}_result.json").write_text(json.dumps({
             "fold_index": i, "status": "completed",
-            "metrics": {"val_auc": comp}, "composite": comp,
+            "metrics": {"val_auc": comp}, "primary_value": comp,
             "elapsed_seconds": 10, "peak_vram_mb": 100,
         }))
 
     payload = aggregate_folds(node_archive, expected_fold_count=5)
     assert payload["status"] == "partial"
-    assert payload["composite_se"] == cross_fold_se([0.70, 0.80])
+    assert payload["primary_se"] == cross_fold_se([0.70, 0.80])

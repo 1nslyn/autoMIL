@@ -10,7 +10,7 @@ Coverage:
   Test 1 — full keep -> nominate -> promote (pass) -> registered trail in history
   Test 2 — Stage A blocks promote without prior nominate (ValueError)
   Test 3 — Stage B can revert to keep: keep -> nominate -> promote (fail) -> keep
-  Test 4 — Stages use disjoint data: search-cell composite vs held-out deltas
+  Test 4 — Stages use disjoint data: search-cell primary_value vs held-out deltas
 """
 from __future__ import annotations
 
@@ -41,12 +41,12 @@ def _make_graph(tmp_path) -> ExperimentGraph:
     graph._data = {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "best_node_id": None,
             "total_executed": 0,
             "total_proposed": 0,
             "next_id": 3,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": {
@@ -55,7 +55,7 @@ def _make_graph(tmp_path) -> ExperimentGraph:
                 "parent_id": None,
                 "type": "executed",
                 "status": "keep",
-                "composite": 0.80,
+                "primary_value": 0.80,
                 "commit": "abc1234",
                 "overlay_files": [],
                 "overlay_dir": "archive/node_0001",
@@ -67,9 +67,9 @@ def _make_graph(tmp_path) -> ExperimentGraph:
                 "parent_id": "node_0001",
                 "type": "executed",
                 "status": "keep",
-                # This composite (0.85) comes from the search cell — Stage A result.
+                # This primary_value (0.85) comes from the search cell — Stage A result.
                 # It must NOT appear in the Stage B deltas.
-                "composite": 0.85,
+                "primary_value": 0.85,
                 "commit": "abc1234",
                 "overlay_files": [],
                 "overlay_dir": "archive/node_0002",
@@ -98,7 +98,7 @@ def _make_manifest(tmp_path) -> tuple[GateManifest, pathlib.Path]:
         # so with positive deltas this will pass
         p_threshold=0.5,
         bootstrap_reps=100,
-        win_definition="delta_composite > 0 AND p < p_threshold",
+        win_definition="delta_primary_value > 0 AND p < p_threshold",
         schema_version="gate-v1",
     )
     manifests_dir = tmp_path / "gate"
@@ -176,7 +176,7 @@ def test_two_stage_gate_keep_then_candidate_then_registered(tmp_path, monkeypatc
     archive_dir = tmp_path / "archive"
     monkeypatch.setattr("automil.gate.evaluate.get_cell", lambda cid: None)
 
-    # Pre-stamp child nodes composite so polling gives positive deltas
+    # Pre-stamp child nodes primary_value so polling gives positive deltas
     def fake_evaluate(candidate_node_id, manifest, backend, graph, **kwargs):
         # Both held-out cells show positive delta vs parent (parent=0.80)
         per_cell = [
@@ -186,8 +186,8 @@ def test_two_stage_gate_keep_then_candidate_then_registered(tmp_path, monkeypatc
                 "encoder": "hibou_l",
                 "task": "subtype",
                 "child_node_id": "child_0001",
-                "candidate_composite": 0.88,
-                "parent_composite": 0.80,
+                "candidate_primary_value": 0.88,
+                "parent_primary_value": 0.80,
                 "delta": 0.08,
                 "status": "completed",
             },
@@ -197,8 +197,8 @@ def test_two_stage_gate_keep_then_candidate_then_registered(tmp_path, monkeypatc
                 "encoder": "ctranspath",
                 "task": "high_grade",
                 "child_node_id": "child_0002",
-                "candidate_composite": 0.87,
-                "parent_composite": 0.80,
+                "candidate_primary_value": 0.87,
+                "parent_primary_value": 0.80,
                 "delta": 0.07,
                 "status": "completed",
             },
@@ -293,8 +293,8 @@ def test_stage_b_can_revert_to_keep(tmp_path, monkeypatch):
                 "encoder": "hibou_l",
                 "task": "subtype",
                 "child_node_id": "child_0001",
-                "candidate_composite": 0.78,
-                "parent_composite": 0.80,
+                "candidate_primary_value": 0.78,
+                "parent_primary_value": 0.80,
                 "delta": -0.02,
                 "status": "completed",
             },
@@ -304,8 +304,8 @@ def test_stage_b_can_revert_to_keep(tmp_path, monkeypatch):
                 "encoder": "ctranspath",
                 "task": "high_grade",
                 "child_node_id": "child_0002",
-                "candidate_composite": 0.79,
-                "parent_composite": 0.80,
+                "candidate_primary_value": 0.79,
+                "parent_primary_value": 0.80,
                 "delta": -0.01,
                 "status": "completed",
             },
@@ -353,14 +353,14 @@ def test_stage_b_can_revert_to_keep(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_stages_use_disjoint_data(tmp_path, monkeypatch):
-    """Stage A composite (search cell) must not appear in Stage B deltas.
+    """Stage A primary_value (search cell) must not appear in Stage B deltas.
 
-    The candidate's composite (0.85) comes from the search cell (Stage A).
+    The candidate's primary_value (0.85) comes from the search cell (Stage A).
     Stage B deltas must come purely from held-out eval results — not from
-    node["composite"] being re-used as a delta.
+    node["primary_value"] being re-used as a delta.
 
     We capture what deltas were passed to paired_wilcoxon_with_bootstrap and
-    verify that 0.85 (or 0.85-0.80=0.05 derived from search composite) does
+    verify that 0.85 (or 0.85-0.80=0.05 derived from search primary_value) does
     NOT appear as one of the captured deltas if our fake_evaluate provides
     different values.
     """
@@ -370,7 +370,7 @@ def test_stages_use_disjoint_data(tmp_path, monkeypatch):
     manifest, manifests_dir = _make_manifest(tmp_path)
     archive_dir = tmp_path / "archive"
 
-    # node_0002["composite"] = 0.85 — the search-cell composite (Stage A)
+    # node_0002["primary_value"] = 0.85 — the search-cell primary_value (Stage A)
     # held-out cell deltas must be 0.07 and 0.09 (different from search delta 0.05)
     held_out_deltas = [0.07, 0.09]
 
@@ -382,8 +382,8 @@ def test_stages_use_disjoint_data(tmp_path, monkeypatch):
                 "encoder": "hibou_l",
                 "task": "subtype",
                 "child_node_id": "child_0001",
-                "candidate_composite": 0.80 + held_out_deltas[0],
-                "parent_composite": 0.80,
+                "candidate_primary_value": 0.80 + held_out_deltas[0],
+                "parent_primary_value": 0.80,
                 "delta": held_out_deltas[0],
                 "status": "completed",
             },
@@ -393,8 +393,8 @@ def test_stages_use_disjoint_data(tmp_path, monkeypatch):
                 "encoder": "ctranspath",
                 "task": "high_grade",
                 "child_node_id": "child_0002",
-                "candidate_composite": 0.80 + held_out_deltas[1],
-                "parent_composite": 0.80,
+                "candidate_primary_value": 0.80 + held_out_deltas[1],
+                "parent_primary_value": 0.80,
                 "delta": held_out_deltas[1],
                 "status": "completed",
             },
