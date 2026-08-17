@@ -105,7 +105,7 @@ def run_nnmil_experiment(
             policy_runtime=fold_policy_runtime,
         )
         fold_results.append(result)
-        _write_fold_result_json(fold, result)
+        _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]

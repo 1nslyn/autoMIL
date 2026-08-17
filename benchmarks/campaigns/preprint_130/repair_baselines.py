@@ -204,6 +204,19 @@ def validate_historical_baseline(
 
     validated = _validate_result_bundle(cell, source)
 
+    # An ordinal cell's declared held-out schema includes test_qwk; history
+    # that predates qwk cannot be reconstructed into it. Checked HERE so
+    # audit_historical_baselines classifies such a source as invalid-reuse
+    # (→ fresh baseline run) instead of passing audit and failing conversion.
+    if str(cell.get("task_family")) == "ordinal" and any(
+        "qwk" not in row["val_metrics"] or "qwk" not in row["test_metrics"]
+        for row in validated["folds"]
+    ):
+        raise HistoricalBaselineError(
+            "ordinal cell history lacks qwk; the declared evidence schema "
+            "cannot be reconstructed — rerun instead of reusing"
+        )
+
     # Where the archive DOES carry recipe evidence, it must match the frozen
     # tree's defaults — a tuned historical run is not a native baseline. The
     # pre-H-3 historical format has no `arm` block at all; for those, config
@@ -389,9 +402,16 @@ def validate_current_baseline(
     return validated
 
 
-def _converted_artifacts(validated: Mapping[str, Any]) -> tuple[dict, list[dict]]:
+def _converted_artifacts(
+    validated: Mapping[str, Any], task_family: str,
+) -> tuple[dict, list[dict]]:
     folds = list(validated["folds"])
-    is_survival = "c_index" in folds[0]["val_metrics"]
+    # Branch on the FROZEN task_family, never sniffed from which metric keys
+    # the historical artifact happens to carry — the same declared-flag rule
+    # as the live writers. An ordinal cell whose history predates qwk cannot
+    # be repaired into the declared evidence schema and fails closed here
+    # (audit disposition: invalid-reuse → fresh baseline run).
+    is_survival = task_family == "survival"
     validation_folds: list[dict[str, Any]] = []
     sealed_folds: list[dict[str, Any]] = []
     composites: list[float] = []
@@ -411,6 +431,16 @@ def _converted_artifacts(validated: Mapping[str, Any]) -> tuple[dict, list[dict]
                 "test_auc": float(test["auc_roc"]),
                 "test_bacc": float(test["balanced_accuracy"]),
             }
+            if task_family == "ordinal":
+                if "qwk" not in val or "qwk" not in test:
+                    raise HistoricalBaselineError(
+                        f"fold {fold}: ordinal cell history lacks qwk; the "
+                        "declared held-out schema cannot be reconstructed"
+                    )
+                # Recording clamp, same convention as the live writers: kappa
+                # is [-1, 1], every sealed consumer requires [0, 1].
+                val_metrics["val_qwk"] = max(0.0, float(val["qwk"]))
+                held_out["test_qwk"] = max(0.0, float(test["qwk"]))
         # Selection is the primary validation metric alone (scoring.formula:
         # val_auc / val_c_index); companions stay recorded but do not vote —
         # the campaign fold validator requires composite == the primary.
@@ -434,17 +464,18 @@ def _converted_artifacts(validated: Mapping[str, Any]) -> tuple[dict, list[dict]
             "peak_vram_mb": 0,
         })
     composite = math.fsum(composites) / len(composites)
-    metrics = (
-        {"val_c_index": composite}
-        if is_survival else {
-            "val_auc": math.fsum(
-                fold["metrics"]["val_auc"] for fold in validation_folds
-            ) / len(validation_folds),
-            "val_bacc": math.fsum(
-                fold["metrics"]["val_bacc"] for fold in validation_folds
-            ) / len(validation_folds),
+    if is_survival:
+        metrics = {"val_c_index": composite}
+    else:
+        # Cross-fold means over the RECORDED per-fold values (for qwk that
+        # means mean of clamped values, matching the live writers).
+        recorded_names = list(validation_folds[0]["metrics"])
+        metrics = {
+            name: math.fsum(
+                fold["metrics"][name] for fold in validation_folds
+            ) / len(validation_folds)
+            for name in recorded_names
         }
-    )
     public_result = {
         "status": "completed",
         "metrics": metrics,
@@ -471,7 +502,9 @@ def convert_and_register_historical_baseline(
 
         register = attest_and_register_baseline
     validated = validate_historical_baseline(cell, source)
-    public_result, sealed_folds = _converted_artifacts(validated)
+    public_result, sealed_folds = _converted_artifacts(
+        validated, str(cell["task_family"]),
+    )
     temporary = Path(tempfile.mkdtemp(prefix=".baseline-reuse-", dir=cell_root))
     archive = temporary / "archive"
     try:
@@ -925,7 +958,22 @@ def preflight_migration(
         if cell["framework"] not in HISTORICAL_REUSABLE_FRAMEWORKS:
             continue
         source = historical_result_dir(phase_root, cell)
-        validate_historical_baseline(cell, source)
+        try:
+            validate_historical_baseline(cell, source)
+        except HistoricalBaselineError as exc:
+            # Preflight is the read-only CLASSIFIER (its report carries a
+            # counts.invalid slot and migrate refuses on it); aborting here
+            # would take the whole dataset down with one unreusable cell —
+            # e.g. ordinal history predating qwk, which invalidates only the
+            # grade cells, never their survival siblings.
+            rows.append({
+                "cell_id": cell["cell_id"],
+                "source": str(source.resolve()),
+                "destination": str(canonical_result_dir(phase_root, cell)),
+                "status": "invalid-reuse",
+                "reason": str(exc),
+            })
+            continue
         source_inventory = _tree_inventory(source)
         summary = _inventory_summary(source_inventory)
         destination = canonical_result_dir(phase_root, cell)
@@ -975,7 +1023,7 @@ def preflight_migration(
             "verified_existing": sum(
                 row["status"] == "verified-existing" for row in rows
             ),
-            "invalid": 0,
+            "invalid": sum(row["status"] == "invalid-reuse" for row in rows),
         },
         "bytes_to_copy": bytes_to_copy,
         "filesystem_free_bytes": free_bytes,

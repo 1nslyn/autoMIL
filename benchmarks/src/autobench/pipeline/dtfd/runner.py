@@ -123,7 +123,7 @@ def run_dtfd_experiment(
             with open(metrics_path) as f:
                 result = json.load(f)
             fold_results.append(result)
-            _write_fold_result_json(fold, result)
+            _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
             continue
 
         fold_policy_runtime = policy_runtime.for_fold()
@@ -171,7 +171,7 @@ def run_dtfd_experiment(
             json.dump(result, f, indent=2)
 
         fold_results.append(result)
-        _write_fold_result_json(fold, result)
+        _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]

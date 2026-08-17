@@ -1,7 +1,7 @@
 # Preprint 130-cell campaign operations
 
 This directory contains the immutable manifest and the operator entry points for
-the full `automil-preprint-130-v5` campaign. The controller enforces the frozen
+the full `automil-preprint-130-v6` campaign. The controller enforces the frozen
 protocol independently for every cell:
 
 - native five-fold baseline on folds `0,1,2,3,4`;

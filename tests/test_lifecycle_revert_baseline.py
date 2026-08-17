@@ -354,3 +354,42 @@ def test_stash_name_printed_before_checkout(tmp_path, cli_runner, monkeypatch):
         "Stash name must appear BEFORE the revert confirmation "
         "(operator needs the name in case checkout crashes)."
     )
+
+
+# --- untracked protected pattern (pre-protected path for an incoming branch) ---
+
+def test_pattern_unknown_to_git_is_skipped_not_fatal(tmp_path, cli_runner, monkeypatch):
+    """A protected path that exists on no commit and in no index must not
+    fail the whole revert: `git checkout` is all-or-nothing over its
+    pathspecs, so one unmatched pattern used to error out AND leave every
+    other protected path dirty. Such a pattern has no baseline state to
+    revert to and is skipped with a notice."""
+    adir, base = _setup_with_protected(
+        tmp_path, ["src/lib.py", "src/not_born_yet.py"],
+    )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src" / "lib.py").write_text("# v2\n")
+
+    from automil.cli import main
+    result = cli_runner.invoke(main, ["revert-baseline"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "src" / "lib.py").read_text() == "# v1\n"
+    assert "Skipped" in result.output
+    assert "src/not_born_yet.py" in result.output
+
+
+def test_untracked_protected_file_created_by_agent_is_cleared(
+    tmp_path, cli_runner, monkeypatch,
+):
+    """An agent-created file at a pre-protected path is cleared by the
+    mandatory --include-untracked stash; the revert still succeeds."""
+    adir, base = _setup_with_protected(
+        tmp_path, ["src/lib.py", "src/not_born_yet.py"],
+    )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src" / "not_born_yet.py").write_text("# rogue\n")
+
+    from automil.cli import main
+    result = cli_runner.invoke(main, ["revert-baseline"])
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "src" / "not_born_yet.py").exists()

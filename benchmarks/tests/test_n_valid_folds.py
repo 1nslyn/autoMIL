@@ -84,6 +84,38 @@ def test_discovery_with_two_of_three_valid_folds_is_partial():
     assert m.summary_to_result_json(summary, 10.0)["status"] == "partial"
 
 
+def test_ordinal_held_out_carries_clamp_then_mean_test_qwk():
+    """Ordinal cells report on test_qwk (primary_by_task_family), so the
+    sealed aggregate must exist and equal the mean of PER-FOLD clamped
+    values — mean(max(0, qwk)), never max(0, mean(qwk))."""
+    m = _load_run_experiment()
+    summary = _cls_summary([0.70, 0.72, 0.68])
+    for fm, qwk in zip(summary["per_fold_val"], (0.30, 0.10, 0.20)):
+        fm["qwk"] = qwk
+    summary["per_fold_test"] = [
+        {"auc_roc": 0.70, "balanced_accuracy": 0.60, "qwk": qwk}
+        for qwk in (0.40, -0.20, 0.20)
+    ]
+    r = m.summary_to_result_json(summary, 10.0, ordinal=True)
+    # mean(max(0, .)) = (0.40 + 0.0 + 0.20) / 3 = 0.20; max(0, mean) would
+    # give 0.1333 — the wrong function.
+    assert r["held_out"]["test_qwk"] == pytest.approx(0.20)
+    assert r["metrics"]["val_qwk"] == pytest.approx(0.20)
+    # qwk is recorded evidence, never a vote: composite is still val_auc.
+    assert r["composite"] == pytest.approx((0.70 + 0.72 + 0.68) / 3)
+
+
+def test_non_ordinal_summary_never_carries_test_qwk():
+    m = _load_run_experiment()
+    summary = _cls_summary([0.70, 0.72, 0.68])
+    summary["per_fold_test"] = [
+        {"auc_roc": 0.70, "balanced_accuracy": 0.60, "qwk": 0.5}
+    ] * 3
+    r = m.summary_to_result_json(summary, 10.0)
+    assert "test_qwk" not in r["held_out"]
+    assert "val_qwk" not in r["metrics"]
+
+
 def test_classification_fold_requires_full_recorded_evidence():
     """Only val_auc votes, but fold VALIDITY spans the recorded set: a fold
     that lost its companion is the fold the campaign validator rejects at

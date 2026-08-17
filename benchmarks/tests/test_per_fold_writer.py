@@ -169,3 +169,51 @@ def test_handles_missing_metrics_gracefully(tmp_path, monkeypatch):
     assert payload["metrics"]["val_auc"] is None
     assert payload["metrics"]["val_bacc"] is None
     assert payload["composite"] is None
+
+
+# ---------------------------------------------------------------------------
+# Test 7: ordinal tasks record qwk on both sides, clamped at 0
+# ---------------------------------------------------------------------------
+
+def test_ordinal_fold_records_clamped_qwk_on_both_sides(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
+
+    result = _minimal_result()
+    result["val_metrics"]["qwk"] = -0.15   # below-chance kappa
+    result["test_metrics"]["qwk"] = 0.42
+    _write_fold_result_json(0, result, ordinal=True)
+
+    payload = json.loads((tmp_path / "fold_0_result.json").read_text())
+    # Recording clamp: kappa is [-1, 1], sealed consumers require [0, 1].
+    assert payload["metrics"]["val_qwk"] == 0.0
+    assert payload["held_out"]["test_qwk"] == pytest.approx(0.42)
+    # qwk never votes: composite is still the selection metric alone.
+    assert payload["composite"] == pytest.approx(0.90)
+
+
+def test_ordinal_fold_missing_qwk_is_invalid(tmp_path, monkeypatch):
+    """Declared-but-missing qwk nulls the recorded slot AND the composite —
+    fold validity spans the full recorded evidence set."""
+    monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
+
+    _write_fold_result_json(0, _minimal_result(), ordinal=True)
+
+    payload = json.loads((tmp_path / "fold_0_result.json").read_text())
+    assert payload["metrics"]["val_qwk"] is None
+    assert payload["held_out"]["test_qwk"] is None
+    assert payload["composite"] is None
+
+
+def test_non_ordinal_fold_never_carries_qwk(tmp_path, monkeypatch):
+    """qwk present in the raw metrics must NOT be sniffed into the evidence
+    of a task that never declared ordinality."""
+    monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
+
+    result = _minimal_result()
+    result["val_metrics"]["qwk"] = 0.5
+    result["test_metrics"]["qwk"] = 0.5
+    _write_fold_result_json(0, result)
+
+    payload = json.loads((tmp_path / "fold_0_result.json").read_text())
+    assert "val_qwk" not in payload["metrics"]
+    assert "test_qwk" not in payload["held_out"]

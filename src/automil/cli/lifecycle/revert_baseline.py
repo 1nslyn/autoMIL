@@ -136,16 +136,41 @@ def revert_baseline():
     else:
         click.echo("Working tree clean; no stash needed.")
 
-    # Now safe to checkout protected paths.
-    co = subprocess.run(
-        ["git", "checkout", base_commit, "--", *list(cfg.protected)],
-        cwd=git_root, capture_output=True, text=True,
-    )
-    if co.returncode != 0:
-        raise click.ClickException(
-            f"`git checkout {base_commit[:8]}` for protected paths failed: "
-            f"{co.stderr.strip()}. Inspect with `git status` and resolve manually."
+    # A protected pattern may match nothing git knows about — e.g. a path
+    # protected ahead of the branch that introduces it. `git checkout` is
+    # all-or-nothing over its pathspecs: one unmatched pattern fails the
+    # whole command AND leaves every other protected path dirty. Filter to
+    # patterns that match at least one path known to base_commit or the
+    # index (`ls-files --with-tree` shares checkout's pathspec semantics);
+    # an unknown pattern has no baseline state to revert TO, and any
+    # untracked file the agent created under it was already cleared by the
+    # stash above.
+    revertable = []
+    skipped = []
+    for pattern in cfg.protected:
+        probe = subprocess.run(
+            ["git", "ls-files", "--with-tree", base_commit, "--", pattern],
+            cwd=git_root, capture_output=True, text=True,
         )
+        if probe.returncode == 0 and probe.stdout.strip():
+            revertable.append(pattern)
+        else:
+            skipped.append(pattern)
+
+    if revertable:
+        co = subprocess.run(
+            ["git", "checkout", base_commit, "--", *revertable],
+            cwd=git_root, capture_output=True, text=True,
+        )
+        if co.returncode != 0:
+            raise click.ClickException(
+                f"`git checkout {base_commit[:8]}` for protected paths failed: "
+                f"{co.stderr.strip()}. Inspect with `git status` and resolve manually."
+            )
 
     click.echo(f"Reverted protected paths to base_commit {base_commit[:8]}.")
-    click.echo(f"  Patterns: {list(cfg.protected)}")
+    click.echo(f"  Patterns: {revertable}")
+    if skipped:
+        click.echo(
+            f"  Skipped (no baseline state at {base_commit[:8]}): {skipped}"
+        )

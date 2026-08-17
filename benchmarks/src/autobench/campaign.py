@@ -26,8 +26,8 @@ from automil.activity_hooks import (
 )
 from automil.cells.state import make_cell_id, normalize_mil_model
 
-SCHEMA_VERSION = 5
-CAMPAIGN_ID = "automil-preprint-130-v5"
+SCHEMA_VERSION = 6
+CAMPAIGN_ID = "automil-preprint-130-v6"
 PROTOCOL_VERSION = "preprint-v2"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
@@ -51,6 +51,59 @@ STAGE_FOLDS = {
 }
 CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
 BASELINE_FOLDS = CERTIFICATION_FOLDS
+#: The frozen held-out evidence schema, per task FAMILY — the one authority the
+#: sealed fold writers, the certification reader, and the analysis stage all
+#: answer to. The FIRST key of each tuple is that family's REPORTING primary
+#: (the field the analysis plan's ``aggregation.primary_by_task_family``
+#: declares; ``build_publication_report`` cross-checks the two and fails
+#: closed on drift). Reporting is per family, Patho-Bench style — binary and
+#: nominal multiclass on AUROC, ordinal grading on quadratic-weighted kappa,
+#: survival on the concordance index — while SELECTION everywhere stays the
+#: primary validation metric (``scoring.formula: val_auc`` / ``val_c_index``);
+#: the val-firewall keeps these two axes from ever touching.
+HELD_OUT_SCHEMA_BY_FAMILY = {
+    "binary": ("test_auc", "test_bacc"),
+    "multiclass": ("test_auc", "test_bacc"),
+    "ordinal": ("test_qwk", "test_auc", "test_bacc"),
+    "survival": ("test_c_index",),
+}
+#: The validation-evidence twin: the exact recorded `metrics` key set per
+#: family (`metrics.track` in every materialized cell config, and the
+#: fold-schema lock at every campaign ingest). NOTE the first-key convention
+#: differs deliberately from the held-out side: here the first key is the
+#: SELECTION primary (`scoring.formula`), which for ordinal cells is still
+#: val_auc — qwk is a recorded companion on the validation side and the
+#: REPORTING primary only on the sealed side.
+VALIDATION_SCHEMA_BY_FAMILY = {
+    "binary": ("val_auc", "val_bacc"),
+    "multiclass": ("val_auc", "val_bacc"),
+    "ordinal": ("val_auc", "val_bacc", "val_qwk"),
+    "survival": ("val_c_index",),
+}
+#: 39 binary (kras, idh1, tp53) + 13 nominal multiclass (immune_class,
+#: deliberately non-ordinal per its dataset YAML) + 13 ordinal (grade,
+#: ``ordinal: true``) + 65 survival (os) = 130.
+TASK_FAMILY_CENSUS = {
+    "binary": 39, "multiclass": 13, "ordinal": 13, "survival": 65,
+}
+
+
+def classification_task_family(spec: Mapping[str, Any]) -> str:
+    """Family of a classification task, from its dataset-YAML declaration.
+
+    Keyed on the DECLARED ``ordinal`` flag and ``n_classes`` — never sniffed
+    from data or metric availability (the same rule as the trainer's qwk
+    handling). Fails closed on a missing ``n_classes`` rather than assuming
+    binary.
+    """
+    if spec.get("ordinal"):
+        return "ordinal"
+    n_classes = spec.get("n_classes")
+    if isinstance(n_classes, bool) or not isinstance(n_classes, int):
+        raise CampaignManifestError(
+            "classification task must declare an integer n_classes"
+        )
+    return "multiclass" if n_classes > 2 else "binary"
 DISCOVERY_ATTEMPTS = 30
 DISCOVERY_AGENT_ACTIVE_BUDGET = "12h"
 AGENT_TIME_ACCOUNTING = {
@@ -387,6 +440,7 @@ def _cell_record(
     dataset: str,
     task: str,
     task_type: str,
+    task_family: str,
     encoder: str,
     framework: str,
     model: str,
@@ -415,6 +469,10 @@ def _cell_record(
         "dataset": dataset,
         "task": task,
         "task_type": task_type,
+        # The reporting family (HELD_OUT_SCHEMA_BY_FAMILY / the analysis
+        # plan's primary_by_task_family key), frozen into the cell identity
+        # so no downstream stage re-derives it from a YAML at read time.
+        "task_family": task_family,
         "encoder": encoder,
         "framework": framework,
         "model": model,
@@ -487,9 +545,12 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
         policy_rel = policy_path.relative_to(repo_root).as_posix()
         policy_hash = file_sha256(policy_path)
         policy_sources[policy_rel] = policy_hash
-        task_pairs = ((classification[0], "classification", None),
-                      ("os", "survival", "nllsurv"))
-        for task, task_type, loss in task_pairs:
+        task_pairs = (
+            (classification[0], "classification", None,
+             classification_task_family(tasks[classification[0]] or {})),
+            ("os", "survival", "nllsurv", "survival"),
+        )
+        for task, task_type, loss, task_family in task_pairs:
             for framework, roster_key in TILE_ARMS:
                 models = list(raw.get(roster_key) or [])
                 if len(models) != 1:
@@ -499,6 +560,7 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
                 for encoder in ENCODERS:
                     cells.append(_cell_record(
                         dataset=dataset, task=task, task_type=task_type,
+                        task_family=task_family,
                         encoder=encoder, framework=framework, model=models[0],
                         survival_loss=loss, dataset_config=config_rel,
                         dataset_config_sha256=config_hash,
@@ -507,6 +569,7 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
                     ))
             cells.append(_cell_record(
                 dataset=dataset, task=task, task_type=task_type,
+                task_family=task_family,
                 encoder="titan", framework="titan", model="titan",
                 survival_loss=loss, dataset_config=config_rel,
                 dataset_config_sha256=config_hash,
@@ -522,11 +585,21 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
         ) from exc
     if (
         not isinstance(analysis_plan, dict)
-        or analysis_plan.get("schema_version") != 1
+        or analysis_plan.get("schema_version") != 2
         or analysis_plan.get("campaign_id") != CAMPAIGN_ID
         or analysis_plan.get("status") != "frozen-before-held-out-certification"
     ):
         raise CampaignManifestError("frozen analysis plan contract is invalid")
+    declared_primary = (analysis_plan.get("aggregation") or {}).get(
+        "primary_by_task_family"
+    )
+    if declared_primary != {
+        family: keys[0] for family, keys in HELD_OUT_SCHEMA_BY_FAMILY.items()
+    }:
+        raise CampaignManifestError(
+            "analysis plan primary_by_task_family disagrees with "
+            "HELD_OUT_SCHEMA_BY_FAMILY"
+        )
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "campaign_id": CAMPAIGN_ID,
@@ -570,6 +643,7 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         raise CampaignManifestError("campaign source locks must be objects")
     per_dataset: dict[str, int] = {}
     per_task_type: dict[str, int] = {}
+    per_task_family: dict[str, int] = {}
     for raw in cells:
         if not isinstance(raw, dict):
             raise CampaignManifestError("every campaign cell must be an object")
@@ -611,6 +685,14 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
             raise CampaignManifestError(f"policy source lock mismatch for {cell_id}")
         per_dataset[cell["dataset"]] = per_dataset.get(cell["dataset"], 0) + 1
         per_task_type[cell["task_type"]] = per_task_type.get(cell["task_type"], 0) + 1
+        family = cell.get("task_family")
+        if family not in HELD_OUT_SCHEMA_BY_FAMILY:
+            raise CampaignManifestError(f"unknown task_family for {cell_id}")
+        if (family == "survival") != (cell["task_type"] == "survival"):
+            raise CampaignManifestError(
+                f"task_family/task_type disagree for {cell_id}"
+            )
+        per_task_family[family] = per_task_family.get(family, 0) + 1
         expected_commands = {
             stage: _run_command(cell, stage)
             for stage in ("baseline", *STAGE_FOLDS)
@@ -621,6 +703,10 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         raise CampaignManifestError(f"per-dataset census mismatch: {per_dataset}")
     if per_task_type != {"classification": 65, "survival": 65}:
         raise CampaignManifestError(f"task-axis census mismatch: {per_task_type}")
+    if per_task_family != TASK_FAMILY_CENSUS:
+        raise CampaignManifestError(
+            f"task-family census mismatch: {per_task_family}"
+        )
 
 
 def write_manifest(manifest: Mapping[str, Any], path: Path) -> str:
@@ -762,15 +848,11 @@ def materialize_discovery_cells(
         # validation splits bacc/qwk are threshold-quantized companions whose
         # single-count jitter is the size of the accept-margin floor — they
         # stay tracked and recorded, but no longer vote.
-        if cell["task_type"] == "survival":
-            primary = "val_c_index"
-            track = ["val_c_index"]
-        else:
-            import yaml as _yaml
-            _tasks = (_yaml.safe_load(dataset_path.read_text()) or {}).get("tasks") or {}
-            ordinal = bool((_tasks.get(cell["task"]) or {}).get("ordinal", False))
-            primary = "val_auc"
-            track = ["val_auc", "val_bacc"] + (["val_qwk"] if ordinal else [])
+        # From the FROZEN cell identity (task_family), never a YAML re-parse
+        # at materialization time — one authority, first key = selection
+        # primary.
+        track = list(VALIDATION_SCHEMA_BY_FAMILY[cell["task_family"]])
+        primary = track[0]
         config["metrics"] = {
             "primary": primary,
             "composite_formula": primary,
@@ -979,9 +1061,13 @@ def audit_materialized_campaign(
             "default_timeout_min"
         ) != ATTEMPT_TIMEOUT_MIN:
             raise CampaignManifestError(f"{cell_id}: attempt timeout drift")
-        _expected_formula = (
-            "val_c_index" if cell["task_type"] == "survival" else "val_auc"
-        )
+        _expected_track = list(VALIDATION_SCHEMA_BY_FAMILY[cell["task_family"]])
+        _expected_formula = _expected_track[0]
+        if (config.get("metrics") or {}).get("track") != _expected_track:
+            raise CampaignManifestError(
+                f"{cell_id}: recorded-evidence drift (metrics.track must be "
+                f"{_expected_track})"
+            )
         if (config.get("scoring") or {}).get("formula") != _expected_formula:
             raise CampaignManifestError(
                 f"{cell_id}: selection-formula drift (expected "

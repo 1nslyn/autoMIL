@@ -31,13 +31,21 @@ def _load_repair_module():
 baselines = _load_repair_module()
 
 
-def _cell(*, framework: str = "nnmil", task_type: str = "classification") -> dict:
+def _cell(
+    *,
+    framework: str = "nnmil",
+    task_type: str = "classification",
+    task_family: str | None = None,
+) -> dict:
     task = "os" if task_type == "survival" else "idh1"
+    if task_family is None:
+        task_family = "survival" if task_type == "survival" else "binary"
     return {
         "cell_id": f"cell-{framework}-{task_type}",
         "dataset": "tcga_lgg",
         "task": task,
         "task_type": task_type,
+        "task_family": task_family,
         "encoder": "uni_v2" if framework != "titan" else "titan",
         "model": {
             "nnmil": "simple_mil",
@@ -51,7 +59,7 @@ def _cell(*, framework: str = "nnmil", task_type: str = "classification") -> dic
     }
 
 
-def _legacy_result(root: Path, cell: dict) -> Path:
+def _legacy_result(root: Path, cell: dict, *, with_qwk: bool = False) -> Path:
     source = baselines.historical_result_dir(root, cell)
     source.mkdir(parents=True)
     is_survival = cell["task_type"] == "survival"
@@ -85,6 +93,10 @@ def _legacy_result(root: Path, cell: dict) -> Path:
                 "auc_roc": 0.65 + fold / 100,
                 "balanced_accuracy": 0.55 + fold / 100,
             }
+            if with_qwk:
+                val["qwk"] = 0.30 + fold / 100
+                # fold 0 below chance: the recording clamp must floor it at 0
+                test["qwk"] = -0.10 if fold == 0 else 0.20 + fold / 100
         per_fold_val.append(val)
         per_fold_test.append(test)
         fold_dir = source / f"fold_{fold}"
@@ -201,6 +213,39 @@ def test_conversion_exposes_validation_only_and_seals_test(tmp_path):
     assert all(set(row["held_out"]) == {"test_auc", "test_bacc"}
                for row in observed["sealed"])
     assert result["disposition"] == "registered-reuse"
+
+
+def test_ordinal_history_without_qwk_is_not_reusable(tmp_path):
+    """The declared ordinal held-out schema includes test_qwk; history that
+    predates qwk fails validation (audit disposition: invalid-reuse)."""
+    cell = _cell(task_family="ordinal")
+    source = _legacy_result(tmp_path / "legacy", cell)
+
+    with pytest.raises(baselines.HistoricalBaselineError, match="lacks qwk"):
+        baselines.validate_historical_baseline(cell, source)
+
+
+def test_ordinal_conversion_records_clamped_qwk(tmp_path):
+    cell = _cell(task_family="ordinal")
+    source = _legacy_result(tmp_path / "legacy", cell, with_qwk=True)
+    validated = baselines.validate_historical_baseline(cell, source)
+
+    public, sealed = baselines._converted_artifacts(validated, "ordinal")
+
+    assert all(
+        set(row["held_out"]) == {"test_auc", "test_bacc", "test_qwk"}
+        for row in sealed
+    )
+    # Recording clamp: fold 0's raw -0.10 is floored at 0.
+    assert sealed[0]["held_out"]["test_qwk"] == 0.0
+    assert sealed[1]["held_out"]["test_qwk"] == pytest.approx(0.21)
+    assert public["metrics"]["val_qwk"] == pytest.approx(
+        sum(0.30 + fold / 100 for fold in range(5)) / 5
+    )
+    # qwk never votes: the composite is still the val_auc fold mean.
+    assert public["composite"] == pytest.approx(
+        sum(0.70 + fold / 100 for fold in range(5)) / 5
+    )
 
 
 def test_canonical_path_is_dataset_rooted_and_seed_aware(tmp_path):

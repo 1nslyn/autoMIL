@@ -29,7 +29,7 @@ behavior were updated to the contract shape.
 PR #39 (native Claude active-time metering) and PR #40 (campaign operator
 runbook). The campaign protocol is now `preprint-v2`: **30 charged attempts
 + 12h natively-metered agent-active time** per cell
-(`automil-preprint-130-v5` manifest). Where a row below cites 60 attempts
+(`automil-preprint-130-v6` manifest). Where a row below cites 60 attempts
 or a 6h/7d time stance, that is the audited pre-merge state; the A10 and
 C-i rows record their post-merge supersession explicitly, and A9's
 bill-at-archive invariant now lives inside #39's fail-closed admission
@@ -53,9 +53,9 @@ the manifest). Mapped to the figure plan and the proposal's RQs:
 | # | Claim | Pre-registered estimand | Mechanism that must carry it |
 |---|---|---|---|
 | C1 | The corrected full-pipeline benchmark exists and is complete (130 cells: 5 datasets × 2 tasks × {4 tile arms × 3 encoders + TITAN}) | `missingness` (fail-closed census) | manifest + `run-baseline`/`register-baseline` + certification chain |
-| **C2** | **Equal-effort agentic recipe search produces a real, honestly-measured lift over the native default** (fig-3 successor; RQ1 evidence base) | `agentic_lift`: frozen winner − native baseline, sealed-test, per cell; sign counts poolable, magnitudes per task type | 30-attempt discovery on folds 0–2 (12h metered agent-active, preprint-v2) → ≤10 promotion on folds 3–4 → 5-fold-val winner → campaign-wide freeze → paired reveal |
+| **C2** | **Equal-effort agentic recipe search produces a real, honestly-measured lift over the native default** (fig-3 successor; RQ1 evidence base) | `agentic_lift`: frozen winner − native baseline, sealed-test, per cell; sign counts poolable, magnitudes per task family (`aggregation.primary_by_task_family`: binary/multiclass on test_auc, ordinal grade on test_qwk, survival on test_c_index) | 30-attempt discovery on folds 0–2 (12h metered agent-active, preprint-v2) → ≤10 promotion on folds 3–4 → 5-fold-val winner → campaign-wide freeze → paired reveal |
 | C3 | Recipe search changes aggregator *rankings* (recipe-bias claim, RQ1) | `tile_ranking_response`: rank shift, Kendall τ-b, top-arm-set change per (dataset, task, encoder) block | same, aggregated across the 30 tile blocks |
-| C4 | The survival axis works; TITAN reported separately | `survival_primary`, `titan_lift` | survival trainers + nllsurv pin + separate-regime rule |
+| C4 | The survival axis works; TITAN reported separately | `aggregation.primary_by_task_family.survival`, `titan_lift` | survival trainers + nllsurv pin + separate-regime rule |
 | C5 | The search is auditable and test never drives it (val-firewall, RQ4) | `search_process` census; `status: frozen-before-held-out-certification` | born-sealing, launch admissibility, process census, session attestation |
 | — | Encoder ≫ aggregator variance decomposition | **not pre-registered** (dropped after PRELAUNCH_REVIEW O1) | — |
 | — | Agentic search beats menu-AutoML / random (RQ2) | **not pre-registered; no comparison arm exists** | — |

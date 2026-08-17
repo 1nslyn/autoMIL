@@ -21,11 +21,23 @@ from autobench.pipeline.clam.train import train_fold
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
-def _write_fold_result_json(fold_index: int, result: dict) -> None:
+def _write_fold_result_json(
+    fold_index: int, result: dict, *, ordinal: bool = False,
+) -> None:
     """Write archive/<node>/fold_<i>_result.json per autoMIL CAP-03 / D-118.
 
     No-op when AUTOMIL_RESULTS_DIR is unset (e.g., running outside the
     autoMIL orchestrator).
+
+    ``ordinal`` is the DECLARED task flag (``exp_cfg.task.ordinal``), never
+    sniffed from whether ``qwk`` happens to be present in the metrics dicts —
+    the same rule as ``summary_to_result_json`` on the aggregate side. When
+    set, ``val_qwk`` joins the recorded fold evidence and ``test_qwk`` the
+    sealed ``held_out`` block, both clamped at 0 (kappa is defined on
+    [-1, 1]; every campaign consumer requires recorded values in [0, 1] —
+    the raw value stays recoverable from the sealed summary and
+    predictions.csv). A declared-but-missing qwk is recorded as ``null`` and
+    invalidates the fold like any other lost component.
 
     Pitfall 5: compute_extended_metrics() returns flat floats at the per-fold
     level. However, this helper defensively unwraps both flat-float and
@@ -72,6 +84,10 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         held_out = {"test_c_index": _unwrap(test_m.get("c_index"))}
         primary = "val_c_index"
     else:
+        def _clamped_qwk(metric) -> float | None:
+            value = _unwrap(metric)
+            return None if value is None else max(0.0, value)
+
         metrics = {
             "val_auc":  _unwrap(val_m.get("auc_roc")),
             "val_bacc": _unwrap(val_m.get("balanced_accuracy")),
@@ -80,6 +96,9 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
             "test_auc":  _unwrap(test_m.get("auc_roc")),
             "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
         }
+        if ordinal:
+            metrics["val_qwk"] = _clamped_qwk(val_m.get("qwk"))
+            held_out["test_qwk"] = _clamped_qwk(test_m.get("qwk"))
         primary = "val_auc"
     # Selection is the primary validation metric alone (scoring.formula:
     # val_auc / val_c_index); companions stay recorded but no longer vote —
@@ -154,7 +173,7 @@ def run_experiment(
                 policy_runtime=fold_policy_runtime,
             )
             fold_results.append(result)
-            _write_fold_result_json(fold, result)
+            _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
     else:
         dataset = create_dataset(
             exp_cfg, benchmark_dir, task_csv_name=exp_cfg.task.name,
@@ -173,7 +192,7 @@ def run_experiment(
                 policy_runtime=fold_policy_runtime,
             )
             fold_results.append(result)
-            _write_fold_result_json(fold, result)
+            _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]

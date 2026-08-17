@@ -63,13 +63,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
 
 
-def _folds(indices, base=0.6):
+def _folds(indices, base=0.6, *, ordinal=False):
     # Fold composite IS the primary validation metric (scoring.formula:
-    # val_auc); val_bacc rides along as a recorded companion that never votes.
+    # val_auc); val_bacc (and val_qwk on ordinal cells) ride along as
+    # recorded companions that never vote.
     return [
         {
             "fold_index": index,
-            "metrics": {"val_auc": base + index / 100, "val_bacc": base},
+            "metrics": {
+                "val_auc": base + index / 100,
+                "val_bacc": base,
+                **({"val_qwk": base} if ordinal else {}),
+            },
             "composite": base + index / 100,
         }
         for index in indices
@@ -121,8 +126,7 @@ AGENT_PROTOCOL = {
 }
 
 
-@pytest.fixture
-def staged_cell(tmp_path):
+def _make_staged_cell(tmp_path, *, task_family: str = "binary"):
     cell_root = tmp_path / "dataset__arm__task"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
@@ -131,6 +135,7 @@ def staged_cell(tmp_path):
         "cell_id": "dataset__arm__task",
         "dataset": "dataset",
         "task": "task",
+        "task_family": task_family,
         "encoder": "encoder",
         "framework": "arm",
         "seed": 42,
@@ -219,9 +224,14 @@ def staged_cell(tmp_path):
     return cell_root, adir, cell, state, tmp_path
 
 
+@pytest.fixture
+def staged_cell(tmp_path):
+    return _make_staged_cell(tmp_path)
+
+
 def _baseline(
     cell_root: Path, *, leak=False, invalid_sealed=False,
-    attest_for: Path | None = None,
+    attest_for: Path | None = None, ordinal_val=False,
 ) -> Path:
     archive = cell_root / "baseline" / "archive"
     sealed = archive / "certify"
@@ -229,8 +239,11 @@ def _baseline(
     result = {
         "status": "completed",
         "composite": 0.62,
-        "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
-        "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60),
+        "metrics": {
+            "val_auc": 0.62, "val_bacc": 0.60,
+            **({"val_qwk": 0.60} if ordinal_val else {}),
+        },
+        "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60, ordinal=ordinal_val),
     }
     if leak:
         result["held_out"] = {"test_auc": 0.99}
@@ -1837,6 +1850,41 @@ def test_cell_certification_requires_global_campaign_freeze(staged_cell):
     select_winner(cell_root)
 
     with pytest.raises(CampaignStageError, match="global 130-cell selection freeze"):
+        certify_winner(cell_root)
+
+
+def test_baseline_ingest_rejects_val_evidence_that_mismatches_the_family(tmp_path):
+    """The val-side family lock fires at the FIRST ingest: an ordinal cell
+    whose validation evidence carries only the binary key set dies at
+    baseline registration — not at certification five stages later, when
+    its hash-anchored budget would be unrecoverable."""
+    cell_root, adir, cell, _, _ = _make_staged_cell(tmp_path, task_family="ordinal")
+
+    with pytest.raises(
+        CampaignStageError,
+        match="validation metric schema differs from the cell's task family",
+    ):
+        register_baseline(cell_root, _baseline(cell_root))
+
+
+def test_certification_rejects_held_out_evidence_that_mismatches_the_family(tmp_path):
+    """The bundle-build family gate, the sealed twin of the val-side lock:
+    valid ordinal VALIDATION evidence, but sealed fold files still carrying
+    the binary held-out key set — certification must refuse (test_qwk is
+    the family\'s declared reporting primary and cannot be absent)."""
+    cell_root, adir, cell, _, _ = _make_staged_cell(tmp_path, task_family="ordinal")
+    register_baseline(cell_root, _baseline(cell_root, ordinal_val=True))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+
+    with pytest.raises(
+        CampaignStageError, match="differs from the cell's task family",
+    ):
         certify_winner(cell_root)
 
 

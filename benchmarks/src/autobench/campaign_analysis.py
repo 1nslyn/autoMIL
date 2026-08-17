@@ -16,6 +16,7 @@ from autobench.campaign import (
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
     DISCOVERY_ATTEMPTS,
+    HELD_OUT_SCHEMA_BY_FAMILY,
     PROTOCOL_VERSION,
     TILE_ARMS,
     content_sha256,
@@ -115,24 +116,25 @@ def _ordered_folds(raw: object, label: str) -> list[dict[str, Any]]:
 
 
 def _primary_values(
-    bundle: Mapping[str, Any], task_type: str, cell_id: str,
+    bundle: Mapping[str, Any], task_family: str, cell_id: str,
 ) -> tuple[list[float], list[float]]:
     winner_folds = _ordered_folds(bundle.get("held_out_folds"), f"{cell_id}.winner")
     baseline_folds = _ordered_folds(
         bundle.get("baseline_held_out_folds"), f"{cell_id}.baseline",
     )
-    # The sealed evidence schema stays exact-key-locked (both classification
-    # metrics must be present and coherent), but the PRIMARY estimand is the
-    # analysis plan's single metric — test_auc / test_c_index — mirroring the
-    # selection side (scoring.formula: val_auc / val_c_index): the campaign
-    # must be ranked on the quantity its agents actually optimized, and bacc
-    # carries the same ~1/17-per-slide threshold quantization on the sealed
-    # folds as on the validation folds.
-    required = (
-        ("test_auc", "test_bacc")
-        if task_type == "classification"
-        else ("test_c_index",)
-    )
+    # The sealed evidence schema is exact-key-locked PER TASK FAMILY
+    # (HELD_OUT_SCHEMA_BY_FAMILY, frozen into the manifest cell record), and
+    # the PRIMARY estimand is that family's first key — the analysis plan's
+    # ``primary_by_task_family``: AUROC for binary and nominal multiclass,
+    # quadratic-weighted kappa for ordinal grading, concordance index for
+    # survival. Selection stays the primary VALIDATION metric everywhere
+    # (scoring.formula: val_auc / val_c_index); companions are recorded in
+    # the sealed evidence but never rank the campaign.
+    required = HELD_OUT_SCHEMA_BY_FAMILY.get(task_family)
+    if required is None:
+        raise CampaignAnalysisError(
+            f"{cell_id}: unknown task family {task_family!r}"
+        )
     primary_key = required[0]
     values: list[list[float]] = [[], []]
     for output, folds, label in (
@@ -240,14 +242,17 @@ def _grouped_lift(cells: list[dict[str, Any]], key: str) -> dict[str, Any]:
     return {name: _summary(values) for name, values in sorted(grouped.items())}
 
 
-def _task_stratified_lift(
+def _family_stratified_lift(
     cells: list[dict[str, Any]], key: str,
 ) -> dict[str, Any]:
+    # Magnitude summaries pool only WITHIN a task family — each family has
+    # exactly one reporting metric and metrics are not interchangeable (the
+    # analysis plan's scale_rule); only sign counts may pool across families.
     return {
-        task_type: _grouped_lift(
-            [cell for cell in cells if cell["task_type"] == task_type], key,
+        family: _grouped_lift(
+            [cell for cell in cells if cell["task_family"] == family], key,
         )
-        for task_type in ("classification", "survival")
+        for family in HELD_OUT_SCHEMA_BY_FAMILY
     }
 
 
@@ -425,10 +430,13 @@ def _ranking_blocks(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for cell in cells:
         if cell["regime"] == "tile":
             grouped[(
-                cell["dataset"], cell["task"], cell["task_type"], cell["encoder"],
+                cell["dataset"], cell["task"], cell["task_type"],
+                cell["task_family"], cell["encoder"],
             )].append(cell)
     blocks: list[dict[str, Any]] = []
-    for (dataset, task, task_type, encoder), rows in sorted(grouped.items()):
+    for (dataset, task, task_type, task_family, encoder), rows in sorted(
+        grouped.items()
+    ):
         if len(rows) != len(expected_arms) or {row["framework"] for row in rows} != expected_arms:
             raise CampaignAnalysisError(
                 f"incomplete tile ranking block {dataset}/{task}/{encoder}"
@@ -447,6 +455,13 @@ def _ranking_blocks(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "dataset": dataset,
             "task": task,
             "task_type": task_type,
+            # Rank statistics are scale-free, so the classification summary
+            # deliberately pools blocks ranked on test_auc with the grade
+            # blocks ranked on test_qwk (declared in the plan's
+            # tile_ranking_response); the family here labels each block's
+            # actual ranking metric so the mixture stays visible.
+            "task_family": task_family,
+            "primary_metric": HELD_OUT_SCHEMA_BY_FAMILY[task_family][0],
             "encoder": encoder,
             "baseline_primary": baseline,
             "winner_primary": automil,
@@ -508,6 +523,16 @@ def build_publication_report(
         ) != DISCOVERY_ATTEMPTS
     ):
         raise CampaignAnalysisError("analysis plan is not frozen for this campaign")
+    # The plan's declared per-family primary must match the code authority
+    # the report actually ranks on — the manifest hash pins the plan bytes,
+    # but only this check pins the plan AGAINST the code that outlived it.
+    if (plan.get("aggregation") or {}).get("primary_by_task_family") != {
+        family: keys[0] for family, keys in HELD_OUT_SCHEMA_BY_FAMILY.items()
+    }:
+        raise CampaignAnalysisError(
+            "analysis plan primary_by_task_family disagrees with "
+            "HELD_OUT_SCHEMA_BY_FAMILY"
+        )
     agent_protocol_path = runtime_root / AGENT_PROTOCOL_FILE
     try:
         agent_protocol = validate_agent_protocol(
@@ -696,7 +721,7 @@ def build_publication_report(
         ):
             raise CampaignAnalysisError(f"{cell_id}: certification bundle mismatch")
         baseline_folds, winner_folds = _primary_values(
-            bundle, cell["task_type"], cell_id,
+            bundle, cell["task_family"], cell_id,
         )
         baseline_primary = math.fsum(baseline_folds) / len(baseline_folds)
         winner_primary = math.fsum(winner_folds) / len(winner_folds)
@@ -705,6 +730,8 @@ def build_publication_report(
             "dataset": cell["dataset"],
             "task": cell["task"],
             "task_type": cell["task_type"],
+            "task_family": cell["task_family"],
+            "primary_metric": HELD_OUT_SCHEMA_BY_FAMILY[cell["task_family"]][0],
             "encoder": cell["encoder"],
             "framework": cell["framework"],
             "model": cell["model"],
@@ -726,7 +753,7 @@ def build_publication_report(
 
     blocks = _ranking_blocks(cells)
     report: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": _file_hash(manifest_path, "manifest"),
         "analysis_plan_sha256": _file_hash(plan_path, "analysis plan"),
@@ -743,27 +770,27 @@ def build_publication_report(
                 cell["primary_lift"] for cell in cells
             ),
             "agentic_lift": {
-                "by_task_type": _grouped_lift(cells, "task_type"),
-                "by_regime_within_task_type": _task_stratified_lift(
+                "by_task_family": _grouped_lift(cells, "task_family"),
+                "by_regime_within_task_family": _family_stratified_lift(
                     cells, "regime",
                 ),
-                "by_dataset_within_task_type": _task_stratified_lift(
+                "by_dataset_within_task_family": _family_stratified_lift(
                     cells, "dataset",
                 ),
-                "by_framework_within_task_type": _task_stratified_lift(
+                "by_framework_within_task_family": _family_stratified_lift(
                     cells, "framework",
                 ),
             },
             "tile_ranking_response": _ranking_summary(blocks),
             "agent_resources": _resource_summary(cells),
             "search_process": _search_process_summary(cells),
-            "titan_by_task_type": {
-                task_type: _summary(
+            "titan_by_task_family": {
+                family: _summary(
                     cell["primary_lift"] for cell in cells
                     if cell["regime"] == "slide"
-                    and cell["task_type"] == task_type
+                    and cell["task_family"] == family
                 )
-                for task_type in ("classification", "survival")
+                for family in HELD_OUT_SCHEMA_BY_FAMILY
             },
         },
         "source_certified_at": index.get("certified_at"),

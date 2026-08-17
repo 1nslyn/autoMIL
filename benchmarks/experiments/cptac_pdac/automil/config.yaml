@@ -102,6 +102,13 @@ registry:
     - "benchmarks/scripts/run_experiment.py"              # entry point + summary_to_result_json
     - "benchmarks/src/autobench/pipeline/results_cache.py"  # CR-5b cache identity
     - "benchmarks/src/autobench/pipeline/results.py"
+    # --- checkpoint selection (which epoch the frozen winner IS) ---
+    - "benchmarks/src/autobench/pipeline/val_loss.py"     # shared CE val-loss helper
+    - "benchmarks/src/autobench/pipeline/abmil/train.py"  # selection inline in train
+    - "benchmarks/src/autobench/pipeline/dtfd/train.py"
+    - "benchmarks/src/autobench/pipeline/titan/train.py"
+    - "benchmarks/lib/nnMIL/training/callbacks/early_stopping.py"
+    - "benchmarks/lib/CLAM/utils/core_utils.py"
     # --- the declared search space itself (A-2) ---
     - "benchmarks/src/autobench/pipeline/search_space.py"
     - "benchmarks/src/autobench/pipeline/hparams.py"

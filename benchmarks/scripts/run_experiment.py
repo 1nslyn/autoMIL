@@ -220,15 +220,18 @@ def _component_value(raw, name: str):
 
     qwk is [-1, 1] while every campaign consumer requires recorded metric
     values in [0, 1] (campaign_stages.py:395). Clamped HERE, at every site
-    that records a component value, so the per-fold and aggregate views cannot
-    disagree. Clamping per fold does bias the fold mean upward relative to
-    clamping only the aggregate -- but it only bites on folds with no ordinal
-    signal at all, and qwk is a recorded companion, not a vote.
+    that records a component value — val_qwk and test_qwk alike, so the
+    validation evidence, the sealed held-out evidence, the per-fold and the
+    aggregate views all share one convention. Clamping per fold does bias the
+    fold mean upward relative to clamping only the aggregate -- but it only
+    bites on folds with no ordinal signal at all, and qwk never votes in
+    selection (it is a recorded companion on the val side and the REPORTING
+    primary for ordinal cells on the sealed side).
     """
     value = _finite_or_none(raw)
     if value is None:
         return None
-    return max(0.0, value) if name == "val_qwk" else value
+    return max(0.0, value) if name.endswith("_qwk") else value
 
 
 def _per_fold_composites(
@@ -435,6 +438,25 @@ def summary_to_result_json(
             "test_auc": _finite_or_none(test.get("auc_roc", {}).get("mean")),
             "test_bacc": _finite_or_none(test.get("balanced_accuracy", {}).get("mean")),
         }
+        if ordinal:
+            # ORDINAL cells report on test_qwk (the analysis plan's
+            # primary_by_task_family), so it joins the sealed evidence. Same
+            # two rules as val_qwk: keyed on the DECLARED flag, and the
+            # cross-fold mean is recomputed from PER-FOLD clamped values —
+            # max(0, mean(qwk)) != mean(max(0, qwk)) on mixed-sign folds, and
+            # the certification aggregate is a mean of clamped fold values.
+            clamped_test_qwk = [
+                value
+                for fm in (summary.get("per_fold_test") or [])
+                if isinstance(fm, dict)
+                for value in (_component_value(fm.get("qwk"), "test_qwk"),)
+                if value is not None
+            ]
+            held_out_candidates["test_qwk"] = (
+                math.fsum(clamped_test_qwk) / len(clamped_test_qwk)
+                if clamped_test_qwk
+                else None
+            )
         metrics = {
             name: round(value, 4)
             for name, value in candidates.items() if value is not None

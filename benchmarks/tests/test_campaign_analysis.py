@@ -21,7 +21,7 @@ from autobench.campaign_analysis import (
     CampaignAnalysisError,
     _direction_only,
     _primary_values,
-    _task_stratified_lift,
+    _family_stratified_lift,
     _validated_process_evidence,
     build_publication_report,
     write_publication_report,
@@ -64,15 +64,18 @@ def _mean_metrics(folds: list[dict]) -> dict[str, float]:
     }
 
 
-def _folds(task_type: str, primary: float) -> list[dict]:
+def _folds(task_family: str, primary: float) -> list[dict]:
+    # Fold evidence in the family's exact held-out schema
+    # (HELD_OUT_SCHEMA_BY_FAMILY); the family's primary key carries `value`.
     rows = []
     for fold in range(5):
         value = primary + fold / 1000
-        held_out = (
-            {"test_auc": value + 0.01, "test_bacc": value - 0.01}
-            if task_type == "classification"
-            else {"test_c_index": value}
-        )
+        if task_family == "survival":
+            held_out = {"test_c_index": value}
+        else:
+            held_out = {"test_auc": value + 0.01, "test_bacc": value - 0.01}
+            if task_family == "ordinal":
+                held_out = {"test_qwk": value, **held_out}
         rows.append({"fold_index": fold, "held_out": held_out})
     return rows
 
@@ -422,10 +425,10 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
             attempt["agent_session_binding_sha256"] = session_binding
         first_job = process["promotion"]["jobs"][0]
         baseline_folds = _folds(
-            cell["task_type"], framework_baseline[cell["framework"]],
+            cell["task_family"], framework_baseline[cell["framework"]],
         )
         winner_folds = _folds(
-            cell["task_type"],
+            cell["task_family"],
             framework_baseline[cell["framework"]]
             + framework_lift[cell["framework"]],
         )
@@ -530,10 +533,10 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
     for cell in manifest["cells"]:
         freeze_entry = frozen_by_cell[cell["cell_id"]]
         baseline = _folds(
-            cell["task_type"], framework_baseline[cell["framework"]],
+            cell["task_family"], framework_baseline[cell["framework"]],
         )
         winner = _folds(
-            cell["task_type"],
+            cell["task_family"],
             framework_baseline[cell["framework"]]
             + framework_lift[cell["framework"]],
         )
@@ -679,11 +682,13 @@ def test_report_contains_complete_lift_and_cross_arm_ranking_estimands(tmp_path)
     assert report["summaries"]["tile_ranking_response"]["survival"][
         "blocks"
     ] == 15
-    assert report["summaries"]["titan_by_task_type"]["classification"]["n"] == 5
-    assert report["summaries"]["titan_by_task_type"]["survival"]["n"] == 5
+    assert report["summaries"]["titan_by_task_family"]["binary"]["n"] == 3
+    assert report["summaries"]["titan_by_task_family"]["multiclass"]["n"] == 1
+    assert report["summaries"]["titan_by_task_family"]["ordinal"]["n"] == 1
+    assert report["summaries"]["titan_by_task_family"]["survival"]["n"] == 5
     assert "all_cells" not in report["summaries"]
-    assert set(report["summaries"]["agentic_lift"]["by_task_type"]) == {
-        "classification", "survival",
+    assert set(report["summaries"]["agentic_lift"]["by_task_family"]) == {
+        "binary", "multiclass", "ordinal", "survival",
     }
     assert report["summaries"]["agent_resources"]["input_tokens"] == {
         "reported_cells": 130,
@@ -1085,24 +1090,30 @@ def test_process_evidence_rejects_duplicate_promotion_identity(field):
         )
 
 
-def test_lift_magnitudes_never_pool_classification_and_survival():
+def test_lift_magnitudes_never_pool_across_task_families():
+    # AUC lifts, QWK lifts, and c-index lifts are different quantities; a
+    # magnitude summary may pool only within one family (sign counts may
+    # still pool across).
     cells = [
-        {"task_type": "classification", "framework": "clam", "primary_lift": 0.9},
-        {"task_type": "survival", "framework": "clam", "primary_lift": 0.1},
+        {"task_family": "binary", "framework": "clam", "primary_lift": 0.9},
+        {"task_family": "ordinal", "framework": "clam", "primary_lift": 0.5},
+        {"task_family": "survival", "framework": "clam", "primary_lift": 0.1},
     ]
 
-    stratified = _task_stratified_lift(cells, "framework")
+    stratified = _family_stratified_lift(cells, "framework")
 
-    assert stratified["classification"]["clam"]["mean"] == pytest.approx(0.9)
+    assert stratified["binary"]["clam"]["mean"] == pytest.approx(0.9)
+    assert stratified["ordinal"]["clam"]["mean"] == pytest.approx(0.5)
     assert stratified["survival"]["clam"]["mean"] == pytest.approx(0.1)
+    assert stratified["multiclass"] == {}
     assert set(_direction_only(cell["primary_lift"] for cell in cells)) == {
         "n", "positive", "zero", "negative",
     }
 
 
 def test_held_out_metrics_must_remain_in_the_unit_interval():
-    baseline = _folds("classification", 0.5)
-    winner = _folds("classification", 0.6)
+    baseline = _folds("binary", 0.5)
+    winner = _folds("binary", 0.6)
     winner[0]["held_out"]["test_auc"] = 1.01
     bundle = {
         "baseline_held_out_folds": baseline,
@@ -1112,7 +1123,7 @@ def test_held_out_metrics_must_remain_in_the_unit_interval():
     }
 
     with pytest.raises(CampaignAnalysisError, match=r"must be in \[0, 1\]"):
-        _primary_values(bundle, "classification", "fixture-cell")
+        _primary_values(bundle, "binary", "fixture-cell")
 
 
 def test_certification_bundle_rejects_false_baseline_winner_lift(tmp_path):

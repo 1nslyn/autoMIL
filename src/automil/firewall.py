@@ -24,9 +24,9 @@ REDACTION = "[REDACTED: held-out metric — val-firewall]"
 #: Deliberately broad: a false positive costs one redacted debug line, a false
 #: negative costs the firewall.
 _HELD_OUT_MARKERS = (
-    "test_auc", "test_bacc", "test_acc", "test_c_index", "test_cindex",
-    "test_f1", "test_auprc", "test_loss", "test_error", "test error",
-    "held_out", "heldout", "held out",
+    "test_auc", "test_bacc", "test_acc", "test_qwk", "test_c_index",
+    "test_cindex", "test_f1", "test_auprc", "test_loss", "test_error",
+    "test error", "held_out", "heldout", "held out",
 )
 
 
