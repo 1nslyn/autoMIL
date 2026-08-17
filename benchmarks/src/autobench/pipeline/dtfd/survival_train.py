@@ -18,6 +18,7 @@ comparison available within one slide's own pseudo-bags. See
 
 from __future__ import annotations
 
+import os
 import random
 import sys
 import time
@@ -32,6 +33,10 @@ from autobench.pipeline.dtfd.dataset import DTFDSurvivalSlide, _read_bag, min_ba
 from autobench.pipeline.dtfd.eval import _split_pseudo_bags
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.dtfd.train import _restore, _snapshot
+from autobench.pipeline.evaluate import (
+    file_sha256_or_none,
+    write_survival_predictions_csv,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -263,6 +268,7 @@ def train_dtfd_survival_fold(
     device: torch.device,
     seed: int,
     policy_runtime: PolicyRuntime | None = None,
+    fold_dir: str | None = None,
 ) -> dict:
     """Train one DTFD-MIL survival (nllsurv) fold; return shared-schema c-index metrics.
 
@@ -313,9 +319,12 @@ def train_dtfd_survival_fold(
         # own snapshot/restore instead of EarlyStoppingSurvival.
         best_loss = float("inf")
         best_snap: dict | None = None
+        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         epochs_no_improve = 0
 
-        start = time.time()
+        # (no timer reset here — the FOLD-TIMING CONTRACT timer above covers
+        # setup too; a second assignment silently excluded it from
+        # elapsed_seconds and broke cross-arm comparability)
         for epoch in range(cfg.max_epochs):
             _train_one_epoch_survival(
                 bundle, train_samples, edges, cfg, loss_fn, opt0, opt1, device, py_rng
@@ -333,6 +342,7 @@ def train_dtfd_survival_fold(
                 if v_loss < best_loss:
                     best_loss = v_loss
                     best_snap = _snapshot(bundle)
+                    best_epoch = epoch
                     epochs_no_improve = 0
                 else:
                     epochs_no_improve += 1
@@ -346,6 +356,10 @@ def train_dtfd_survival_fold(
 
         if best_snap is not None:
             _restore(bundle, best_snap)
+        # A3: source=best when a val-selected snapshot was restored above,
+        # source=final when the final weights were kept (no restore).
+        print(f"[selected] epoch={best_epoch} "
+              f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
         # across folds instead of averaging five ~2-event c-indices.
@@ -353,6 +367,12 @@ def train_dtfd_survival_fold(
             _risk_records(bundle, val_samples, cfg, device, seed) if val_samples
             else {"risks": [], "statuses": [], "times": [], "patient_ids": []}
         )
+        # A4': persist the selected model's val risk scores (already in hand)
+        # so the fold carries a hashable no-op detector.
+        if fold_dir:
+            write_survival_predictions_csv(
+                os.path.join(fold_dir, "predictions_val.csv"), _val_records,
+            )
         test_metrics = {
             "c_index": _c_index(bundle, test_samples, cfg, device, seed)
             if test_samples else float("nan"),
@@ -362,6 +382,13 @@ def train_dtfd_survival_fold(
             "test_metrics": test_metrics,
             "val_metrics": val_metrics,
             "val_records": _val_records,
+            # A4': no-op detector — hash of the val risk scores persisted just
+            # above; the fold-result builder is the ONE hash home. None when
+            # this fold wrote none (no fold_dir).
+            "val_predictions_sha256": (
+                file_sha256_or_none(os.path.join(fold_dir, "predictions_val.csv"))
+                if fold_dir else None
+            ),
             "elapsed_seconds": time.time() - start,
         }
     finally:

@@ -37,31 +37,18 @@ from autobench.pipeline.config import (
 )
 from autobench.pipeline.orchestrator import mark_completed
 
+from _helpers import make_ledger_exp, write_ledger_summary
 
-def _exp(encoder: str = "virchow2") -> ExperimentConfig:
-    return ExperimentConfig(
-        task=TaskConfig(
-            name="kras", label_col="label", label_dict={"0": 0, "1": 1},
-            task_type="classification",
-        ),
-        encoder_key=encoder,
-        embed_dim=2560,
-        model=ModelConfig(model_type="clam_mb"),
-        train=TrainConfig(seed=42),
-        n_folds=5,
-        framework=Framework.CLAM,
-        strategy="standard",
-        dataset="tcga_luad",
+
+def _exp(encoder: str = "virchow2"):
+    return make_ledger_exp(
+        task_name="kras", label_dict={"0": 0, "1": 1}, encoder=encoder,
+        embed_dim=2560, dataset="tcga_luad",
     )
 
 
-def _write_summary(benchmark_dir: str, exp: ExperimentConfig) -> str:
-    cell = os.path.join(benchmark_dir, "results", exp.results_subdir)
-    os.makedirs(cell, exist_ok=True)
-    path = os.path.join(cell, "summary.json")
-    with open(path, "w") as f:
-        json.dump({"experiment_id": exp.experiment_id, "task": "kras"}, f)
-    return path
+def _write_summary(benchmark_dir: str, exp) -> str:
+    return write_ledger_summary(benchmark_dir, exp, task="kras")
 
 
 def test_ghost_ledger_entry_makes_the_cell_run(tmp_path, capsys):

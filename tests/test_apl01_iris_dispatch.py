@@ -52,13 +52,13 @@ def _run_iris(cwd: Path, extra_env: dict | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Baseline — no variant → result.json written, composite > 0
+# Test 1: Baseline — no variant → result.json written, primary_value > 0
 # Regression guard: MUST PASS from the start (no production changes needed).
 # ---------------------------------------------------------------------------
 
 
 def test_iris_baseline_no_variant(tmp_path):
-    """Iris train.py with no model.variant writes result.json with composite > 0."""
+    """Iris train.py with no model.variant writes result.json with primary_value > 0."""
     # Write a minimal automil/config.yaml with NO model.variant key.
     automil_dir = tmp_path / "automil"
     automil_dir.mkdir()
@@ -68,8 +68,8 @@ def test_iris_baseline_no_variant(tmp_path):
     result = _run_iris(tmp_path)
 
     assert result["status"] == "completed"
-    assert result["composite"] > 0, f"composite should be > 0, got {result['composite']}"
-    assert "accuracy" in result.get("metrics", {})
+    assert result["primary_value"] > 0, f"primary_value should be > 0, got {result['primary_value']}"
+    assert "val_accuracy" in result.get("metrics", {})
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ def test_iris_dispatches_classifier_v0_when_variant_set(tmp_path):
 
     Strategy: write the classifier_v0 variant directory into the tmp automil/
     directory, set model.variant in config.yaml, run iris train.py, and assert
-    result.json composite > 0 AND that the variant was actually dispatched
+    result.json primary_value > 0 AND that the variant was actually dispatched
     (sentinel file written by the variant module OR environment variable probe).
 
     This test verifies the dispatch branch exists in train.py — it will fail RED
@@ -170,4 +170,4 @@ def test_iris_applied_variant_reaches_worktree_at_runtime(tmp_path):
         "applied_variant.json. The variant must be read from applied_variant.json "
         "even when config.yaml is absent."
     )
-    assert result["composite"] > 0
+    assert result["primary_value"] > 0

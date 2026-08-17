@@ -209,10 +209,32 @@ def check():
         if _formula and not known_formula(str(_formula)):
             issues.append(
                 f"scoring.formula {_formula!r} is not a known reducer "
-                "(mean | max | min | trust_reported). Arithmetic expressions "
-                "are not evaluated; document the recipe in "
-                "metrics.composite_formula instead."
+                "(mean | max | min | trust_reported) or a 'val_'-prefixed "
+                "metric selector (val_auc | val_c_index | ...). Arithmetic "
+                "expressions are not evaluated."
             )
+
+        # An existing graph.json FREEZES meta.scoring at seeding (setdefault
+        # semantics — deliberate for accept_margin, inherited by formula), so
+        # editing config.yaml after the first run silently changes nothing:
+        # every future ingest keeps recomputing on the frozen formula.
+        graph_file = adir / "graph.json"
+        if graph_file.exists():
+            try:
+                _frozen = (
+                    (json.loads(graph_file.read_text()).get("meta") or {})
+                    .get("scoring") or {}
+                ).get("formula")
+            except (OSError, json.JSONDecodeError):
+                _frozen = None
+            if _frozen is not None and (_formula or "mean") != _frozen:
+                warnings.append(
+                    f"scoring.formula in config.yaml ({_formula!r}) differs from "
+                    f"the value frozen in graph.json ({_frozen!r}); the FROZEN "
+                    "value governs every ingest. Start a fresh graph (or edit "
+                    "graph.json meta deliberately) to change the selection "
+                    "formula."
+                )
 
         # Check files.editable
         editable = config.get("files", {}).get("editable", [])
@@ -261,9 +283,9 @@ def check():
                     break  # one warning per editable root is sufficient
 
         # Check baseline
-        baseline_comp = config.get("baseline", {}).get("composite", 0)
+        baseline_comp = config.get("baseline", {}).get("primary_value", 0)
         if baseline_comp == 0:
-            warnings.append("baseline.composite is 0. Set this after running your first experiment.")
+            warnings.append("baseline.primary_value is 0. Set this after running your first experiment.")
 
         # P2.3: surface the resolved cell budget so the operator sees it at setup.
         from automil.cells import format_duration  # noqa: PLC0415

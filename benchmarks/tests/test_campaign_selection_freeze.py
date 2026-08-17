@@ -38,7 +38,7 @@ AGENT_PROTOCOL = {
     "runtime_version": "test-runtime-1",
     "model": "test-model",
     "model_version": "test-model-1",
-    "effort": "high",
+    "effort": "max",
     "network_access": "enabled",
     "fallback_model": None,
     "proposal_policy_content": "test proposal policy",
@@ -73,11 +73,19 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
     baseline_result = baseline_archive / "result.json"
     baseline_result.write_text(json.dumps({"status": "completed"}))
     sealed_fold_sha256 = {}
+    # Evidence in the cell's own family schema — the certify build gate
+    # rejects a fold roster that mismatches the frozen task_family.
+    if cell["task_family"] == "survival":
+        held_out = {"test_c_index": 0.5}
+    elif cell["task_family"] == "ordinal":
+        held_out = {"test_auc": 0.5, "test_bacc": 0.5, "test_qwk": 0.5}
+    else:
+        held_out = {"test_auc": 0.5, "test_bacc": 0.5}
     for fold in range(5):
         fold_path = baseline_archive / "certify" / f"fold_{fold}_result.json"
         fold_path.write_text(json.dumps({
             "fold_index": fold,
-            "held_out": {"test_auc": 0.5, "test_bacc": 0.5},
+            "held_out": held_out,
         }))
         sealed_fold_sha256[fold_path.name] = file_sha256(fold_path)
     baseline_attestation = {
@@ -110,7 +118,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         "attestation_sha256": baseline_attestation["attestation_sha256"],
         "validation_mean": 0.5,
         "validation_folds": [
-            {"fold_index": fold, "composite": 0.5, "metrics": {}}
+            {"fold_index": fold, "primary_value": 0.5, "metrics": {}}
             for fold in range(5)
         ],
         "result_status": "completed",
@@ -328,10 +336,21 @@ def test_certify_campaign_indexes_exactly_the_frozen_130_bundles(
     def fake_certify(cell_root: Path) -> dict:
         state = json.loads((cell_root / "campaign_state.json").read_text())
         visited.append(state["cell_id"])
+        cell = json.loads(
+            (cell_root / "automil" / "campaign_cell.json").read_text()
+        )
+        # Mirror the family-shaped sealed evidence _freeze_ready_state wrote.
+        if cell["task_family"] == "survival":
+            held_out = {"test_c_index": 0.5}
+        elif cell["task_family"] == "ordinal":
+            held_out = {"test_auc": 0.5, "test_bacc": 0.5, "test_qwk": 0.5}
+        else:
+            held_out = {"test_auc": 0.5, "test_bacc": 0.5}
+        zero_delta = {key: 0.0 for key in held_out}
         held_out_folds = [
             {
                 "fold_index": fold,
-                "held_out": {"test_auc": 0.5, "test_bacc": 0.5},
+                "held_out": held_out,
             }
             for fold in range(5)
         ]
@@ -355,7 +374,7 @@ def test_certify_campaign_indexes_exactly_the_frozen_130_bundles(
                 "validation_mean": 0.5,
             },
             "held_out_folds": held_out_folds,
-            "held_out": {"test_auc": 0.5, "test_bacc": 0.5},
+            "held_out": held_out,
             "source_fold_sha256": {
                 filename: record["sha256"]
                 for filename, record in frozen_entries[state["cell_id"]][
@@ -363,7 +382,7 @@ def test_certify_campaign_indexes_exactly_the_frozen_130_bundles(
                 ].items()
             },
             "baseline_held_out_folds": held_out_folds,
-            "baseline_held_out": {"test_auc": 0.5, "test_bacc": 0.5},
+            "baseline_held_out": held_out,
             "baseline_source_fold_sha256": {
                 filename: record["sha256"]
                 for filename, record in frozen_entries[state["cell_id"]][
@@ -373,11 +392,11 @@ def test_certify_campaign_indexes_exactly_the_frozen_130_bundles(
             "paired_fold_deltas": [
                 {
                     "fold_index": fold,
-                    "held_out_delta": {"test_auc": 0.0, "test_bacc": 0.0},
+                    "held_out_delta": zero_delta,
                 }
                 for fold in range(5)
             ],
-            "held_out_lift": {"test_auc": 0.0, "test_bacc": 0.0},
+            "held_out_lift": zero_delta,
             "retrained": False,
             "certified_at": freeze["frozen_at"],
         }

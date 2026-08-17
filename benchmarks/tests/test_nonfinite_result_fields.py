@@ -6,11 +6,11 @@ parser rejects the entire file and rewrites the node as a crash:
   1. ``summary`` — unestimable diagnostics (multi-class sensitivity, a degenerate
      cross-fold CI). Sealed copy only; fixed at the serializer.
   2. ``validation_folds[].metrics`` — raw per-fold values passed through
-     unfiltered while the sibling ``composite`` was correctly ``None``-guarded.
+     unfiltered while the sibling ``primary_value`` was correctly ``None``-guarded.
      This block is in the AGENT-FACING copy, so it killed runs the same way.
-  3. ``metrics`` / ``composite`` — when no fold produced a usable value at all.
+  3. ``metrics`` / ``primary_value`` — when no fold produced a usable value at all.
      That one SHOULD fail, but as a quarantined ``partial`` with a readable
-     cause, not as a phantom crash with ``composite: 0.0``.
+     cause, not as a phantom crash with ``primary_value: 0.0``.
 
 Serializer-level sanitization is pinned framework-side in
 ``tests/test_nonfinite_result_serialization.py``; this file pins the producers.
@@ -83,7 +83,7 @@ class TestValidationFoldEvidence:
         folds = result["validation_folds"]
         assert folds[0]["metrics"]["val_auc"] is None
         assert folds[0]["metrics"]["val_bacc"] == 0.60   # the finite sibling survives
-        assert folds[0]["composite"] is None             # unchanged behaviour
+        assert folds[0]["primary_value"] is None             # unchanged behaviour
         assert folds[1]["metrics"]["val_auc"] == 0.72
 
     def test_fields_this_function_owns_are_finite(self):
@@ -122,9 +122,9 @@ class TestValidationFoldEvidence:
         assert sealed_payload["summary"]["per_fold_val"][0]["auc_roc"] is None
 
 
-# --- leak site 3: an unestimable composite ---------------------------------
+# --- leak site 3: an unestimable primary_value ---------------------------------
 
-class TestUnestimableComposite:
+class TestUnestimablePrimary_value:
     def test_all_folds_unestimable_is_partial_not_crash(self):
         m = _load_run_experiment()
         result = m.summary_to_result_json(
@@ -132,13 +132,13 @@ class TestUnestimableComposite:
         )
 
         assert result["status"] == "partial"
-        assert isinstance(result["composite"], float)
-        assert math.isfinite(result["composite"])
+        assert isinstance(result["primary_value"], float)
+        assert math.isfinite(result["primary_value"])
         assert result["metrics"] == {}
-        assert "error" in result and "composite" in result["error"].lower()
+        assert "error" in result and "primary_value" in result["error"].lower()
 
     def test_the_payload_still_validates_against_the_result_schema(self):
-        """A partial must be ingestible: `null` composite would fail the schema."""
+        """A partial must be ingestible: `null` primary_value would fail the schema."""
         from automil.schemas import validate_result
 
         m = _load_run_experiment()
@@ -147,14 +147,15 @@ class TestUnestimableComposite:
         )
         validate_result(result)   # must not raise
 
-    def test_one_unestimable_component_voids_the_whole_composite(self):
-        """All-or-nothing: no half-scale composite may escape (review finding).
+    def test_one_unestimable_component_voids_the_whole_primary_value(self):
+        """All-or-nothing over the recorded evidence set (review finding).
 
-        Reporting val_bacc alone would put this node on a different estimand from
-        every sibling scored on (auc+bacc)/2 -- and `status: partial` does NOT
-        contain that: it keeps the node out of KEEP_CLASS but not out of being a
-        PARENT, and terminal_writer gates a child against `parent["composite"]`
-        with no partial check. A half-scale bar would silently decide a completed
+        A run that lost its selection metric has no primary_value at all, and
+        reporting val_bacc alone would hand the generic `mean` reducer a
+        wrong-scale estimand -- and `status: partial` does NOT contain that:
+        it keeps the node out of KEEP_CLASS but not out of being a PARENT,
+        and terminal_writer gates a child against `parent["primary_value"]` with
+        no partial check. A half-scale bar would silently decide a completed
         child's keep/discard, biased one way because bacc < auc in practice.
         """
         m = _load_run_experiment()
@@ -164,12 +165,16 @@ class TestUnestimableComposite:
 
         assert result["status"] == "partial"
         assert result["metrics"] == {}
-        assert result["composite"] == 0.0
+        assert result["primary_value"] == 0.0
         assert "val_auc" in result["error"]
 
-    def test_the_composite_is_never_a_partial_scale(self):
-        """CR-1b must agree, or terminal_writer overwrites the selection signal."""
-        from automil.scoring import composite_disagrees, recompute_composite
+    def test_the_primary_value_is_never_a_partial_scale(self):
+        """CR-1b must agree, or terminal_writer overwrites the selection signal.
+
+        Recomputed under the campaign's declared selector (scoring.formula:
+        val_auc) — the reducer this trainer's primary_value is paired with.
+        """
+        from automil.scoring import primary_value_disagrees, recompute_primary_value
 
         m = _load_run_experiment()
         for summary in (
@@ -178,9 +183,9 @@ class TestUnestimableComposite:
             _summary([NAN] * 5, [NAN] * 5, val_auc=NAN, val_bacc=NAN),
         ):
             result = m.summary_to_result_json(summary, 10.0)
-            recomputed = recompute_composite(result["metrics"])
+            recomputed = recompute_primary_value(result["metrics"], "val_auc")
             if recomputed is not None:
-                assert not composite_disagrees(result["composite"], recomputed)
+                assert not primary_value_disagrees(result["primary_value"], recomputed)
 
     def test_a_healthy_run_is_untouched(self):
         m = _load_run_experiment()
@@ -188,7 +193,7 @@ class TestUnestimableComposite:
 
         assert result["status"] == "completed"
         assert result["metrics"] == {"val_auc": 0.70, "val_bacc": 0.60}
-        assert result["composite"] == pytest.approx(0.65)
+        assert result["primary_value"] == pytest.approx(0.70)
         assert "error" not in result
 
 
@@ -212,7 +217,20 @@ class TestWriteFoldResultJson:
         payload = json.loads(text)
         assert payload["metrics"]["val_auc"] is None
         assert payload["metrics"]["val_bacc"] == pytest.approx(0.61)
-        assert payload["composite"] is None
+        assert payload["primary_value"] is None
+
+        # A lost COMPANION nulls the fold primary_value too — fold validity spans
+        # the full recorded evidence set (matches the campaign validator).
+        _write_fold_result_json(2, {
+            "val_metrics": {"auc_roc": 0.72, "balanced_accuracy": NAN},
+            "test_metrics": {"auc_roc": 0.70, "balanced_accuracy": 0.65},
+            "elapsed_seconds": 120,
+            "peak_vram_mb": 4000,
+        })
+        payload = json.loads((tmp_path / "fold_2_result.json").read_text())
+        assert payload["metrics"]["val_auc"] == pytest.approx(0.72)
+        assert payload["metrics"]["val_bacc"] is None
+        assert payload["primary_value"] is None
 
     def test_a_healthy_fold_is_untouched(self, tmp_path, monkeypatch):
         from autobench.pipeline.clam.runner import _write_fold_result_json
@@ -229,7 +247,7 @@ class TestWriteFoldResultJson:
         payload = json.loads((tmp_path / "fold_1_result.json").read_text())
         assert payload["metrics"] == {"val_auc": 0.80, "val_bacc": 0.70}
         assert payload["held_out"] == {"test_auc": 0.78, "test_bacc": 0.68}
-        assert payload["composite"] == pytest.approx(0.75)
+        assert payload["primary_value"] == pytest.approx(0.80)
         assert payload["status"] == "completed"
 
 
@@ -250,14 +268,14 @@ class TestMainDoesNotCrashOnAPartialResult:
         {"val_c_index": 0.61},                    # survival
     ])
     def test_summary_print_formats_any_metrics_shape(self, metrics, capsys):
-        result = {"metrics": metrics, "composite": 0.65, "error": "unestimable: val_auc"}
+        result = {"metrics": metrics, "primary_value": 0.65, "error": "unestimable: val_auc"}
 
         reported = "  ".join(
             f"{name}={value:.4f}" for name, value in sorted(result["metrics"].items())
         )
-        line = f"  {reported}  composite={result['composite']:.4f}".lstrip()
+        line = f"  {reported}  primary_value={result['primary_value']:.4f}".lstrip()
 
-        assert "composite=0.6500" in line
+        assert "primary_value=0.6500" in line
         for name in metrics:
             assert name in line
 

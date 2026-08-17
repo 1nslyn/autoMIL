@@ -151,6 +151,14 @@ def _port_in_use(port: int) -> bool:
         return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
+# Public re-exports for operator tooling (campaign_operate.py): the runtime
+# version probe and the exporter-port probe must have exactly one
+# implementation and one failure mode across the launcher and the operator
+# CLI. The underscore names stay the in-module call/monkeypatch surface.
+claude_cli_version = _claude_cli_version
+port_in_use = _port_in_use
+
+
 def _sha256_text(path: Path) -> str:
     return hashlib.sha256(path.read_text().encode()).hexdigest()
 

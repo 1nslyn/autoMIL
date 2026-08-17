@@ -178,7 +178,7 @@ source; then `uv run automil reconcile`.
 
 ## The val-firewall — select on validation, never test
 
-Every `result.json` `metrics` block is **validation-only**, and `composite` is
+Every `result.json` `metrics` block is **validation-only**, and `primary_value` is
 computed from it — that is the sole selection signal. Any test metrics the
 consumer emits are sealed into a `held_out` block that the orchestrator
 quarantines under `archive/<node>/certify/`; they are never surfaced to you
@@ -202,7 +202,7 @@ The val→test gap is the honest cost of search; reporting the certified number
 - In architecture-preserving mode, edit only `files.editable`; never attempt
   to bypass admissibility with explicit `--files`, raw identity overrides, or
   a model/loss variant.
-- NEVER read or optimize against test: `metrics`/`composite` are validation-only and test is sealed (val-firewall). Reveal held-out test once at the very end with `uv run automil certify`, never inside the loop
+- NEVER read or optimize against test: `metrics`/`primary_value` are validation-only and test is sealed (val-firewall). Reveal held-out test once at the very end with `uv run automil certify`, never inside the loop
 - Use `uv run automil submit` for every experiment (not manual runs)
 - Use `uv run automil rank` to pick experiments (not random)
 - Update `automil/learnings.md` after every result (paper title + arXiv id when from a paper)

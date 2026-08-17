@@ -28,7 +28,7 @@ def graph_with_keep_node(tmp_path):
         "type": "executed",
         "status": "keep",
         "description": "fixture",
-        "composite": 0.85,
+        "primary_value": 0.85,
         "created_at": "2026-05-05T00:00:00+00:00",
     }
     return g
@@ -130,7 +130,7 @@ def test_nominate_does_not_save(tmp_path):
         "type": "executed",
         "status": "keep",
         "description": "fixture",
-        "composite": 0.85,
+        "primary_value": 0.85,
         "created_at": "2026-05-05T00:00:00+00:00",
     }
     g.save()  # persist the INITIAL state (status=keep)

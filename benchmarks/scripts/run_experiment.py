@@ -178,65 +178,93 @@ def _parse_folds(raw: str | None, n_folds: int) -> tuple[int, ...] | None:
     return values
 
 
-#: The composite's component metrics, in ONE place. Three call sites previously
-#: hard-coded ("auc_roc", "balanced_accuracy") independently -- the reported
-#: composite, its per-fold recomputation for composite_se, and the per-fold
-#: evidence the campaign aggregates. Adding qwk to only the first left
-#: composite_se measuring a different quantity than it gates, and left the
-#: campaign's stage gates and FINAL WINNER selecting on the old 2-term formula
-#: while the in-search Ladder used the 3-term one. Two estimands for one node.
-def _composite_components(is_survival: bool, ordinal: bool):
-    """(summary_key, public_name) pairs that make up the composite."""
+#: Two component authorities, in ONE place each — because they answer two
+#: different questions. ``_metric_components`` is the RECORDED evidence set:
+#: what the ``metrics`` blocks (top-level and per-fold) must carry, matching
+#: the campaign controller's exact-key schema lock. ``_primary_components``
+#: is the SELECTION set: what the primary_value is computed from. Collapsing them
+#: into one tuple recreates one of two bugs — sharing the full set makes
+#: companions vote (the pre-round-2 lattice noise), sharing the selection set
+#: silently drops companions from the recorded evidence (schema-lock reject).
+def _metric_components(is_survival: bool, ordinal: bool):
+    """(summary_key, public_name) pairs RECORDED in the metrics blocks."""
     if is_survival:
         return (("c_index", "val_c_index"),)
-    base = (("auc_roc", "val_auc"), ("balanced_accuracy", "val_bacc"))
-    return base + ((("qwk", "val_qwk"),) if ordinal else ())
+    components = (("auc_roc", "val_auc"), ("balanced_accuracy", "val_bacc"))
+    if ordinal:
+        components += (("qwk", "val_qwk"),)
+    return components
+
+
+def _primary_components(is_survival: bool, ordinal: bool):
+    """(summary_key, public_name) pairs that make up the primary_value.
+
+    Selection is the PRIMARY validation metric alone: val_auc for
+    classification (ordinal included), val_c_index for survival. Balanced
+    accuracy and qwk stay recorded in ``metrics`` — they just no longer vote:
+    on a few-dozen-slide validation split bacc is threshold-quantized at
+    ~1/17 per flipped minority slide (the size of the accept-margin floor),
+    so averaging it in injected lattice noise at exactly the decision scale,
+    and the old multi-metric composite's rankings disagreed with auc's throughout
+    the canary cells.
+    Matches ``scoring.formula: val_auc`` / ``val_c_index`` in the campaign
+    cell configs (the framework recomputes and cross-checks with the same
+    selector at ingest).
+    """
+    if is_survival:
+        return (("c_index", "val_c_index"),)
+    return (("auc_roc", "val_auc"),)
 
 
 def _component_value(raw, name: str):
-    """Finite float for a component, with the selection clamp applied to qwk.
+    """Finite float for a component, with the recording clamp applied to qwk.
 
-    qwk is [-1, 1] while every campaign consumer requires composites in [0, 1]
-    (campaign_stages.py:395). Clamped HERE, at every site that builds a
-    composite, so the per-fold and aggregate views cannot disagree. Clamping
-    per fold does bias the fold mean upward relative to clamping only the
-    aggregate -- but it only bites on folds with no ordinal signal at all, and a
-    per-fold/aggregate mismatch would corrupt composite_se, which is the number
-    the Ladder keep-margin is derived from.
+    qwk is [-1, 1] while every campaign consumer requires recorded metric
+    values in [0, 1] (campaign_stages.py:395). Clamped HERE, at every site
+    that records a component value — val_qwk and test_qwk alike, so the
+    validation evidence, the sealed held-out evidence, the per-fold and the
+    aggregate views all share one convention. Clamping per fold does bias the
+    fold mean upward relative to clamping only the aggregate -- but it only
+    bites on folds with no ordinal signal at all, and qwk never votes in
+    selection (it is a recorded companion on the val side and the REPORTING
+    primary for ordinal cells on the sealed side).
     """
     value = _finite_or_none(raw)
     if value is None:
         return None
-    return max(0.0, value) if name == "val_qwk" else value
+    return max(0.0, value) if name.endswith("_qwk") else value
 
 
-def _per_fold_composites(
+def _per_fold_primary_values(
     per_fold_val: list, is_survival: bool, ordinal: bool = False,
 ) -> list[float]:
-    """The composite recomputed per fold — the input to its cross-fold SE (CR-4).
+    """The primary_value recomputed per fold — the input to its cross-fold SE (CR-4).
 
-    The composite reported at the top of ``summary_to_result_json`` is a mean of
+    The primary_value reported at the top of ``summary_to_result_json`` is a mean of
     fold MEANS, so its own spread is not recoverable from that number alone. Here
     the same formula is applied fold by fold, which is what makes the noise
     measurable at all.
 
-    A fold missing ANY component of the composite is dropped whole rather than
-    contributing a half-composite: averaging a fold's AUC with a missing balanced
-    accuracy would report a value on a different scale from every other fold and
-    inflate the spread.
+    Fold validity spans the full RECORDED evidence set even though only the
+    selection metric votes: a fold that lost a companion broke the declared
+    evidence contract — the campaign's fold validator rejects exactly that
+    fold at ingest — so the node must quarantine as ``partial`` on BOTH sides
+    of the seam rather than sail through selection here and die silently at
+    discovery freeze. A valid fold's primary_value is the selection metric alone.
     """
+    # Single-selector contract: hard-unpack so an extended selection set can
+    # never silently fall back to implicit averaging.
+    (_, selection_name), = _primary_components(is_survival, ordinal)
     out: list[float] = []
     for fm in per_fold_val or []:
         if not isinstance(fm, dict):
             continue
-        vals = []
-        for key, name in _composite_components(is_survival, ordinal):
-            f = _component_value(fm.get(key), name)
-            if f is None:
-                break
-            vals.append(f)
-        else:
-            out.append(sum(vals) / len(vals))
+        recorded = {
+            name: _component_value(fm.get(key), name)
+            for key, name in _metric_components(is_survival, ordinal)
+        }
+        if all(value is not None for value in recorded.values()):
+            out.append(recorded[selection_name])
     return out
 
 
@@ -262,30 +290,49 @@ def _validation_fold_evidence(summary: dict, ordinal: bool = False) -> list[dict
     recover validation values.  This deliberately narrow projection is safe to
     leave in the agent-facing ``result.json`` and is sufficient to prove exact
     fold coverage and recompute an equal-weight cross-stage mean.
+
+    Each entry also carries ``val_predictions_sha256`` (A4'): the sha256 of the
+    fold's persisted val-prediction file, val-only data and firewall-safe. Its
+    authoritative home is result.json + the graph node; the campaign ledger
+    rebuilds entries on its own schema and drops it, which is fine.
     """
     per_fold = summary.get("per_fold_val", []) or []
     indices = summary.get("fold_indices")
     if not isinstance(indices, list) or len(indices) != len(per_fold):
         indices = list(range(len(per_fold)))
+    # A4': per-fold no-op detector, positional with per_fold_val (each runner
+    # emits the two lists together). ENTRY level, never inside `metrics` — the
+    # campaign controller exact-key-locks the metric schema, and CR-1b would
+    # fold anything in `metrics` into the primary_value.
+    raw_hashes = summary.get("per_fold_val_predictions_sha256")
+    if not isinstance(raw_hashes, list) or len(raw_hashes) != len(per_fold):
+        raw_hashes = [None] * len(per_fold)
     is_survival = "c_index" in (summary.get("test") or {})
     evidence: list[dict] = []
-    for fold_index, raw_metrics in zip(indices, per_fold):
+    for fold_index, raw_metrics, fold_hash in zip(indices, per_fold, raw_hashes):
         metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
         # Non-finite fold values are nulled here, not passed through raw: this
         # block ships in the AGENT-FACING copy of result.json, so a NaN AUC from
         # a fold that happened to miss a class would get the file rejected at
         # ingestion and the node recorded as a crash.
-        components = _composite_components(is_survival, ordinal)
         public_metrics = {
-            name: _component_value(metrics.get(key), name) for key, name in components
+            name: _component_value(metrics.get(key), name)
+            for key, name in _metric_components(is_survival, ordinal)
         }
-        values = tuple(public_metrics.values())
-        finite = all(value is not None for value in values)
+        # A valid fold's primary_value is the selection metric alone; a fold that
+        # lost ANY recorded component (companion included) carries a null
+        # primary_value — the same full-evidence validity rule as
+        # ``_per_fold_primary_values``, and the same fold the campaign validator
+        # rejects at ingest. Companions are recorded (as null when lost) but
+        # never vote.
+        (_, selection_name), = _primary_components(is_survival, ordinal)
+        complete = all(value is not None for value in public_metrics.values())
         evidence.append({
             "fold_index": fold_index,
             "metrics": public_metrics,
-            "composite": (
-                sum(values) / len(values) if finite else None
+            "primary_value": public_metrics[selection_name] if complete else None,
+            "val_predictions_sha256": (
+                fold_hash if isinstance(fold_hash, str) else None
             ),
         })
     return evidence
@@ -296,11 +343,11 @@ def summary_to_result_json(
 ) -> dict:
     """Convert autobench summary dict to autoMIL result.json format.
 
-    The composite is the VALIDATION selection signal (autoMIL keep/discard and
-    UCB select on it): survival summaries (``c_index`` entry) use the validation
-    concordance index; classification uses ``(val_auc + val_bacc) / 2``, or
-    ``(val_auc + val_bacc + val_qwk) / 3`` on ordinal tasks. Test
-    metrics stay in ``metrics`` for now (quarantined in a later step) and are
+    The primary_value is the VALIDATION selection signal (autoMIL keep/discard and
+    UCB select on it) and equals the PRIMARY validation metric alone: the
+    validation concordance index for survival summaries (``c_index`` entry),
+    ``val_auc`` for classification (ordinal included). Companions (``val_bacc``,
+    ``val_qwk``) stay recorded in ``metrics`` but do not vote. Test metrics are
     never the selection signal.
     """
     test = summary.get("test", {})
@@ -318,19 +365,21 @@ def summary_to_result_json(
 
     # An unestimable metric is DROPPED from its block rather than written as NaN.
     # `metrics` and `held_out` are schema-constrained to numbers, and CR-1b
-    # recomputes the composite as the mean of `metrics` — so the composite below
-    # is likewise the mean of what survived, keeping reported and recomputed in
-    # agreement. Which names went missing is reported via `unestimable`.
+    # recomputes the primary_value from `metrics` under the declared formula
+    # (`scoring.formula: val_auc` / `val_c_index` in campaign cells) — the
+    # primary_value below is that same selector value, keeping reported and
+    # recomputed in agreement. Which names went missing is reported via
+    # `unestimable`.
     if "c_index" in test:
         test_ci = _finite_or_none(test.get("c_index", {}).get("mean"))
         # The campaign ranks discovery, promotion, and the final winner by the
-        # equal-weight mean of the same fold composites. Keep the graph-facing
+        # equal-weight mean of the same fold primary values. Keep the graph-facing
         # result on that exact scale as well; ``val_pooled`` remains a useful
         # sealed diagnostic but must not silently change the search estimand.
         fold_values = [
             value
             for value in (
-                _finite_or_none(fold.get("composite")) for fold in validation_folds
+                _finite_or_none(fold.get("primary_value")) for fold in validation_folds
             )
             if value is not None
         ]
@@ -342,10 +391,10 @@ def summary_to_result_json(
         metrics = {"val_c_index": val_ci} if val_ci is not None else {}
         held_out = {"test_c_index": round(test_ci, 4)} if test_ci is not None else {}
         unestimable = [] if val_ci is not None else ["val_c_index"]
-        composite = val_ci if val_ci is not None else 0.0
+        primary_value = val_ci if val_ci is not None else 0.0
     else:
         # Keyed on the DECLARED `ordinal` flag, never on whether `qwk` happens
-        # to be present. Sniffing the data silently produced a 2-term composite
+        # to be present. Sniffing the data silently produced a 2-term primary_value
         # marked `completed` whenever qwk was missing for an unrelated reason --
         # an arm that failed to thread the flag, or a resume from folds computed
         # before qwk existed -- and nothing downstream could tell the two apart.
@@ -353,8 +402,8 @@ def summary_to_result_json(
         # qwk's cross-fold mean is recomputed from the PER-FOLD clamped values,
         # not taken from val["qwk"]["mean"]. Those are different functions:
         # max(0, mean(qwk)) != mean(max(0, qwk)) whenever folds have mixed signs.
-        # Taking the pre-computed mean made result["composite"] (which drives the
-        # Ladder and UCB) disagree with mean(validation_folds[*].composite)
+        # Taking the pre-computed mean made result["primary_value"] (which drives the
+        # Ladder and UCB) disagree with mean(validation_folds[*].primary_value)
         # (which is what campaign_stages selects the FINAL WINNER on) by up to
         # 0.022 -- reintroducing the exact two-estimands split this change exists
         # to close, precisely in the near-chance regime qwk is there to resolve.
@@ -371,25 +420,52 @@ def summary_to_result_json(
 
         candidates = {
             name: _component_mean(key, name)
-            for key, name in _composite_components(False, ordinal)
+            for key, name in _metric_components(False, ordinal)
         }
-        # ORDINAL tasks -- TCGA-HNSC grade (g1<g2<g3) only -- add QWK to
-        # the selection signal. It is the only component that uses the ordering:
-        # auc and bacc both score a g1->g3 error exactly like a g1->g2 one, and on
-        # a 3-class fold that is most of the information in the confusion matrix.
+        # ORDINAL tasks -- TCGA-HNSC grade (g1<g2<g3) only -- RECORD QWK as a
+        # companion (it no longer votes; selection is val_auc alone). It is
+        # still the one recorded metric that uses the ordering -- auc and bacc
+        # both score a g1->g3 error exactly like a g1->g2 one -- so it stays
+        # tracked for the agent's diagnostics and the campaign's evidence lock.
         #
         # Clamped at 0 because kappa is defined on [-1, 1] while the campaign's
-        # fold-composite validator requires [0, 1] (campaign_stages.py:395), and
-        # because for SELECTION purposes every below-chance model is equally
-        # useless -- the ordering among them is not worth preserving. The raw,
-        # unclamped value stays available in the sealed `summary` block and is
-        # recomputable from predictions.csv. Clamping is deliberately done HERE,
-        # as selection policy, not inside evaluate.quadratic_weighted_kappa, which
-        # reports the honest measurement.
+        # metric validator requires every recorded value in [0, 1]
+        # (campaign_stages.py:395). The raw, unclamped value stays available in
+        # the sealed `summary` block and is recomputable from predictions.csv.
+        # Clamping is deliberately done HERE, at the recording boundary, not
+        # inside evaluate.quadratic_weighted_kappa, which reports the honest
+        # measurement.
         held_out_candidates = {
             "test_auc": _finite_or_none(test.get("auc_roc", {}).get("mean")),
             "test_bacc": _finite_or_none(test.get("balanced_accuracy", {}).get("mean")),
         }
+        if ordinal:
+            # ORDINAL cells report on test_qwk (the analysis plan's
+            # primary_by_task_family), so it joins the sealed evidence. Same
+            # two rules as val_qwk: keyed on the DECLARED flag, and the
+            # cross-fold mean is recomputed from PER-FOLD clamped values —
+            # max(0, mean(qwk)) != mean(max(0, qwk)) on mixed-sign folds, and
+            # the certification aggregate is a mean of clamped fold values.
+            clamped_test_qwk = [
+                value
+                for fm in (summary.get("per_fold_test") or [])
+                if isinstance(fm, dict)
+                for value in (_component_value(fm.get("qwk"), "test_qwk"),)
+                if value is not None
+            ]
+            # EVERY test fold must contribute, or the qwk mean runs over a
+            # different denominator than test_auc/test_bacc beside it (the
+            # mixed-denominator failure this file's all-or-nothing rule
+            # exists to prevent) — one lost fold nulls the component.
+            _n_test_folds = sum(
+                1 for fm in (summary.get("per_fold_test") or [])
+                if isinstance(fm, dict)
+            )
+            held_out_candidates["test_qwk"] = (
+                math.fsum(clamped_test_qwk) / len(clamped_test_qwk)
+                if clamped_test_qwk and len(clamped_test_qwk) == _n_test_folds
+                else None
+            )
         metrics = {
             name: round(value, 4)
             for name, value in candidates.items() if value is not None
@@ -399,41 +475,54 @@ def summary_to_result_json(
             for name, value in held_out_candidates.items() if value is not None
         }
         unestimable = [name for name, value in candidates.items() if value is None]
-        # ALL-OR-NOTHING, deliberately. An earlier revision reported the mean of
-        # whichever components survived, so a node missing val_auc was scored on
-        # val_bacc alone -- a different estimand, on a different scale, from
-        # every sibling scored on (auc+bacc)/2. The composite formula is
+        # The RECORDED evidence set spans the sealed side too: an ordinal
+        # summary with a lost test_qwk would otherwise seal a partial
+        # held_out under `status: completed` and die stages later at the
+        # family-exact certification lock (same rule as the per-fold writer
+        # and aggregate_folds — both blocks or nothing).
+        unestimable += [
+            name for name, value in held_out_candidates.items() if value is None
+        ]
+        # ALL-OR-NOTHING over the RECORDED evidence set, deliberately — even
+        # though only val_auc votes now. A run that lost a declared companion
+        # broke the evidence contract (the campaign schema lock rejects it at
+        # ingest for the same reason), and under the generic `mean` reducer a
+        # partial metrics block would put CR-1b's recompute on a different
+        # scale from every sibling. The primary_value formula is
         # pre-registered (`meta.scoring`) and the Ladder margin is declared
         # against it; silently swapping the estimand per node at runtime is the
         # same class of move the val-firewall and the Ladder exist to prevent.
         # It also leaked: `status: partial` keeps the node itself out of
         # KEEP_CLASS, but nothing stops it being a PARENT, and terminal_writer
-        # gates a child against `parent["composite"]` with no partial check --
+        # gates a child against `parent["primary_value"]` with no partial check --
         # so a half-scale bar silently decided a completed child's keep/discard.
         # NOTE this does not close that leak, it only stops feeding it a
         # wrong-scale number: the parent bar becomes the 0.0 sentinel, which
         # auto-keeps every child. That is no worse than before (such a node was
-        # a crash at composite 0.0), but the real fix is a parent-status gate in
+        # a crash at primary_value 0.0), but the real fix is a parent-status gate in
         # terminal_writer/graph, which is deliberately out of scope here.
         # If a cell genuinely cannot estimate AUC, the honest fix is to declare a
         # bacc-only metric set for that cell up front, so every node in it is on
         # one scale.
         if unestimable:
             metrics = {}
-            composite = 0.0
+            held_out = {}
+            primary_value = 0.0
         else:
-            composite = math.fsum(candidates.values()) / len(candidates)
+            # Selection = the primary metric alone; companions are recorded
+            # in `metrics` above but do not vote (scoring.formula: val_auc).
+            primary_value = candidates["val_auc"]
 
     # A stage is complete only when every fold it declared has a finite
-    # selection composite.  The old global ``>= 2`` threshold let a 2/3-fold
+    # selection primary_value.  The old global ``>= 2`` threshold let a 2/3-fold
     # discovery attempt enter keep/UCB even though freeze later rejected it.
     # Promotion's declared 2/2 subset remains complete; a full run requires 5/5.
     per_fold_val = summary.get("per_fold_val", []) or []
     n_folds_total = summary.get("n_folds", len(per_fold_val))
-    valid_fold_composites = _per_fold_composites(
+    valid_fold_primary_values = _per_fold_primary_values(
         per_fold_val, is_survival="c_index" in test, ordinal=ordinal,
     )
-    n_valid_folds = len(valid_fold_composites)
+    n_valid_folds = len(valid_fold_primary_values)
     selected = summary.get("fold_indices")
     if selected is None:
         required_folds = n_folds_total
@@ -455,27 +544,30 @@ def summary_to_result_json(
         if declared_coverage_valid and n_valid_folds == required_folds
         else "partial"
     )
-    # A selection signal missing a component is not a completed run. Say so as a
-    # quarantined `partial` with a readable cause (D-01), rather than letting a
-    # NaN reach disk and get the node written off as a phantom crash.
+    # A run missing a declared evidence component is not a completed run. Say so
+    # as a quarantined `partial` with a readable cause (D-01), rather than
+    # letting a NaN reach disk and get the node written off as a phantom crash.
     if unestimable:
         status = "partial"
 
     # CR-4: measure the noise the Ladder keep-margin is supposed to exceed.
-    # `composite_se` is TOP-LEVEL, deliberately: CR-1b recomputes the composite as
-    # the mean of `metrics`, so an extra key in there would corrupt the very
-    # selection signal this is meant to protect. None (not 0.0) when fewer than
+    # `primary_se` is TOP-LEVEL, deliberately: `metrics` is the exact-key-locked
+    # input CR-1b recomputes the primary_value from (the mean of its values under the
+    # `mean` reducer, the named metric under a `val_*` selector), so an extra key
+    # in there would corrupt the selection signal for mean-reducer projects and
+    # fail the campaign's schema lock outright. None (not 0.0) when fewer than
     # two folds are estimable — 0.0 would read as "measured, noise-free".
     from automil.scoring import cross_fold_se
 
-    composite_se = cross_fold_se(valid_fold_composites)
+    primary_se = cross_fold_se(valid_fold_primary_values)
 
     # AGENT-VISIBLE DIAGNOSTICS, deliberately OUTSIDE `metrics`.
     #
-    # CR-1b recomputes the composite as the mean of every value in `metrics`, so
-    # anything added there becomes part of the selection signal. These are not
+    # `metrics` is the exact-key-locked CR-1b input — under the `mean` reducer
+    # every value in it votes, and under the campaign's schema lock any extra
+    # key fails the fold outright. These are not
     # selection signals -- they are how the agent tells apart failures that the
-    # composite reports identically. `diagnostics` is not in
+    # primary_value reports identically. `diagnostics` is not in
     # terminal_writer's sealed set ("held_out", "summary"), so unlike those it
     # survives into the agent-facing archive/<node>/result.json.
     #
@@ -512,8 +604,8 @@ def summary_to_result_json(
         "metrics": metrics,
         "diagnostics": diagnostics,
         "held_out": held_out,
-        "composite": composite if "c_index" in test else round(composite, 4),
-        "composite_se": composite_se,
+        "primary_value": primary_value if "c_index" in test else round(primary_value, 4),
+        "primary_se": primary_se,
         "elapsed_seconds": round(elapsed, 1),
         "peak_vram_mb": round(peak_vram_mb),
         "n_valid_folds": n_valid_folds,
@@ -523,18 +615,18 @@ def summary_to_result_json(
     }
     if unestimable:
         # Describes the all-or-nothing rule above. An earlier draft said the
-        # composite was "the mean of the N metric(s) that were estimable",
+        # primary_value was "the mean of the N metric(s) that were estimable",
         # which was left over from the partial-mean semantics this replaced:
-        # `metrics` is now always {} here, so N was always 0, and the composite
+        # `metrics` is now always {} here, so N was always 0, and the primary_value
         # is a sentinel rather than any mean. The trigger is the pooled
         # cross-fold mean being non-finite -- which happens only when NO fold
         # was estimable, since compute_confidence_intervals already drops
         # non-finite folds per metric. This string is agent-facing (`error` is
         # not in _SEALED_RESULT_KEYS), so it has to be true.
         result["error"] = (
-            f"composite not reported: {', '.join(unestimable)} was unestimable "
-            "across every fold, and the composite is only defined over its full "
-            "declared metric set. composite=0.0 is a sentinel, not a score; the "
+            f"primary_value not reported: {', '.join(unestimable)} was unestimable "
+            "across every fold, and the primary_value is only defined over its full "
+            "declared metric set. primary_value=0.0 is a sentinel, not a score; the "
             "node is quarantined as partial."
         )
     return result
@@ -783,7 +875,7 @@ def main() -> None:
     reported = "  ".join(
         f"{name}={value:.4f}" for name, value in sorted(result["metrics"].items())
     )
-    summary_line = f"composite={result['composite']:.4f}"
+    summary_line = f"primary_value={result['primary_value']:.4f}"
     if reported:
         summary_line = f"{reported}  {summary_line}"
     print(f"  {summary_line}")

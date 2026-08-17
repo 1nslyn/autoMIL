@@ -42,7 +42,7 @@ A training script must:
    `automil/schemas/result.schema.json`. The framework validates this at
    ingestion; malformed payloads transition the node to `crashed` with
    the schema location in the error message. The minimum valid payload is
-   `{"composite": <float>}`. All other fields are optional.
+   `{"primary_value": <float>}`. All other fields are optional.
 
 6. **Declared env vars are present at startup.** The framework's
    `automil check` validates `automil/config.yaml: env.required` BEFORE
@@ -63,7 +63,7 @@ The script follows this structure:
 - load iris dataset
 - train LogisticRegression
 - compute accuracy and F1
-- write `result.json` with `{"composite": accuracy, "metrics": {...}, "status": "completed"}`
+- write `result.json` with `{"primary_value": accuracy, "metrics": {...}, "status": "completed"}`
 
 To run it end-to-end: `uv run automil submit --node iris_001 --files examples/sklearn-iris/train.py`.
 
@@ -79,7 +79,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 _state = {"completed": False, "loss": 0.0}
 
 def _write_result(*, status: str, partial: bool):
-    payload = {"status": status, "composite": -_state["loss"], "partial": partial}
+    payload = {"status": status, "primary_value": -_state["loss"], "partial": partial}
     open("result.json", "w").write(json.dumps(payload))
 
 def _on_sigterm(signum, frame):
@@ -155,7 +155,7 @@ Regardless of pattern, the handler must:
 ## Result.json schema
 
 The contract is `automil/schemas/result.schema.json` (Draft 2020-12).
-Required: `composite` (number). Optional: `metrics` (dict of
+Required: `primary_value` (number). Optional: `metrics` (dict of
 str -> number; validation-only under the val-firewall), `held_out` (dict of
 str -> number; sealed test metrics, quarantined from search and revealed only
 via `automil certify`), `status` (one of completed, crash, budget_killed,
@@ -167,22 +167,22 @@ Two ingest rules sit on top of the schema. (a) Held-out-named keys inside
 `summary`) fail the node closed with a val-firewall error: test values belong
 only in `held_out`. (b) An optional `validation_folds` list of per-fold
 validation projections, shaped
-`[{"fold_index": <int>, "metrics": {"val_...": <number>}, "composite": <number>}, ...]`,
-lets the framework recompute `composite_se` (the cross-fold standard error
-that feeds the Ladder keep-margin) from the per-fold composites; when present,
-the recomputed SE is preferred over a reported `composite_se`.
+`[{"fold_index": <int>, "metrics": {"val_...": <number>}, "primary_value": <number>}, ...]`,
+lets the framework recompute `primary_se` (the cross-fold standard error
+that feeds the Ladder keep-margin) from the per-fold primary values; when present,
+the recomputed SE is preferred over a reported `primary_se`.
 
 Minimum valid payload:
 
 ```json
-{"composite": 0.912}
+{"primary_value": 0.912}
 ```
 
 Full payload example (autobench / CCRCC consumer):
 
 ```json
 {
-  "composite": 0.845,
+  "primary_value": 0.845,
   "metrics": {
     "val_auc": 0.87,
     "val_bacc": 0.81
@@ -202,16 +202,16 @@ Malformed payloads transition the node to `crashed` with an error that
 references this schema's location. Schema path in the error:
 `see automil/schemas/result.schema.json`.
 
-The `composite` field is the single scalar used by the experiment tree for
+The `primary_value` field is the single scalar used by the experiment tree for
 ranking and keep/discard (UCB scoring, Ladder margin). It is the
 **validation** selection signal, never test. When a `metrics` block is
-present the framework recomputes the composite from it at ingest (the
+present the framework recomputes the primary_value from it at ingest (the
 `scoring.formula` reducer, `mean` by default; CR-1b) and prefers the
-recomputed value, logging any disagreement; a bare `{"composite": ...}`
+recomputed value, logging any disagreement; a bare `{"primary_value": ...}`
 payload is used as reported. Test metrics belong in
 `held_out` instead, sealed away from search and revealed once via
 `automil certify`. Higher is always better. For loss minimization, negate:
-`"composite": -val_loss`.
+`"primary_value": -val_loss`.
 
 ## Required env vars
 

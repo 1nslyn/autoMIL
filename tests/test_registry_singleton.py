@@ -13,7 +13,7 @@ def _spec_kwargs(**overrides):
         "kind": "model",
         "parent": "clam_mb",
         "base_commit": "abc1234",
-        "composite": 0.8074,
+        "primary_value": 0.8074,
         "node_id": "node_0176",
         "created_at": "2026-05-02T10:00:00Z",
     }

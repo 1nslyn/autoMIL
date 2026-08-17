@@ -18,6 +18,10 @@ from autobench import LIB_ROOT
 from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSurvivalSlide, _read_bag
 from autobench.pipeline.abmil.model import build_abmil_model
+from autobench.pipeline.evaluate import (
+    file_sha256_or_none,
+    write_survival_predictions_csv,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
@@ -224,7 +228,7 @@ def train_abmil_survival_fold(
                 )
                 # Always save the best (val-loss) checkpoint; cfg.early_stopping
                 # only gates stopping early (matches classification/DTFD).
-                early_stopping(v_loss, v_cidx, model)
+                early_stopping(v_loss, v_cidx, model, epoch=epoch)
                 default_stop = cfg.early_stopping and early_stopping.early_stop
                 if policy_runtime.should_stop(
                     default_stop,
@@ -236,17 +240,28 @@ def train_abmil_survival_fold(
         # Restore the best (val-loss) checkpoint from disk before scoring: the
         # in-memory best_model_state is a shallow copy aliasing the live params,
         # so it decays to the last epoch's weights. Mirrors CLAM.
+        restored = False
         best_path = os.path.join(fold_dir, f"best_{model_type}.pth")
         if os.path.exists(best_path):
             model.load_state_dict(torch.load(best_path, map_location=device))
+            restored = True
         elif getattr(early_stopping, "best_model_state", None) is not None:
             model.load_state_dict(early_stopping.best_model_state)
+            restored = True
+        # A3: source=best when a val-selected checkpoint was restored above,
+        # source=final when the final weights were kept (no restore).
+        print(f"[selected] epoch={early_stopping.best_epoch} "
+              f"source={'best' if restored else 'final'}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
         # across folds instead of averaging five ~2-event c-indices.
         _val_records = _risk_records(val_samples) if val_samples else {
             "risks": [], "statuses": [], "times": [], "patient_ids": []
         }
+        # A4': persist the selected model's val risk scores (already in hand)
+        # so the fold carries a hashable no-op detector.
+        val_predictions_path = os.path.join(fold_dir, "predictions_val.csv")
+        write_survival_predictions_csv(val_predictions_path, _val_records)
         test_metrics = {
             "c_index": _c_index(test_samples) if test_samples else float("nan")
         }
@@ -255,6 +270,9 @@ def train_abmil_survival_fold(
             "test_metrics": test_metrics,
             "val_metrics": val_metrics,
             "val_records": _val_records,
+            # A4': no-op detector — hash of the persisted val risk scores
+            # above; the fold-result builder is the ONE hash home.
+            "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
             # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore
             # and final scoring included, so the number is comparable across
             # arms and task types.

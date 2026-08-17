@@ -28,12 +28,11 @@ baseline:
   model: "clam_mb"
   framework: "CLAM"
   test_auc: 0.865
-  composite: 0.814
+  primary_value: 0.814
 
 metrics:
-  primary: "composite"
-  composite_formula: "(test_auc + test_bacc) / 2"
-  track: ["val_auc", "val_bacc", "test_auc", "test_bacc"]
+  primary: "val_auc"
+  track: ["val_auc", "val_bacc"]
 
 training:
   learning_rate: 3e-4
@@ -59,3 +58,6 @@ orchestrator:
 viz:
   port: 8420
   host: "0.0.0.0"
+
+scoring:
+  formula: "val_auc"

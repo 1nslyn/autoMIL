@@ -24,7 +24,7 @@ from tests.skills.conftest import fake_nvidia_smi_3gpu
 def _seed_results_tsv(automil_dir: Path, vram_values: list[float]) -> None:
     automil_dir.mkdir(parents=True, exist_ok=True)
     header = (
-        "node_id\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tcomposite\t"
+        "node_id\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tprimary_value\t"
         "vram_gb\telapsed_min\tstatus\tdescription\n"
     )
     rows = "".join(

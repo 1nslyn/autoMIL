@@ -31,13 +31,21 @@ def _load_repair_module():
 baselines = _load_repair_module()
 
 
-def _cell(*, framework: str = "nnmil", task_type: str = "classification") -> dict:
+def _cell(
+    *,
+    framework: str = "nnmil",
+    task_type: str = "classification",
+    task_family: str | None = None,
+) -> dict:
     task = "os" if task_type == "survival" else "idh1"
+    if task_family is None:
+        task_family = "survival" if task_type == "survival" else "binary"
     return {
         "cell_id": f"cell-{framework}-{task_type}",
         "dataset": "tcga_lgg",
         "task": task,
         "task_type": task_type,
+        "task_family": task_family,
         "encoder": "uni_v2" if framework != "titan" else "titan",
         "model": {
             "nnmil": "simple_mil",
@@ -51,7 +59,7 @@ def _cell(*, framework: str = "nnmil", task_type: str = "classification") -> dic
     }
 
 
-def _legacy_result(root: Path, cell: dict) -> Path:
+def _legacy_result(root: Path, cell: dict, *, with_qwk: bool = False) -> Path:
     source = baselines.historical_result_dir(root, cell)
     source.mkdir(parents=True)
     is_survival = cell["task_type"] == "survival"
@@ -85,6 +93,10 @@ def _legacy_result(root: Path, cell: dict) -> Path:
                 "auc_roc": 0.65 + fold / 100,
                 "balanced_accuracy": 0.55 + fold / 100,
             }
+            if with_qwk:
+                val["qwk"] = 0.30 + fold / 100
+                # fold 0 below chance: the recording clamp must floor it at 0
+                test["qwk"] = -0.10 if fold == 0 else 0.20 + fold / 100
         per_fold_val.append(val)
         per_fold_test.append(test)
         fold_dir = source / f"fold_{fold}"
@@ -201,6 +213,39 @@ def test_conversion_exposes_validation_only_and_seals_test(tmp_path):
     assert all(set(row["held_out"]) == {"test_auc", "test_bacc"}
                for row in observed["sealed"])
     assert result["disposition"] == "registered-reuse"
+
+
+def test_ordinal_history_without_qwk_is_not_reusable(tmp_path):
+    """The declared ordinal held-out schema includes test_qwk; history that
+    predates qwk fails validation (audit disposition: invalid-reuse)."""
+    cell = _cell(task_family="ordinal")
+    source = _legacy_result(tmp_path / "legacy", cell)
+
+    with pytest.raises(baselines.HistoricalBaselineError, match="lacks qwk"):
+        baselines.validate_historical_baseline(cell, source)
+
+
+def test_ordinal_conversion_records_clamped_qwk(tmp_path):
+    cell = _cell(task_family="ordinal")
+    source = _legacy_result(tmp_path / "legacy", cell, with_qwk=True)
+    validated = baselines.validate_historical_baseline(cell, source)
+
+    public, sealed = baselines._converted_artifacts(validated, "ordinal")
+
+    assert all(
+        set(row["held_out"]) == {"test_auc", "test_bacc", "test_qwk"}
+        for row in sealed
+    )
+    # Recording clamp: fold 0's raw -0.10 is floored at 0.
+    assert sealed[0]["held_out"]["test_qwk"] == 0.0
+    assert sealed[1]["held_out"]["test_qwk"] == pytest.approx(0.21)
+    assert public["metrics"]["val_qwk"] == pytest.approx(
+        sum(0.30 + fold / 100 for fold in range(5)) / 5
+    )
+    # qwk never votes: the primary_value is still the val_auc fold mean.
+    assert public["primary_value"] == pytest.approx(
+        sum(0.70 + fold / 100 for fold in range(5)) / 5
+    )
 
 
 def test_canonical_path_is_dataset_rooted_and_seed_aware(tmp_path):
@@ -444,3 +489,121 @@ def test_reuse_accepts_a_default_arm_block(tmp_path):
 
     validated = baselines.validate_historical_baseline(cell, source)
     assert validated["folds"]
+
+
+def test_canonical_audit_accepts_fresh_result_when_history_is_unreusable(
+    tmp_path, monkeypatch,
+):
+    """An ordinal reusable-framework cell whose legacy history predates qwk
+    is classified invalid-reuse ("rerun instead of reusing"). The canonical
+    audit must then accept a valid FRESH canonical result — demanding the
+    rerun equal a legacy source it was never derived from holds the cell at
+    `pending` forever against the sbatch runner's `pending: 0` assert."""
+    cell = _cell(task_family="ordinal")
+    legacy = _legacy_result(tmp_path / "legacy", cell)  # no qwk -> unreusable
+
+    monkeypatch.setattr(baselines, "load_manifest", lambda _: {"cells": [cell]})
+    monkeypatch.setattr(
+        baselines, "historical_result_dir", lambda root, c: legacy,
+    )
+    monkeypatch.setattr(
+        baselines,
+        "validate_current_baseline",
+        lambda c, path: {"source": str(path)},
+    )
+    destination = baselines.canonical_result_dir(tmp_path, cell)
+    destination.mkdir(parents=True)
+    (destination / "summary.json").write_text("{}")
+
+    report = baselines.audit_canonical_results(MANIFEST, tmp_path)
+
+    assert report["counts"] == {"complete": 1, "pending": 0}, (
+        f"fresh rerun not accepted: {report['cells']}"
+    )
+
+
+def test_canonical_audit_still_requires_equality_for_reusable_history(
+    tmp_path, monkeypatch,
+):
+    """The fresh-rerun escape must not weaken the reuse path: when the
+    legacy history IS valid, a canonical result that differs from it stays
+    an error (classified pending)."""
+    cell = _cell(task_family="ordinal")
+    legacy = _legacy_result(tmp_path / "legacy", cell, with_qwk=True)
+
+    monkeypatch.setattr(baselines, "load_manifest", lambda _: {"cells": [cell]})
+    monkeypatch.setattr(
+        baselines, "historical_result_dir", lambda root, c: legacy,
+    )
+    monkeypatch.setattr(
+        baselines,
+        "validate_current_baseline",
+        lambda c, path: {"source": str(path)},
+    )
+    destination = baselines.canonical_result_dir(tmp_path, cell)
+    destination.mkdir(parents=True)
+    (destination / "not_the_legacy_tree.json").write_text("{}")
+
+    report = baselines.audit_canonical_results(MANIFEST, tmp_path)
+
+    assert report["counts"] == {"complete": 0, "pending": 1}
+    assert "differs from its legacy source" in report["cells"][0]["reason"]
+
+
+def test_migrate_skips_invalid_reuse_cells_instead_of_refusing(
+    tmp_path, monkeypatch,
+):
+    """One unreusable cell must not block its valid siblings from
+    publishing (preflight classifies per cell for exactly this reason);
+    migrate publishes nothing for it and records the skip."""
+    cell = _cell(task_family="ordinal")
+    preflight_report = {
+        "counts": {"reusable": 1, "will_copy": 0, "verified_existing": 0,
+                   "invalid": 1},
+        "cells": [{
+            "cell_id": cell["cell_id"],
+            "source": "legacy", "destination": "canonical",
+            "status": "invalid-reuse",
+            "reason": "ordinal cell history lacks qwk",
+        }],
+    }
+    monkeypatch.setattr(
+        baselines, "preflight_migration", lambda *a, **k: preflight_report,
+    )
+    monkeypatch.setattr(baselines, "load_manifest", lambda _: {"cells": [cell]})
+    monkeypatch.setattr(
+        baselines, "ensure_prepared_links", lambda *a, **k: [],
+    )
+
+    report = baselines.migrate_reusable_results(MANIFEST, tmp_path)
+
+    assert report["counts"]["skipped_invalid_reuse"] == 1
+    assert report["counts"]["copied"] == 0
+    row = next(r for r in report["cells"] if r["cell_id"] == cell["cell_id"])
+    assert row["disposition"] == "skipped-invalid-reuse"
+    assert "lacks qwk" in row["reason"]
+
+
+def test_fresh_escape_rejects_a_qwk_less_canonical_tree(tmp_path, monkeypatch):
+    """The fresh-rerun escape must not accept a legacy-shaped tree copied
+    into canonical storage: with unreusable ordinal history, the canonical
+    result must itself carry the family-exact evidence (qwk) or the cell
+    stays pending. Exercises the REAL validate_current_baseline — no
+    stubbing at this boundary."""
+    cell = _cell(task_family="ordinal")
+    legacy = _legacy_result(tmp_path / "legacy", cell)      # no qwk anywhere
+
+    destination = baselines.canonical_result_dir(tmp_path, cell)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copytree(legacy, destination)                    # "fresh" = a legacy copy
+
+    monkeypatch.setattr(baselines, "load_manifest", lambda _: {"cells": [cell]})
+    monkeypatch.setattr(
+        baselines, "historical_result_dir", lambda root, c: legacy,
+    )
+
+    report = baselines.audit_canonical_results(MANIFEST, tmp_path)
+
+    assert report["counts"] == {"complete": 0, "pending": 1}
+    assert "lacks qwk" in report["cells"][0]["reason"]

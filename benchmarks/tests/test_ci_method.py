@@ -125,7 +125,7 @@ class TestBackwardCompatibleContract:
         assert {"mean", "std", "ci_low", "ci_high"} <= set(ci)
 
     def test_selection_signal_is_unchanged_by_the_method_switch(self):
-        """LOAD-BEARING: composite/keep-discard read only ``mean``.
+        """LOAD-BEARING: primary_value/keep-discard read only ``mean``.
 
         run_experiment.py::summary_to_result_json consumes ``.get(metric).get("mean")``
         and nothing else, so switching the default interval must not move any

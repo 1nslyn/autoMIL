@@ -30,7 +30,7 @@ def _add_node(g: ExperimentGraph, node_id: str, status: str, history: list | Non
         "type": "executed",
         "status": status,
         "description": "test fixture",
-        "composite": 0.80,
+        "primary_value": 0.80,
         "created_at": "2026-05-05T00:00:00+00:00",
     }
     if history is not None:

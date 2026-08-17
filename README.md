@@ -71,7 +71,7 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 </table>
 
 > **Real result:** On ovarian cancer HRD prediction, autoMIL autonomously ran
-> 189 experiments and improved the composite score from 0.814 to 0.851 (+4.5%),
+> 189 experiments and improved the primary-metric value from 0.814 to 0.851 (+4.5%),
 > discovering techniques like R-Drop, focal loss, gradient clipping, and
 > coordinate positional encoding that human researchers hadn't tried.
 
@@ -88,12 +88,12 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 | **Pluggable backends**               | `local` (default), `slurm` (submitit, opt-in via `[slurm]` extra), `ray` (raw `@ray.remote`, opt-in via `[ray]` extra). Same `Backend` ABC; same cap contract.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | **Hardware autodetect**              | `automil init` probes CUDA / ROCm / CPU via `LocalBackend.healthcheck()` and stamps detected GPU count, VRAM, and concurrency defaults into `config.yaml`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **Variant registry**                 | Architectural changes ship as committed variant modules (`automil/variants/<parent>/<name>.py`) selected via config. Registry-only path reproduces a node end-to-end via `automil verify-repro`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **Configurable per-cell budget cap** | Two-tier state machine (`refusing-new` at T-buffer, `terminating` at T) with per-fold checkpoints and a SIGTERM contract. Budget is set as a duration (`cap.budget: 6h`, also `30m`/`90s`/`2d`) — set it with `uv run automil budget set 6h` / inspect with `uv run automil budget show`, or per-cell via `uv run automil submit --budget-seconds N` (D-134, honored only on the submit that creates the cell). **`cap.mode: agent_active`** consumes Claude Code's native cumulative `claude_code.active_time.total` metric (CLI + user active seconds; idle excluded), scraped from Claude's localhost Prometheus endpoint and bound to the cell by synchronous session hooks. `wall_clock` is the portable fallback for runtimes without that observer. The framework fallback is 6h; the frozen preprint campaign pins 12h plus exactly 30 launches. Budget-killed runs reconcile to `executed` with partial composite, never `crash`. |
+| **Configurable per-cell budget cap** | Two-tier state machine (`refusing-new` at T-buffer, `terminating` at T) with per-fold checkpoints and a SIGTERM contract. Budget is set as a duration (`cap.budget: 6h`, also `30m`/`90s`/`2d`) — set it with `uv run automil budget set 6h` / inspect with `uv run automil budget show`, or per-cell via `uv run automil submit --budget-seconds N` (D-134, honored only on the submit that creates the cell). **`cap.mode: agent_active`** consumes Claude Code's native cumulative `claude_code.active_time.total` metric (CLI + user active seconds; idle excluded), scraped from Claude's localhost Prometheus endpoint and bound to the cell by synchronous session hooks. `wall_clock` is the portable fallback for runtimes without that observer. The framework fallback is 6h; the frozen preprint campaign pins 12h plus exactly 30 launches. Budget-killed runs reconcile to `executed` with partial primary_value, never `crash`. |
 | **Validation-firewall**              | Keep/discard selects on **validation** only; test metrics are sealed at ingest into a quarantined `held_out` block and revealed exactly once via `automil certify`. Test never drives search, so final numbers aren't selected on test.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **Generalization gate**              | Pre-registered held-out manifest + paired Wilcoxon + bootstrap CI + Bonferroni, ships a `candidate` node status, manual nomination by default, promotion-rate metric exposed via SSE.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | **Trajectory recorder**              | Per-submit JSONL using OpenTelemetry `gen_ai.*` keys with secret redaction (`sk-…`, `hf_…`, AWS keys) and bounded rotation (5 MB soft / 50 MB hard).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Multi-GPU orchestrator**           | Background daemon with bin packing, OOM detection, crash recovery, namespaced `running/<backend>/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **Experiment tree**                  | UCB-inspired scoring balances exploitation and exploration across branches; composite-dominance keep/discard gated by the Ladder keep-margin, on a **validation-only** composite scalar (the val-firewall).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Experiment tree**                  | UCB-inspired scoring balances exploitation and exploration across branches; primary_value-dominance keep/discard gated by the Ladder keep-margin, on a **validation-only** primary_value scalar (the val-firewall).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **3D dashboard**                     | Interactive Three.js visualization with live SSE updates (`localhost:8420`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | **Persistent learnings**             | Knowledge accumulates across sessions. Agents don't repeat mistakes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Setup validation**                 | `automil check` validates protected files, registry purity, backend directives, and `env.required` before experiments run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -173,19 +173,19 @@ files:
   readonly: ["evaluate.py"]                          # what must not change
 
 baseline:
-  composite: 0.814             # your starting performance
+  primary_value: 0.814             # your starting performance
 
 env:
   required: []                 # vars that MUST be set before submit
   passthrough: [AUTOMIL_*]     # vars forwarded to experiment subprocesses
 
 scoring:
-  # The reducer CR-1b uses to recompute the composite from the validation
+  # The reducer CR-1b uses to recompute the primary_value from the validation
   # `metrics` block at ingest — the val-firewall does not trust the reported
   # scalar. "" -> "mean" over the metrics values (reproduces the standard
-  # composites exactly); also: max | min | trust_reported (explicit opt-out,
+  # primary values exactly); also: max | min | trust_reported (explicit opt-out,
   # weakens the firewall). Arithmetic expressions are rejected by
-  # `automil check`; test metrics never belong in the composite (they live
+  # `automil check`; test metrics never belong in the primary_value (they live
   # in the sealed `held_out` block).
   formula: ""
 
@@ -272,7 +272,7 @@ Runs on a typed CPU/CUDA/ROCm slot in isolation
     |  (framework-owned device masks)
     v
 Collects result.json
-    |  (Ladder keep-margin on the val composite: keep or discard?)
+    |  (Ladder keep-margin on the val primary_value: keep or discard?)
     v
 Updates experiment graph
     |  (UCB scoring across branches)
@@ -296,13 +296,13 @@ honor `SIGTERM` for partial flush, declare required env vars in
 The minimum valid payload is:
 
 ```json
-{"composite": 0.912}
+{"primary_value": 0.912}
 ```
 
-`composite` is the single scalar the experiment tree uses for ranking
+`primary_value` is the single scalar the experiment tree uses for ranking
 (higher is always better; for loss minimization, negate). Everything else
 is optional. Under the **val-firewall**, `metrics` is validation-only and is
-what `composite` is computed from; any test metrics go in a sealed `held_out`
+what `primary_value` is computed from; any test metrics go in a sealed `held_out`
 block that the orchestrator quarantines under `archive/<node>/certify/` and
 reveals once via `automil certify`, so test never drives search; held-out-named
 keys (e.g. `test_*`) inside `metrics` fail the node closed at ingest. A full example
@@ -313,13 +313,13 @@ payload from the autobench consumer:
   "status": "completed",
   "metrics": {"val_auc": 0.870, "val_bacc": 0.810},
   "held_out": {"test_auc": 0.872, "test_bacc": 0.830},
-  "composite": 0.840,
+  "primary_value": 0.840,
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500
 }
 ```
 
-The sklearn-iris consumer writes `{"composite": <accuracy>}` with no
+The sklearn-iris consumer writes `{"primary_value": <accuracy>}` with no
 metrics dict; both shapes validate against the same schema.
 
 The schema is JSON Schema 2020-12 and is validated at ingest by the
@@ -465,7 +465,7 @@ carry only non-skill assets (hooks, plugins), and `automil show-skill
 
 | Example                                  | Task                                | Library               | Notes                                                                                                                                      | Result                                 |
 | ---------------------------------------- | ----------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| [`sklearn-iris`](examples/sklearn-iris/) | 3-class iris classification         | scikit-learn          | Reference second-consumer (~80 LOC, no `automil.*` imports) demonstrating the [training-script contract](docs/training-script-contract.md) | composite ≈ 0.95                       |
+| [`sklearn-iris`](examples/sklearn-iris/) | 3-class iris classification         | scikit-learn          | Reference second-consumer (~80 LOC, no `automil.*` imports) demonstrating the [training-script contract](docs/training-script-contract.md) | primary_value ≈ 0.95                       |
 | [`ovarian_hrd`](examples/ovarian_hrd/)   | Binary HRD classification           | CLAM-MB / H-optimus-1 | Pre-v1.0 autonomous run                                                                                                                    | 0.814 → 0.851 (+4.5%, 189 experiments) |
 | [`clwd`](examples/clwd/)                 | 7-class lung subtype classification | autobench             | Skeleton                                                                                                                                   | -                                      |
 | [`placeholder`](examples/placeholder/)   | -                                   | -                     | Template emitted by `automil init`                                                                                                         | -                                      |
@@ -478,7 +478,7 @@ carry only non-skill assets (hooks, plugins), and `automil show-skill
 - **[Training-Script Contract](docs/training-script-contract.md)**, the seam between framework and consumer (6 contract items + SIGTERM patterns)
 - **[Agent Compatibility](docs/agent-compatibility.md)**, per-runtime setup, overlay merge model, multi-runtime asset layout
 - **[Implementation Report](docs/implementation-report.md)**, v1.0 architecture, design decisions, and the 9-phase refactor that produced it (point-in-time; the Ladder gate + val-firewall came later — see the contract doc and CHANGELOG)
-- **[CHANGELOG](CHANGELOG.md)**, release notes through v1.2 plus the Unreleased preprint-campaign integration (preprint-v2 protocol, native active-time metering)
+- **[CHANGELOG](CHANGELOG.md)**, release notes through v1.2 plus the Unreleased preprint-campaign integration (preprint-v3 protocol, native active-time metering)
 
 ---
 

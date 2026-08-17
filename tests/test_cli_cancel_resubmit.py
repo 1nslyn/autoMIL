@@ -96,12 +96,12 @@ def _write_graph(adir: Path, nodes: dict[str, Any]) -> None:
     graph = {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "best_node_id": None,
             "total_executed": 0,
             "total_proposed": 0,
             "next_id": 10,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {
                 "exploration_weight": 0.005,
                 "novelty_weight": 0.003,

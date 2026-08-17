@@ -28,7 +28,7 @@ tasks:
     # cptac_pda/Immune_class specifies metric `bacc` and treats this as ordinary
     # multi-class TME subtyping -- unlike its cptac_hnsc/Histologic_Grade, which
     # specifies `weighted_kappa`. Both were read directly from the upstream
-    # configs. Marking this ordinal would put a QWK term in the composite that
+    # configs. Marking this ordinal would put a QWK term in the primary_value that
     # the source task does not use, and break comparability with Patho-Bench for
     # the sake of an ordering inferred from label names alone.
   os:

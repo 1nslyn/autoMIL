@@ -34,8 +34,7 @@ encoders:
     conch_v15: 768        # TITAN's input features
 
 metrics:
-  primary: "composite"
-  composite_formula: "(val_auc + val_bacc) / 2"
+  primary: "val_auc"
   track: ["val_auc", "val_bacc"]
 
 # CR-4 / PRELAUNCH_REVIEW O2: the Ladder keep-margin. δ=0.0 (strict dominance) is
@@ -45,9 +44,9 @@ metrics:
 # survive to the sealed test block. O2's recommendation, scaled to the val SE:
 # δ ≈ 0.05 on the small cohorts (GBM n=99, PDAC n=105) vs ≈ 0.015 on the large
 # ones. This is a predeclared placeholder — CR-4 replaces it with a per-cell
-# δ computed as ≥1 SE of the CV composite.
+# δ computed as ≥1 SE of the CV primary_value.
 scoring:
-  formula: ""
+  formula: "val_auc"
   technique_map: {}
   accept_margin: 0.05
   # CR-4: the applied margin is max(accept_margin, se_multiplier x the parent's
@@ -102,6 +101,13 @@ registry:
     - "benchmarks/scripts/run_experiment.py"              # entry point + summary_to_result_json
     - "benchmarks/src/autobench/pipeline/results_cache.py"  # CR-5b cache identity
     - "benchmarks/src/autobench/pipeline/results.py"
+    # --- checkpoint selection (which epoch the frozen winner IS) ---
+    - "benchmarks/src/autobench/pipeline/val_loss.py"     # shared CE val-loss helper
+    - "benchmarks/src/autobench/pipeline/abmil/train.py"  # selection inline in train
+    - "benchmarks/src/autobench/pipeline/dtfd/train.py"
+    - "benchmarks/src/autobench/pipeline/titan/train.py"
+    - "benchmarks/lib/nnMIL/training/callbacks/early_stopping.py"
+    - "benchmarks/lib/CLAM/utils/core_utils.py"
     # --- the declared search space itself (A-2) ---
     - "benchmarks/src/autobench/pipeline/search_space.py"
     - "benchmarks/src/autobench/pipeline/hparams.py"
@@ -137,7 +143,12 @@ orchestrator:
   # reads them from here (_orchestrator_daemon.py:439-444). The shipped template
   # puts them under `cap:`, where nothing reads them.
   max_concurrent_per_gpu: 4
-  default_vram_estimate_gb: 1.0
+  # >= the one measured arm peak (nnMIL ~4.5GB) + headroom, so the
+  # packer's VRAM budget is honest accounting, not fiction: the 4-job
+  # cap binds first on 49GB cards (4x6 + 2 margin < capacity), but an
+  # operator raising the cap must hit a truthful budget, not a
+  # placeholder.
+  default_vram_estimate_gb: 6.0
 
 env:
   passthrough:

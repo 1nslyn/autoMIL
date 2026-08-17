@@ -129,9 +129,11 @@ else:
 
 def _find_automil_dir() -> Path:
     """Walk up from cwd to find automil/config.yaml. Returns the automil/ dir."""
+    from automil.paths import probe_exists
+
     p = Path.cwd()
     while p != p.parent:
-        if (p / "automil" / "config.yaml").exists():
+        if probe_exists(p / "automil" / "config.yaml"):
             return p / "automil"
         p = p.parent
     raise RuntimeError(
@@ -149,90 +151,15 @@ def _find_git_root(start: Path | None = None) -> Path:
     raise RuntimeError("Not inside a git repository.")
 
 
-# ---------------------------------------------------------------------------
-# PID-file starttime cross-check (CLN-04 / D-17)
-# ---------------------------------------------------------------------------
-# PID reuse on Linux can cause a stale PID file to claim ownership of an
-# unrelated process. Compare both pid AND /proc/<pid>/stat starttime_ticks
-# before signalling. Linux-only is acceptable per PROJECT.md Constraints.
-
-def _parse_starttime_from_stat_line(line: str) -> int:
-    """Parse field 22 (1-indexed) — process starttime in clock ticks — from a /proc/<pid>/stat line.
-
-    The `comm` field (#2) is wrapped in parentheses and CAN contain spaces.
-    Find the LAST ')' to skip past comm, then split the suffix on whitespace.
-    """
-    end_comm = line.rfind(")")
-    if end_comm == -1:
-        raise ValueError(f"Malformed /proc/<pid>/stat line: {line!r}")
-    # After the ')' there's a space, then field 3 (state) onwards.
-    suffix = line[end_comm + 1:].strip()
-    fields = suffix.split()
-    # suffix starts at field 3; starttime is field 22 (1-indexed) -> suffix index 22 - 3 = 19.
-    if len(fields) < 20:
-        raise ValueError(f"/proc/<pid>/stat has fewer fields than expected: {len(fields)}")
-    return int(fields[19])
-
-
-def _read_proc_starttime(pid: int) -> int | None:
-    """Read /proc/<pid>/stat field 22 (starttime_ticks). Returns None if pid not found or /proc unavailable."""
-    try:
-        line = Path(f"/proc/{pid}/stat").read_text()
-    except (FileNotFoundError, PermissionError, OSError):
-        return None
-    try:
-        return _parse_starttime_from_stat_line(line)
-    except ValueError as e:
-        logger.warning("Could not parse /proc/%d/stat: %s", pid, e)
-        return None
-
-
-def _is_pid_alive_with_starttime(pid: int, expected_starttime_ticks: int) -> bool:
-    """True iff the process at *pid* is running AND its starttime matches the recorded value.
-
-    The starttime check defends against PID reuse: a previous daemon's PID
-    could be reassigned to an unrelated process; signalling that PID would
-    be wrong. See CONCERNS.md §"PID-file stale-detection uses os.kill(pid, 0)".
-    """
-    actual = _read_proc_starttime(pid)
-    if actual is None:
-        return False
-    return actual == expected_starttime_ticks
-
-
-def _write_pid_file(pid_file: Path) -> None:
-    """Write PID file as JSON with pid + starttime_ticks + starttime_iso (D-17 shape)."""
-    my_pid = os.getpid()
-    starttime = _read_proc_starttime(my_pid)
-    if starttime is None:
-        # /proc unavailable (non-Linux test env); record what we can.
-        starttime = 0
-    payload = {
-        "pid": my_pid,
-        "starttime_ticks": starttime,
-        "starttime_iso": datetime.now().isoformat(),
-    }
-    pid_file.write_text(json.dumps(payload) + "\n")
-
-
-def _load_pid_file(pid_file: Path) -> dict | None:
-    """Load pid_file as JSON. Returns None on legacy plain-int, invalid JSON, or missing keys.
-
-    None means "treat as stale" — the caller should unlink and proceed as
-    if no daemon were running. Documented for plain-int compat: an in-flight
-    daemon started before this change uses the legacy format; on first
-    post-upgrade cmd_start, the legacy file is treated as stale and
-    unlinked, the operator restarts and gets the new format.
-    """
-    try:
-        data = json.loads(pid_file.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    if not {"pid", "starttime_ticks", "starttime_iso"}.issubset(data.keys()):
-        return None
-    return data
+# PID-file starttime cross-check (CLN-04 / D-17) lives in automil.backends.pidfile
+# (public surface, shared with operator tooling). Only the names the daemon
+# itself calls are aliased here; anything else imports from pidfile directly.
+from automil.backends.pidfile import (  # noqa: E402
+    read_proc_starttime as _read_proc_starttime,
+    is_pid_alive_with_starttime as _is_pid_alive_with_starttime,
+    write_pid_file as _write_pid_file,
+    load_pid_file as _load_pid_file,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +512,7 @@ class ExperimentOrchestrator:
         # activity health so a file blip never fakes a telemetry transition.
         self._unreadable_cell_logged: set[str] = set()
 
-        self.runner = Runner(self.project_root)
+        self.runner = Runner(self.project_root, self.automil_dir)
 
         # CR-01 fix: ExperimentGraph instance initialized here so _handle_completion
         # and _handle_cap_killed_completion both receive a valid graph object at
@@ -618,6 +545,10 @@ class ExperimentOrchestrator:
         self.poll_interval = orch_cfg.get("poll_interval_sec", POLL_INTERVAL_SEC)
         self.safety_margin_gb = orch_cfg.get("safety_margin_gb", SAFETY_MARGIN_GB)
         self.default_timeout = orch_cfg.get("default_timeout_min", DEFAULT_TIMEOUT_MIN)
+        # The timeout CAP reference is the RAW config value — None when the
+        # key is absent, so the cap skips symmetrically with submit's gate
+        # instead of refusing (post-billing) against the framework fallback.
+        self.timeout_cap = orch_cfg.get("default_timeout_min")
         self.max_per_gpu = orch_cfg.get("max_concurrent_per_gpu", MAX_CONCURRENT_PER_GPU)
         self.default_vram = orch_cfg.get("default_vram_estimate_gb", DEFAULT_VRAM_ESTIMATE_GB)
         self.scheduling_policy: str = orch_cfg.get("scheduling_policy", SCHEDULING_POLICY)
@@ -787,6 +718,25 @@ class ExperimentOrchestrator:
         # Load .env from project root so worktree processes inherit env vars
         # (worktrees don't contain .env since it's typically gitignored)
         self._load_dotenv()
+
+        # Eagerly bind the completion path's lazy imports. A long-running
+        # daemon otherwise imports these at its FIRST completion — hours
+        # after start, from whatever is on disk by then. A repo update in
+        # that window makes the new file's imports resolve against stale
+        # cached modules and completion ingestion dies on the live daemon
+        # (observed 2026-08-16: a graph.py rename broke a running daemon's
+        # ingestion mid-recovery). Import at construction so the daemon's
+        # code surface is fixed at start. The set below is the transitive
+        # lazy closure of write_terminal_state and the daemon's own
+        # budget-kill/aggregation branches.
+        import automil.admissibility     # noqa: F401
+        import automil.cells.activity    # noqa: F401
+        import automil.cells.reconcile   # noqa: F401  (pulls cells + cells.state)
+        import automil.firewall          # noqa: F401
+        import automil.graph             # noqa: F401
+        import automil.schemas           # noqa: F401  (terminal_writer validate)
+        import automil.scoring           # noqa: F401
+        import automil.terminal_writer   # noqa: F401
 
         # Ensure directories.
         # NOTE: we create running_root (the parent running/ dir) but NOT the
@@ -1252,6 +1202,12 @@ class ExperimentOrchestrator:
         # AUTOMIL_ACCELERATOR to distinguish CPU from accelerator execution.
         env["AUTOMIL_GPU"] = "0"
         env["AUTOMIL_ACCELERATOR"] = accelerator
+        # Training stdout goes to run.log through a pipe, where CPython
+        # block-buffers ~8KB: per-epoch lines were invisible to any live probe
+        # and LOST outright when a timeout escalated to SIGKILL — exactly the
+        # runs whose learning curve the post-mortem needs. Unbuffered stdout is
+        # measurement-neutral (log I/O only).
+        env["PYTHONUNBUFFERED"] = "1"
         env["AUTOMIL_DESC"] = spec.get("description", "")
         env["AUTOMIL_NODE_ID"] = node_id
         try:
@@ -1521,7 +1477,7 @@ class ExperimentOrchestrator:
         children refuse a still-running parent). It is not marked crashed either
         — nothing ran, so a crash row would poison the failure statistics and,
         via ``completed/``, would have ``reconcile`` promote a phantom executed
-        node with composite 0.0.
+        node with primary_value 0.0.
 
         Specs with no ``metadata.cell_id`` remain valid because ``Backend.submit``
         is a first-class non-cell submission path. A spec that *declares* a cell
@@ -1549,24 +1505,79 @@ class ExperimentOrchestrator:
             return False
         if not blocks_new_work(cell):
             return False
-        if (
-            node_id in cell.billed_node_ids
-            and cell.status not in (CellStatus.TERMINATING, CellStatus.FINALIZED)
-        ):
-            # A9 exactly-once, final-attempt corner: an attempt that was already
-            # BILLED (crash/unlink-abort inside its launch window, now retrying)
-            # is paid-for work being completed, not new work — and on the last
-            # budgeted attempt the bill itself flips evals_exhausted, so refusing
-            # here would stamp the archived spec cap_refused and leave the freeze
-            # census permanently one short of consumed_evals. Exempt it, unless
-            # the TIME axis has already escalated to terminating/finalized (the
-            # hard wall may not be crossed to start new processes).
-            logger.info(
-                "Launching already-billed %s despite %s cell %s: a charged "
-                "attempt being retried is not new work.",
-                node_id, cell.status.value, cell.cell_id[:8],
+        if node_id in cell.billed_node_ids:
+            # A9 exactly-once: an attempt that was already BILLED (crash or
+            # unlink-abort inside its launch window, now retrying) is paid-for
+            # work being completed, not new work. Refusing it stamps the
+            # archived spec cap_refused and leaves the freeze census
+            # permanently short of consumed_evals — so no EVAL-axis state may
+            # refuse it, including TERMINATING/FINALIZED reached by the idle
+            # drain (canary recovery 2026-08-15: all 20 billed promotion
+            # retries were cancelled by finalized cells whose 7-day wall_clock
+            # budgets had days of headroom left). The one wall that may refuse
+            # paid work is a genuinely expired wall_clock budget — the only
+            # axis denominated in the unit the retry would spend; an
+            # agent_active budget bounds agent seconds, which a billed GPU
+            # retry cannot consume.
+            wall_expired = (
+                cell.mode == "wall_clock"
+                and (time.time() - cell.started_at) >= cell.budget_seconds
             )
-            return False
+            # Exactly-once completion: a billed retry exists to COMPLETE a
+            # measurement that never landed (crash or unlink-abort inside the
+            # launch window). A billed node whose archive already holds a
+            # MEASURED terminal result (completed/partial) has nothing left to
+            # complete — relaunching it would overwrite evidence a freeze
+            # census may already have counted. This is also the wall for
+            # agent_active cells, which have no wall-clock expiry: with a
+            # measured result the retry is refused; without one, completing
+            # the paid-for attempt is exactly what the census needs, whenever
+            # it happens. (A crash result stays retryable — crash IS the
+            # retry case.)
+            already_measured = False
+            try:
+                _archived = self.archive_dir / node_id / "result.json"
+                if _archived.exists():
+                    already_measured = json.loads(_archived.read_text()).get(
+                        "status"
+                    ) in ("completed", "partial")
+            except (OSError, json.JSONDecodeError):
+                already_measured = False   # unreadable → treat as unmeasured
+            if not wall_expired and not already_measured:
+                # Once per spec, not per tick: this INFO fired 6,900+ times in
+                # a 105-minute canary recovery and buried the two real ERRORs.
+                if not hasattr(self, "_billed_exempt_logged"):
+                    self._billed_exempt_logged = set()
+                if node_id not in self._billed_exempt_logged:
+                    self._billed_exempt_logged.add(node_id)
+                    logger.info(
+                        "Launching already-billed %s despite %s cell %s: a charged "
+                        "attempt being retried is not new work.",
+                        node_id, cell.status.value, cell.cell_id[:8],
+                    )
+                return False
+            if already_measured:
+                # NOT the cap-refusal tail below: stamping cap_refused onto a
+                # billed archived spec (or cancelling its executed node) is the
+                # census corruption the billed exemption exists to prevent.
+                # The measurement is done; only the stale queue file goes.
+                logger.warning(
+                    "Dropping stale billed queue spec %s: its archive already "
+                    "holds a measured terminal result — nothing left to "
+                    "complete, and relaunching would overwrite counted "
+                    "evidence.",
+                    node_id,
+                )
+                src_file = spec.get("_file")
+                if src_file and Path(src_file).exists():
+                    try:
+                        Path(src_file).unlink()
+                    except OSError as exc:
+                        logger.warning(
+                            "Could not remove stale billed queue spec %s: %s",
+                            src_file, exc,
+                        )
+                return True
         logger.warning(
             "Refusing to launch %s: cell %s is %s "
             "(consumed_evals=%d/%s). Dequeuing the spec and cancelling "
@@ -1894,6 +1905,15 @@ class ExperimentOrchestrator:
                 ).hexdigest()
                 if _actual_manifest_hash != _campaign.get("manifest_sha256"):
                     raise ValueError("campaign manifest changed between submit and launch")
+                # Queue specs are agent-editable JSON: re-enforce the timeout
+                # cap here, or submit-time enforcement is bypassable by
+                # editing the spec after submit. Same RAW config reference as
+                # submit — absent key skips at both gates.
+                from automil.admissibility import enforce_attempt_timeout_cap
+
+                enforce_attempt_timeout_cap(
+                    spec.get("timeout_min"), self.timeout_cap
+                )
                 validate_campaign_binding(
                     _manifest_path,
                     _campaign,
@@ -2410,12 +2430,12 @@ class ExperimentOrchestrator:
         self._timed_out.pop(node_id, None)
 
         status_str = result.get("status", "unknown")
-        composite = result.get("composite", 0)
+        primary_value = result.get("primary_value", 0)
         logger.info(
-            "Completed %s: status=%s, composite=%.4f, elapsed=%.1fmin, %s",
+            "Completed %s: status=%s, primary_value=%.4f, elapsed=%.1fmin, %s",
             node_id,
             status_str,
-            composite,
+            primary_value,
             elapsed_s / 60,
             self._execution_label(gpu_id),
         )
@@ -2516,9 +2536,9 @@ class ExperimentOrchestrator:
             ),
         )
         logger.info(
-            "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
+            "Cap-driven cancel reconciled for %s: status=%s primary_value=%.4f "
             "partial_folds=%d/%d",
-            node_id, payload["status"], payload["composite"],
+            node_id, payload["status"], payload["primary_value"],
             payload.get("partial_folds", 0), payload.get("expected_folds", 0),
         )
         # H-2: a budget-killed run that produced folds still yielded a usable
@@ -2568,7 +2588,7 @@ class ExperimentOrchestrator:
                 )
                 result = {
                     "status": "crash",
-                    "composite": 0.0,
+                    "primary_value": 0.0,
                     "metrics": {},
                     "error": (
                         f"result.json failed schema validation: {exc.message} "
@@ -2843,14 +2863,21 @@ class ExperimentOrchestrator:
         # the graph must not wait for a reconcile that may never be run.
         self._mark_node_terminal_in_graph(node_id, "crash", error)
 
-    _TSV_TRAILING = ("composite", "vram_gb", "elapsed_min", "status", "description")
+    _TSV_TRAILING = ("primary_value", "primary_se", "vram_gb", "elapsed_min",
+                     "status", "description")
+    #: Pre-rename trailing names -> their schema-3 successors. A results.tsv
+    #: written before the composite retirement carries these in its header;
+    #: without the map they read as METRIC columns and the file keeps a
+    #: phantom metric named after the retired concept forever.
+    _TSV_LEGACY_TRAILING = {"composite": "primary_value",
+                            "composite_se": "primary_se"}
 
     def _append_results_tsv(self, node_id: str, result: dict, description: str = ""):
         """Append a row to results.tsv (sole writer, no locking needed).
 
         Metric columns come from the keys of ``result["metrics"]`` — no hardcoded
         MIL vocabulary. Header shape is
-        ``node_id, <metric keys sorted>, composite, vram_gb, elapsed_min, status,
+        ``node_id, <metric keys sorted>, primary_value, vram_gb, elapsed_min, status,
         description``.
 
         TSV-1: the header used to be locked by the FIRST row, and any later key it
@@ -2858,7 +2885,7 @@ class ExperimentOrchestrator:
         precisely the breaking case — 65 classification experiments emit
         ``val_auc``/``val_bacc``, 100 survival experiments emit ``val_c_index``,
         and whichever finished first decided which group lost its only metric.
-        ``composite`` still landed, so the file looked populated.
+        ``primary_value`` still landed, so the file looked populated.
 
         A genuinely new key now WIDENS the header and rewrites the file,
         backfilling earlier rows with blanks (they really had no value for that
@@ -2866,7 +2893,7 @@ class ExperimentOrchestrator:
         whose keys the header already covers is a plain append.
         """
         metrics = result.get("metrics", {})
-        composite = result.get("composite", 0.0)
+        primary_value = result.get("primary_value", 0.0)
         status = result.get("status", "completed")
         elapsed_s = result.get("elapsed_seconds", 0)
         vram_mb = result.get("peak_vram_mb", 0)
@@ -2880,27 +2907,39 @@ class ExperimentOrchestrator:
 
         trailing = list(self._TSV_TRAILING)
         existing_rows: list[list[str]] = []
+        disk_header: list[str] = []
         if self.results_tsv.exists() and self.results_tsv.stat().st_size:
             lines = self.results_tsv.read_text().splitlines()
-            header_cols = lines[0].split("\t")
-            metric_cols = [c for c in header_cols
-                           if c != "node_id" and c not in set(trailing)]
+            disk_header = lines[0].split("\t")
+            # Trailing names not in the current tuple are either retired
+            # (mapped by _TSV_LEGACY_TRAILING into their successors during
+            # the rewrite below) or genuinely unknown; neither is a metric.
+            metric_cols = [c for c in disk_header
+                           if c != "node_id" and c not in set(trailing)
+                           and c not in self._TSV_LEGACY_TRAILING]
             existing_rows = [ln.split("\t") for ln in lines[1:] if ln]
         else:
-            header_cols, metric_cols = [], []
+            metric_cols = []
 
-        new_metrics = [k for k in sorted(metrics) if k not in metric_cols]
-        if new_metrics or not header_cols:
-            # Schema change (or first write): widen and rewrite, backfilling the
-            # rows that predate the new column(s) with blanks.
-            old_metric_cols = list(metric_cols)
-            metric_cols = sorted(set(metric_cols) | set(metrics))
-            header_cols = ["node_id"] + metric_cols + trailing
-            rebuilt = ["\t".join(header_cols)]
+        metric_cols = sorted(set(metric_cols) | set(metrics))
+        canonical_header = ["node_id"] + metric_cols + trailing
+        if disk_header != canonical_header:
+            # Schema change (new metric key, a grown trailing block, or first
+            # write): widen and rewrite, backfilling the rows that predate the
+            # new column(s) with blanks. Rows are remapped by the header
+            # actually on disk — zipping against a reconstruction from the
+            # CURRENT trailing tuple misaligns every backfilled trailing cell
+            # the moment the trailing schema changes.
+            rebuilt = ["\t".join(canonical_header)]
             for row in existing_rows:
-                old_header = ["node_id"] + old_metric_cols + trailing
-                by_name = dict(zip(old_header, row))
-                rebuilt.append("\t".join(by_name.get(c, "") for c in header_cols))
+                by_name = dict(zip(disk_header, row))
+                # Carry retired trailing columns' data into their successors
+                # (the legacy column itself is absent from canonical_header,
+                # so its cell would otherwise be dropped on rewrite).
+                for _old, _new in self._TSV_LEGACY_TRAILING.items():
+                    if by_name.get(_old) and not by_name.get(_new):
+                        by_name[_new] = by_name[_old]
+                rebuilt.append("\t".join(by_name.get(c, "") for c in canonical_header))
             self._write_tsv_atomic("\n".join(rebuilt) + "\n")
 
         def _fmt(v) -> str:
@@ -2911,10 +2950,15 @@ class ExperimentOrchestrator:
             except (TypeError, ValueError):
                 return str(v)
 
+        primary_se = result.get("primary_se")
+        if isinstance(primary_se, bool) or not isinstance(primary_se, (int, float)):
+            primary_se = None   # blank cell: SE not estimable (<2 finite folds)
+
         cells: list[str] = [node_id]
         cells.extend(_fmt(metrics.get(c, "")) for c in metric_cols)
         cells.extend([
-            f"{composite:.6f}",
+            f"{primary_value:.6f}",
+            "" if primary_se is None else f"{primary_se:.6f}",
             f"{vram_mb / 1024:.1f}",
             f"{elapsed_s / 60:.1f}",
             status,

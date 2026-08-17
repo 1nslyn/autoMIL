@@ -3,7 +3,6 @@
 Framework-specific preparation lives in each adapter:
 - ``clam/prepare.py``: H5 -> PT conversion
 - ``nnmil/prepare.py``: dataset.json, dataset_plan.json generation
-- ``smmile/prepare.py``: H5 -> NIC conversion, superpixel generation
 """
 
 from __future__ import annotations

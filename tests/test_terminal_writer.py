@@ -27,7 +27,7 @@ def _make_graph(tmp_path: Path):
         parent_id=None,
         description="baseline",
         techniques=["baseline"],
-        metrics={"composite": 0.5},
+        metrics={"primary_value": 0.5},
         status="keep",
     )
     # Promote to "running" (simulates what submit does)
@@ -68,15 +68,15 @@ def test_normal_completion_writes_all_four(tmp_path: Path) -> None:
         tsv_calls.append((nid, result, description))
         # Write a minimal TSV row
         if not results_tsv.exists():
-            results_tsv.write_text("node_id\tcomposite\tstatus\tdescription\n")
-        composite = result.get("composite", 0.0)
+            results_tsv.write_text("node_id\tprimary_value\tstatus\tdescription\n")
+        primary_value = result.get("primary_value", 0.0)
         status = result.get("status", "crash")
         with open(results_tsv, "a") as f:
-            f.write(f"{nid}\t{composite:.6f}\t{status}\t{description}\n")
+            f.write(f"{nid}\t{primary_value:.6f}\t{status}\t{description}\n")
 
     result = {
         "status": "completed",
-        "composite": 0.85,
+        "primary_value": 0.85,
         "metrics": {"val_auc": 0.85},
         "elapsed_seconds": 100,
         "peak_vram_mb": 4000,
@@ -100,14 +100,14 @@ def test_normal_completion_writes_all_four(tmp_path: Path) -> None:
     node = graph2.get_node(node_id)
     assert node is not None
     assert node["type"] == "executed"
-    assert abs(node["composite"] - 0.85) < 1e-6, f"graph composite={node['composite']}"
+    assert abs(node["primary_value"] - 0.85) < 1e-6, f"graph primary_value={node['primary_value']}"
 
     # Artifact 2: completed/<node>.json
     comp_file = completed_dir / f"{node_id}.json"
     assert comp_file.exists(), "completed/<node>.json must exist"
     comp = json.loads(comp_file.read_text())
     assert comp["id"] == node_id
-    assert abs(comp["composite"] - 0.85) < 1e-6
+    assert abs(comp["primary_value"] - 0.85) < 1e-6
 
     # Artifact 3: archive result.json
     archive_result = archive_dir / "result.json"
@@ -133,14 +133,14 @@ def test_cap_kill_writes_all_four(tmp_path: Path) -> None:
     def tsv_writer(nid, result, description=""):
         tsv_calls.append((nid, result, description))
         if not results_tsv.exists():
-            results_tsv.write_text("node_id\tcomposite\tstatus\n")
+            results_tsv.write_text("node_id\tprimary_value\tstatus\n")
         with open(results_tsv, "a") as f:
-            f.write(f"{nid}\t{result.get('composite',0):.6f}\t{result.get('status','')}\n")
+            f.write(f"{nid}\t{result.get('primary_value',0):.6f}\t{result.get('status','')}\n")
 
     # Budget-kill payload (partial folds)
     result = {
         "status": "partial",
-        "composite": 0.78,
+        "primary_value": 0.78,
         "metrics": {"val_auc": 0.78},
         "partial_folds": 3,
         "expected_folds": 5,
@@ -176,7 +176,7 @@ def test_cap_kill_writes_all_four(tmp_path: Path) -> None:
     assert node["status"] == "partial", (
         f"Cap-kill node should have status='partial', got {node['status']!r}"
     )
-    assert abs(node["composite"] - 0.78) < 1e-6
+    assert abs(node["primary_value"] - 0.78) < 1e-6
 
 
 @pytest.mark.parametrize("metadata", ["legacy", ["legacy"]])
@@ -191,7 +191,7 @@ def test_terminal_writer_tolerates_non_mapping_metadata(
         node_id=node_id,
         result={
             "status": "completed",
-            "composite": 0.7,
+            "primary_value": 0.7,
             "metrics": {"val_auc": 0.7},
             "metadata": metadata,
         },
@@ -226,7 +226,7 @@ def test_graph_updated_before_tsv(tmp_path: Path) -> None:
 
     result = {
         "status": "completed",
-        "composite": 0.90,
+        "primary_value": 0.90,
         "metrics": {},
         "elapsed_seconds": 200,
         "peak_vram_mb": 3000,
@@ -274,7 +274,7 @@ def test_graph_updated_before_tsv(tmp_path: Path) -> None:
 def test_held_out_named_metrics_key_fails_the_node_closed(tmp_path: Path) -> None:
     """A6 (claims-alignment): a held-out-named key inside `metrics` is a
     val-firewall violation — it would flow into every agent-facing surface and
-    into the recomputed composite (test driving selection). The node crashes
+    into the recomputed primary_value (test driving selection). The node crashes
     with a pointer, exactly like a schema failure."""
     from automil.terminal_writer import write_terminal_state
     from automil.graph import ExperimentGraph
@@ -284,7 +284,7 @@ def test_held_out_named_metrics_key_fails_the_node_closed(tmp_path: Path) -> Non
 
     result = {
         "status": "completed",
-        "composite": 0.99,
+        "primary_value": 0.99,
         "metrics": {"val_auc": 0.85, "test_auc": 0.99},
         "held_out": {"test_bacc": 0.9},
     }
@@ -300,12 +300,12 @@ def test_held_out_named_metrics_key_fails_the_node_closed(tmp_path: Path) -> Non
     assert "val-firewall violation" in archived["error"]
     assert "test_auc" in archived["error"]
     assert archived["metrics"] == {}
-    assert archived["composite"] == 0.0
+    assert archived["primary_value"] == 0.0
 
     reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
     gnode = reloaded.get_node(node_id)
     assert gnode["status"] == "crash"
-    assert gnode["composite"] == 0.0
+    assert gnode["primary_value"] == 0.0
 
 
 def test_val_only_metrics_pass_the_key_guard(tmp_path: Path) -> None:
@@ -317,7 +317,7 @@ def test_val_only_metrics_pass_the_key_guard(tmp_path: Path) -> None:
 
     result = {
         "status": "completed",
-        "composite": 0.825,
+        "primary_value": 0.825,
         "metrics": {"val_auc": 0.85, "val_bacc": 0.80},
         "held_out": {"test_auc": 0.84},
     }

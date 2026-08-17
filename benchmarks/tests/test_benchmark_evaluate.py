@@ -259,7 +259,7 @@ class TestMultiClassSensitivitySpecificity:
     rode in the ``summary`` diagnostic block of result.json, serialized as a bare
     ``NaN`` token, and the orchestrator's ingestion parser rejected the whole
     file — so every 3-class run (CPTAC-PDAC, TCGA-HNSC) was recorded as a crash
-    despite having a perfectly good validation composite.
+    despite having a perfectly good validation primary_value.
 
     The binary formula is deliberately unchanged: it reports the positive class
     only (``pos_label=1``), and published binary numbers must not move.

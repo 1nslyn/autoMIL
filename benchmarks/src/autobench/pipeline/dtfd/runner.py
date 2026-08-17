@@ -22,7 +22,11 @@ from autobench.pipeline.dtfd.survival_train import train_dtfd_survival_fold
 from autobench.pipeline.dtfd.train import train_dtfd_fold
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.results_cache import resolve_results_dir
-from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.evaluate import (
+    compute_confidence_intervals,
+    pooled_val_block,
+    val_prediction_hashes,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
@@ -119,7 +123,7 @@ def run_dtfd_experiment(
             with open(metrics_path) as f:
                 result = json.load(f)
             fold_results.append(result)
-            _write_fold_result_json(fold, result)
+            _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
             continue
 
         fold_policy_runtime = policy_runtime.for_fold()
@@ -134,6 +138,7 @@ def run_dtfd_experiment(
                 embed_dim=exp_cfg.embed_dim, nll_bins=exp_cfg.task.nll_bins,
                 cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
                 policy_runtime=fold_policy_runtime,
+                fold_dir=fold_dir,
             )
         else:
             train_slides = load_dtfd_split(task_csv, split_csv, h5_dir, label_dict, "train")
@@ -153,6 +158,10 @@ def run_dtfd_experiment(
             "val_metrics": raw["val_metrics"],
             # CR-3: carry the val risk records through for pooled concordance.
             **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
+            # A4': computed in the fold trainer, right where it writes
+            # fold_dir/predictions_val.csv — the ONE hash home; the runner
+            # only carries it through.
+            "val_predictions_sha256": raw.get("val_predictions_sha256"),
             "fold": fold,
             # Both branches now report their own span (FOLD-TIMING CONTRACT);
             # the runner no longer times one of them itself.
@@ -162,7 +171,7 @@ def run_dtfd_experiment(
             json.dump(result, f, indent=2)
 
         fold_results.append(result)
-        _write_fold_result_json(fold, result)
+        _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]
@@ -188,6 +197,9 @@ def run_dtfd_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
+        # A4': positional with per_fold_val; one hash home — see
+        # val_prediction_hashes.
+        "per_fold_val_predictions_sha256": val_prediction_hashes(fold_results),
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

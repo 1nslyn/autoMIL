@@ -77,14 +77,14 @@ def test_completion_leaves_agent_archive_test_free(tmp_path: Path) -> None:
     # --- Simulate a born-sealed run on disk -------------------------------------
     # 1. The training script wrote result.json to its worktree with BOTH the val
     #    metrics (agent-facing) and the sealed held_out (test) block.
-    runner = Runner(project_root=project)
+    runner = Runner(project_root=project, automil_dir=project / "automil")
     wt = runner.worktree_path(node_id)
     wt.mkdir(parents=True, exist_ok=True)
     raw_result = {
         "status": "completed",
         "metrics": {"val_auc": 0.88, "val_bacc": 0.81},
         "held_out": {"test_auc": 0.87, "test_bacc": 0.83},
-        "composite": 0.845,
+        "primary_value": 0.845,
         "elapsed_seconds": 100,
         "peak_vram_mb": 4000,
     }
@@ -94,7 +94,7 @@ def test_completion_leaves_agent_archive_test_free(tmp_path: Path) -> None:
     sealed = archive / "certify"
     sealed.mkdir(parents=True, exist_ok=True)
     (sealed / "fold_0_result.json").write_text(
-        json.dumps({"composite": 0.845, "metrics": {"val_auc": 0.88},
+        json.dumps({"primary_value": 0.845, "metrics": {"val_auc": 0.88},
                     "held_out": {"test_auc": 0.87}})
     )
     (sealed / "results").mkdir()
@@ -109,7 +109,7 @@ def test_completion_leaves_agent_archive_test_free(tmp_path: Path) -> None:
     graph = ExperimentGraph(path=project / "graph.json")
     generated_id = graph.add_executed(
         parent_id=None, description="baseline", techniques=["baseline"],
-        metrics={"composite": 0.0}, status="keep",
+        metrics={"primary_value": 0.0}, status="keep",
     )
     assert generated_id == node_id  # first executed node is node_0001
     graph.save()  # terminal_writer's locked_update re-reads the graph from disk
@@ -152,9 +152,9 @@ def test_completion_leaves_agent_archive_test_free(tmp_path: Path) -> None:
     assert tsv_rows, "results.tsv writer was not invoked"
     assert "held_out" not in tsv_rows[0][1], "held_out leaked into the results.tsv payload"
 
-    # (4) The graph node stores val composite + val metrics only.
+    # (4) The graph node stores val primary_value + val metrics only.
     gnode = ExperimentGraph(path=project / "graph.json").get_node(node_id)
-    assert gnode["composite"] == 0.845
+    assert gnode["primary_value"] == 0.845
     assert not any("test" in k for k in gnode.get("metrics", {})), (
         f"test-keyed metric leaked into the graph node: {gnode.get('metrics')}"
     )

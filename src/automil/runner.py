@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,11 +13,34 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _worktree_scope(project_root: Path, automil_dir: Path) -> str:
+    """One filesystem-safe path component naming the automil project served.
+
+    Worktrees live under ``.automil_worktrees/<scope>/<node_id>``. Scoping by
+    the automil project directory makes concurrent orchestrators in one
+    checkout disjoint even though every campaign cell numbers its nodes from
+    ``node_0001`` (canary incident 2026-08-15: two concurrent promotion
+    orchestrators wiped each other's live worktrees through the shared,
+    node_id-keyed namespace — 18 of 20 jobs destroyed).
+    """
+    try:
+        rel = automil_dir.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        # An automil dir outside the checkout has no stable relative name;
+        # fall back to a digest of its absolute path.
+        return hashlib.sha256(str(automil_dir.resolve()).encode()).hexdigest()[:16]
+    slug = "+".join(rel.parts) or "root"
+    slug = re.sub(r"[^A-Za-z0-9+._-]", "_", slug)
+    if len(slug) > 200:  # POSIX filename limit is 255 bytes; keep headroom
+        slug = f"{slug[:184]}-{hashlib.sha256(slug.encode()).hexdigest()[:15]}"
+    return slug
+
+
 def _reject_nonfinite_constant(token: str):
     """``parse_constant`` hook: reject ``Infinity`` / ``-Infinity`` / ``NaN`` tokens.
 
-    CR-1a (audit 2026-07-23): result.json is agent-writable and ``composite`` is
-    trusted verbatim as the val-firewall selection signal. A non-finite composite
+    CR-1a (audit 2026-07-23): result.json is agent-writable and ``primary_value`` is
+    trusted verbatim as the val-firewall selection signal. A non-finite primary_value
     would rig selection (``Infinity`` captures best_node and forces keep; ``NaN``
     poisons every ``>`` comparison and persists as an invalid-JSON token). Reject
     such tokens at the parse boundary — the semantic finite check in
@@ -28,10 +52,13 @@ def _reject_nonfinite_constant(token: str):
 class Runner:
     """Manages git worktree lifecycle for experiment execution."""
 
-    def __init__(self, project_root: str | Path):
+    def __init__(self, project_root: str | Path, automil_dir: str | Path):
         self.project_root = Path(project_root)
-        self._worktree_base = self.project_root / ".automil_worktrees"
-        self._worktree_base.mkdir(exist_ok=True)
+        self._worktree_base = (
+            self.project_root / ".automil_worktrees"
+            / _worktree_scope(self.project_root, Path(automil_dir))
+        )
+        self._worktree_base.mkdir(parents=True, exist_ok=True)
 
     def worktree_path(self, node_id: str) -> Path:
         """Public accessor for a node's worktree path."""
@@ -41,21 +68,35 @@ class Runner:
         """Create a detached worktree at the given commit.
 
         If a worktree directory already exists at the target path, it is
-        wiped before the new ``git worktree add`` runs. This handles the
-        common case where a previous launch was interrupted and left
-        ``.automil_worktrees/<node_id>/`` orphaned. The wipe is logged at
+        removed (registration included) before the new ``git worktree add``
+        runs. This handles the common case where a previous launch was
+        interrupted and left the worktree orphaned. The removal is logged at
         WARNING so the paper trail survives — if that orphan was holding
         unsaved state (extremely rare; framework-owned subtree), the
         operator can correlate against the log line.
+
+        Canary incident 2026-08-15: the previous implementation wiped the
+        directory with a bare ``rmtree``, which leaves the git registration
+        behind — the follow-up ``git worktree add`` then always fails with
+        exit 128 ("missing but already registered worktree"), so the
+        documented recovery never once succeeded. Removal now goes through
+        ``cleanup_worktree`` (``git worktree remove --force`` with an
+        rmtree+prune fallback), and a stale registration whose directory is
+        already gone is cleared by the unconditional prune below.
         """
         wt_path = self._worktree_base / node_id
         if wt_path.exists():
             logger.warning(
-                "Runner.create_worktree: %s already exists; wiping before recreate "
-                "(likely an interrupted prior launch). Original contents lost.",
+                "Runner.create_worktree: %s already exists; removing before "
+                "recreate (likely an interrupted prior launch). Original "
+                "contents lost.",
                 wt_path,
             )
-            shutil.rmtree(wt_path)
+            self.cleanup_worktree(wt_path)
+        # A crash (or an out-of-band rmtree) can leave a registration whose
+        # directory is already gone; `git worktree add` refuses over such a
+        # stale registration, so prune unconditionally before adding.
+        self.prune_stale_worktrees()
 
         subprocess.run(
             ["git", "worktree", "add", "--detach", str(wt_path), base_commit],
@@ -244,7 +285,7 @@ class Runner:
             )
             return {
                 "status": "crash",
-                "composite": 0.0,
+                "primary_value": 0.0,
                 "metrics": {},
                 "error": f"result.json rejected at ingestion: {exc}",
             }

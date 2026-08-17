@@ -179,7 +179,7 @@ _GOOD_TRAIN_PY = (
     "    'status': 'completed',\n"
     "    'metrics': {'val_auc': 0.5, 'val_bacc': 0.5},\n"
     "    'held_out': {'test_auc': 0.5, 'test_bacc': 0.5},\n"
-    "    'composite': 0.5, 'elapsed_seconds': 1, 'peak_vram_mb': 100,\n"
+    "    'primary_value': 0.5, 'elapsed_seconds': 1, 'peak_vram_mb': 100,\n"
     "}\n"
     "pathlib.Path('result.json').write_text(json.dumps(result))\n"
 )

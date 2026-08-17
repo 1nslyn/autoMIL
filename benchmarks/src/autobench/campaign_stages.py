@@ -52,6 +52,8 @@ from autobench.campaign import (
     CERTIFICATION_FOLDS,
     DATASETS,
     DISCOVERY_ATTEMPTS,
+    HELD_OUT_SCHEMA_BY_FAMILY,
+    VALIDATION_SCHEMA_BY_FAMILY,
     PROMOTION_CANDIDATES,
     PROMOTION_WALL_CLOCK_CONTAINMENT,
     PROTOCOL,
@@ -74,6 +76,15 @@ CAMPAIGN_CERTIFICATION_FILE = "campaign_certification.json"
 AGENT_SESSION_FILE = "agent_session.json"
 CAMPAIGN_CELL_COUNT = len(DATASETS) * 26
 SELECTION_FREEZE_SCHEMA_VERSION = 4
+#: The legal held-out fold shapes, derived from the one schema authority.
+#: Context-free validators check membership here; the FAMILY-exact lock is
+#: enforced at both ends of the evidence chain — bundle build
+#: (``_certify_winner_unlocked`` via the frozen ``campaign_cell.json``
+#: task_family) and report (``campaign_analysis._primary_values`` via the
+#: manifest cell) — so a wrong-family bundle can be neither written nor read.
+_LEGAL_HELD_OUT_SHAPES = frozenset(
+    frozenset(keys) for keys in HELD_OUT_SCHEMA_BY_FAMILY.values()
+)
 
 
 class CampaignStageError(ValueError):
@@ -291,6 +302,35 @@ def _import_baseline_archive(
     return target
 
 
+def _cell_task_family(cell_root: Path, state: Mapping[str, Any]) -> str:
+    """The frozen reporting family, from the cell's own campaign_cell.json.
+
+    Bound to the stage state's frozen identity (cell_id + cell_sha256 +
+    content hash, the ``_expected_baseline_attestation`` triple) so a rewritten
+    cell file cannot smuggle in a different family. Fails closed on an unknown
+    value.
+    """
+    try:
+        cell = json.loads(
+            (cell_root / "automil" / "campaign_cell.json").read_text()
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read campaign cell: {exc}") from exc
+    unhashed_cell = {
+        key: value for key, value in cell.items() if key != "cell_sha256"
+    }
+    if (
+        cell.get("cell_id") != state["cell_id"]
+        or cell.get("cell_sha256") != state["cell_sha256"]
+        or cell.get("cell_sha256") != content_sha256(unhashed_cell)
+    ):
+        raise CampaignStageError("campaign cell differs from stage state")
+    family = cell.get("task_family")
+    if family not in HELD_OUT_SCHEMA_BY_FAMILY:
+        raise CampaignStageError("campaign cell task_family is unknown")
+    return family
+
+
 def _expected_baseline_attestation(
     cell_root: Path,
     state: Mapping[str, Any],
@@ -365,9 +405,20 @@ def _write_baseline_attestation(
 
 
 def _validation_folds(
-    result: Mapping[str, Any], expected_folds: tuple[int, ...],
+    result: Mapping[str, Any],
+    expected_folds: tuple[int, ...],
+    *,
+    expected_metrics: tuple[str, ...],
 ) -> list[dict[str, Any]]:
-    """Validate and normalize public fold evidence without touching test."""
+    """Validate and normalize public fold evidence without touching test.
+
+    ``expected_metrics`` is the cell's frozen validation schema
+    (``VALIDATION_SCHEMA_BY_FAMILY[task_family]``, first key = selection
+    primary). The lock is family-EXACT on both evidence axes so a shape
+    mismatch fails at the FIRST ingest — an ordinal cell whose evidence
+    lost qwk must die at baseline registration, not at certification five
+    stages later when its hash-anchored budget is unrecoverable.
+    """
     if "held_out" in result or "summary" in result:
         raise CampaignStageError(
             "controller received a test-bearing result; use agent-facing result.json"
@@ -385,17 +436,17 @@ def _validation_folds(
         if not isinstance(raw, dict):
             raise CampaignStageError("validation_folds entries must be objects")
         fold_index = raw.get("fold_index")
-        composite = raw.get("composite")
+        primary_value = raw.get("primary_value")
         if type(fold_index) is not int or fold_index in seen:
             raise CampaignStageError("validation fold indices must be unique integers")
         if (
-            isinstance(composite, bool)
-            or not isinstance(composite, (int, float))
-            or not math.isfinite(float(composite))
-            or not 0 <= float(composite) <= 1
+            isinstance(primary_value, bool)
+            or not isinstance(primary_value, (int, float))
+            or not math.isfinite(float(primary_value))
+            or not 0 <= float(primary_value) <= 1
         ):
             raise CampaignStageError(
-                f"fold {fold_index} validation composite is outside [0, 1]"
+                f"fold {fold_index} validation primary_value is outside [0, 1]"
             )
         metrics = raw.get("metrics")
         if (
@@ -413,36 +464,32 @@ def _validation_folds(
             raise CampaignStageError(
                 f"fold {fold_index} metrics are not validation-only unit-interval values"
             )
-        # Ordinal tasks (TCGA-HNSC grade) carry a third component. Locked as its
-        # own exact key set rather than relaxed to "any subset", so a fold that
-        # merely LOST a component still fails closed.
-        if set(metrics) == {"val_auc", "val_bacc", "val_qwk"}:
-            expected_composite = (
-                float(metrics["val_auc"])
-                + float(metrics["val_bacc"])
-                + float(metrics["val_qwk"])
-            ) / 3
-        elif set(metrics) == {"val_auc", "val_bacc"}:
-            expected_composite = (
-                float(metrics["val_auc"]) + float(metrics["val_bacc"])
-            ) / 2
-        elif set(metrics) == {"val_c_index"}:
-            expected_composite = float(metrics["val_c_index"])
-        else:
+        # Family-EXACT lock: exactly the frozen task_family's recorded set,
+        # never a membership test over legal shapes — a fold that merely
+        # LOST a component fails closed, and so does an ordinal fold whose
+        # evidence degraded to the binary shape.
+        # Selection is the PRIMARY validation metric alone (scoring.formula:
+        # val_auc / val_c_index): companions stay recorded in `metrics` but no
+        # longer vote — bacc's ~1/17-per-slide threshold quantization injected
+        # lattice noise at exactly the accept-margin scale, and the canary
+        # cells' old multi-metric composite disagreed with auc's ranking throughout.
+        if set(metrics) != set(expected_metrics):
             raise CampaignStageError(
-                f"fold {fold_index} validation metric schema is not campaign-locked"
+                f"fold {fold_index} validation metric schema differs from "
+                "the cell's task family"
             )
+        expected_primary_value = float(metrics[expected_metrics[0]])
         if not math.isclose(
-            float(composite), expected_composite, rel_tol=0.0, abs_tol=1e-12,
+            float(primary_value), expected_primary_value, rel_tol=0.0, abs_tol=1e-12,
         ):
             raise CampaignStageError(
-                f"fold {fold_index} composite disagrees with validation metrics"
+                f"fold {fold_index} primary_value disagrees with validation metrics"
             )
         seen.add(fold_index)
         normalized.append({
             "fold_index": fold_index,
             "metrics": metrics,
-            "composite": float(composite),
+            "primary_value": float(primary_value),
         })
     if seen != set(expected_folds):
         raise CampaignStageError(
@@ -453,7 +500,7 @@ def _validation_folds(
 
 
 def _mean(folds: list[Mapping[str, Any]]) -> float:
-    return math.fsum(float(fold["composite"]) for fold in folds) / len(folds)
+    return math.fsum(float(fold["primary_value"]) for fold in folds) / len(folds)
 
 
 def _sealed_fold_hashes(
@@ -507,7 +554,7 @@ def _ensure_discovery_baseline_root(
         raise CampaignStageError("baseline lacks exact discovery-fold evidence")
     discovery_mean = _mean(discovery_folds)
     discovery_se = cross_fold_se(
-        [float(fold["composite"]) for fold in discovery_folds]
+        [float(fold["primary_value"]) for fold in discovery_folds]
     )
     try:
         cell = json.loads(
@@ -531,16 +578,16 @@ def _ensure_discovery_baseline_root(
         if matches:
             node = matches[0]
             metadata = node.get("metadata") or {}
-            recorded_composite = node.get("composite")
-            recorded_baseline = graph.meta.get("baseline_composite")
+            recorded_primary_value = node.get("primary_value")
+            recorded_baseline = graph.meta.get("baseline_primary_value")
             valid = (
                 node.get("parent_id") is None
                 and node.get("type") == "executed"
                 and node.get("status") == "keep"
-                and not isinstance(recorded_composite, bool)
-                and isinstance(recorded_composite, (int, float))
+                and not isinstance(recorded_primary_value, bool)
+                and isinstance(recorded_primary_value, (int, float))
                 and math.isclose(
-                    float(recorded_composite), discovery_mean,
+                    float(recorded_primary_value), discovery_mean,
                     rel_tol=0.0, abs_tol=1e-12,
                 )
                 and metadata.get("cell_id") == budget_cell_id
@@ -570,8 +617,8 @@ def _ensure_discovery_baseline_root(
             description="native upstream baseline (discovery folds 0/1/2)",
             techniques=[],
             metrics={
-                "composite": discovery_mean,
-                "composite_se": discovery_se,
+                "primary_value": discovery_mean,
+                "primary_se": discovery_se,
             },
             status="keep",
             config_hash=baseline["candidate_sha256"],
@@ -585,7 +632,7 @@ def _ensure_discovery_baseline_root(
             "campaign_baseline_sha256": baseline["candidate_sha256"],
             "validation_folds": discovery_folds,
         })
-        graph.meta["baseline_composite"] = discovery_mean
+        graph.meta["baseline_primary_value"] = discovery_mean
         graph.recalculate_scores()
         return node_id
 
@@ -631,7 +678,12 @@ def _register_baseline_unlocked(
     except (OSError, json.JSONDecodeError) as exc:
         raise CampaignStageError(f"cannot read baseline result.json: {exc}") from exc
     baseline_resources = _process_resource_summary([result])
-    folds = _validation_folds(result, CERTIFICATION_FOLDS)
+    folds = _validation_folds(
+        result, CERTIFICATION_FOLDS,
+        expected_metrics=VALIDATION_SCHEMA_BY_FAMILY[
+            _cell_task_family(cell_root, state)
+        ],
+    )
     sealed_hashes = _sealed_fold_hashes(baseline_archive, CERTIFICATION_FOLDS)
     identity_payload = {
         "result_sha256": file_sha256(result_path),
@@ -960,6 +1012,9 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         raise CampaignStageError(f"cannot freeze discovery from phase {state['phase']!r}")
     if state.get("baseline") is None:
         raise CampaignStageError("register the native five-fold baseline first")
+    expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
+        _cell_task_family(cell_root, state)
+    ]
 
     adir = cell_root / "automil"
     try:
@@ -1073,14 +1128,34 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                 audit.update(_terminal_evidence(adir, archive.name, result))
                 if verdict is None:
                     raise CampaignStageError(audit["reason"])
-                folds = _validation_folds(result, STAGE_FOLDS["discovery"])
+                folds = _validation_folds(
+                    result, STAGE_FOLDS["discovery"],
+                    expected_metrics=expected_metrics,
+                )
                 candidate_sha, identity = _candidate_identity(spec, verdict)
+                # Per-fold prediction hashes are the byte discriminator the
+                # outcome dedup below keys on. They live beside — never
+                # inside — the normalized fold entries: winner verification
+                # re-derives those entries from the archive and compares
+                # them by content hash, so their shape must stay stable.
+                raw_hash_by_fold = {
+                    raw_fold["fold_index"]: (
+                        raw_fold.get("val_predictions_sha256")
+                        if _is_sha256(raw_fold.get("val_predictions_sha256"))
+                        else None
+                    )
+                    for raw_fold in result["validation_folds"]
+                }
                 candidate = {
                     "candidate_id": archive.name,
                     "candidate_sha256": candidate_sha,
                     "source_spec_sha256": file_sha256(archive / "spec.json"),
                     "identity": identity,
                     "validation_folds": folds,
+                    "val_predictions_sha256": [
+                        raw_hash_by_fold.get(fold["fold_index"])
+                        for fold in folds
+                    ],
                     "discovery_mean": _mean(folds),
                     "sealed_fold_sha256": _sealed_fold_hashes(
                         archive, STAGE_FOLDS["discovery"],
@@ -1108,10 +1183,40 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
     eligible.sort(key=lambda item: (-item["discovery_mean"], item["candidate_id"]))
     unique_eligible: list[dict[str, Any]] = []
     seen_identities: set[str] = set()
+    seen_hash_vectors: set[tuple[str, ...]] = set()
+    seen_outcomes: set[tuple] = set()
     for candidate in eligible:
         identity = candidate["candidate_sha256"]
         if identity in seen_identities:
             continue
+        # Outcome identity: runs are bit-deterministic under the locked seed,
+        # so two candidates that produced the SAME validation predictions are
+        # the same measurement wearing different configs (uni_v2 canary: a
+        # weight-decay value inside the logit-scaling invariant regime
+        # reproduced its parent to 16 digits and occupied a second promotion
+        # slot). Promotion re-runs byte-copies on folds 3/4; re-measuring an
+        # identical run twice buys zero information, so the slot goes to the
+        # next distinct config. The discriminator is the per-fold
+        # val_predictions_sha256 vector when both candidates carry a complete
+        # one — quantized primary values can tie for genuinely different configs,
+        # and dropping those would silently lose a distinct candidate. Only
+        # hashless artifacts (pre-hash cells, e.g. the live canaries) fall
+        # back to the legacy primary_value-tuple rule, and a hash-bearing
+        # candidate never dedups against a hashless one.
+        hashes = candidate["val_predictions_sha256"]
+        if hashes and all(isinstance(value, str) for value in hashes):
+            vector = tuple(hashes)
+            if vector in seen_hash_vectors:
+                continue
+            seen_hash_vectors.add(vector)
+        else:
+            outcome = tuple(
+                (fold["fold_index"], fold["primary_value"])
+                for fold in candidate["validation_folds"]
+            )
+            if outcome in seen_outcomes:
+                continue
+            seen_outcomes.add(outcome)
         seen_identities.add(identity)
         unique_eligible.append(candidate)
     promoted = unique_eligible[:PROMOTION_CANDIDATES]
@@ -1647,6 +1752,9 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
     state = load_stage_state(cell_root)
     if state["promotion"]["frozen"]:
         return state
+    expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
+        _cell_task_family(cell_root, state)
+    ]
     if state["phase"] != "promotion":
         raise CampaignStageError(
             f"promotion can freeze only from promotion phase, got {state['phase']!r}"
@@ -1750,6 +1858,7 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
         try:
             promotion_folds = _validation_folds(
                 result, STAGE_FOLDS["promotion"],
+                expected_metrics=expected_metrics,
             )
             promotion_sealed = _sealed_fold_hashes(
                 archive, STAGE_FOLDS["promotion"],
@@ -1987,8 +2096,12 @@ def _searched_winner_sources(
     if discovery_sha != winner["candidate_sha256"]:
         raise CampaignStageError("winner discovery candidate changed after selection")
     discovery_result = json.loads((discovery_archive / "result.json").read_text())
+    expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
+        _cell_task_family(cell_root, state)
+    ]
     discovery_folds = _validation_folds(
         discovery_result, STAGE_FOLDS["discovery"],
+        expected_metrics=expected_metrics,
     )
     if not _same_fold_evidence(discovery_folds, source["validation_folds"]):
         raise CampaignStageError("winner discovery validation evidence changed")
@@ -2008,6 +2121,7 @@ def _searched_winner_sources(
     promotion_result = json.loads((promotion_archive / "result.json").read_text())
     promotion_folds = _validation_folds(
         promotion_result, STAGE_FOLDS["promotion"],
+        expected_metrics=expected_metrics,
     )
     five_folds = sorted(
         [*discovery_folds, *promotion_folds], key=lambda fold: fold["fold_index"],
@@ -3767,7 +3881,7 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
                 raise CampaignStageError(f"{label} fold schema is invalid")
             metrics = row["held_out"]
             keys = set(metrics)
-            if keys not in ({"test_auc", "test_bacc"}, {"test_c_index"}):
+            if frozenset(keys) not in _LEGAL_HELD_OUT_SHAPES:
                 raise CampaignStageError(f"{label} metric schema is not locked")
             if metric_keys is None:
                 metric_keys = keys
@@ -4691,6 +4805,14 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     if set(aggregate) != set(baseline_aggregate):
         raise CampaignStageError(
             "winner and baseline held-out metric keys differ"
+        )
+    # Family-exact schema lock at bundle BUILD time: the sealed evidence must
+    # carry exactly the frozen task_family's held-out keys (an ordinal cell
+    # missing test_qwk fails here, not at report time five stages later).
+    expected_keys = set(HELD_OUT_SCHEMA_BY_FAMILY[_cell_task_family(cell_root, state)])
+    if set(aggregate) != expected_keys:
+        raise CampaignStageError(
+            "held-out evidence schema differs from the cell's task family"
         )
     paired_fold_deltas = []
     for winner_fold, baseline_fold in zip(

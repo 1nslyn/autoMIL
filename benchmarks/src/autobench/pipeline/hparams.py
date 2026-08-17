@@ -185,7 +185,7 @@ def _check_declared(arm: str, requested: str, resolved: str) -> None:
     """Refuse a knob the arm's declared search space does not contain (A-2).
 
     Enforcement is skipped for arms with no declared space (``arm=""`` in tests,
-    and ``smmile``, which is vendored but unreachable from ``--framework``), so
+    ), so
     this cannot silently narrow anything that was never declared in the first
     place.
     """

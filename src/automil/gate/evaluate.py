@@ -78,8 +78,8 @@ def evaluate_candidate(
                 "encoder": str,
                 "task": str,
                 "child_node_id": str,
-                "candidate_composite": float,
-                "parent_composite": float,
+                "candidate_primary_value": float,
+                "parent_primary_value": float,
                 "delta": float,
                 "status": "completed" | "partial" | "crashed",
             }
@@ -93,12 +93,12 @@ def evaluate_candidate(
         raise ValueError(
             f"candidate node {candidate_node_id!r} not found in graph"
         )
-    candidate_composite = float(candidate_node.get("composite", 0.0))
+    candidate_primary_value = float(candidate_node.get("primary_value", 0.0))
 
     parent_id = candidate_node.get("parent_id")
     parent_node = graph.nodes.get(parent_id) if parent_id else None
-    parent_composite = (
-        float(parent_node.get("composite", 0.0)) if parent_node else 0.0
+    parent_primary_value = (
+        float(parent_node.get("primary_value", 0.0)) if parent_node else 0.0
     )
 
     skipped: list[str] = []
@@ -160,7 +160,7 @@ def evaluate_candidate(
             "status": "pending",
             "edge_type": "gate_eval",
             "description": f"gate-eval for {candidate_node_id} on cell {cell_id[:8]}",
-            "composite": 0.0,
+            "primary_value": 0.0,
             "metadata": {
                 "held_out": True,
                 "gate_eval": True,
@@ -186,7 +186,7 @@ def evaluate_candidate(
     # Concurrent poll: all handles polled in the same loop until all terminal
     per_cell_results = _poll_handles(
         handles, backend, graph,
-        candidate_composite, parent_composite,
+        candidate_primary_value, parent_primary_value,
         poll_interval_s, poll_timeout_s,
     )
     return per_cell_results, skipped
@@ -215,8 +215,8 @@ def _poll_handles(
     handles: dict,
     backend: "Backend",
     graph: "ExperimentGraph",
-    candidate_composite: float,
-    parent_composite: float,
+    candidate_primary_value: float,
+    parent_primary_value: float,
     poll_interval_s: float,
     poll_timeout_s: float,
 ) -> list[dict]:
@@ -237,19 +237,19 @@ def _poll_handles(
             state = backend.poll(handle)
             state_str = state.value if hasattr(state, "value") else str(state)
             if state_str in _TERMINAL_STATES:
-                cand_composite, status_label = _read_eval_composite(
-                    handle, backend, graph, child_id, candidate_composite, state_str,
+                cand_primary_value, status_label = _read_eval_primary_value(
+                    handle, backend, graph, child_id, candidate_primary_value, state_str,
                 )
                 # Crashed/cancelled jobs carry delta=0.0 (no meaningful comparison)
-                delta = 0.0 if status_label == "crashed" else cand_composite - parent_composite
+                delta = 0.0 if status_label == "crashed" else cand_primary_value - parent_primary_value
                 results.append({
                     "cell_id": cell_id,
                     "dataset": hc[1],
                     "encoder": hc[2],
                     "task": hc[3],
                     "child_node_id": child_id,
-                    "candidate_composite": cand_composite,
-                    "parent_composite": parent_composite,
+                    "candidate_primary_value": cand_primary_value,
+                    "parent_primary_value": parent_primary_value,
                     "delta": delta,
                     "status": status_label,
                 })
@@ -269,27 +269,27 @@ def _poll_handles(
     return results
 
 
-def _read_eval_composite(
+def _read_eval_primary_value(
     handle,
     backend,
     graph: "ExperimentGraph",
     child_id: str,
-    fallback_composite: float,
+    fallback_primary_value: float,
     state_str: str,
 ) -> tuple[float, str]:
-    """Read per-cell composite from the completed eval result.
+    """Read per-cell primary_value from the completed eval result.
 
     For crashed/cancelled/budget_killed states, returns (0.0, 'crashed').
-    For completed state, reads composite from graph node (which the orchestrator
+    For completed state, reads primary_value from graph node (which the orchestrator
     would have written from result.json — in tests, mock backends stamp the node
-    directly or use fallback_composite).
+    directly or use fallback_primary_value).
     """
     if state_str in ("crashed", "cancelled", "budget_killed"):
         return (0.0, "crashed")
 
     node = graph.nodes.get(child_id, {})
-    composite = float(node.get("composite", 0.0))
-    if composite == 0.0:
-        # Fallback: use the candidate's composite (same variant, different cell context)
-        composite = fallback_composite
-    return (composite, "completed")
+    primary_value = float(node.get("primary_value", 0.0))
+    if primary_value == 0.0:
+        # Fallback: use the candidate's primary_value (same variant, different cell context)
+        primary_value = fallback_primary_value
+    return (primary_value, "completed")

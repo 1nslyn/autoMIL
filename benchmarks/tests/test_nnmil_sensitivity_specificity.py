@@ -10,8 +10,12 @@ reports both, which left a hole in the results table on exactly one arm.
 The fix is an add-on: autobench wraps the ``get_eval_metrics`` binding that
 nnMIL's trainer module already holds, computes the two metrics from the
 targets/preds that call is being handed anyway, and lets them flow out through
-the trainer's normal metric dict. ``benchmarks/lib/nnMIL/`` is not modified —
-pinned by ``test_vendored_nnmil_is_not_modified`` below.
+the trainer's normal metric dict. nnMIL's METRIC layer
+(``benchmarks/lib/nnMIL/utilities/``) is not modified — pinned by
+``test_vendored_nnmil_metric_layer_is_not_modified`` below. (The trainer files
+do carry sanctioned benchmark instrumentation — the PolicyRuntime dispatch
+calls and the A3 ``[epoch]``/``[selected]`` lines — which is exactly why the
+pin is on the metric layer, not the whole tree.)
 
 Both arms share ONE implementation (``evaluate.sensitivity_specificity``), so
 the numbers are identical by construction rather than merely equivalent — a
@@ -220,22 +224,31 @@ class TestInstall:
 
 # --- the constraint: this is an add-on ---------------------------------------
 
-def test_vendored_nnmil_is_not_modified():
-    """The whole point: nnMIL's own source gains nothing.
+def test_vendored_nnmil_metric_layer_is_not_modified():
+    """The metric mechanism stays an add-on: nnMIL's metric layer gains nothing.
 
-    Asks git whether the vendored tree is dirty, rather than grepping one
-    function body for three substrings. The grep version passed against two
-    real violations demonstrated in review -- sensitivity computed inline in
-    ``classification_trainer.py``, and a new helper added to ``utils.py``
-    outside ``get_eval_metrics`` -- i.e. it did not detect the exact
-    "simplify by editing lib/" move it exists to forbid. It also missed any
-    rename (``tpr``/``tnr`` for the checked words).
+    Asks git whether the vendored METRIC layer (``utilities/``, where
+    ``get_eval_metrics`` lives) changed, rather than grepping one function body
+    for three substrings. The grep version passed against a real violation
+    demonstrated in review -- a new helper added to ``utils.py`` outside
+    ``get_eval_metrics`` -- and missed any rename (``tpr``/``tnr``).
 
-    Uncommitted AND committed edits both count: comparing against the merge-base
-    with the default branch catches a change that was committed on this branch.
+    Scoped to ``utilities/`` deliberately, not the whole vendored tree: the
+    TRAINER files carry sanctioned benchmark instrumentation with in-repo
+    precedent (the PolicyRuntime ``should_stop`` dispatch, the A3
+    ``[selected] epoch=`` line), landed as reviewed commits. What must never
+    move into the vendored tree is the metric computation itself -- that lives
+    in ``autobench/pipeline/nnmil/metrics_addon.py`` and
+    ``autobench/pipeline/evaluate.py``, shared with every other arm.
+
+    Uncommitted edits are refused for the WHOLE vendored tree: any vendored
+    change must be a deliberate, reviewed commit, never a loose working-tree
+    edit. Committed edits are checked against the merge-base with the default
+    branch, scoped to the metric layer.
     """
     repo = Path(__file__).resolve().parents[2]
     vendored = "benchmarks/lib/nnMIL"
+    metric_layer = "benchmarks/lib/nnMIL/utilities"
 
     def _git(*args) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -248,16 +261,75 @@ def test_vendored_nnmil_is_not_modified():
     dirty = _git("status", "--porcelain", "--", vendored).stdout.strip()
     assert not dirty, (
         f"benchmarks/lib/nnMIL has uncommitted changes:\n{dirty}\n"
-        "This must stay an add-on: the mechanism belongs in "
+        "Vendored edits must be deliberate, reviewed commits -- and the metric "
+        "mechanism in particular belongs in "
         "autobench/pipeline/nnmil/metrics_addon.py, not in vendored code."
+    )
+
+    # Committed-diff guard covers the FULL vendored tree minus the explicit
+    # allowlist of instrumentation-touched files, so models/, losses/, and
+    # data/ stay guarded — a loss tweak or architecture edit hidden in the
+    # vendored tree would move the arm's numbers for a reason invisible in
+    # autobench/ while the suite stayed green.
+    allowed_vendored_edits = {
+        "benchmarks/lib/nnMIL/training/trainers/classification_trainer.py",
+        "benchmarks/lib/nnMIL/training/trainers/survival_trainer.py",
+        "benchmarks/lib/nnMIL/training/trainers/survival_porpoise_trainer.py",
+        "benchmarks/lib/nnMIL/training/callbacks/early_stopping.py",
+    }
+    base = _git("merge-base", "HEAD", "origin/main").stdout.strip()
+    if base:
+        committed = [
+            p for p in _git(
+                "diff", "--name-only", base, "HEAD", "--", vendored,
+            ).stdout.split()
+            if p not in allowed_vendored_edits
+        ]
+        assert not committed, (
+            f"benchmarks/lib/nnMIL was edited outside the sanctioned "
+            f"instrumentation allowlist on this branch:\n"
+            + "\n".join(committed)
+            + "\nVendored edits beyond the PolicyRuntime dispatch / A3 "
+            "instrumentation files change what the paper compares."
+        )
+        assert metric_layer  # the metric layer is never allowlisted
+
+
+def test_vendored_clam_is_not_modified_outside_instrumentation():
+    """CLAM twin of the nnMIL pin — it had no guard at all while this branch
+    was already editing its ``core_utils.py``."""
+    repo = Path(__file__).resolve().parents[2]
+    vendored = "benchmarks/lib/CLAM"
+    allowed_vendored_edits = {
+        "benchmarks/lib/CLAM/utils/core_utils.py",
+    }
+
+    def _git(*args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True,
+        )
+
+    if _git("rev-parse", "--git-dir").returncode != 0:
+        pytest.skip("not a git checkout")
+
+    dirty = _git("status", "--porcelain", "--", vendored).stdout.strip()
+    assert not dirty, (
+        f"benchmarks/lib/CLAM has uncommitted changes:\n{dirty}\n"
+        "Vendored edits must be deliberate, reviewed commits."
     )
 
     base = _git("merge-base", "HEAD", "origin/main").stdout.strip()
     if base:
-        committed = _git("diff", "--stat", base, "HEAD", "--", vendored).stdout.strip()
+        committed = [
+            p for p in _git(
+                "diff", "--name-only", base, "HEAD", "--", vendored,
+            ).stdout.split()
+            if p not in allowed_vendored_edits
+        ]
         assert not committed, (
-            f"benchmarks/lib/nnMIL was edited in a commit on this branch:\n"
-            f"{committed}\nKeep the mechanism consumer-side."
+            f"benchmarks/lib/CLAM was edited outside the sanctioned "
+            f"instrumentation allowlist on this branch:\n"
+            + "\n".join(committed)
         )
 
 

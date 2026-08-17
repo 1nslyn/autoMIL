@@ -12,7 +12,7 @@ def test_seal_moves_fold_and_results_into_certify(tmp_path):
     node = tmp_path
     # The agent-visible node archive after a run: test-bearing per-fold detritus
     # sits directly under the node dir alongside val-only result.json / run.log.
-    (node / "result.json").write_text('{"composite": 0.84}')        # val-only, stays
+    (node / "result.json").write_text('{"primary_value": 0.84}')        # val-only, stays
     (node / "run.log").write_text("Val error: 0.2")                  # stays
     (node / "fold_0_result.json").write_text('{"held_out": {"test_auc": 0.8}}')
     (node / "fold_1_result.json").write_text('{"held_out": {"test_auc": 0.7}}')

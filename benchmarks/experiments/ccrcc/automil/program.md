@@ -59,7 +59,7 @@ Required fields:
     "test_auc": 0.872,
     "test_bacc": 0.830
   },
-  "composite": 0.851,
+  "primary_value": 0.851,
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500
 }
@@ -103,7 +103,7 @@ Run `automil check` to verify everything is configured correctly.
 5. Wait for completion notifications in `automil/orchestrator/completed/`
 6. Read results, update graph via `automil reconcile`
 7. Update `automil/learnings.md` with insights
-8. If composite improved: commit the winning changes
+8. If primary_value improved: commit the winning changes
 9. If no proposals remain: brainstorm and use `automil propose`
 10. Repeat
 
@@ -130,14 +130,14 @@ The orchestrator provides these to your training script:
 
 ## Keep/Discard Rules
 
-The framework decides keep/discard on the single **validation** composite , 
+The framework decides keep/discard on the single **validation** primary_value , 
 never test:
-- **Keep**: child's composite beats the parent's by more than the
+- **Keep**: child's primary_value beats the parent's by more than the
   predeclared `accept_margin` δ (`graph.json` `meta.scoring.accept_margin`,
   default 0.0 = strict dominance)
-- **Discard**: composite is within the margin of, or worse than, the parent
+- **Discard**: primary_value is within the margin of, or worse than, the parent
 
-Optimize the **validation** composite only. Test is sealed into a
+Optimize the **validation** primary_value only. Test is sealed into a
 `held_out` block and must NOT be referenced, inspected, or optimized during
 the loop, it is revealed exactly once, at the end, via `automil certify`.
 

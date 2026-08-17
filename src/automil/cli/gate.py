@@ -209,7 +209,7 @@ def register_manifest_cmd(
         p_threshold=p_threshold,
         bootstrap_reps=bootstrap_reps,
         win_definition=(
-            "delta_composite > 0 AND p <= alpha/K (paired Wilcoxon, "
+            "delta_primary_value > 0 AND p <= alpha/K (paired Wilcoxon, "
             "Bonferroni-corrected) AND ci_low > 0 (BCa bootstrap, 95%)"
         ),
         schema_version=SCHEMA_VERSION,

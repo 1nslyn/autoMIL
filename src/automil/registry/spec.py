@@ -29,7 +29,7 @@ class VariantSpec:
     kind: Kind
     parent: Optional[str]
     base_commit: str
-    composite: float
+    primary_value: float
     node_id: str
     created_at: str
     mutations: tuple[str, ...] = field(default_factory=tuple)

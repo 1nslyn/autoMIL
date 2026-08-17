@@ -1,11 +1,17 @@
 {
   "aggregation": {
     "cell_metric": "equal-weight arithmetic mean across the five predeclared folds",
-    "classification_primary": "(test_auc + test_bacc) / 2",
-    "survival_primary": "test_c_index",
+    "primary_by_task_family": {
+      "binary": "test_auc",
+      "multiclass": "test_auc",
+      "ordinal": "test_qwk",
+      "survival": "test_c_index"
+    },
+    "primary_rationale": "reporting follows the field's canonical metric per task family (binary and nominal multiclass on AUROC, ordinal grading on quadratic-weighted kappa, survival on the concordance index); selection everywhere remains the primary validation metric and is never a test quantity",
+    "qwk_recording_rule": "quadratic-weighted kappa is recorded clamped at 0 (kappa is defined on [-1, 1] while every sealed consumer requires [0, 1]); the raw value remains recoverable from the sealed summary block and persisted predictions",
     "survival_scale_rule": "aggregate fold-level c-index values; never pool raw risks across independently trained folds"
   },
-  "campaign_id": "automil-preprint-130-v5",
+  "campaign_id": "automil-preprint-130-v6",
   "estimands": {
     "agent_resources": {
       "fields": [
@@ -20,12 +26,12 @@
     "agentic_lift": {
       "contrast": "frozen autoMIL winner minus native baseline within the same cell",
       "report_by": [
-        "task_type",
+        "task_family",
         "regime",
         "dataset",
         "framework"
       ],
-      "scale_rule": "classification and survival magnitude summaries are always separate; only sign counts may be pooled across task types",
+      "scale_rule": "magnitude summaries are always per task family (each family has exactly one reporting metric and metrics are not interchangeable); only sign counts may be pooled across families",
       "unit": "one predeclared cell identified only by dataset, task, encoder, arm, seed, and protocol_version"
     },
     "search_process": {
@@ -82,6 +88,7 @@
         "kendall_tau_b",
         "top_arm_set_changed"
       ],
+      "pooling_rule": "rank statistics are scale-free, so the classification stratum deliberately pools blocks ranked on test_auc with the ordinal grade blocks ranked on test_qwk; every block row carries its task_family and primary_metric so the mixture stays visible",
       "stratify_by": "task_type"
     },
     "titan_lift": {
@@ -109,6 +116,6 @@
     "tie_method": "average ranks",
     "top_arm_definition": "the complete set tied at the maximum primary metric"
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "status": "frozen-before-held-out-certification"
 }

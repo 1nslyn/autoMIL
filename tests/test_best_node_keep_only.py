@@ -1,5 +1,5 @@
 """H-6 (audit 2026-07-23): meta.best_node_id must never point to a discarded
-node. The old inline ``composite > best`` updates were status-agnostic and ran
+node. The old inline ``primary_value > best`` updates were status-agnostic and ran
 before ``_reevaluate_descendants`` could flip a child to discard, so best could
 be left on a discarded node (reported by status/viz; a certify target).
 
@@ -21,15 +21,15 @@ def _fresh_graph(tmp_path, margin=0.0):
 def test_promote_discard_status_never_becomes_best(tmp_path):
     g = _fresh_graph(tmp_path)
     root = g.add_proposed("root", "root", [], kind="hp")
-    g.promote(root, {"composite": 0.80, "status": "keep"})
+    g.promote(root, {"primary_value": 0.80, "status": "keep"})
     assert g.meta["best_node_id"] == root
 
     child = g.add_proposed(root, "higher-but-discarded", [], kind="hp")
-    # Higher composite but explicitly discarded — must NOT capture best.
-    g.promote(child, {"composite": 0.90, "status": "discard"})
+    # Higher primary_value but explicitly discarded — must NOT capture best.
+    g.promote(child, {"primary_value": 0.90, "status": "discard"})
 
     assert g.meta["best_node_id"] == root
-    assert g.meta["best_composite"] == pytest.approx(0.80)
+    assert g.meta["best_primary_value"] == pytest.approx(0.80)
 
 
 def test_descendant_flipped_to_discard_loses_best(tmp_path):
@@ -40,17 +40,17 @@ def test_descendant_flipped_to_discard_loses_best(tmp_path):
     parent = g.add_proposed("root", "parent", [], kind="hp")
     child = g.add_proposed(parent, "within-margin child", [], kind="hp")
 
-    # Child promoted first: parent composite defaults to 0, so 0.82 is kept and
+    # Child promoted first: parent primary_value defaults to 0, so 0.82 is kept and
     # becomes best.
-    g.promote(child, {"composite": 0.82, "status": "keep"})
+    g.promote(child, {"primary_value": 0.82, "status": "keep"})
     assert g.meta["best_node_id"] == child
-    assert g.meta["best_composite"] == pytest.approx(0.82)
+    assert g.meta["best_primary_value"] == pytest.approx(0.82)
 
     # Parent completes at 0.80. δ=0.05 → child (0.82) is within margin of parent
     # (needs > 0.85) → _reevaluate_descendants flips it to discard.
-    g.promote(parent, {"composite": 0.80, "status": "keep"})
+    g.promote(parent, {"primary_value": 0.80, "status": "keep"})
 
     assert g.nodes[child]["status"] == "discard"
     # Best must now be the parent (the only keep node), not the discarded child.
     assert g.meta["best_node_id"] == parent
-    assert g.meta["best_composite"] == pytest.approx(0.80)
+    assert g.meta["best_primary_value"] == pytest.approx(0.80)

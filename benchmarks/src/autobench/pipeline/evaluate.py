@@ -107,8 +107,8 @@ def quadratic_weighted_kappa(
 
     Returns the RAW value, which lives in [-1, 1] and is negative when
     agreement is worse than chance. Clamping is a selection-policy decision and
-    belongs to the caller that builds the composite (see run_experiment.py), not
-    to the measurement -- the campaign's fold-composite validator requires
+    belongs to the caller that builds the primary_value (see run_experiment.py), not
+    to the measurement -- the campaign's fold-primary_value validator requires
     [0, 1], but a diagnostic should still be able to say "worse than chance".
 
     NaN when kappa is undefined (a fold where every sample, true and predicted,
@@ -185,10 +185,10 @@ def _macro_sensitivity_specificity(cm: np.ndarray) -> tuple[float, float]:
 
     These were ``float("nan")`` for every multi-class task until 2026-08-10. The
     NaN itself was contained -- these are diagnostics, never in ``metrics`` and
-    never in ``composite`` -- but it serialized into result.json as a bare ``NaN``
+    never in ``primary_value`` -- but it serialized into result.json as a bare ``NaN``
     token, which the orchestrator's ingestion parser rejects outright (CR-1a).
     Every 3-class run (CPTAC-PDAC, TCGA-HNSC) was therefore recorded as a crash
-    despite carrying a perfectly good validation composite. Note the SERIALIZER
+    despite carrying a perfectly good validation primary_value. Note the SERIALIZER
     fix is what repaired that; naming these honestly is a separate concern.
 
     A class absent from ``y_true`` has an undefined recall, and one that consumes
@@ -372,7 +372,7 @@ def compute_confidence_intervals(
     ``mean``, ``std`` (ddof=1)
         Unchanged by the method switch. ``mean`` is what
         ``run_experiment.py::summary_to_result_json`` reads, so no selection
-        signal, composite, or keep/discard decision moves because of H-5a.
+        signal, primary_value, or keep/discard decision moves because of H-5a.
     ``ci_low``, ``ci_high``
         The interval. Widens ~1.6x relative to the old percentile bootstrap.
     ``method``
@@ -491,3 +491,66 @@ def write_predictions_csv(
             sid = slide_ids[i] if slide_ids is not None and i < len(slide_ids) else f"sample_{i}"
             w.writerow([sid, int(y_true[i])]
                        + [float(x) for x in y_probs[i]] + [int(y_pred[i])])
+
+
+def write_survival_predictions_csv(path: str, records: dict) -> None:
+    """Persist one split's per-sample survival risk scores (A4').
+
+    ``records`` is the ``val_records`` dict every survival trainer already
+    materializes at fold end (CR-3): ``risks`` / ``statuses`` / ``times`` /
+    ``patient_ids``, parallel lists. Written as
+    ``patient_id, status, time, risk_score`` — the same column set nnMIL's own
+    test-side CSV uses — so a survival fold's validation split can be re-scored
+    (or byte-compared across runs) without a retrain, exactly what
+    ``write_predictions_csv`` provides on the classification side.
+    """
+    import csv as _csv
+    import os as _os
+
+    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["patient_id", "status", "time", "risk_score"])
+        for pid, status, time_, risk in zip(
+            records["patient_ids"], records["statuses"],
+            records["times"], records["risks"],
+        ):
+            w.writerow([pid, int(status), float(time_), float(risk)])
+
+
+def val_prediction_hashes(fold_results: list[dict]) -> list[str | None]:
+    """Project each fold's ``val_predictions_sha256`` for the summary (A4').
+
+    Positional with ``per_fold_val``. The hash has ONE home: every arm's
+    fold-result builder computes it right where that fold's
+    ``predictions_val.csv`` is written — this helper only reads it back out,
+    never recomputes it. ``None`` therefore means the fold result carries no
+    hash: a fold resumed from a metrics.json that predates hashing, or a fold
+    that never wrote val predictions (no ``fold_dir`` / empty val split) —
+    not "unimplemented".
+    """
+    return [fr.get("val_predictions_sha256") for fr in fold_results]
+
+
+def file_sha256_or_none(path: str) -> str | None:
+    """sha256 hex of a file's bytes, or None when the file does not exist.
+
+    The no-op detector (A4'): two runs whose recipes differ but whose selected
+    models score the validation split identically are indistinguishable by
+    metrics on a small split — the hash of the persisted per-fold val
+    predictions tells a changed model from an unchanged one.
+
+    The name carries the contract: ``autobench.campaign.file_sha256`` is the
+    strict sibling (``Path -> str``, raises on a missing file). Keeping the
+    two names distinct is what stops the contracts being silently swapped.
+    """
+    import hashlib
+    import os as _os
+
+    if not _os.path.exists(path):
+        return None
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

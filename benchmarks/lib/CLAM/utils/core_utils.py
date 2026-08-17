@@ -64,14 +64,30 @@ class EarlyStopping:
         self.best_score = None
         self.early_stop = False
         self.val_loss_min = np.inf
+        self.best_epoch = -1  # epoch of the checkpoint currently saved
 
     def __call__(self, epoch, val_loss, model, ckpt_name = 'checkpoint.pt'):
 
         score = -val_loss
 
-        if self.best_score is None:
+        # A non-finite val loss must never become (or defend) the checkpoint:
+        # with a finite best, NaN fails `score < best` and the upstream else
+        # branch would SAVE the non-finite epoch as the new best. Map it to
+        # -inf (always a regression) and never save on a degenerate first
+        # epoch — same contract as the nnMIL callbacks.
+        if np.isnan(score) or np.isinf(score):
+            score = float('-inf')
+
+        if self.best_score is None and score == float('-inf'):
+            self.counter += 1
+            print(f'EarlyStopping: non-finite val loss at epoch {epoch}; no checkpoint saved ({self.counter}/{self.patience})')
+            if self.counter >= self.patience and epoch > self.stop_epoch:
+                self.early_stop = True
+        elif self.best_score is None:
             self.best_score = score
+            self.best_epoch = epoch
             self.save_checkpoint(val_loss, model, ckpt_name)
+            self.counter = 0
         elif score < self.best_score:
             self.counter += 1
             print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
@@ -79,6 +95,7 @@ class EarlyStopping:
                 self.early_stop = True
         else:
             self.best_score = score
+            self.best_epoch = epoch
             self.save_checkpoint(val_loss, model, ckpt_name)
             self.counter = 0
 
@@ -177,15 +194,26 @@ def train(datasets, cur, args):
     print('Done!')
 
     print('\nSetup EarlyStopping...', end=' ')
-    if args.early_stopping:
-        early_stopping = EarlyStopping(patience=getattr(args, 'patience', 20), stop_epoch=getattr(args, 'stop_epoch', 50), verbose=True)
-
-    else:
-        early_stopping = None
+    # Protocol v3: the val-loss checkpoint tracker runs UNCONDITIONALLY;
+    # `args.early_stopping` (a legal tunable knob) only decides whether the
+    # patience signal may END TRAINING early — the same split every other
+    # arm uses. Upstream coupled the two: flag off meant no per-epoch
+    # checkpointing at all, so the FINAL epoch's weights were scored and a
+    # search proposal could silently opt this arm out of the frozen
+    # selection rule.
+    early_stopping = EarlyStopping(patience=getattr(args, 'patience', 20), stop_epoch=getattr(args, 'stop_epoch', 50), verbose=True)
     print('Done!')
 
+    ckpt_path = os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))
+    # A checkpoint left by a prior attempt in the same results_dir must not
+    # be restorable as this run's selection (existence is not authorship).
+    if os.path.exists(ckpt_path):
+        os.remove(ckpt_path)
+
+    last_epoch = -1  # stays -1 when max_epochs == 0: the loop never binds `epoch`
     for epoch in range(args.max_epochs):
-        if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:     
+        last_epoch = epoch
+        if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:
             train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
             stop, val_metrics = validate_clam(cur, epoch, model, val_loader, args.n_classes,
                 early_stopping, writer, loss_fn, args.results_dir)
@@ -195,16 +223,38 @@ def train(datasets, cur, args):
             stop, val_metrics = validate(cur, epoch, model, val_loader, args.n_classes,
                 early_stopping, writer, loss_fn, args.results_dir)
 
+        if not args.early_stopping:
+            # Flag off = run every epoch; the tracker above still checkpoints.
+            stop = False
         if policy_runtime is not None:
             # A2 (claims-alignment): validation metrics, same as every other arm.
             stop = policy_runtime.should_stop(stop, epoch=epoch, metrics=val_metrics)
         if stop:
             break
 
-    if args.early_stopping:
-        model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
+    if os.path.exists(ckpt_path):
+        model.load_state_dict(torch.load(ckpt_path))
+        selected_epoch, selected_source = early_stopping.best_epoch, 'best'
+    elif last_epoch >= 0:
+        # Epochs ran but none ever checkpointed: every validation loss was
+        # non-finite. Publishing the final weights would certify garbage
+        # under honest-looking metrics — fail the fold instead (same
+        # contract as the nnMIL callbacks: an all-degenerate run ends with
+        # no checkpoint, not a fallback selection).
+        raise RuntimeError(
+            'CLAM: every epoch had a non-finite validation loss; no '
+            'loss-selected checkpoint exists to certify'
+        )
     else:
-        torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+        # No epoch ever ran (max_epochs == 0): score the current weights so
+        # summary() below has something coherent to evaluate.
+        torch.save(model.state_dict(), ckpt_path)
+        selected_epoch, selected_source = last_epoch, 'final'
+
+    # A3: the epoch whose weights are scored below — EarlyStopping's best
+    # val-loss checkpoint whenever one was saved (source=best), else the
+    # current weights, no restore (source=final; epoch=-1 when max_epochs == 0).
+    print('[selected] epoch={} source={}'.format(selected_epoch, selected_source), flush=True)
 
     _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
     print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))

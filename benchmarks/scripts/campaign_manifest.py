@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from automil.backends.pidfile import is_pid_alive_with_starttime, load_pid_file
 from autobench.campaign import (
     build_preprint_manifest,
     file_sha256,
@@ -44,6 +45,38 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError:
         parser.error("--output-root must live inside the git repository")
     if args.action == "generate":
+        # Live-daemon guard: daemons anchored at this checkout re-hash
+        # manifest.json at every launch revalidation against the sha pinned in
+        # their queued specs. Rewriting it under them refuses their own billed
+        # retries mid-flight (observed live 2026-08-15 on the canary recovery,
+        # 43 seconds after an in-place rewrite). Drain and stop daemons first.
+        # Scanned roots: the campaign dir (covers the default runtime/ and
+        # runtime-canary/ layouts) AND the declared --output-root, which may
+        # live elsewhere in the repo.
+        guard_roots = {manifest_path.parent, output_root}
+        live = []
+        seen_pid_files = set()
+        for root in sorted(guard_roots):
+            for pid_file in sorted(root.glob("**/orchestrator.pid")):
+                if pid_file in seen_pid_files:
+                    continue
+                seen_pid_files.add(pid_file)
+                loaded = load_pid_file(pid_file)
+                if loaded and is_pid_alive_with_starttime(
+                    loaded["pid"], loaded["starttime_ticks"]
+                ):
+                    live.append(
+                        f"PID {loaded['pid']}: {pid_file.parent.parent.parent}"
+                    )
+        if live:
+            raise SystemExit(
+                "refusing to rewrite the manifest while orchestrator daemons "
+                "are alive under this checkout's campaign roots — their queued "
+                "specs pin the current manifest bytes and every launch "
+                "revalidates them:\n  " + "\n  ".join(live)
+                + "\nStop each daemon (`uv run automil --project <root> "
+                "orchestrator stop`) after its queue drains, then re-run."
+            )
         digest = write_manifest(build_preprint_manifest(repo_root), manifest_path)
         print(f"wrote {manifest_path} ({digest})")
     elif args.action == "check":

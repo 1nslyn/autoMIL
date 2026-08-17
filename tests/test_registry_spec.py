@@ -14,7 +14,7 @@ def _spec_fields() -> dict:
         "kind": "model",
         "parent": "clam_mb",
         "base_commit": "abc1234",
-        "composite": 0.8074,
+        "primary_value": 0.8074,
         "node_id": "node_0176",
         "created_at": "2026-05-02T10:00:00Z",
     }
@@ -26,14 +26,14 @@ def test_construction_happy_path():
     assert spec.name == "clam_mb_v0176"
     assert spec.kind == "model"
     assert spec.parent == "clam_mb"
-    assert spec.composite == pytest.approx(0.8074)
+    assert spec.primary_value == pytest.approx(0.8074)
 
 
 def test_frozen_mutation_refused():
     from automil.registry.spec import VariantSpec
     spec = VariantSpec(**_spec_fields())
     with pytest.raises(dataclasses.FrozenInstanceError):
-        spec.composite = 0.99  # type: ignore[misc]
+        spec.primary_value = 0.99  # type: ignore[misc]
 
 
 def test_mutations_tuple_immutable():

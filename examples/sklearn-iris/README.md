@@ -22,7 +22,7 @@ uv run python train.py              # writes result.json to CWD
 cat result.json
 ```
 
-Expected: `composite` between 0.93 and 0.98 with `random_state=42`.
+Expected: `primary_value` between 0.93 and 0.98 with `random_state=42`.
 
 ## How autoMIL uses it
 
@@ -42,6 +42,6 @@ exercises this exact path on every Phase 8+ commit.
 | Path | Role |
 |------|------|
 | `train.py` | minimal training script (~80 lines) |
-| `automil/config.yaml` | consumer config: env.required=[], scoring.formula="accuracy" |
-| `automil/program.md` | narrative for the agent: what to search, composite definition |
+| `automil/config.yaml` | consumer config: env.required=[], scoring.formula="val_accuracy" |
+| `automil/program.md` | narrative for the agent: what to search, primary_value definition |
 | `automil/variants/classifier_v0/logistic_v0.py` | starter variant exporting `make_classifier` |

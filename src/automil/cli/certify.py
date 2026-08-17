@@ -1,6 +1,6 @@
 """certify command: reveal the sealed held-out TEST performance ONCE (val-firewall).
 
-During search the experiment tree selects on the VALIDATION composite and test
+During search the experiment tree selects on the VALIDATION primary_value and test
 metrics are quarantined in a sealed ``archive/<node>/certify/`` subdir (written by
 terminal_writer). ``certify`` is the single, deliberate end-of-run read of that
 test performance for the val-selected winner (or an explicit ``--node``)
@@ -39,7 +39,7 @@ _MULTI_REVEAL_REFUSAL = (
 
 
 def _sorted_keep_nodes(graph) -> list[dict]:
-    """Executed keep-class nodes, best validation composite first (id ties).
+    """Executed keep-class nodes, best validation primary_value first (id ties).
 
     B5: `candidate` and `registered` are better-validated keep-states —
     excluding them meant nominating your best node silently pointed
@@ -53,9 +53,9 @@ def _sorted_keep_nodes(graph) -> list[dict]:
         and n.get("type") == "executed"
         and n.get("status") in KEEP_CLASS
     ]
-    # D-12 tie-break: highest composite first, lexicographically smaller id wins ties
+    # D-12 tie-break: highest primary_value first, lexicographically smaller id wins ties
     # (matches recompute_best / meta.best_node_id so `certify` reports the canonical winner).
-    keeps.sort(key=lambda n: (-float(n.get("composite", 0.0)), n.get("id", "")))
+    keeps.sort(key=lambda n: (-float(n.get("primary_value", 0.0)), n.get("id", "")))
     return keeps
 
 
@@ -86,7 +86,7 @@ def _validate_reveal_scope(
 @click.option("--node", "node_id", default=None,
               help="Node id to certify (default: the val-selected best node).")
 @click.option("--top-k", "top_k", default=1, type=int,
-              help="Certify the top-K keep nodes by validation composite. "
+              help="Certify the top-K keep nodes by validation primary_value. "
                    "K>1 unseals several nodes' test blocks and so requires "
                    "--unseal-multiple.")
 @click.option("--unseal-multiple", "unseal_multiple", is_flag=True, default=False,
@@ -147,11 +147,11 @@ def certify(ctx: click.Context, node_id: str | None, top_k: int, unseal_multiple
         if node is None:
             click.echo(f"  [{nid}] not found in graph.")
             continue
-        val_comp = node.get("composite", 0.0)
+        val_comp = node.get("primary_value", 0.0)
         certify_path = archive / nid / "certify" / "certify.json"
         if not certify_path.exists():
             click.echo(
-                f"  [{nid}] val_composite={val_comp:.4f}  —  "
+                f"  [{nid}] primary_value={val_comp:.4f}  —  "
                 "no certify.json (test not sealed for this node)."
             )
             continue
@@ -166,7 +166,7 @@ def certify(ctx: click.Context, node_id: str | None, top_k: int, unseal_multiple
             if isinstance(v, (int, float))
         )
         click.echo(
-            f"  [{nid}] val_composite={val_comp:.4f}  |  held-out: {test_str or '(none)'}"
+            f"  [{nid}] primary_value={val_comp:.4f}  |  held-out: {test_str or '(none)'}"
         )
 
     click.echo(

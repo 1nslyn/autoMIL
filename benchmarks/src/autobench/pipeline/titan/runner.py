@@ -16,9 +16,13 @@ from dataclasses import replace
 
 from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
-from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.evaluate import (
+    compute_confidence_intervals,
+    pooled_val_block,
+    val_prediction_hashes,
+)
 from autobench.pipeline.results_cache import resolve_results_dir
-from autobench.pipeline.titan.config import TitanHeadConfig
+from autobench.pipeline.titan.config import TitanHeadConfig, apply_train_overrides
 from autobench.pipeline.titan.dataset import build_split_dataset, build_survival_split_dataset
 from autobench.pipeline.titan.survival_train import train_titan_survival_fold
 from autobench.pipeline.titan.train import train_titan_fold
@@ -60,6 +64,12 @@ def run_titan_experiment(
     # and config.json/summary record the real dimension.
     exp_cfg = replace(exp_cfg, embed_dim=int(manifest["embed_dim"]))
     policy_runtime = PolicyRuntime.from_experiment(exp_cfg)
+
+    # H-3 / CR-5b: apply the opaque channel's train-side slice (max_epochs,
+    # early_stopping) HERE — before results-dir resolution and exp_cfg.save —
+    # so cache identity and the archived config.json record the effective
+    # values. The trainers read exp_cfg.train as already-effective.
+    apply_train_overrides(exp_cfg)
 
     # CR-5 (audit 2026-07-23): honor an explicit isolated results_dir
     # (AUTOMIL_RESULTS_DIR under the orchestrator) so per-fold metrics.json is
@@ -112,7 +122,7 @@ def run_titan_experiment(
                 policy_runtime=fold_policy_runtime,
             )
         fold_results.append(result)
-        _write_fold_result_json(fold, result)
+        _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]
@@ -138,6 +148,9 @@ def run_titan_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
+        # A4': positional with per_fold_val; one hash home — see
+        # val_prediction_hashes.
+        "per_fold_val_predictions_sha256": val_prediction_hashes(fold_results),
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

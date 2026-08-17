@@ -138,6 +138,39 @@ class TestTheDefectItself:
         assert saved["train"]["weight_decay"] != saved["arm"]["wd"]
 
 
+class TestTitanArchivedProvenance:
+    """The archived config.json must carry the EFFECTIVE train values.
+
+    The defect (F-K11): the opaque channel's train-side slice used to be
+    applied inside the TITAN trainers (via resolve_head_config) — AFTER the
+    runner had resolved the results dir and saved config.json — so a run
+    overridden to max_epochs=7 archived the default 200. The seam is now
+    ``apply_train_overrides`` at the runner level, contract-matched to
+    ``hparams.apply_overrides_to_exp_cfg``: run before results-dir
+    resolution and ``exp_cfg.save``.
+    """
+
+    def test_archived_config_carries_the_overridden_max_epochs(self, tmp_path):
+        from autobench.pipeline.titan.config import (
+            TitanHeadConfig,
+            apply_train_overrides,
+        )
+
+        exp = _exp(framework=Framework.TITAN)
+        exp.hparam_overrides = {"max_epochs": 7}
+
+        # The runner's real order: apply, then save.
+        apply_train_overrides(exp)
+        path = tmp_path / "results" / "config.json"
+        exp.save(str(path), arm_cfg=TitanHeadConfig())
+
+        saved = json.loads(path.read_text())
+        assert saved["train"]["max_epochs"] == 7
+        # Still the arm's documented mixed provenance: the SHARED block
+        # governs max_epochs, so it must not be listed as superseded.
+        assert "max_epochs" not in saved["train_fields_superseded_by_arm"]
+
+
 class TestFingerprintIsNotDisturbed:
     def test_to_dict_does_not_gain_the_provenance_fields(self):
         """Load-bearing. ``fingerprint_payload`` is built on ``to_dict``; a new

@@ -27,7 +27,7 @@ multiple instance learning (MIL).
 - **Encoder:** `hoptimus1` (1536d)
 - **Model:** `clam_mb` (starting point, CLAM framework)
 - **Baseline Test AUC:** TBD (run baseline first)
-- **Optimization target:** composite = (test_auc + test_bacc) / 2
+- **Optimization target:** primary_value = val_auc (the VALIDATION selection signal — test metrics are sealed in `held_out` and never drive selection)
 
 Available `MODEL_TYPE` options:
 - **nnMIL models:** `vision_transformer`, `ab_mil`, `trans_mil`, `ilra_mil`, etc.

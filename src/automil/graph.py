@@ -106,8 +106,8 @@ def merged_metadata(node: dict | None, updates: dict) -> dict:
 def _accept_margin(meta: dict | None) -> float:
     """Predeclared Ladder keep-margin δ from ``meta.scoring.accept_margin``.
 
-    δ=0.0 (the default) reproduces plain composite dominance. A δ>0 requires a
-    child to beat its parent's validation composite by more than the margin
+    δ=0.0 (the default) reproduces plain primary_value dominance. A δ>0 requires a
+    child to beat its parent's validation primary_value by more than the margin
     before it is kept — a Ladder-style gate against promoting within-noise
     improvements over a long agentic search.
     """
@@ -118,14 +118,14 @@ def _accept_margin(meta: dict | None) -> float:
         return 0.0
 
 
-def _accept(child_composite: float, parent_composite: float, margin: float = 0.0) -> bool:
-    """Keep a child iff its composite beats the parent's by more than ``margin``.
+def _accept(child_primary_value: float, parent_primary_value: float, margin: float = 0.0) -> bool:
+    """Keep a child iff its primary_value beats the parent's by more than ``margin``.
 
     The single keep/discard predicate, shared by every decision site (the live
     terminal writer, descendant re-evaluation, and both reconcile paths) so the
     Ladder margin is applied uniformly. margin=0.0 → strict dominance.
     """
-    return child_composite > parent_composite + margin
+    return child_primary_value > parent_primary_value + margin
 
 
 #: One SE. The point of CR-4 is that the bar is the measured noise; a default of
@@ -140,8 +140,8 @@ DEFAULT_SE_MULTIPLIER = 1.0
 KEEP_CLASS = frozenset({"keep", "candidate", "registered"})
 
 
-def node_composite_se(node: dict | None) -> float | None:
-    """Cross-fold SE of a node's composite, or ``None`` if it was never measured.
+def node_primary_se(node: dict | None) -> float | None:
+    """Cross-fold SE of a node's primary_value, or ``None`` if it was never measured.
 
     ``None`` covers three real cases and they must not be conflated with zero:
     a legacy node written before CR-4, a partial run with fewer than two finite
@@ -151,7 +151,7 @@ def node_composite_se(node: dict | None) -> float | None:
     """
     if not isinstance(node, dict):
         return None
-    raw = node.get("composite_se")
+    raw = node.get("primary_se")
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
     val = float(raw)
@@ -175,32 +175,162 @@ def _se_multiplier(meta: dict | None) -> float:
         return DEFAULT_SE_MULTIPLIER
 
 
-def effective_accept_margin(meta: dict | None, parent_node: dict | None) -> float:
-    """The margin actually applied: ``max(predeclared δ, k × parent SE)`` (CR-4).
+def node_fold_primary_values(node: dict | None) -> dict[int, float] | None:
+    """``fold_index -> primary_value`` for a node, from whichever source it has.
 
-    Two invariants, both load-bearing:
+    Two sources, one shape (entries of ``{fold_index, primary_value, ...}``):
 
-    **Monotone.** The measured noise can only ever RAISE the bar. A campaign that
-    predeclared δ=0.05 must not silently drop to 0.01 because one parent happened
-    to have a tight CV — the predeclared value is a pre-registration commitment,
-    not an opening bid.
+    - ``node["fold_primary_values"]`` — written at ingest for every executed node
+      (terminal writer, both reconcile scans, ``reconcile --refresh``).
+    - ``node["metadata"]["validation_folds"]`` — the baseline root's folds,
+      written by the campaign controller's ``_ensure_discovery_baseline_root``.
+      The baseline is the dominant parent of a discovery cell, and it never
+      passes through the terminal writer, so the paired margin must read the
+      metadata form or it would silently fall back to the marginal SE in
+      exactly the topology it exists for.
 
-    **The bar belongs to the incumbent.** It is derived from the PARENT's SE, not
-    the child's. If it came from the child's, then taking the argmax over ~60
-    screened candidates would simultaneously be taking the argmin over their
-    margins: the search would be selecting on the gate itself.
+    Returns ``None`` when neither source yields a usable fold map.
+    """
+    if not isinstance(node, dict):
+        return None
+    from automil.scoring import fold_primary_value_map
 
-    This is a conservative single-arm screen, **not a test**. Parent and child
-    share folds, so the SE of their difference is not the SE of either one. The
-    honest paired inference happens at the Stage-B gate (``gate/stats.py``:
-    paired Wilcoxon + BCa on per-cell deltas). Do not report this margin as
-    significance.
+    folds = fold_primary_value_map(node.get("fold_primary_values"))
+    if folds is not None:
+        return folds
+    meta = node.get("metadata")
+    if isinstance(meta, dict):
+        return fold_primary_value_map(meta.get("validation_folds"))
+    return None
+
+
+def _formula_pairs_folds(meta: dict | None) -> bool:
+    """True when the primary_value is the mean of the per-fold primary_values.
+
+    The paired margin substitutes ``SE(per-fold child−parent deltas)`` for the
+    marginal SE while the accept predicate still compares node primary_values.
+    That substitution is coherent under the ``mean`` reducer (the default) AND
+    under ``val_*`` metric selectors: the node-level metric is the per-key
+    mean over folds, so a per-fold selector value averages back to the node
+    primary_value exactly as per-fold means do. Under ``max``/``min`` (or an
+    opt-out formula trusting reported scalars) the identity breaks, so the
+    margin falls back to the marginal basis.
+    """
+    formula = ((meta or {}).get("scoring") or {}).get("formula")
+    if formula in (None, "", "mean"):
+        return True
+    return isinstance(formula, str) and formula.startswith("val_")
+
+
+def effective_accept_margin(
+    meta: dict | None, parent_node: dict | None, child_node: dict | None = None,
+) -> float:
+    """The margin actually applied: ``max(predeclared δ, k × SE)`` (CR-4).
+
+    The SE basis is chosen by evidence available, best first:
+
+    **Paired** — when parent and child both carry primary values for the SAME fold
+    set (and the reducer is ``mean``; see :func:`_formula_pairs_folds`), the
+    basis is ``SE(per-fold child−parent deltas)``. Runs share folds under a
+    locked seed, so the fold effect — the dominant noise term — cancels in the
+    difference; on the canary cells this basis is 3–6× tighter than the
+    marginal SE and moves the detectable-effect floor into the range train-only
+    recipe changes actually produce. The paired basis is child-derived by
+    construction: the screen becomes "paired t > k, with floor δ", which is the
+    standard form for a noisy-CV accept rule. The old incumbent-only argument
+    (child-derived bars let the argmax select on the gate) traded a real
+    multiplicity concern for a bar so wide it discarded everything — the
+    virchow2 canary discarded 30/30 attempts against a bar its per-fold oracle
+    could not reach. The multiplicity concern is real and handled downstream:
+    at k=1 a null child passes with p ≈ 0.21 (one-sided t, 2 df), so over ~30
+    screened candidates several false keeps are EXPECTED — promotion re-runs
+    the top-10 on held-back folds 3/4 and the winner is selected on the 5-fold
+    mean, which is the arbitration this screen defers to. A zero paired SE
+    (fold-uniform delta) keeps at the δ floor; that is legitimately strong
+    paired evidence at this n, but note the sign-test bound: n=3 uniform
+    deltas reach one-sided p = 1/8 at best. NEVER report a keep as
+    significance — it is a search-steering screen.
+
+    **Marginal** — otherwise, ``k × parent primary_se`` (the pre-existing
+    CR-4 basis). Still monotone: measured noise can only RAISE the bar above
+    the predeclared δ; a campaign that predeclared δ=0.05 must not silently
+    drop to 0.01 because one parent happened to have a tight CV.
     """
     delta = _accept_margin(meta)
-    se = node_composite_se(parent_node)
+    _basis, se = margin_se_basis(meta, parent_node, child_node)
     if se is None:
         return delta
     return max(delta, _se_multiplier(meta) * se)
+
+
+def margin_se_basis(
+    meta: dict | None, parent_node: dict | None, child_node: dict | None = None,
+) -> tuple[str, float | None]:
+    """The SE basis :func:`effective_accept_margin` actually applies.
+
+    Returns ``("paired", se)``, ``("marginal", se)`` or ``("none", None)``.
+    Public so display surfaces (``automil rank``) label the evidence with the
+    SAME choice the gate makes — printing the raw paired SE beside a bar that
+    fell back to the marginal basis misrepresents the decision's evidence.
+    """
+    if child_node is not None and _formula_pairs_folds(meta):
+        from automil.scoring import paired_delta_se
+
+        child_folds = node_fold_primary_values(child_node)
+        parent_folds = node_fold_primary_values(parent_node)
+        # Identity guard: the paired basis substitutes SE(per-fold deltas)
+        # while _accept still compares node primary values, so it is coherent only
+        # when each node's primary_value IS the mean of its fold primary values. The
+        # reducer name alone cannot guarantee that — a recovery aggregate with
+        # sparse per-fold metrics reports a primary_value whose denominator
+        # differs from the fold vector's. Verify the property on the data in
+        # hand and fall back to the marginal basis when it fails.
+        if _primary_value_matches_folds(child_node, child_folds) and \
+                _primary_value_matches_folds(parent_node, parent_folds):
+            paired_se = paired_delta_se(child_folds, parent_folds)
+            if paired_se is not None:
+                return "paired", paired_se
+    se = node_primary_se(parent_node)
+    if se is None:
+        return "none", None
+    return "marginal", se
+
+
+def _primary_value_matches_folds(node: dict | None, folds: dict[int, float] | None) -> bool:
+    """True when the node's primary_value equals the mean of its fold primary_values
+    (within the ingest rounding tolerance) — the identity the paired margin
+    rests on."""
+    if not isinstance(node, dict) or not folds:
+        return False
+    primary_value = node.get("primary_value")
+    if isinstance(primary_value, bool) or not isinstance(primary_value, (int, float)):
+        return False
+    from automil.scoring import PRIMARY_VALUE_TOLERANCE
+
+    mean = sum(folds.values()) / len(folds)
+    return abs(float(primary_value) - mean) <= PRIMARY_VALUE_TOLERANCE
+
+
+def keep_or_discard(meta: dict | None, parent_node: dict | None, child_node: dict) -> str:
+    """THE keep/discard decision — every accept site routes through here.
+
+    ``child_node`` is REQUIRED (no default): a site that cannot supply child
+    evidence must say so by constructing the evidence dict explicitly, never
+    by omission — an omitted child would silently select the wider marginal
+    bar and stamp a genuinely improved node ``discard``, indistinguishable
+    from a real rejection (the exact failure the paired margin exists to fix).
+    Root semantics (no parent): keep iff primary_value > 0, margin N/A.
+    """
+    primary_value = child_node.get("primary_value")
+    primary_value = float(primary_value) if isinstance(primary_value, (int, float)) \
+        and not isinstance(primary_value, bool) else 0.0
+    if parent_node is None:
+        return "keep" if primary_value > 0 else "discard"
+    p_comp = parent_node.get("primary_value")
+    p_comp = float(p_comp) if isinstance(p_comp, (int, float)) \
+        and not isinstance(p_comp, bool) else 0.0
+    margin = effective_accept_margin(meta, parent_node, child_node)
+    return "keep" if _accept(primary_value, p_comp, margin) else "discard"
 
 
 def _config_accept_margin(graph_path) -> float | None:
@@ -250,7 +380,7 @@ def _config_se_multiplier(graph_path) -> float | None:
 def _config_scoring_formula(graph_path) -> str | None:
     """Best-effort read of ``scoring.formula`` from the sibling config.yaml (CR-1b).
 
-    Lets an operator predeclare the composite reducer per-dataset. Returns None
+    Lets an operator predeclare the primary_value reducer per-dataset. Returns None
     when there is no config or the key is absent (callers fall back to the
     framework default). The graph stays config-agnostic everywhere else.
     """
@@ -267,16 +397,17 @@ def _config_scoring_formula(graph_path) -> str | None:
         return None
     # B2 (claims-alignment): validate OUTSIDE the blanket except — an unknown
     # reducer name used to fall through per-result to "trusting the reported
-    # composite", i.e. a typo (or following the template's old arithmetic
+    # primary_value", i.e. a typo (or following the template's old arithmetic
     # examples) silently disabled CR-1b. Fail at config load instead.
     from automil.scoring import known_formula
     if value is not None and not known_formula(value):
         raise ValueError(
             f"scoring.formula {value!r} in {config_path} is not a known reducer. "
             "Valid values: mean | max | min (reducers over the validation "
-            "metrics) or trust_reported (explicit opt-out, weakens the "
-            "val-firewall). Arithmetic expressions are not evaluated — state "
-            "the human-readable recipe in metrics.composite_formula instead."
+            "metrics), a 'val_'-prefixed metric selector (val_auc | "
+            "val_c_index | ... — the primary_value IS that one metric), or "
+            "trust_reported (explicit opt-out, weakens the val-firewall). "
+            "Arithmetic expressions are not evaluated."
         )
     return value
 
@@ -370,18 +501,18 @@ class ExperimentGraph:
         )
         _cfg_mult = None if _has_mult else _config_se_multiplier(self.path)
         _default_mult = _cfg_mult if _cfg_mult is not None else DEFAULT_SE_MULTIPLIER
-        # CR-1b: the composite reducer, predeclarable per-dataset in config.yaml.
+        # CR-1b: the primary_value reducer, predeclarable per-dataset in config.yaml.
         _cfg_formula = _config_scoring_formula(self.path)
         _default_formula = _cfg_formula if _cfg_formula else _DEFAULT_SCORING_FORMULA
         defaults = {
-            "schema_version": 2,
+            "schema_version": 3,
             "meta": {
-                "best_composite": 0.0,
+                "best_primary_value": 0.0,
                 "best_node_id": None,
                 "total_executed": 0,
                 "total_proposed": 0,
                 "next_id": 1,
-                "baseline_composite": 0.0,
+                "baseline_primary_value": 0.0,
                 "scoring": {
                     "exploration_weight": 0.005,
                     "novelty_weight": 0.003,
@@ -443,6 +574,88 @@ class ExperimentGraph:
                     "graph.json at %s: legacy schema (pre-D-200) detected; "
                     "migrated %d node(s) to metrics-dict layout on read. "
                     "Re-save to persist the migration.",
+                    self.path,
+                    _migrated,
+                )
+        # Schema 3: the "composite" concept was retired (single-metric
+        # optimization); the selection field is `primary_value` and its SE is
+        # `primary_se`. A pre-rename graph read by the every-`.get(...)`-
+        # defaults-to-0.0 code silently zeroes every node's selection signal
+        # and strands the real best under the orphaned keys — so migrate on
+        # read, same in-memory-only contract as DBT-01 above.
+        if _on_disk_schema_version < 3:
+            _RENAMES = (
+                ("composite", "primary_value"),
+                ("composite_se", "primary_se"),
+                ("fold_composites", "fold_primary_values"),
+            )
+            _META_RENAMES = (
+                ("best_composite", "best_primary_value"),
+                ("baseline_composite", "baseline_primary_value"),
+            )
+            from automil.firewall import is_held_out_metric_key as _is_held_out
+
+            _migrated = 0
+            for _node in self._data.get("nodes", {}).values():
+                _hit = False
+                for _old, _new in _RENAMES:
+                    if _old in _node:
+                        _node.setdefault(_new, _node.pop(_old))
+                        _hit = True
+                # Legacy metrics hygiene: pre-firewall writers copied the
+                # flat test_* keys into `metrics` (DBT-01 above still does,
+                # for schema-1 graphs) and some stored the derived scalar
+                # there too. Held-out-named keys in the validation block are
+                # an A6 violation on every agent-facing surface, and a
+                # derived `composite` scalar is not a metric — the mean
+                # reducer would average it into selection.
+                _metrics_block = _node.get("metrics")
+                if isinstance(_metrics_block, dict):
+                    for _stale in ("composite", "composite_se"):
+                        if _stale in _metrics_block:
+                            _metrics_block.pop(_stale)
+                            _hit = True
+                    for _leak in [k for k in _metrics_block
+                                  if _is_held_out(str(k))]:
+                        _metrics_block.pop(_leak)
+                        _hit = True
+                for _entry in _node.get("fold_primary_values") or []:
+                    if isinstance(_entry, dict) and "composite" in _entry:
+                        _entry.setdefault("primary_value", _entry.pop("composite"))
+                        _hit = True
+                _meta_block = _node.get("metadata")
+                # The campaign's discovery baseline root stores its fold
+                # vector under metadata.validation_folds (it never passes
+                # through the terminal writer) — node_fold_primary_values
+                # reads that form for exactly this topology, so leaving the
+                # legacy key there would silently widen every child of the
+                # baseline root onto the marginal-SE bar.
+                if isinstance(_meta_block, dict):
+                    for _entry in _meta_block.get("validation_folds") or []:
+                        if isinstance(_entry, dict) and "composite" in _entry:
+                            _entry.setdefault(
+                                "primary_value", _entry.pop("composite")
+                            )
+                            _hit = True
+                if isinstance(_meta_block, dict) and "composite_disagreement" in _meta_block:
+                    _meta_block.setdefault(
+                        "primary_value_disagreement",
+                        _meta_block.pop("composite_disagreement"),
+                    )
+                    _hit = True
+                _migrated += _hit
+            for _old, _new in _META_RENAMES:
+                if _old in self._data["meta"]:
+                    _value = self._data["meta"].pop(_old)
+                    if not self._data["meta"].get(_new):
+                        self._data["meta"][_new] = _value
+                    _migrated += 1
+            self._data["schema_version"] = 3
+            if loaded_from_disk and _migrated > 0:
+                logger.warning(
+                    "graph.json at %s: pre-rename schema detected; migrated "
+                    "%d node/meta record(s) from 'composite' to "
+                    "'primary_value' on read. Re-save to persist.",
                     self.path,
                     _migrated,
                 )
@@ -559,12 +772,12 @@ class ExperimentGraph:
                      bootstrapped: bool = False) -> str:
         nid = self.next_id()
         parent = self.get_node(parent_id) if parent_id else None
-        parent_composite = parent.get("composite", 0.0) if parent else 0.0
-        composite = metrics.get("composite", 0.0)
-        # CR-4: the cross-fold SE is a framework-owned scalar like `composite`, so
+        parent_primary_value = parent.get("primary_value", 0.0) if parent else 0.0
+        primary_value = metrics.get("primary_value", 0.0)
+        # CR-4: the cross-fold SE is a framework-owned scalar like `primary_value`, so
         # it is lifted to the top level rather than left inside the opaque consumer
         # metrics dict — where CR-1b's mean-of-metrics reducer would average it in.
-        composite_se = node_composite_se({"composite_se": metrics.get("composite_se")})
+        primary_se = node_primary_se({"primary_se": metrics.get("primary_se")})
         techniques = self._auto_extract_if_empty(description, techniques)
 
         node = {
@@ -575,12 +788,12 @@ class ExperimentGraph:
             "description": description,
             "techniques": techniques,
             # Framework-owned scalars (D-200): preserved at top level.
-            "composite": composite,
-            "composite_se": composite_se,
+            "primary_value": primary_value,
+            "primary_se": primary_se,
             "global_delta": metrics.get("global_delta", metrics.get("delta", 0.0)),
-            "parent_delta": composite - parent_composite,
+            "parent_delta": primary_value - parent_primary_value,
             # Consumer metrics stored as opaque dict (D-200 / DEC-04).
-            "metrics": {k: v for k, v in metrics.items() if k != "composite_se"},
+            "metrics": {k: v for k, v in metrics.items() if k != "primary_se"},
             # Orchestrator-measured scalars (kept top-level for ergonomics; read
             # by init.py for empirical default_vram_estimate_gb).
             "vram_gb": metrics.get("vram_gb", 0.0),
@@ -602,14 +815,14 @@ class ExperimentGraph:
         # H-6 (audit 2026-07-23): only a keep node may become best (this path has
         # no descendant re-evaluation, so a keep-gated inline update suffices and
         # avoids an O(N) recompute per insert).
-        if status == "keep" and composite > self.meta["best_composite"]:
-            self.meta["best_composite"] = composite
+        if status == "keep" and primary_value > self.meta["best_primary_value"]:
+            self.meta["best_primary_value"] = primary_value
             self.meta["best_node_id"] = nid
 
         if parent_id and parent_id in self.nodes:
             self.nodes[parent_id]["child_count"] = len(self.children(parent_id))
 
-        self._update_technique_stats(techniques, composite - parent_composite)
+        self._update_technique_stats(techniques, primary_value - parent_primary_value)
         return nid
 
     def add_proposed(self, parent_id: str, description: str,
@@ -657,26 +870,39 @@ class ExperimentGraph:
     def promote(self, node_id: str, metrics: dict):
         node = self.nodes[node_id]
         parent = self.get_node(node.get("parent_id")) if node.get("parent_id") else None
-        parent_composite = parent.get("composite", 0.0) if parent else 0.0
-        composite = metrics.get("composite", 0.0)
+        parent_primary_value = parent.get("primary_value", 0.0) if parent else 0.0
+        primary_value = metrics.get("primary_value", 0.0)
         status = metrics.get("status", "discard")
 
         node["type"] = "executed"
         node["status"] = status
-        node["composite"] = composite
+        node["primary_value"] = primary_value
         # CR-4: keep the measured noise attached when a node is promoted from a
         # reconcile artifact, or the recovered incumbent would set its children's
         # bar from the bare predeclared margin instead of its own CV spread.
-        _se = node_composite_se({"composite_se": metrics.get("composite_se")})
-        if _se is not None or "composite_se" not in node:
-            node["composite_se"] = _se
+        _se = node_primary_se({"primary_se": metrics.get("primary_se")})
+        if _se is not None or "primary_se" not in node:
+            node["primary_se"] = _se
+        # Paired margin: lift the fold projection alongside the SE — same
+        # framework-owned contract, same "recovered incumbent must not lose its
+        # evidence" rationale. Assign-or-CLEAR: a re-ingest without usable
+        # folds must not leave a previous run's vector beside a new primary_value
+        # (the paired deltas would difference across runs).
+        from automil.scoring import fold_primary_value_map as _fold_map
+        _folds = metrics.get("fold_primary_values")
+        if _fold_map(_folds) is not None:
+            node["fold_primary_values"] = _folds
+        else:
+            node.pop("fold_primary_values", None)
         node["global_delta"] = metrics.get("global_delta", metrics.get("delta", 0.0))
-        node["parent_delta"] = composite - parent_composite
-        # D-200: store consumer metrics as opaque dict. `composite_se` is a
-        # framework-owned scalar (lifted above), so it is excluded here for the
-        # same reason as in add_executed: CR-1b recomputes the composite as the
-        # mean of `metrics`, and an SE averaged in would corrupt it.
-        node["metrics"] = {k: v for k, v in metrics.items() if k != "composite_se"}
+        node["parent_delta"] = primary_value - parent_primary_value
+        # D-200: store consumer metrics as opaque dict. `primary_se` and
+        # `fold_primary_values` are framework-owned (lifted above), so they are
+        # excluded here for the same reason as in add_executed: CR-1b recomputes
+        # the primary_value as the mean of `metrics`, and foreign values averaged or
+        # carried in would corrupt it.
+        node["metrics"] = {k: v for k, v in metrics.items()
+                           if k not in ("primary_se", "fold_primary_values")}
         # Orchestrator-measured scalars stay top-level.
         node["vram_gb"] = metrics.get("vram_gb", 0.0)
         node["elapsed_min"] = metrics.get("elapsed_min", 0.0)
@@ -697,7 +923,7 @@ class ExperimentGraph:
             ])
 
         self._update_technique_stats(node.get("techniques", []),
-                                     composite - parent_composite)
+                                     primary_value - parent_primary_value)
 
         self._reevaluate_descendants(node_id)
         # H-6 (audit 2026-07-23): recompute best from keep nodes only, AFTER
@@ -722,7 +948,7 @@ class ExperimentGraph:
             parent = self.nodes.get(pid)
             if not parent or parent.get("type") != "executed":
                 continue
-            p_comp = parent.get("composite", 0)
+            p_comp = parent.get("primary_value", 0)
             for child in self.nodes.values():
                 if child.get("parent_id") != pid:
                     continue
@@ -732,12 +958,11 @@ class ExperimentGraph:
                     continue   # D-01: partial nodes are not keep/discard candidates
                 if child.get("status") not in ("keep", "discard"):
                     continue
-                c_comp = child.get("composite", 0)
-                # D-200 Option B: composite-only dominance, gated by the Ladder
-                # keep-margin (δ=0.0 → strict dominance). The composite is the
+                c_comp = child.get("primary_value", 0)
+                # D-200 Option B: primary_value-only dominance, gated by the Ladder
+                # keep-margin (δ=0.0 → strict dominance). The primary_value is the
                 # consumer-computed validation selection signal (val-firewall).
-                keep = _accept(c_comp, p_comp, effective_accept_margin(self.meta, parent))
-                child["status"] = "keep" if keep else "discard"
+                child["status"] = keep_or_discard(self.meta, parent, child)
                 child["parent_delta"] = c_comp - p_comp
                 stack.append(child["id"])
 
@@ -746,7 +971,7 @@ class ExperimentGraph:
         node = self.nodes[node_id]
         node["type"] = "executed"
         node["status"] = status
-        node["composite"] = 0.0
+        node["primary_value"] = 0.0
         node["parent_delta"] = 0.0
         node["global_delta"] = 0.0
         node["error"] = error
@@ -793,13 +1018,13 @@ class ExperimentGraph:
                 ])
                 node["child_count"] = child_count
                 node["potential"] = round(
-                    node.get("composite", 0) +
+                    node.get("primary_value", 0) +
                     w_e * math.sqrt(math.log(total) / (1 + child_count)),
                     6,
                 )
             elif node["type"] == "proposed" and node["status"] != "cancelled":
                 parent = self.get_node(node.get("parent_id"))
-                parent_composite = parent.get("composite", 0.0) if parent else 0.0
+                parent_primary_value = parent.get("primary_value", 0.0) if parent else 0.0
                 siblings_tried = len([
                     n for n in self.nodes.values()
                     if n.get("parent_id") == node.get("parent_id")
@@ -813,16 +1038,16 @@ class ExperimentGraph:
                     tech_novelty /= len(node["techniques"])
 
                 node["potential"] = round(
-                    parent_composite +
+                    parent_primary_value +
                     w_e * math.sqrt(math.log(total) / (1 + siblings_tried)) +
                     w_n * tech_novelty,
                     6,
                 )
 
     def recompute_best(self) -> tuple[str | None, float, str | None, float]:
-        """Walk executed/keep nodes; pick max-composite node as best (CLI-07 / D-10..D-12).
+        """Walk executed/keep nodes; pick max-primary_value node as best (CLI-07 / D-10..D-12).
 
-        Returns ``(old_node_id, old_composite, new_node_id, new_composite)``.
+        Returns ``(old_node_id, old_primary_value, new_node_id, new_primary_value)``.
         Mutates ``self._data["meta"]`` in place. The caller decides whether to
         call ``self.save()`` — recompute_best does NOT persist (so the CLI
         ``--dry-run`` flag can skip save).
@@ -833,31 +1058,31 @@ class ExperimentGraph:
         best). Discarded / crashed / cancelled / budget-killed / proposed nodes
         are excluded.
 
-        Composite formula (D-11): uses the existing per-node ``composite`` field
+        Primary-value rule (D-11): uses the existing per-node ``primary_value`` field
         as already populated by train.py → result.json → orchestrator pipeline.
         Phase 0 does NOT redefine the formula — that's Phase 8 / DEC-04.
 
-        Tie-break (D-12): equal composites resolve to lexicographic min on
+        Tie-break (D-12): equal primary values resolve to lexicographic min on
         ``node_id``. Stable and deterministic.
         """
         old_id = self.meta.get("best_node_id")
-        old_c = float(self.meta.get("best_composite", 0.0))
+        old_c = float(self.meta.get("best_primary_value", 0.0))
 
         keep_nodes: list[tuple[str, float]] = []
         for node_id, node in self.nodes.items():
             if node.get("type") == "executed" and node.get("status") in KEEP_CLASS:
-                keep_nodes.append((node_id, float(node.get("composite", 0.0))))
+                keep_nodes.append((node_id, float(node.get("primary_value", 0.0))))
 
         if not keep_nodes:
             new_id: str | None = None
             new_c = 0.0
         else:
-            # Sort: composite DESC, node_id ASC (lex tie-break — D-12).
+            # Sort: primary_value DESC, node_id ASC (lex tie-break — D-12).
             keep_nodes.sort(key=lambda x: (-x[1], x[0]))
             new_id, new_c = keep_nodes[0]
 
         self.meta["best_node_id"] = new_id
-        self.meta["best_composite"] = new_c
+        self.meta["best_primary_value"] = new_c
         return old_id, old_c, new_id, new_c
 
     def rank_proposals(self, n: int = 6, max_per_branch: int = 2) -> list[dict]:
@@ -1002,10 +1227,10 @@ class ExperimentGraph:
                 # sanitation as the terminal writer — key-guard first (a
                 # held-out-named metrics key means crash-not-ingest; averaging
                 # it would put test into selection), then the val-recomputed
-                # composite and fold-derived SE, preferring both over the
+                # primary_value and fold-derived SE, preferring both over the
                 # reported values.
                 from automil.scoring import ingest_signal as _ingest_signal
-                _leaking, _comp_rec, _se_rec = _ingest_signal(
+                _leaking, _comp_rec, _se_rec, _refused = _ingest_signal(
                     completion, (self.meta.get("scoring") or {}).get("formula")
                 )
                 if _leaking:
@@ -1015,28 +1240,39 @@ class ExperimentGraph:
                         node_id, ", ".join(_leaking),
                     )
                     completion = {
-                        **completion, "status": "crash", "composite": 0.0,
+                        **completion, "status": "crash", "primary_value": 0.0,
                         "metrics": {},
                         "error": (
                             "val-firewall violation: held-out-named key(s) in "
                             f"`metrics`: {', '.join(_leaking)}"
                         ),
                     }
+                elif _refused:
+                    # Fail-closed (B2/B3, same contract as terminal_writer):
+                    # metrics present but unable to support the declared
+                    # formula — the reported primary_value must not survive.
+                    logger.error(
+                        "reconcile: metrics for %s cannot support the declared "
+                        "scoring.formula; refusing the reported primary_value and "
+                        "scoring the node 0.0.",
+                        node_id,
+                    )
+                    completion = {**completion, "primary_value": 0.0}
 
                 # Initialized for every status (a crash-only completion used to
-                # leave composite_se unbound); the completed branch upgrades
+                # leave primary_se unbound); the completed branch upgrades
                 # both to the recomputed values.
-                composite = completion.get("composite", 0.0)
-                composite_se = node_composite_se(completion)   # CR-4 legacy fallback
+                primary_value = completion.get("primary_value", 0.0)
+                primary_se = node_primary_se(completion)   # CR-4 legacy fallback
 
                 orch_status = completion.get("status", "")
                 if orch_status in ("oom", "crash", "timeout"):
                     graph_status = orch_status
                 elif orch_status == "completed":
                     if _comp_rec is not None:
-                        composite = _comp_rec
+                        primary_value = _comp_rec
                     if _se_rec is not None:
-                        composite_se = _se_rec
+                        primary_se = _se_rec
                     comp_metrics = completion.get("metrics", {})
                     gm = completion.get("graph_metadata", {})
                     if not gm:
@@ -1051,28 +1287,33 @@ class ExperimentGraph:
                     if not parent_id_check and node:
                         parent_id_check = node.get("parent_id")
                     parent_node = self.get_node(parent_id_check) if parent_id_check else None
-                    if parent_node:
-                        p_comp = parent_node.get("composite", 0)
-                        # D-200 Option B: composite-only dominance + Ladder margin.
-                        keep = _accept(composite, p_comp,
-                                       effective_accept_margin(self.meta, parent_node))
-                        graph_status = "keep" if keep else "discard"
-                    else:
-                        graph_status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
+                    # D-200 Option B: primary_value-only dominance + Ladder margin.
+                    # The completion artifact carries the full child evidence
+                    # (primary_value + SE + fold projection), so the paired basis
+                    # survives this recovery path too.
+                    child_evidence = {
+                        "primary_value": primary_value,
+                        "primary_se": primary_se,
+                        "fold_primary_values": completion.get("fold_primary_values"),
+                    }
+                    graph_status = keep_or_discard(self.meta, parent_node, child_evidence)
                 else:
                     graph_status = "discard"
 
                 comp_metrics = completion.get("metrics", {})
                 metrics = dict(comp_metrics)  # D-200: spread consumer metrics
-                # B6: store the same composite the keep/discard decision used
+                # B6: store the same primary_value the keep/discard decision used
                 # (val-recomputed when available), never a diverging reported one.
-                metrics["composite"] = composite
+                metrics["primary_value"] = primary_value
                 metrics["vram_gb"] = completion.get("peak_vram_mb", 0) / 1024
                 metrics["elapsed_min"] = completion.get("elapsed_seconds", 0) / 60
                 metrics["gpu"] = completion.get("gpu", -1)
                 metrics["status"] = graph_status
-                metrics["global_delta"] = composite - self.meta.get("best_composite", 0)
-                metrics["composite_se"] = composite_se   # CR-4: lifted by add_executed
+                metrics["global_delta"] = primary_value - self.meta.get("best_primary_value", 0)
+                metrics["primary_se"] = primary_se   # CR-4: lifted by add_executed
+                # Paired margin: the fold projection travels with the recovery so
+                # promote() can lift it onto the node (framework-owned, like the SE).
+                metrics["fold_primary_values"] = completion.get("fold_primary_values")
 
                 config_hash = completion.get("config_hash")
                 if not config_hash:
@@ -1115,7 +1356,13 @@ class ExperimentGraph:
                         "status": graph_status,
                         "description": completion.get("description", "recovered"),
                         "techniques": techniques,
-                        "composite": metrics["composite"],
+                        "primary_value": metrics["primary_value"],
+                        # CR-4 + paired margin: a node REBUILT from completed/
+                        # must carry the same evidence promote() lifts, or the
+                        # recovered incumbent screens its children against the
+                        # wider marginal bar (or none) with no error anywhere.
+                        "primary_se": primary_se,
+                        "fold_primary_values": completion.get("fold_primary_values"),
                         "global_delta": metrics["global_delta"],
                         "parent_delta": 0.0,
                         # D-200: consumer metrics opaque dict.
@@ -1132,14 +1379,14 @@ class ExperimentGraph:
                         "recovered": True,
                     }
                     if parent_id and parent_id in self.nodes:
-                        parent_comp = self.nodes[parent_id].get("composite", 0)
-                        self.nodes[node_id]["parent_delta"] = metrics["composite"] - parent_comp
+                        parent_comp = self.nodes[parent_id].get("primary_value", 0)
+                        self.nodes[node_id]["parent_delta"] = metrics["primary_value"] - parent_comp
                     self.meta["total_executed"] += 1
                     # H-6 (audit 2026-07-23): only a keep node may become best
                     # (keep-gated inline update preserves the D-14 no-full-recompute
                     # contract of default reconcile while never selecting a discard).
-                    if graph_status == "keep" and metrics["composite"] > self.meta["best_composite"]:
-                        self.meta["best_composite"] = metrics["composite"]
+                    if graph_status == "keep" and metrics["primary_value"] > self.meta["best_primary_value"]:
+                        self.meta["best_primary_value"] = metrics["primary_value"]
                         self.meta["best_node_id"] = node_id
 
                     self._update_technique_stats(
@@ -1168,7 +1415,7 @@ class ExperimentGraph:
                         gm = spec.get("graph_metadata", {})
                         # B6: same ingest sanitation as the terminal writer.
                         from automil.scoring import ingest_signal as _ingest_signal
-                        _leaking, _comp_rec, _se_rec = _ingest_signal(
+                        _leaking, _comp_rec, _se_rec, _refused = _ingest_signal(
                             result, (self.meta.get("scoring") or {}).get("formula")
                         )
                         if _leaking:
@@ -1178,22 +1425,32 @@ class ExperimentGraph:
                                 node_id_r, ", ".join(_leaking),
                             )
                             result = {
-                                **result, "status": "crash", "composite": 0.0,
+                                **result, "status": "crash", "primary_value": 0.0,
                                 "metrics": {},
                                 "error": (
                                     "val-firewall violation: held-out-named key(s) "
                                     f"in `metrics`: {', '.join(_leaking)}"
                                 ),
                             }
+                        elif _refused:
+                            # Fail-closed (B2/B3): same contract as the other
+                            # ingest mouths — never keep the reported scalar.
+                            logger.error(
+                                "reconcile(archive): metrics for %s cannot support "
+                                "the declared scoring.formula; refusing the "
+                                "reported primary_value and scoring the node 0.0.",
+                                node_id_r,
+                            )
+                            result = {**result, "primary_value": 0.0}
                         r_metrics = result.get("metrics", {})
-                        composite = (
+                        primary_value = (
                             _comp_rec
                             if _comp_rec is not None and result.get("status") == "completed"
-                            else result.get("composite", 0.0)
+                            else result.get("primary_value", 0.0)
                         )
-                        composite_se = (
+                        primary_se = (
                             _se_rec if _se_rec is not None
-                            else node_composite_se(result)   # CR-4 legacy fallback
+                            else node_primary_se(result)   # CR-4 legacy fallback
                         )
                         num = int(node_id_r.split("_")[1])
                         if num >= self.meta["next_id"]:
@@ -1201,17 +1458,23 @@ class ExperimentGraph:
 
                         parent_id = gm.get("parent_id")
                         parent = self.get_node(parent_id) if parent_id else None
-                        parent_composite = parent.get("composite", 0.0) if parent else 0.0
+                        parent_primary_value = parent.get("primary_value", 0.0) if parent else 0.0
+                        # Paired margin: the archive result carries the full
+                        # validation_folds; project it once for both the margin
+                        # and the recovered node below.
+                        from automil.scoring import fold_primary_value_entries as _fold_entries
+                        _folds_r = _fold_entries(
+                            result, (self.meta.get("scoring") or {}).get("formula")
+                        )
                         raw_status = result.get("status", "completed")
                         if raw_status == "completed":
-                            if parent:
-                                p_comp = parent.get("composite", 0)
-                                # D-200 Option B: composite-only dominance + Ladder margin.
-                                keep = _accept(composite, p_comp,
-                                              effective_accept_margin(self.meta, parent))
-                                status = "keep" if keep else "discard"
-                            else:
-                                status = "keep" if composite > 0 else "discard"  # root: no parent, δ N/A
+                            # D-200 Option B: primary_value-only dominance + Ladder
+                            # margin, decided on the full child evidence.
+                            status = keep_or_discard(self.meta, parent, {
+                                "primary_value": primary_value,
+                                "primary_se": primary_se,
+                                "fold_primary_values": _folds_r,
+                            })
                         else:
                             status = raw_status
 
@@ -1220,10 +1483,11 @@ class ExperimentGraph:
                             "id": node_id_r, "parent_id": parent_id,
                             "type": "executed", "status": status,
                             "description": spec.get("description", f"recovered {node_id_r}"),
-                            "techniques": techniques, "composite": composite,
-                            "composite_se": composite_se,   # CR-4
-                            "global_delta": composite - self.meta.get("best_composite", 0),
-                            "parent_delta": composite - parent_composite,
+                            "techniques": techniques, "primary_value": primary_value,
+                            "primary_se": primary_se,   # CR-4
+                            "fold_primary_values": _folds_r,    # paired-margin evidence
+                            "global_delta": primary_value - self.meta.get("best_primary_value", 0),
+                            "parent_delta": primary_value - parent_primary_value,
                             # D-200: consumer metrics opaque dict.
                             "metrics": dict(r_metrics),
                             "vram_gb": result.get("peak_vram_mb", 0) / 1024,
@@ -1235,10 +1499,10 @@ class ExperimentGraph:
                         }
                         self.meta["total_executed"] += 1
                         # H-6 (audit 2026-07-23): only a keep node may become best.
-                        if status == "keep" and composite > self.meta.get("best_composite", 0):
-                            self.meta["best_composite"] = composite
+                        if status == "keep" and primary_value > self.meta.get("best_primary_value", 0):
+                            self.meta["best_primary_value"] = primary_value
                             self.meta["best_node_id"] = node_id_r
-                        parent_delta = composite - parent_composite
+                        parent_delta = primary_value - parent_primary_value
                         self._update_technique_stats(techniques, parent_delta)
                     except (json.JSONDecodeError, Exception):
                         continue
@@ -1295,7 +1559,7 @@ class ExperimentGraph:
         """Bootstrap a graph from a TSV produced by ``_append_results_tsv``.
 
         Column order is read from the header row, not hardcoded — any
-        columns beyond ``node_id``, ``composite``, ``vram_gb``,
+        columns beyond ``node_id``, ``primary_value``, ``vram_gb``,
         ``elapsed_min``, ``status``, ``description`` are mapped into the
         node's ``metrics`` dict by their header name. Any consumer's TSV
         round-trips without framework changes.
@@ -1327,7 +1591,7 @@ class ExperimentGraph:
                     "as the identifier."
                 )
         try:
-            i_composite = header_cols.index("composite")
+            i_primary_value = header_cols.index("primary_value")
             i_vram = header_cols.index("vram_gb")
             i_elapsed = header_cols.index("elapsed_min")
             i_status = header_cols.index("status")
@@ -1335,10 +1599,10 @@ class ExperimentGraph:
         except ValueError as exc:
             raise ValueError(
                 f"TSV {tsv_path} is missing one of the required columns "
-                f"(composite, vram_gb, elapsed_min, status, description): "
+                f"(primary_value, vram_gb, elapsed_min, status, description): "
                 f"{exc}"
             )
-        _RESERVED = {header_cols[i_node], "composite", "vram_gb",
+        _RESERVED = {header_cols[i_node], "primary_value", "vram_gb",
                      "elapsed_min", "status", "description", "delta"}
         # All other columns are treated as metrics.
         metric_idx = [
@@ -1356,7 +1620,7 @@ class ExperimentGraph:
 
             commit = parts[i_node]
             try:
-                composite = float(parts[i_composite])
+                primary_value = float(parts[i_primary_value])
             except ValueError:
                 continue
             try:
@@ -1368,7 +1632,7 @@ class ExperimentGraph:
             description = parts[i_desc]
 
             metrics: dict[str, float] = {
-                "composite": composite,
+                "primary_value": primary_value,
                 "vram_gb": vram_gb,
                 "elapsed_min": elapsed_min,
                 "gpu": -1,

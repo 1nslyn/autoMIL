@@ -16,7 +16,7 @@ help text. That string is operator-facing help, not a code path; allowlisted
 by intent.
 
 Allowlist deviations from plan baseline (3 expected -> 5 actual, post-08-04/08-05):
-  - config.yaml.j2:105: migration-note comment for autobench-shaped consumers
+  - config.yaml.j2:128: migration-note comment for autobench-shaped consumers
   - config.yaml.j2:122: inline example comment in scoring.formula block
 Both are informational-only; they contain no functional consumer-namespace code
 path. Allowlisted per deviation Rule 2 (correct allowlist coverage so the test
@@ -57,7 +57,9 @@ _ALLOWLIST: dict[str, str] = {
     #    ClickException. The token 'benchmarks/lib/CLAM/**' is an EXAMPLE
     #    value used to teach operators what registry.protected accepts;
     #    not a path the framework reads or depends on. Allowlist by intent.
-    "src/automil/cli/lifecycle/revert_baseline.py:87":
+    #    Line shifted +2 by the base-tree probe fix (`os` + `tempfile`
+    #    imports for the throwaway GIT_INDEX_FILE).
+    "src/automil/cli/lifecycle/revert_baseline.py:89":
         "'benchmarks/lib/CLAM/**'",
     # 4. Migration note comment in config.yaml.j2 directing autobench-shaped
     #    consumers to the CHANGELOG 8.0.0 BREAKING section. Informational only;
@@ -66,8 +68,11 @@ _ALLOWLIST: dict[str, str] = {
     #    +4 by the run.mil_model addition to the run: block,
     #    +6 by the H-4 registry block, -2 by CFG-2 (dead cap: duplicates removed),
     #    +9 by CR-4's se_multiplier documentation in the scoring: block,
-    #    +9 by the architecture-preserving command/identity channels.
-    "src/automil/templates/config.yaml.j2:129":
+    #    +9 by the architecture-preserving command/identity channels,
+    #    -1 by the composite_formula key removal (single-metric optimization),
+    #    +3 by the metrics.primary/scoring.formula agreement comment,
+    #    +5 by the vocabulary-agnostic default guidance (round 6).
+    "src/automil/templates/config.yaml.j2:136":
         "autobench-shaped consumers",
     # (The former entry 5 — an "autobench consumer" formula example in the
     # scoring block — was removed by B2: the rewritten reducer documentation

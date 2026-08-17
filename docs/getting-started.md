@@ -110,10 +110,10 @@ env:
   passthrough: [AUTOMIL_*]       # vars forwarded into experiment subprocesses
 
 scoring:
-  formula: ""                    # composite reducer: "" -> mean | max | min | trust_reported
+  formula: ""                    # primary_value reducer: "" -> mean | max | min | trust_reported
 
 baseline:
-  composite: 0.0                 # your starting performance
+  primary_value: 0.0                 # your starting performance
 
 cap:
   # cap is consumer-supplied — 6h is the generic framework fallback, not
@@ -140,9 +140,9 @@ A few notes on each:
   experiment subprocess. `AUTOMIL_*` matches all framework variables
   including `AUTOMIL_RUNTIME` (declared, never inferred, D-87).
 - **`scoring.formula`** is the reducer the framework uses to recompute the
-  composite from the validation `metrics` block at ingest (CR-1b — the
+  primary_value from the validation `metrics` block at ingest (CR-1b — the
   val-firewall does not trust the reported scalar). `""` means `mean`, which
-  reproduces the standard composites exactly; `trust_reported` opts out.
+  reproduces the standard primary values exactly; `trust_reported` opts out.
   Arithmetic expressions are rejected by `automil check`.
 - **`cap.budget` / `cap.safety_buffer`** are consumer-supplied durations
   (`6h`, `30m`, `90s`, `2d`, or a bare number of seconds). The framework provides the
@@ -192,13 +192,13 @@ Your training script must honor the 6 items documented in
 The minimum valid `result.json` is:
 
 ```json
-{"composite": 0.912}
+{"primary_value": 0.912}
 ```
 
-`composite` is the single scalar the experiment tree uses for ranking
+`primary_value` is the single scalar the experiment tree uses for ranking
 (higher is always better; for loss minimization, negate). All other
 fields are optional. Under the **val-firewall**, `metrics` is
-validation-only and is what `composite` is computed from; any test metrics go
+validation-only and is what `primary_value` is computed from; any test metrics go
 in a sealed `held_out` block that the orchestrator quarantines under
 `archive/<node>/certify/` and reveals once via `automil certify` — the agent
 never sees test during search. A full example payload from the autobench
@@ -209,7 +209,7 @@ consumer:
   "status": "completed",
   "metrics": {"val_auc": 0.870, "val_bacc": 0.810},
   "held_out": {"test_auc": 0.872, "test_bacc": 0.830},
-  "composite": 0.840,
+  "primary_value": 0.840,
   "elapsed_seconds": 4098,
   "peak_vram_mb": 4500,
   "fold_results": [...],
@@ -217,14 +217,14 @@ consumer:
 }
 ```
 
-The sklearn-iris consumer writes `{"composite": <accuracy>, "metrics": {"accuracy": 0.95, "f1": 0.94}, "status": "completed"}`.
+The sklearn-iris consumer writes `{"primary_value": <accuracy>, "metrics": {"accuracy": 0.95, "f1": 0.94}, "status": "completed"}`.
 Both shapes validate against the same schema; the framework imposes no
 hardcoded metric keys.
 
 The orchestrator validates this at ingest via JSON Schema. Malformed payloads
 transition the node to `crashed` with a schema-location pointer. The
-`composite` scalar is the single field the experiment tree uses for ranking
-(UCB scoring, composite-dominance gated by the Ladder keep-margin, higher is
+`primary_value` scalar is the single field the experiment tree uses for ranking
+(UCB scoring, primary_value-dominance gated by the Ladder keep-margin, higher is
 always better; for loss minimization, negate).
 
 ## Running the Loop
@@ -353,14 +353,14 @@ automil trajectory export <node_id> --out trajectory_bundle.tgz
 
 ## Revealing Held-Out Test Metrics (the val-firewall)
 
-Selection runs entirely on the **validation** composite. Test metrics are sealed
+Selection runs entirely on the **validation** primary_value. Test metrics are sealed
 at ingest into a `held_out` block that the orchestrator quarantines under
 `archive/<node>/certify/`, out of every agent-facing surface during search. Once
 search is done, reveal them exactly once:
 
 ```bash
 automil certify                 # sealed held-out test for the val-selected best node
-automil certify --top-k 3       # or the top-K keep nodes by validation composite
+automil certify --top-k 3       # or the top-K keep nodes by validation primary_value
 automil certify --node node_0042
 ```
 

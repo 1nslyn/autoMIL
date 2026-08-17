@@ -190,7 +190,7 @@ def test_campaign_binding_rejects_protocol_version_drift(tmp_path):
     from automil.admissibility import validate_campaign_binding
 
     manifest, campaign = _campaign_record()
-    campaign["protocol_version"] = "preprint-v2"
+    campaign["protocol_version"] = "preprint-v3"
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="protocol_version"):
@@ -525,7 +525,7 @@ def test_architecture_preserving_policy_module_and_selector_form_one_candidate(
 from automil.registry import PolicyVariant, VariantSpec, register
 @register(VariantSpec(
     name="identity", kind="policy", parent=None, base_commit="abc",
-    composite=0.5, node_id="node_0001",
+    primary_value=0.5, node_id="node_0001",
     created_at="2026-08-02T00:00:00+00:00",
 ))
 class Identity(PolicyVariant):
@@ -566,7 +566,7 @@ def test_architecture_preserving_policy_source_without_selector_is_rejected(
 from automil.registry import PolicyVariant, VariantSpec, register
 @register(VariantSpec(
     name="identity", kind="policy", parent=None, base_commit="abc",
-    composite=0.5, node_id="node_0001",
+    primary_value=0.5, node_id="node_0001",
     created_at="2026-08-02T00:00:00+00:00",
 ))
 class Identity(PolicyVariant):

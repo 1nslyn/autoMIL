@@ -22,13 +22,13 @@ def _setup(tmp_path):
         "schema_version": 2,
         "meta": {
             "best_node_id": "node_0001",
-            "best_composite": 0.87,
+            "best_primary_value": 0.87,
             "scoring": {"accept_margin": 0.0},
         },
         "nodes": {
             "node_0001": {
                 "id": "node_0001", "type": "executed", "status": "keep",
-                "composite": 0.87, "metrics": {"val_auc": 0.9, "val_bacc": 0.84},
+                "primary_value": 0.87, "metrics": {"val_auc": 0.9, "val_bacc": 0.84},
             },
         },
         "technique_stats": {},
@@ -48,7 +48,7 @@ def test_certify_reveals_sealed_held_out_test(tmp_path, monkeypatch):
     result = CliRunner().invoke(main, ["certify"])
     assert result.exit_code == 0, result.output
     assert "node_0001" in result.output
-    assert "val_composite=0.8700" in result.output
+    assert "primary_value=0.8700" in result.output
     assert "test_auc=0.8300" in result.output
     assert "test_bacc=0.8000" in result.output
 
@@ -62,17 +62,17 @@ def test_certify_missing_sidecar_is_graceful(tmp_path, monkeypatch):
     assert "no certify.json" in result.output
 
 
-def _setup_many(tmp_path, composites=(0.90, 0.88, 0.86)):
+def _setup_many(tmp_path, primary_values=(0.90, 0.88, 0.86)):
     """A project with several keep nodes, each carrying a sealed certify.json."""
     adir = tmp_path / "automil"
     adir.mkdir()
     (adir / "config.yaml").write_text("run:\n  script: train.py\n")
     nodes = {}
-    for rank, comp in enumerate(composites, start=1):
+    for rank, comp in enumerate(primary_values, start=1):
         nid = f"node_{rank:04d}"
         nodes[nid] = {
             "id": nid, "type": "executed", "status": "keep",
-            "composite": comp, "metrics": {"val_auc": comp},
+            "primary_value": comp, "metrics": {"val_auc": comp},
         }
         na = adir / "orchestrator" / "archive" / nid / "certify"
         na.mkdir(parents=True)
@@ -169,7 +169,7 @@ class TestTopKIsSelectionOnTest:
 
 
 def test_certify_default_matches_canonical_best_on_tie(tmp_path, monkeypatch):
-    """M1: on tied composites, certify's default node matches best_node (D-12: smaller id)."""
+    """M1: on tied primary_values, certify's default node matches best_node (D-12: smaller id)."""
     adir = tmp_path / "automil"
     adir.mkdir()
     (adir / "config.yaml").write_text("run:\n  script: train.py\n")
@@ -178,9 +178,9 @@ def test_certify_default_matches_canonical_best_on_tie(tmp_path, monkeypatch):
         "meta": {"best_node_id": "node_0001", "scoring": {"accept_margin": 0.0}},
         "nodes": {
             "node_0005": {"id": "node_0005", "type": "executed", "status": "keep",
-                          "composite": 0.87, "metrics": {"val_auc": 0.9}},
+                          "primary_value": 0.87, "metrics": {"val_auc": 0.9}},
             "node_0001": {"id": "node_0001", "type": "executed", "status": "keep",
-                          "composite": 0.87, "metrics": {"val_auc": 0.9}},
+                          "primary_value": 0.87, "metrics": {"val_auc": 0.9}},
         },
         "technique_stats": {},
     }))

@@ -68,7 +68,7 @@ def launch_host(tmp_path):
     """A fake repository with one materialized-enough cell, ready to launch."""
     repo_root = tmp_path / "repo"
     runtime_root = repo_root / "runtime"
-    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v2"
+    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v3"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
     (repo_root / "CLAUDE.md").write_text("# repo dev instructions\n")
@@ -145,7 +145,10 @@ def test_committed_policy_carries_the_load_bearing_rules():
         "--include-held-out",
         "variants/_policies",
         "git-root-relative",
-        "runtime/<cell-id>/automil/variants/_policies",
+        # v6: the editable-path authority is config.yaml files.editable read
+        # VERBATIM — a literal runtime/ prefix broke every non-runtime root.
+        "`files.editable` — read the value and use it VERBATIM",
+        "<cell-id>/automil/variants/_policies",
         "wrap_scheduler",
         "only on the DTFD arm",
         "never end the session while unspent attempts remain",

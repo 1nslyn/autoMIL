@@ -380,7 +380,7 @@ class TestSubmit:
         graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
         root = graph.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
+            metrics={"primary_value": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
                      "val_auc": 0.82, "val_bacc": 0.78,
                      "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0},
             status="keep",
@@ -410,7 +410,7 @@ class TestSubmit:
         graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
         graph.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
+            metrics={"primary_value": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
                      "val_auc": 0.82, "val_bacc": 0.78,
                      "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0},
             status="keep",
@@ -437,7 +437,7 @@ class TestSubmit:
         graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
         root = graph.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
+            metrics={"primary_value": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
                      "val_auc": 0.82, "val_bacc": 0.78,
                      "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0},
             status="keep",
@@ -466,7 +466,7 @@ class TestPropose:
         graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
         root = graph.add_executed(
             parent_id=None, description="baseline", techniques=[],
-            metrics={"composite": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
+            metrics={"primary_value": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
                      "val_auc": 0.82, "val_bacc": 0.78,
                      "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0},
             status="keep",
@@ -499,14 +499,14 @@ class TestPropose:
         graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
         root_a = graph.add_executed(
             parent_id=None, description="A", techniques=[],
-            metrics={"composite": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
+            metrics={"primary_value": 0.80, "test_auc": 0.82, "test_bacc": 0.78,
                      "val_auc": 0.82, "val_bacc": 0.78,
                      "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0},
             status="keep",
         )
         root_b = graph.add_executed(
             parent_id=None, description="B", techniques=[],
-            metrics={"composite": 0.81, "test_auc": 0.83, "test_bacc": 0.79,
+            metrics={"primary_value": 0.81, "test_auc": 0.83, "test_bacc": 0.79,
                      "val_auc": 0.83, "val_bacc": 0.79,
                      "vram_gb": 0.4, "elapsed_min": 60, "gpu": 0},
             status="keep",
@@ -541,7 +541,7 @@ class TestRank:
             parent_id=None,
             description="baseline",
             techniques=["baseline"],
-            metrics={"test_auc": 0.85, "test_bacc": 0.80, "composite": 0.825},
+            metrics={"test_auc": 0.85, "test_bacc": 0.80, "primary_value": 0.825},
             status="keep",
         )
         graph.add_proposed(
@@ -709,12 +709,12 @@ def test_submit_existing_pending_marks_running(cli_runner, tmp_path, monkeypatch
     graph_data = {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "best_node_id": None,
             "total_executed": 0,
             "total_proposed": 1,
             "next_id": 10,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {
                 "exploration_weight": 0.005,
                 "novelty_weight": 0.003,

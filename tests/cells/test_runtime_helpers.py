@@ -70,7 +70,7 @@ def test_register_sigterm_flush_subprocess_writes_result_json_on_sigterm(tmp_pat
         "fold_count": 5,
         "status": "completed",
         "metrics": {"val_auc": 0.80},
-        "composite": 0.80,
+        "primary_value": 0.80,
         "elapsed_seconds": 100,
         "peak_vram_mb": 4000,
     }))
@@ -79,7 +79,7 @@ def test_register_sigterm_flush_subprocess_writes_result_json_on_sigterm(tmp_pat
         "fold_count": 5,
         "status": "completed",
         "metrics": {"val_auc": 0.82},
-        "composite": 0.82,
+        "primary_value": 0.82,
         "elapsed_seconds": 110,
         "peak_vram_mb": 4100,
     }))

@@ -125,12 +125,12 @@ validates the keys are present at runtime.
 ### Heuristic 5: result.json adapter check
 
 Does the training script write `result.json`? Grep for `result.json`,
-`peak_vram_mb`, `composite`. If zero matches, mark "result.json adapter required"
+`peak_vram_mb`, `primary_value`. If zero matches, mark "result.json adapter required"
 and emit an example adapter snippet in `program.md`. The training script either
 writes `result.json` directly or wraps an upstream output via the snippet.
 
 The adapter must respect the val-firewall: put only **validation** metrics in
-`metrics` (that is what `composite` is computed from, and the only selection
+`metrics` (that is what `primary_value` is computed from, and the only selection
 signal), and put any test metrics in a separate sealed `held_out` block. The
 framework quarantines `held_out` and reveals it only via `automil certify` at the
 end of search, so test performance never leaks into selection.

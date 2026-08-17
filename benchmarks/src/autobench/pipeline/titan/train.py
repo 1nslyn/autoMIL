@@ -1,6 +1,7 @@
 """Single-fold training for the TITAN linear probe.
 
-Standard CE + Adam on frozen slide embeddings, early-stopping on val AUC,
+Standard CE + Adam on frozen slide embeddings, early-stopping on val CE
+loss (protocol v3; AUC reported at the selected checkpoint, not voting),
 final evaluation via the SAME ``compute_extended_metrics`` every other arm
 uses -- so ``test_auc``/``test_bacc`` are computed by identical code
 across all four models (design spec §4, §7).
@@ -18,12 +19,16 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
+from autobench.pipeline.evaluate import (
+    compute_extended_metrics,
+    file_sha256_or_none,
+    write_predictions_csv,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
-from autobench.pipeline.titan.config import TitanHeadConfig
+from autobench.pipeline.val_loss import ce_loss
+from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSlideDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
 
@@ -36,8 +41,14 @@ def _evaluate(
     n_classes: int,
     ordinal: bool = False,
     predictions_path: str | None = None,
-) -> dict[str, float]:
-    """Run the probe over a split and compute the shared extended metrics."""
+    return_probs: bool = False,
+) -> "dict[str, float] | tuple[dict[str, float], np.ndarray, np.ndarray]":
+    """Run the probe over a split and compute the shared extended metrics.
+
+    ``return_probs=True`` additionally returns ``(y_true, y_probs)`` so the
+    training loop can compute the protocol-v3 selection loss without touching
+    the shared-schema metrics dict.
+    """
     model.eval()
     all_probs: list[np.ndarray] = []
     all_labels: list[int] = []
@@ -58,7 +69,10 @@ def _evaluate(
         # carry through -- so rows fall back to positional sample_<i>. Still
         # enough for any confusion-matrix metric; just not joinable by slide.
         write_predictions_csv(predictions_path, None, y_true, y_probs, y_pred)
-    return compute_extended_metrics(y_true, y_probs, y_pred, n_classes, ordinal=ordinal)
+    metrics = compute_extended_metrics(y_true, y_probs, y_pred, n_classes, ordinal=ordinal)
+    if return_probs:
+        return metrics, y_true, y_probs
+    return metrics
 
 
 def train_titan_fold(
@@ -82,16 +96,11 @@ def train_titan_fold(
     Seed follows the shared convention: ``train.seed + fold`` (matches
     nnMIL/DTFD).
     """
-    if head_cfg is None:
-        head_cfg = TitanHeadConfig()
-    # H-3: TitanHeadConfig stays the source of truth for lr/weight_decay/
-    # patience; layer on only the explicitly-set overrides. max_epochs and
-    # early_stopping are deliberately excluded — this arm reads those straight
-    # off exp_cfg.train (its documented mixed provenance), so routing them here
-    # would double-apply and trip the fail-loud guard.
-    _titan_ov = {k: v for k, v in all_overrides(exp_cfg).items()
-                 if k not in ("max_epochs", "early_stopping")}
-    head_cfg = apply_overrides(head_cfg, _titan_ov, arm="titan")
+    # H-3: head-side filtering only — the opaque channel's max_epochs/
+    # early_stopping were already applied onto exp_cfg.train at the RUNNER
+    # level (apply_train_overrides, before config.json was saved), so
+    # exp_cfg.train is read here as already-effective.
+    head_cfg = resolve_head_config(exp_cfg, head_cfg)
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
@@ -123,8 +132,9 @@ def train_titan_fold(
     val_loader = DataLoader(val_ds, batch_size=max(1, len(val_ds)), shuffle=False)
     test_loader = DataLoader(test_ds, batch_size=max(1, len(test_ds)), shuffle=False)
 
-    best_val_auc = -float("inf")
+    best_val_loss = float("inf")
     best_state = copy.deepcopy(model.state_dict())
+    best_epoch = -1  # -1: never improved; the pre-training snapshot is kept
     epochs_without_improvement = 0
 
     start = time.time()
@@ -140,16 +150,22 @@ def train_titan_fold(
             loss.backward()
             optimizer.step()
 
-        val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,
-                            predictions_path=os.path.join(fold_dir, "predictions_val.csv"))
+        val_metrics, y_true_v, y_probs_v = _evaluate(
+            model, val_loader, torch_device, n_classes, ordinal=ordinal,
+            predictions_path=os.path.join(fold_dir, "predictions_val.csv"),
+            return_probs=True,
+        )
         val_auc = val_metrics["auc_roc"]
-        # NaN AUC (e.g. a val split missing a class) can't drive early
-        # stopping -- treat it as "no improvement" rather than crashing.
-        improved = not np.isnan(val_auc) and val_auc > best_val_auc
+        # Protocol v3: the checkpoint is selected on continuous val CE loss;
+        # AUC is reported at that checkpoint, not voting. ce_loss maps any
+        # non-finite probabilities to +inf, so a degenerate epoch never wins.
+        val_loss = ce_loss(y_true_v, y_probs_v)
+        improved = val_loss < best_val_loss
 
         if improved:
-            best_val_auc = val_auc
+            best_val_loss = val_loss
             best_state = copy.deepcopy(model.state_dict())
+            best_epoch = _epoch
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -159,11 +175,18 @@ def train_titan_fold(
             and epochs_without_improvement >= head_cfg.patience
         )
         if policy_runtime.should_stop(
-            default_stop, epoch=_epoch, metrics={"val_auc": val_auc},
+            default_stop, epoch=_epoch, metrics={"val_auc": val_auc, "val_loss": val_loss},
         ):
             break
 
     model.load_state_dict(best_state)
+    # A3: this arm ALWAYS restores best_state. source=best when some epoch
+    # improved on it; source=untrained when the restored snapshot is the
+    # pre-loop deepcopy that predates any training step (best_epoch == -1,
+    # e.g. an all-NaN val split) — NOT the "final weights kept" of the arms
+    # that print source=final.
+    print(f"[selected] epoch={best_epoch} "
+          f"source={'best' if best_epoch >= 0 else 'untrained'}", flush=True)
     test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
                              predictions_path=os.path.join(fold_dir, "predictions.csv"))
     val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,
@@ -172,6 +195,10 @@ def train_titan_fold(
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
+        # A4': no-op detector — hash of the persisted val predictions above.
+        "val_predictions_sha256": file_sha256_or_none(
+            os.path.join(fold_dir, "predictions_val.csv")
+        ),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation
         # included, so the number is comparable across arms and task types.

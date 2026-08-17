@@ -30,12 +30,19 @@ baseline:
   model: "clam_mb"
   framework: "CLAM"
   val_auc: 0.0
-  composite: 0.0
+  primary_value: 0.0
 
 metrics:
-  primary: "composite"
-  composite_formula: "(val_auc + val_bacc) / 2"
-  track: ["val_auc", "val_bacc"]
+  # The declared PRIMARY signal — must agree with scoring.formula below
+  # (that is what the framework actually recomputes and selects on at
+  # ingest; this block is the agent-facing declaration of the same fact).
+  # A fresh overlay does not know your metric vocabulary yet, so the
+  # default is the MEAN over whatever validation metrics train.py emits.
+  # Once you know the names, declare single-metric optimization by setting
+  # BOTH fields: primary: "val_<metric>" here and the same selector in
+  # scoring.formula.
+  primary: ""
+  track: ["val_auc", "val_bacc"]   # example vocabulary — match your train.py
 
 training:
   learning_rate: 3e-4
@@ -144,18 +151,23 @@ env:
   #     - "configs/.env.local"
   dotenv_files: []
 
-# --- Composite scoring (DEC-04 / D-200 / CR-1b) ---
-# scoring.formula is the reducer the framework uses to recompute the composite
-# from the validation `metrics` block at ingest (CR-1b: the val-firewall does
-# not trust the reported scalar). Valid values:
+# --- Primary_value scoring (DEC-04 / D-200 / CR-1b) ---
+# scoring.formula is the reducer or metric selector the framework uses to
+# recompute the primary_value from the validation `metrics` block at ingest
+# (CR-1b: the val-firewall does not trust the reported scalar). Valid values:
 #   formula: ""                # default -> "mean" over metrics values; this
 #                              #   reproduces (val_auc + val_bacc) / 2 and a
 #                              #   lone val_c_index exactly
 #   formula: "mean" | "max" | "min"
+#   formula: "val_<metric>"    # METRIC SELECTOR: the primary_value IS this one
+#                              #   validation metric (e.g. "val_auc",
+#                              #   "val_c_index"); other metrics stay recorded
+#                              #   but do not vote. The name must exist in
+#                              #   `metrics` — a result whose metrics cannot
+#                              #   support the selector fails ingest closed.
 #   formula: "trust_reported"  # explicit opt-out; weakens the val-firewall
 # Anything else (e.g. an arithmetic expression) fails `automil check` and graph
-# seeding — it is NOT evaluated. Document the human-readable recipe in a
-# comment or in metrics.composite_formula (informational) instead.
+# seeding — it is NOT evaluated.
 #
 # scoring.technique_map is a {pattern: tag} dict for description-driven
 # auto-tagging. When `automil submit` / `automil propose` is called WITHOUT
@@ -172,9 +184,14 @@ env:
 # Used by graph.recalculate_scores' novelty term and by the viz "Techniques"
 # tab. Explicit --techniques on submit/propose still wins over auto-extract.
 scoring:
+  # "" = the mean reducer over the validation metrics train.py emits —
+  # vocabulary-agnostic, so a fresh overlay works with ANY consumer. Set a
+  # "val_<metric>" selector (and metrics.primary above, to match) as soon
+  # as you know your metric names: single-metric optimization is the
+  # recommended end state.
   formula: ""
   technique_map: {}
-  accept_margin: 0.0   # Ladder keep-margin δ: child kept iff composite > parent + δ. Predeclare per-dataset (0.0 = strict dominance). Read from graph.json meta.scoring.
+  accept_margin: 0.0   # Ladder keep-margin δ: child kept iff primary_value > parent + δ. Predeclare per-dataset (0.0 = strict dominance). Read from graph.json meta.scoring.
   # CR-4: the margin ACTUALLY applied is max(accept_margin, se_multiplier x the
   #   PARENT's measured cross-fold SE). The noise floor can only ever raise the
   #   bar, never lower a predeclared δ, and it is derived from the incumbent —

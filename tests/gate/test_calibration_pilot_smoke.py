@@ -6,7 +6,7 @@ cells) is a checkpoint task documented in docs/calibration-pilot.md.
 
 Coverage:
   Test 1 (test_calibrate_pilot_synthetic_graph_smoke):
-        5 held-out cells, mixed composites, --calibrate path:
+        5 held-out cells, mixed primary values, --calibrate path:
         - exit_code == 0
         - graph node_0002 status STAYS "candidate"
         - archive/<node_0002>/gate_evaluation.jsonl exists with per-cell + decision
@@ -50,7 +50,7 @@ _MANIFEST_K = 5
 _MANIFEST_P_THRESHOLD = 0.2
 _PARENT_COMPOSITE = 0.80
 
-# Per-cell composites from the spec (D-151 calibration pilot example):
+# Per-cell primary values from the spec (D-151 calibration pilot example):
 # [0.82, 0.83, 0.78, 0.84, 0.79]
 # Deltas vs parent=0.80: [+0.02, +0.03, -0.02, +0.04, -0.01]
 # Wins (delta > 0): 3/5 — typical near-threshold mixed signal
@@ -67,8 +67,8 @@ def project_with_candidate(tmp_path):
     """Minimal automil project with a search-cell parent + candidate node + gate manifest.
 
     Graph:
-      node_0001  (status=keep, composite=0.80, parent=None)  ← search cell parent
-      node_0002  (status=candidate, composite=0.85, parent=node_0001)
+      node_0001  (status=keep, primary_value=0.80, parent=None)  ← search cell parent
+      node_0002  (status=candidate, primary_value=0.85, parent=node_0001)
 
     Manifest: node_0001 with 5 held-out cells (3 CCRCC + 2 CLWD), K=5, p=0.2.
     """
@@ -84,7 +84,7 @@ def project_with_candidate(tmp_path):
                 "parent_id": None,
                 "type": "executed",
                 "status": "keep",
-                "composite": _PARENT_COMPOSITE,
+                "primary_value": _PARENT_COMPOSITE,
                 "description": "search-cell parent (known-good basis)",
                 "overlay_dir": str(tmp_path / "archive" / "node_0001"),
             },
@@ -93,7 +93,7 @@ def project_with_candidate(tmp_path):
                 "parent_id": "node_0001",
                 "type": "executed",
                 "status": "candidate",
-                "composite": 0.85,
+                "primary_value": 0.85,
                 "description": "candidate applying node_0176-equivalent changes",
                 "overlay_dir": str(tmp_path / "archive" / "node_0002"),
             },
@@ -111,7 +111,7 @@ def project_with_candidate(tmp_path):
         K=_MANIFEST_K,
         p_threshold=_MANIFEST_P_THRESHOLD,
         bootstrap_reps=100,  # small for test speed
-        win_definition="delta_composite > 0 AND p < p_threshold",
+        win_definition="delta_primary_value > 0 AND p < p_threshold",
         schema_version="gate-v1",
     )
     write_manifest(manifest, manifests_dir)
@@ -152,8 +152,8 @@ def _make_fake_evaluate(deltas: list[float]):
                 "encoder": _HELD_OUT_CELLS[i][2],
                 "task": _HELD_OUT_CELLS[i][3],
                 "child_node_id": f"child_{i:04d}",
-                "candidate_composite": _PARENT_COMPOSITE + d,
-                "parent_composite": _PARENT_COMPOSITE,
+                "candidate_primary_value": _PARENT_COMPOSITE + d,
+                "parent_primary_value": _PARENT_COMPOSITE,
                 "delta": d,
                 "status": "completed",
             }

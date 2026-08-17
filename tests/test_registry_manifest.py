@@ -14,7 +14,7 @@ def _spec_kwargs(**overrides):
         "kind": "model",
         "parent": "clam_mb",
         "base_commit": "abc1234",
-        "composite": 0.8074,
+        "primary_value": 0.8074,
         "node_id": "node_0176",
         "created_at": "2026-05-02T10:00:00Z",
         "mutations": ("ce_smooth=0.008", "sam_lookahead"),
@@ -80,7 +80,7 @@ def test_read_missing_required_key(tmp_path):
     # Missing "ported_at" key.
     path.write_text(json.dumps({
         "spec": {"name": "x", "kind": "model", "parent": "p",
-                 "base_commit": "abc", "composite": 0.5, "node_id": "n",
+                 "base_commit": "abc", "primary_value": 0.5, "node_id": "n",
                  "created_at": "2026-05-02"},
         "source_node": "n",
         "source_overlay_files": [],
@@ -98,7 +98,7 @@ def test_cross_check_happy(tmp_path):
         'clam_mb_v0176 variant.\n\n'
         'Parent: clam_mb\n'
         'Base commit: abc1234\n'
-        'Composite: 0.8074\n'
+        'Primary_value: 0.8074\n'
         'Node ID: node_0176\n'
         'Mutations: ce_smooth=0.008, sam_lookahead\n'
         '"""\n'
@@ -108,7 +108,7 @@ def test_cross_check_happy(tmp_path):
         '"""clam_mb_v0176 variant.\n\n'
         'Parent: clam_mb\n'
         'Base commit: abc1234\n'
-        'Composite: 0.8074\n'
+        'Primary_value: 0.8074\n'
         'Node ID: node_0176\n'
         'Mutations: ce_smooth=0.008, sam_lookahead\n'
         '"""\n'
@@ -129,7 +129,7 @@ def test_cross_check_name_mismatch(tmp_path):
         '"""v9999 variant.\n\n'
         'Parent: clam_mb\n'
         'Base commit: abc1234\n'
-        'Composite: 0.8074\n'
+        'Primary_value: 0.8074\n'
         'Node ID: node_0176\n'
         'Mutations: \n'
         '"""\n'
@@ -157,7 +157,7 @@ def test_cross_check_parent_mismatch(tmp_path):
         '"""clam_mb_v0176 variant.\n\n'
         'Parent: ab_mil\n'  # WRONG
         'Base commit: abc1234\n'
-        'Composite: 0.8074\n'
+        'Primary_value: 0.8074\n'
         'Node ID: node_0176\n'
         'Mutations: \n'
         '"""\n'
@@ -167,7 +167,7 @@ def test_cross_check_parent_mismatch(tmp_path):
     assert "parent" in reason.lower()
 
 
-def test_cross_check_composite_mismatch(tmp_path):
+def test_cross_check_primary_value_mismatch(tmp_path):
     from automil.registry.manifest import Manifest
     m = Manifest(**_manifest_kwargs())
     module_path = tmp_path / "clam_mb_v0176.py"
@@ -175,14 +175,14 @@ def test_cross_check_composite_mismatch(tmp_path):
         '"""clam_mb_v0176 variant.\n\n'
         'Parent: clam_mb\n'
         'Base commit: abc1234\n'
-        'Composite: 0.81\n'  # WRONG (manifest says 0.8074)
+        'Primary_value: 0.81\n'  # WRONG (manifest says 0.8074)
         'Node ID: node_0176\n'
         'Mutations: \n'
         '"""\n'
     )
     ok, reason = m.cross_check_with_module(module_path)
     assert not ok
-    assert "composite" in reason.lower()
+    assert "primary_value" in reason.lower()
 
 
 def test_manifest_is_frozen():
@@ -204,3 +204,32 @@ def test_manifest_kwargs_helper_excludes_unknown_keys():
     from automil.registry.manifest import Manifest
     with pytest.raises(TypeError):
         Manifest(**kwargs)
+
+
+class TestLegacyCompositeLabelFailsClosed:
+    """A pre-rename variant doc carrying `Composite:` must FAIL the
+    cross-check, not silently skip the D-44 exact-float comparison."""
+
+    def test_legacy_label_is_rejected(self, tmp_path):
+        from automil.registry.manifest import Manifest
+        m = Manifest(**_manifest_kwargs())
+        module_path = tmp_path / "clam_mb_v0176.py"
+        module_path.write_text(
+            '"""clam_mb_v0176 variant.\n\n'
+            'Parent: clam_mb\n'
+            'Base commit: abc1234\n'
+            'Composite: 0.8074\n'
+            'Node ID: node_0176\n'
+            '"""\n'
+        )
+        ok, reason = m.cross_check_with_module(module_path)
+        assert ok is False
+        assert "retired 'Composite:' label" in reason
+
+    def test_writer_emits_the_pinned_label(self):
+        """The generated variant module must carry `Primary_value:` so the
+        parser's exact-float cross-check can never become a vacuous pass."""
+        import inspect
+        from automil.cli.lifecycle import port_variant
+        source = inspect.getsource(port_variant._write_variant_module)
+        assert "Primary_value:" in source

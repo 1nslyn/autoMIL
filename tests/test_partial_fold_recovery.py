@@ -18,23 +18,23 @@ import pytest
 from automil.cells.reconcile import aggregate_folds
 
 
-def _write_fold(archive: Path, idx: int, composite: float = 0.80) -> None:
+def _write_fold(archive: Path, idx: int, primary_value: float = 0.80) -> None:
     """Write a well-formed fold result JSON into archive/."""
     payload = {
         "fold_index": idx,
         "fold_count": 5,
         "status": "completed",
-        "composite": composite,
-        "metrics": {"val_auc": composite, "val_bacc": composite,
-                    "test_auc": composite, "test_bacc": composite},
+        "primary_value": primary_value,
+        "metrics": {"val_auc": primary_value, "val_bacc": primary_value,
+                    "test_auc": primary_value, "test_bacc": primary_value},
         "elapsed_seconds": 100,
         "peak_vram_mb": 4000,
     }
     (archive / f"fold_{idx}_result.json").write_text(json.dumps(payload))
 
 
-def test_kill_with_n_completed_folds_returns_mean_composite(tmp_path: Path) -> None:
-    """D-01 baseline: 3 of 5 folds → composite = mean of 3, status='partial'.
+def test_kill_with_n_completed_folds_returns_mean_primary_value(tmp_path: Path) -> None:
+    """D-01 baseline: 3 of 5 folds → primary_value = mean of 3, status='partial'.
 
     This should be GREEN — confirms aggregate_folds already handles partial correctly.
     baseline — must stay GREEN.
@@ -42,24 +42,24 @@ def test_kill_with_n_completed_folds_returns_mean_composite(tmp_path: Path) -> N
     archive = tmp_path / "archive"
     archive.mkdir()
 
-    composites = [0.80, 0.82, 0.84]
-    for i, c in enumerate(composites):
-        _write_fold(archive, i, composite=c)
+    primary_values = [0.80, 0.82, 0.84]
+    for i, c in enumerate(primary_values):
+        _write_fold(archive, i, primary_value=c)
 
     result = aggregate_folds(archive, expected_fold_count=5)
 
     assert result["status"] == "partial", f"Expected 'partial', got {result['status']!r}"
-    expected_composite = sum(composites) / len(composites)
-    assert result["composite"] == pytest.approx(expected_composite, rel=1e-6), (
-        f"Composite {result['composite']} != mean of {composites} = {expected_composite}"
+    expected_primary_value = sum(primary_values) / len(primary_values)
+    assert result["primary_value"] == pytest.approx(expected_primary_value, rel=1e-6), (
+        f"Primary_value {result['primary_value']} != mean of {primary_values} = {expected_primary_value}"
     )
-    assert result["composite"] != 0.0, "composite must not be 0.0 for partial result"
+    assert result["primary_value"] != 0.0, "primary_value must not be 0.0 for partial result"
 
 
 def test_partial_status_excluded_from_best_node(tmp_path: Path) -> None:
-    """D-01: a partial node must NOT become best_node even if its composite is high.
+    """D-01: a partial node must NOT become best_node even if its primary_value is high.
 
-    Graph with completed parent (composite=0.7) + partial child (composite=0.8):
+    Graph with completed parent (primary_value=0.7) + partial child (primary_value=0.8):
     best_node must remain the completed parent.
     RED until D-01 quarantine guard in graph ships in Plan 06.
     """
@@ -68,16 +68,16 @@ def test_partial_status_excluded_from_best_node(tmp_path: Path) -> None:
     graph_path = tmp_path / "graph.json"
     graph = ExperimentGraph(path=str(graph_path))
 
-    # Add completed parent with composite=0.7
+    # Add completed parent with primary_value=0.7
     parent_id = graph.add_executed(
         parent_id=None,
         description="baseline",
         techniques=["baseline"],
-        metrics={"composite": 0.7},
+        metrics={"primary_value": 0.7},
         status="keep",
     )
 
-    # Add a partial child with higher composite=0.8 via direct nodes dict mutation
+    # Add a partial child with higher primary_value=0.8 via direct nodes dict mutation
     child_node = {
         "id": "node_0002",
         "parent_id": parent_id,
@@ -85,10 +85,10 @@ def test_partial_status_excluded_from_best_node(tmp_path: Path) -> None:
         "status": "partial",   # quarantined status
         "description": "partial run",
         "techniques": [],
-        "composite": 0.8,
+        "primary_value": 0.8,
         "global_delta": 0.0,
         "parent_delta": 0.1,
-        "metrics": {"composite": 0.8, "partial_folds": 3, "expected_folds": 5},
+        "metrics": {"primary_value": 0.8, "partial_folds": 3, "expected_folds": 5},
         "vram_gb": 0.0,
         "elapsed_min": 0.0,
         "gpu": -1,
@@ -103,11 +103,11 @@ def test_partial_status_excluded_from_best_node(tmp_path: Path) -> None:
     best = graph.best_node()
     assert best is not None, "best_node must not be None with a completed parent present"
     assert best.get("id") != "node_0002", (
-        "D-01 not implemented: partial node (node_0002, composite=0.8) became best_node. "
+        "D-01 not implemented: partial node (node_0002, primary_value=0.8) became best_node. "
         "Partial nodes must be quarantined from best_node selection."
     )
     assert best.get("id") == parent_id, (
-        f"Expected best_node={parent_id!r} (completed, composite=0.7), "
+        f"Expected best_node={parent_id!r} (completed, primary_value=0.7), "
         f"got best_node={best.get('id')!r}."
     )
 
@@ -127,7 +127,7 @@ def test_partial_status_excluded_from_keep_discard(tmp_path: Path) -> None:
         parent_id=None,
         description="baseline",
         techniques=["baseline"],
-        metrics={"composite": 0.7},
+        metrics={"primary_value": 0.7},
         status="keep",
     )
 
@@ -139,10 +139,10 @@ def test_partial_status_excluded_from_keep_discard(tmp_path: Path) -> None:
         "status": "partial",
         "description": "partial run",
         "techniques": [],
-        "composite": 0.75,
+        "primary_value": 0.75,
         "global_delta": 0.0,
         "parent_delta": 0.05,
-        "metrics": {"composite": 0.75, "partial_folds": 2, "expected_folds": 5},
+        "metrics": {"primary_value": 0.75, "partial_folds": 2, "expected_folds": 5},
         "vram_gb": 0.0,
         "elapsed_min": 0.0,
         "gpu": -1,

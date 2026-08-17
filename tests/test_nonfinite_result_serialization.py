@@ -5,19 +5,19 @@ The bug this pins
 ``sensitivity``/``specificity`` are unestimable on a multi-class task, so the
 per-fold value is NaN and the cross-fold CI degenerates to
 ``{"mean": nan, "ci_low": nan, ...}``. Those live in the ``summary`` diagnostic
-block -- never in ``metrics``, never in ``composite`` -- yet they killed the run:
+block -- never in ``metrics``, never in ``primary_value`` -- yet they killed the run:
 
   1. ``_atomic_write_json`` used ``json.dumps`` at its default ``allow_nan=True``,
      emitting a bare ``NaN`` token (invalid JSON per RFC 8259).
   2. ``write_result_json`` keeps ``summary`` in the SEALED copy.
   3. ``Runner.collect_result`` reads the sealed copy FIRST and parses it with the
      CR-1a ``parse_constant`` hook, which rejects the whole file.
-  4. The node was rewritten as ``{"status": "crash", "composite": 0.0}``.
+  4. The node was rewritten as ``{"status": "crash", "primary_value": 0.0}``.
 
 So an unestimable *diagnostic* destroyed a scientifically valid run. The fix is
 at the serializer, not the guard: a non-finite value is written as JSON ``null``
 ("no value available"), which is exactly what it means. CR-1a stays in force --
-a hand-written ``NaN`` token is still rejected, and a ``null`` composite still
+a hand-written ``NaN`` token is still rejected, and a ``null`` primary_value still
 fails the schema's ``{"type": "number"}``.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _strict_load(path: Path) -> dict:
 class TestAtomicWriteJson:
     def test_nan_serializes_as_null(self, tmp_path):
         path = tmp_path / "result.json"
-        _atomic_write_json(path, {"composite": 0.8, "diagnostic": float("nan")})
+        _atomic_write_json(path, {"primary_value": 0.8, "diagnostic": float("nan")})
 
         assert "NaN" not in path.read_text()
         assert _strict_load(path)["diagnostic"] is None
@@ -73,8 +73,8 @@ class TestAtomicWriteJson:
         payload = {
             "status": "completed",
             "metrics": {"val_auc": 0.87, "val_bacc": 0.81},
-            "composite": 0.84,
-            "composite_se": None,
+            "primary_value": 0.84,
+            "primary_se": None,
             "n_folds": 5,
             "flag": True,
             "note": "unchanged",
@@ -113,7 +113,7 @@ class TestCollectResultSurvivesUnestimableDiagnostics:
                 "status": "completed",
                 "metrics": {"val_auc": 0.87, "val_bacc": 0.81},
                 "held_out": {"test_auc": 0.85, "test_bacc": 0.80},
-                "composite": 0.84,
+                "primary_value": 0.84,
                 # Unestimable on a 3-class task -- always NaN before the fix.
                 "summary": {
                     "val": {
@@ -126,46 +126,46 @@ class TestCollectResultSurvivesUnestimableDiagnostics:
             worktree_dir=worktree,
         )
 
-        result = Runner(tmp_path).collect_result(worktree, archive)
+        result = Runner(tmp_path, tmp_path / "automil").collect_result(worktree, archive)
 
         assert result["status"] == "completed"
-        assert result["composite"] == 0.84
+        assert result["primary_value"] == 0.84
         assert result["summary"]["val"]["sensitivity"]["mean"] is None
         assert result["summary"]["val"]["auc_roc"]["mean"] == 0.87
         assert "error" not in result
 
     def test_hand_written_nan_token_is_still_rejected(self, tmp_path):
-        """CR-1a is untouched: an agent cannot smuggle in a non-finite composite."""
+        """CR-1a is untouched: an agent cannot smuggle in a non-finite primary_value."""
         archive = tmp_path / "archive" / "node_b"
         sealed = archive / "certify"
         sealed.mkdir(parents=True)
         worktree = tmp_path / "wt"
         worktree.mkdir()
         (sealed / "result.json").write_text(
-            '{"status": "completed", "composite": Infinity, "metrics": {}}'
+            '{"status": "completed", "primary_value": Infinity, "metrics": {}}'
         )
 
-        result = Runner(tmp_path).collect_result(worktree, archive)
+        result = Runner(tmp_path, tmp_path / "automil").collect_result(worktree, archive)
 
         assert result["status"] == "crash"
-        assert result["composite"] == 0.0
+        assert result["primary_value"] == 0.0
         assert "rejected at ingestion" in result["error"]
 
 
-class TestNullCompositeStillFailsClosed:
-    def test_schema_rejects_a_null_composite(self):
+class TestNullPrimary_valueStillFailsClosed:
+    def test_schema_rejects_a_null_primary_value(self):
         """Sanitizing does not let a broken selection signal through."""
         from automil.schemas import ValidationError, validate_result
 
         with pytest.raises(ValidationError):
-            validate_result({"status": "completed", "composite": None, "metrics": {}})
+            validate_result({"status": "completed", "primary_value": None, "metrics": {}})
 
     def test_schema_rejects_a_null_metric(self):
         from automil.schemas import ValidationError, validate_result
 
         with pytest.raises(ValidationError):
             validate_result(
-                {"status": "completed", "composite": 0.8, "metrics": {"val_auc": None}}
+                {"status": "completed", "primary_value": 0.8, "metrics": {"val_auc": None}}
             )
 
 

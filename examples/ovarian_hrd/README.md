@@ -16,7 +16,7 @@ an existing project. The full project would also contain:
 ## Results (pre-v1.0 autonomous run)
 
 - **189 experiments** executed autonomously
-- **Best composite: 0.851** (from 0.814 baseline, +4.5%)
+- **Best primary_value: 0.851** (from 0.814 baseline, +4.5%)
 - Discovered techniques: R-Drop, focal loss, gradient clipping, coordinate
   positional encoding, none of which the human researchers had tried
 - See `automil/graph.json` for the full experiment tree

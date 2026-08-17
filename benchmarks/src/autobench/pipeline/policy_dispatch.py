@@ -110,6 +110,21 @@ def _fold_local_policy_type(factory: type[Any]) -> type[Any]:
     return policy_type
 
 
+def _scalar_repr(value: Any) -> str:
+    """Full-precision canonical rendering for the per-epoch line.
+
+    ``repr(float(...))`` is the shortest round-trip form, and normalizes numpy
+    scalars (whose repr grew a type prefix in numpy 2) so the log format does
+    not depend on which library produced the metric. Non-numeric values fall
+    back to plain repr rather than raising — this line is logging, and must
+    never take a training run down.
+    """
+    try:
+        return repr(float(value))
+    except (TypeError, ValueError):
+        return repr(value)
+
+
 def runtime_automil_dir() -> Path:
     """Return this worktree's configured autoMIL directory.
 
@@ -292,6 +307,17 @@ class PolicyRuntime:
         epoch: int,
         metrics: Mapping[str, float] | None = None,
     ) -> bool:
+        # A3: one measurement-neutral trajectory line per epoch, policy or not.
+        # This dispatch is the only per-epoch seam shared by the five arms, so
+        # printing here makes every run's trajectory readable from run.log
+        # without a charged probe. EXACTLY the metrics the trainer already
+        # passed — nothing is evaluated here; full-precision floats so equal
+        # runs stay bit-comparable. Flushed: these lines are the forensic
+        # record a timeout SIGKILL must not swallow.
+        rendered = " ".join(
+            f"{key}={_scalar_repr(value)}" for key, value in (metrics or {}).items()
+        )
+        print(f"[epoch {int(epoch)}]" + (f" {rendered}" if rendered else ""), flush=True)
         policy = self._resolved_policy()
         if policy is None:
             return bool(default)

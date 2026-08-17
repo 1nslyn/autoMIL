@@ -33,9 +33,9 @@ def _time_limit(seconds: float):
 
 def _write_graph(path, nodes, scoring=None):
     meta = {
-        "best_composite": 0.0, "best_node_id": None,
+        "best_primary_value": 0.0, "best_node_id": None,
         "total_executed": len(nodes), "total_proposed": 0, "next_id": 99,
-        "baseline_composite": 0.0,
+        "baseline_primary_value": 0.0,
     }
     if scoring is not None:
         meta["scoring"] = scoring
@@ -51,9 +51,9 @@ def test_recalculate_scores_backfills_missing_scoring_weights(tmp_path):
         tmp_path / "graph.json",
         nodes={
             "node_0001": {"id": "node_0001", "type": "executed", "status": "keep",
-                          "composite": 0.8, "parent_id": None, "metrics": {}, "techniques": []},
+                          "primary_value": 0.8, "parent_id": None, "metrics": {}, "techniques": []},
             "node_0002": {"id": "node_0002", "type": "proposed", "status": "pending",
-                          "composite": 0.0, "parent_id": "node_0001", "metrics": {}, "techniques": []},
+                          "primary_value": 0.0, "parent_id": "node_0001", "metrics": {}, "techniques": []},
         },
         scoring={"accept_margin": 0.0},
     )
@@ -66,9 +66,9 @@ def test_lineage_and_reeval_terminate_on_cycle(tmp_path):
     g = _write_graph(
         tmp_path / "graph.json",
         nodes={
-            "A": {"id": "A", "type": "executed", "status": "keep", "composite": 0.8,
+            "A": {"id": "A", "type": "executed", "status": "keep", "primary_value": 0.8,
                   "parent_id": "B", "metrics": {}, "techniques": []},
-            "B": {"id": "B", "type": "executed", "status": "keep", "composite": 0.7,
+            "B": {"id": "B", "type": "executed", "status": "keep", "primary_value": 0.7,
                   "parent_id": "A", "metrics": {}, "techniques": []},
         },
     )

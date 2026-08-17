@@ -95,7 +95,7 @@ def _seed_graph(orch: Any, node_id: str) -> ExperimentGraph:
     graph = ExperimentGraph(path=orch.automil_dir / "graph.json")
     graph.nodes[node_id] = {
         "id": node_id, "parent_id": None, "type": "running", "status": "running",
-        "description": f"eval {node_id}", "techniques": [], "composite": 0.0,
+        "description": f"eval {node_id}", "techniques": [], "primary_value": 0.0,
         "cell_id": CELL_ID,
     }
     graph.save()
@@ -234,7 +234,7 @@ def test_completed_evals_counts_only_usable_results(tmp_path, status, expected_c
     _seed_graph(orch, "node_0001")
 
     _complete(orch, tmp_path, "node_0001", {
-        "status": status, "composite": 0.5, "metrics": {"val_auc": 0.5},
+        "status": status, "primary_value": 0.5, "metrics": {"val_auc": 0.5},
         "elapsed_seconds": 10,
     })
 
@@ -268,7 +268,7 @@ def test_budget_killed_partial_counts_as_usable(tmp_path):
     for i in range(2):
         (sealed / f"fold_{i}_result.json").write_text(json.dumps({
             "fold_index": i, "fold_count": 5, "status": "completed",
-            "metrics": {"val_auc": 0.8}, "composite": 0.8,
+            "metrics": {"val_auc": 0.8}, "primary_value": 0.8,
             "elapsed_seconds": 100, "peak_vram_mb": 1000,
         }))
     spec_data = {**_spec(node_id), "env": {"AUTOMIL_FOLD_COUNT": "5"}}

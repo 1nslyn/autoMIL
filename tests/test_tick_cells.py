@@ -313,7 +313,7 @@ def test_handle_completion_with_cap_cancel_reason_calls_reconcile(tmp_path: Path
             "status": "completed",
             "metrics": {"val_auc": 0.85, "val_bacc": 0.80},
             "held_out": {"test_auc": 0.84, "test_bacc": 0.79},
-            "composite": 0.82,
+            "primary_value": 0.82,
             "elapsed_seconds": 400,
             "peak_vram_mb": 4500,
         }
@@ -338,7 +338,7 @@ def test_handle_completion_with_cap_cancel_reason_calls_reconcile(tmp_path: Path
         "status": "running",
         "description": "cap test",
         "techniques": [],
-        "composite": 0.0,
+        "primary_value": 0.0,
         "test_auc": 0.0,
         "test_bacc": 0.0,
         "val_auc": 0.0,
@@ -392,7 +392,7 @@ def test_handle_completion_with_cap_cancel_reason_calls_reconcile(tmp_path: Path
     assert gnode.get("metadata", {}).get("budget_killed") is True, (
         f"budget_killed missing: {gnode.get('metadata')}"
     )
-    assert gnode["composite"] > 0, f"Composite should be positive, got {gnode['composite']}"
+    assert gnode["primary_value"] > 0, f"Primary_value should be positive, got {gnode['primary_value']}"
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +432,7 @@ def test_handle_completion_with_cap_cancel_zero_folds_marks_crash(tmp_path: Path
         "status": "running",
         "description": "zero folds test",
         "techniques": [],
-        "composite": 0.0,
+        "primary_value": 0.0,
         "test_auc": 0.0,
         "test_bacc": 0.0,
         "val_auc": 0.0,
@@ -732,14 +732,14 @@ def test_handle_completion_daemon_supplies_own_graph(tmp_path: Path) -> None:
         "status": "running",
         "description": "cr01 test",
         "techniques": [],
-        "composite": 0.0,
+        "primary_value": 0.0,
     }
     init_graph.save()
 
     # Stub runner so no real worktrees are touched.
     result_payload = {
         "status": "completed",
-        "composite": 0.82,
+        "primary_value": 0.82,
         "metrics": {"val_auc": 0.82},
         "elapsed_seconds": 100,
     }
@@ -774,11 +774,11 @@ def test_handle_completion_daemon_supplies_own_graph(tmp_path: Path) -> None:
         "self.graph was likely missing (AttributeError swallowed by tick except)."
     )
 
-    # 2. archive result.json must be valid JSON with correct composite.
+    # 2. archive result.json must be valid JSON with correct primary_value.
     result_path = node_archive / "result.json"
     assert result_path.exists(), "CR-01: archive result.json not written by terminal_writer"
     result_written = json.loads(result_path.read_text())
-    assert result_written.get("composite") == 0.82
+    assert result_written.get("primary_value") == 0.82
 
     # 3. graph.json must reflect the node as executed (status keep or discard).
     reloaded = ExperimentGraph(path=graph_path, technique_map=None)

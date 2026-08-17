@@ -40,11 +40,11 @@ def _write_graph(adir: Path, nodes: dict):
         "schema_version": 1,
         "meta": {
             "best_node_id": None,
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "total_executed": 0,
             "total_proposed": 0,
             "next_id": 1,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": nodes,
@@ -71,7 +71,7 @@ def test_apply_model_only(tmp_path, cli_runner, monkeypatch):
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.5,
+            "primary_value": 0.5,
             "variant_spec": {"kind": "model", "name": "v0001", "parent": "p"},
         }
     })
@@ -96,7 +96,7 @@ def test_apply_loss_only(tmp_path, cli_runner, monkeypatch):
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.5,
+            "primary_value": 0.5,
             "variant_spec": {"kind": "loss", "name": "l0001", "parent": None},
         }
     })
@@ -120,7 +120,7 @@ def test_apply_policy_only(tmp_path, cli_runner, monkeypatch):
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.5,
+            "primary_value": 0.5,
             "variant_spec": {"kind": "policy", "name": "sam", "parent": None},
         }
     })
@@ -144,7 +144,7 @@ def test_apply_combined_recipe(tmp_path, cli_runner, monkeypatch):
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.5,
+            "primary_value": 0.5,
             "recipe": [
                 {"kind": "model", "name": "v0001", "parent": "p"},
                 {"kind": "loss", "name": "l0001"},
@@ -175,7 +175,7 @@ def test_apply_idempotent(tmp_path, cli_runner, monkeypatch):
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.5,
+            "primary_value": 0.5,
             "variant_spec": {"kind": "model", "name": "v0001", "parent": "p"},
         }
     })
@@ -386,7 +386,7 @@ def test_apply_node_without_variant_spec(tmp_path, cli_runner, monkeypatch):
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.5,
+            "primary_value": 0.5,
         },  # no variant_spec, no recipe
     })
     from automil.cli import main
@@ -418,7 +418,7 @@ def test_apply_writes_applied_variant_json(tmp_path, cli_runner, monkeypatch):
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.85,
+            "primary_value": 0.85,
             "variant_spec": {"kind": "model", "name": "classifier_v0", "parent": "baseline"},
         }
     })
@@ -476,7 +476,7 @@ def test_apply_injects_env_var_into_queue_spec(tmp_path, cli_runner, monkeypatch
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.85,
+            "primary_value": 0.85,
             "variant_spec": {"kind": "model", "name": "classifier_v0", "parent": "baseline"},
         }
     })
@@ -548,14 +548,14 @@ def test_apply_then_submit_propagates_to_new_node_archive(
             "id": "node_0001",
             "type": "executed",
             "status": "keep",
-            "composite": 0.88,
+            "primary_value": 0.88,
             "variant_spec": {"kind": "model", "name": "classifier_v0", "parent": "baseline"},
         },
         "node_0002": {
             "id": "node_0002",
             "type": "proposed",
             "status": "pending",
-            "composite": 0.0,
+            "primary_value": 0.0,
         },
     })
 

@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 
-def _write_fold(archive: Path, idx: int, composite: float = 0.80) -> None:
+def _write_fold(archive: Path, idx: int, primary_value: float = 0.80) -> None:
     """Write a well-formed fold result JSON into archive/certify/ (born-sealed, Scope B).
 
     The orchestrator points AUTOMIL_RESULTS_DIR at archive/<node>/certify/, so
@@ -26,8 +26,8 @@ def _write_fold(archive: Path, idx: int, composite: float = 0.80) -> None:
         "fold_index": idx,
         "fold_count": 5,
         "status": "completed",
-        "composite": composite,
-        "metrics": {"val_auc": composite},
+        "primary_value": primary_value,
+        "metrics": {"val_auc": primary_value},
         "elapsed_seconds": 100,
         "peak_vram_mb": 4000,
     }
@@ -58,9 +58,9 @@ def test_fold_aggregation_tried_before_synthesis(tmp_path: Path) -> None:
     archive.mkdir(parents=True)
 
     # Write 3 of 5 folds — no result.json, no run.log
-    _write_fold(archive, 0, composite=0.80)
-    _write_fold(archive, 1, composite=0.82)
-    _write_fold(archive, 2, composite=0.84)
+    _write_fold(archive, 0, primary_value=0.80)
+    _write_fold(archive, 1, primary_value=0.82)
+    _write_fold(archive, 2, primary_value=0.84)
 
     from automil.backends._orchestrator_daemon import ExperimentOrchestrator
 
@@ -74,9 +74,9 @@ def test_fold_aggregation_tried_before_synthesis(tmp_path: Path) -> None:
 
     # After D-03 fix: must aggregate folds, not return 0.0 crash
     assert result is not None, "result must not be None"
-    assert result.get("composite", 0.0) != 0.0, (
+    assert result.get("primary_value", 0.0) != 0.0, (
         "D-03 not implemented: fold aggregation not tried before synthesis. "
-        "composite is 0.0 but 3 folds exist."
+        "primary_value is 0.0 but 3 folds exist."
     )
     assert result.get("status") in ("partial", "completed"), (
         f"Expected status=partial, got {result.get('status')!r}. "

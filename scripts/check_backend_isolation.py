@@ -18,6 +18,17 @@ ALLOWLIST rationale:
                                            not been extended; migrating viz daemon PID
                                            lifecycle to a backend would be Phase 7
                                            hardware-autodetect scope creep.)
+  - ``backends/pidfile.py``              — the PID-file starttime cross-check (CLN-04 /
+                                           D-17) extracted VERBATIM from
+                                           ``_orchestrator_daemon.py`` so operator tooling
+                                           can test daemon liveness with the daemon's own
+                                           semantics.  Its only process-control reference
+                                           is ``os.getpid()`` on ITSELF inside
+                                           ``write_pid_file`` (recording the caller's own
+                                           pid + starttime), NOT job-control of other
+                                           processes.  Same PID-file-management category
+                                           the daemon was already allowlisted for; the
+                                           extraction moved the line, not the behavior.
   - ``cli/cancel.py``                    — OPS-01 (ISSUE-011, v1.1 Phase 13): the CLI
                                            cancel command signals a daemon-launched LOCAL
                                            job's process group DIRECTLY (``os.kill(pid, 0)``
@@ -69,6 +80,7 @@ FORBIDDEN_ATTR: str = "pid"
 ALLOWLIST_PATHS: frozenset[Path] = frozenset({
     Path("backends/local.py"),
     Path("backends/_orchestrator_daemon.py"),
+    Path("backends/pidfile.py"),  # PID-file liveness surface extracted from the daemon (see docstring rationale)
     Path("viz/server.py"),
     Path("cli/cancel.py"),  # OPS-01 CLI direct-kill of daemon-launched local jobs (see docstring rationale)
 })

@@ -1,0 +1,406 @@
+"""Paired-fold keep margin: the Ladder bar scales with the paired-delta SE.
+
+Runs share folds under a locked seed, so the fold effect cancels in the
+per-fold child−parent difference. The margin basis switches to
+``SE(paired deltas)`` whenever both nodes carry primary values for the same fold
+set (and the reducer is ``mean``); otherwise it falls back to the marginal
+parent SE (CR-4).
+
+The canonical regression numbers are the virchow2 runtime-canary cell:
+baseline folds (0.6770, 0.4299, 0.6064) → marginal SE 0.0735, and its best
+child node_0004 folds (0.6863, 0.4716, 0.6113) → paired SE 0.0116. Under the
+marginal basis the child was discarded against a bar (0.6446) its per-fold
+oracle could not reach; under the paired basis it clears max(δ=0.015, 0.0116).
+"""
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+
+import pytest
+
+BASELINE_FOLDS = {0: 0.6770, 1: 0.4299, 2: 0.6064}
+CHILD_FOLDS = {0: 0.6863, 1: 0.4716, 2: 0.6113}
+DELTA = 0.015  # the campaign's predeclared accept_margin
+
+
+def _entries(folds: dict[int, float]) -> list[dict]:
+    return [{"fold_index": i, "primary_value": c} for i, c in sorted(folds.items())]
+
+
+def _mean(folds: dict[int, float]) -> float:
+    return sum(folds.values()) / len(folds)
+
+
+# ---------------------------------------------------------------------------
+# Unit surface
+# ---------------------------------------------------------------------------
+
+def test_paired_delta_se_matches_hand_computation() -> None:
+    from automil.scoring import paired_delta_se
+
+    se = paired_delta_se(CHILD_FOLDS, BASELINE_FOLDS)
+    assert se == pytest.approx(0.011603, abs=1e-5)
+
+
+def test_paired_delta_se_requires_identical_fold_sets() -> None:
+    from automil.scoring import paired_delta_se
+
+    assert paired_delta_se({0: 0.6, 1: 0.5}, {0: 0.6, 2: 0.5}) is None
+    assert paired_delta_se({0: 0.6}, {0: 0.5}) is None          # n=1
+    assert paired_delta_se(None, BASELINE_FOLDS) is None
+    assert paired_delta_se({}, {}) is None
+
+
+def test_paired_delta_se_uniform_deltas_are_zero_not_none() -> None:
+    from automil.scoring import paired_delta_se
+
+    child = {i: v + 0.02 for i, v in BASELINE_FOLDS.items()}
+    assert paired_delta_se(child, BASELINE_FOLDS) == 0.0
+
+
+def test_fold_primary_value_map_skips_junk_entries() -> None:
+    from automil.scoring import fold_primary_value_map
+
+    entries = [
+        {"fold_index": 0, "primary_value": 0.6},
+        {"fold_index": True, "primary_value": 0.5},        # bool index
+        {"fold_index": 1, "primary_value": float("nan")},  # non-finite
+        {"fold_index": 2},                             # missing primary_value
+        "not-a-mapping",
+        {"fold_index": 3, "primary_value": 0.7},
+    ]
+    assert fold_primary_value_map(entries) == {0: 0.6, 3: 0.7}
+    assert fold_primary_value_map([]) is None
+    assert fold_primary_value_map(None) is None
+
+
+def test_node_fold_primary_values_reads_both_sources() -> None:
+    from automil.graph import node_fold_primary_values
+
+    # Regular ingested node: top-level fold_primary_values.
+    assert node_fold_primary_values({"fold_primary_values": _entries(CHILD_FOLDS)}) == CHILD_FOLDS
+    # Baseline root: the campaign controller writes metadata.validation_folds
+    # (entries additionally carry a metrics dict — same reader).
+    baseline_shaped = {
+        "metadata": {
+            "validation_folds": [
+                {"fold_index": i, "metrics": {"val_auc": c}, "primary_value": c}
+                for i, c in sorted(BASELINE_FOLDS.items())
+            ]
+        }
+    }
+    assert node_fold_primary_values(baseline_shaped) == BASELINE_FOLDS
+    # The top-level field wins when both are present.
+    both = dict(baseline_shaped, fold_primary_values=_entries(CHILD_FOLDS))
+    assert node_fold_primary_values(both) == CHILD_FOLDS
+    assert node_fold_primary_values({}) is None
+    assert node_fold_primary_values(None) is None
+
+
+def test_effective_accept_margin_canonical_virchow2_numbers() -> None:
+    from automil.graph import _accept, effective_accept_margin
+
+    meta = {"scoring": {"accept_margin": DELTA, "se_multiplier": 1.0, "formula": "mean"}}
+    parent = {
+        "primary_value": _mean(BASELINE_FOLDS),
+        "primary_se": 0.07347,
+        "metadata": {"validation_folds": _entries(BASELINE_FOLDS)},
+    }
+    child = {
+        "primary_value": _mean(CHILD_FOLDS),
+        "fold_primary_values": _entries(CHILD_FOLDS),
+    }
+
+    marginal = effective_accept_margin(meta, parent)
+    assert marginal == pytest.approx(0.07347)
+    assert not _accept(child["primary_value"], parent["primary_value"], marginal)
+
+    paired = effective_accept_margin(meta, parent, child)
+    assert paired == pytest.approx(DELTA)  # max(0.015, 0.0116) — δ floor binds
+    assert _accept(child["primary_value"], parent["primary_value"], paired)
+
+
+def test_paired_basis_requires_mean_formula() -> None:
+    from automil.graph import effective_accept_margin
+
+    parent = {
+        "primary_se": 0.07347,
+        "metadata": {"validation_folds": _entries(BASELINE_FOLDS)},
+    }
+    child = {"fold_primary_values": _entries(CHILD_FOLDS)}
+    for formula in ("max", "min", "trust_reported"):
+        meta = {"scoring": {"accept_margin": DELTA, "se_multiplier": 1.0,
+                            "formula": formula}}
+        assert effective_accept_margin(meta, parent, child) == pytest.approx(0.07347)
+
+
+def test_paired_margin_monotone_over_delta_floor() -> None:
+    """A noisy paired SE still RAISES the bar above δ, never lowers below it."""
+    from automil.graph import effective_accept_margin
+
+    meta = {"scoring": {"accept_margin": 0.005, "se_multiplier": 1.0, "formula": "mean"}}
+    parent = {"primary_value": _mean(BASELINE_FOLDS),
+              "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
+    child = {"primary_value": _mean(CHILD_FOLDS),
+             "fold_primary_values": _entries(CHILD_FOLDS)}
+    assert effective_accept_margin(meta, parent, child) == pytest.approx(0.011603, abs=1e-5)
+
+
+def test_paired_basis_engages_under_a_metric_selector() -> None:
+    """`val_*` selectors keep the paired identity — the node primary_value is the
+    per-key mean over folds, so per-fold selector values average back to it —
+    and must therefore use the tight paired basis, not the marginal one."""
+    from automil.graph import effective_accept_margin
+
+    meta = {"scoring": {"accept_margin": 0.005, "se_multiplier": 1.0,
+                        "formula": "val_auc"}}
+    parent = {"primary_value": _mean(BASELINE_FOLDS), "primary_se": 0.07347,
+              "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
+    child = {"primary_value": _mean(CHILD_FOLDS),
+             "fold_primary_values": _entries(CHILD_FOLDS)}
+    assert effective_accept_margin(meta, parent, child) == pytest.approx(
+        0.011603, abs=1e-5)
+
+
+def test_identity_guard_rejects_primary_value_fold_disagreement() -> None:
+    """The paired basis requires primary_value == mean(fold primary_values) on BOTH
+    nodes; a node whose primary_value disagrees with its own fold vector (sparse-
+    metric recovery aggregate, or a shaped payload) falls back to the marginal
+    basis rather than differencing incomparable quantities."""
+    from automil.graph import effective_accept_margin
+
+    meta = {"scoring": {"accept_margin": DELTA, "se_multiplier": 1.0, "formula": "mean"}}
+    parent = {"primary_value": _mean(BASELINE_FOLDS), "primary_se": 0.07347,
+              "metadata": {"validation_folds": _entries(BASELINE_FOLDS)}}
+    shaped = {"primary_value": _mean(CHILD_FOLDS) + 0.05,   # disagrees with its folds
+              "fold_primary_values": _entries(CHILD_FOLDS)}
+    assert effective_accept_margin(meta, parent, shaped) == pytest.approx(0.07347)
+
+
+# ---------------------------------------------------------------------------
+# Real ingest path (the artifact under test is the graph node + decision; the
+# result payload is written exactly as a training script would write it).
+# ---------------------------------------------------------------------------
+
+def _noop_tsv(nid, result, description=""):
+    return None
+
+
+def _ingest(tmp_path: Path, graph, node_id: str, result: dict) -> None:
+    from automil.terminal_writer import write_terminal_state
+
+    completed_dir = tmp_path / "completed"
+    completed_dir.mkdir(exist_ok=True)
+    archive_dir = tmp_path / "archive" / node_id
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    write_terminal_state(
+        node_id=node_id,
+        result=result,
+        graph=graph,
+        completed_dir=completed_dir,
+        archive_dir=archive_dir,
+        results_tsv_writer=_noop_tsv,
+        spec={"description": "d", "graph_metadata": {}},
+        elapsed_s=1.0,
+        gpu_id=0,
+    )
+
+
+def _result_payload(folds: dict[int, float]) -> dict:
+    """A result.json exactly as the benchmark runner emits it: per-fold val
+    metrics whose primary_value is their mean, plus the aggregate metrics block."""
+    n = len(folds)
+    mean_auc = sum(folds.values()) / n
+    return {
+        "status": "completed",
+        "primary_value": mean_auc,
+        "metrics": {"val_auc": mean_auc},
+        "validation_folds": [
+            {"fold_index": i, "metrics": {"val_auc": c}, "primary_value": c}
+            for i, c in sorted(folds.items())
+        ],
+    }
+
+
+def _campaign_graph(tmp_path: Path):
+    """A graph whose meta matches the campaign scoring config, with a
+    baseline root shaped the way ``_ensure_discovery_baseline_root`` writes it
+    (folds in metadata.validation_folds, never through the terminal writer)."""
+    from automil.graph import ExperimentGraph
+
+    graph = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    graph.meta.setdefault("scoring", {}).update(
+        {"accept_margin": DELTA, "se_multiplier": 1.0, "formula": "mean"}
+    )
+    root_id = graph.add_executed(
+        parent_id=None, description="native baseline", techniques=[],
+        metrics={"primary_value": _mean(BASELINE_FOLDS), "val_auc": _mean(BASELINE_FOLDS)},
+        status="keep",
+    )
+    root = graph.get_node(root_id)
+    root["primary_value"] = _mean(BASELINE_FOLDS)
+    root["primary_se"] = 0.07347
+    root["metadata"] = {
+        "validation_folds": [
+            {"fold_index": i, "metrics": {"val_auc": c}, "primary_value": c}
+            for i, c in sorted(BASELINE_FOLDS.items())
+        ]
+    }
+    graph.save()
+    return graph, root_id
+
+
+def test_ingest_keeps_virchow2_best_child_under_paired_margin(tmp_path: Path) -> None:
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(child_id)
+    assert node["status"] == "keep"          # discarded under the marginal basis
+    assert node["fold_primary_values"] == _entries(CHILD_FOLDS)
+    assert "fold_primary_values" not in node.get("metrics", {})
+
+
+def test_ingest_without_fold_data_falls_back_to_marginal(tmp_path: Path) -> None:
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+
+    payload = _result_payload(CHILD_FOLDS)
+    del payload["validation_folds"]          # legacy result: no fold evidence
+    _ingest(tmp_path, graph, child_id, payload)
+
+    node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(child_id)
+    assert node["status"] == "discard"       # marginal bar 0.0735 holds
+    assert node.get("fold_primary_values") is None
+
+
+def test_completed_artifact_round_trips_fold_primary_values(tmp_path: Path) -> None:
+    """reconcile() rebuilds nodes from completed/<id>.json — without the fold
+    projection there, a recovered node would silently revert to the marginal
+    basis. The completion is written by the REAL terminal writer; nothing here
+    hand-writes the asserted artifact."""
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    completion = json.loads((tmp_path / "completed" / f"{child_id}.json").read_text())
+    assert completion["fold_primary_values"] == _entries(CHILD_FOLDS)
+
+
+def test_rank_leaderboard_shows_paired_delta_and_bar(tmp_path: Path, capsys) -> None:
+    """The leaderboard surfaces primary_value ± SE, paired Δparent ± SE, and the
+    required bar — the numbers both canary agents hand-parsed 30 archive
+    JSONs to reconstruct."""
+    from automil.cli.propose import _print_leaderboard
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    _print_leaderboard(reloaded)
+    out = capsys.readouterr().out
+
+    assert "Completed nodes" in out
+    assert child_id in out
+    assert "Δparent +0.0186" in out
+    assert "±0.0116" in out          # paired SE, not the marginal 0.0735
+    assert "(bar 0.0150)" in out     # max(δ=0.015, paired SE)
+    assert "[keep]" in out
+
+
+def test_reevaluate_descendants_uses_paired_basis(tmp_path: Path) -> None:
+    """_reevaluate_descendants re-runs the accept with node-stored folds."""
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    reloaded._reevaluate_descendants(root_id)
+    assert reloaded.get_node(child_id)["status"] == "keep"
+
+
+def test_rebuilt_from_completed_node_keeps_fold_evidence(tmp_path: Path) -> None:
+    """K3: a node whose graph entry is LOST and rebuilt from completed/<id>.json
+    (the real reconcile scan) must carry fold_primary_values and primary_se, or
+    the recovered incumbent screens its children against the wider marginal
+    bar with no error anywhere."""
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    # Lose the node (graph rebuilt from scratch), keep the completed artifact.
+    wiped = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    del wiped.nodes[child_id]
+    wiped.save()
+
+    recovered = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    (tmp_path / "queue").mkdir(exist_ok=True)
+    (tmp_path / "running").mkdir(exist_ok=True)
+    recovered.reconcile(str(tmp_path / "queue"), str(tmp_path / "running"),
+                        str(tmp_path / "completed"), str(tmp_path / "archive"))
+    node = recovered.get_node(child_id)
+    assert node is not None
+    assert node["fold_primary_values"] == _entries(CHILD_FOLDS)
+    assert node["primary_se"] is not None
+
+
+def test_refresh_without_folds_clears_stale_projection(tmp_path: Path) -> None:
+    """K4: re-ingest of a result WITHOUT usable validation_folds must CLEAR the
+    node's previous fold vector — pairing children against a different run's
+    folds than the primary_value being compared is neither basis."""
+    from automil.scoring import fold_primary_value_entries
+
+    payload = _result_payload(CHILD_FOLDS)
+    del payload["validation_folds"]
+    assert fold_primary_value_entries(payload, "mean") is None  # projection: none
+
+    from automil.graph import ExperimentGraph
+
+    graph, root_id = _campaign_graph(tmp_path)
+    child_id = graph.add_proposed(parent_id=root_id, description="anneal30",
+                                  techniques=[], kind="hp")
+    graph.nodes[child_id]["status"] = "running"
+    graph.save()
+    _ingest(tmp_path, graph, child_id, _result_payload(CHILD_FOLDS))
+
+    # Re-ingest the SAME node id from a foldless payload via the terminal
+    # writer (the real assign-or-clear site).
+    reloaded = ExperimentGraph(path=str(tmp_path / "graph.json"))
+    reloaded.nodes[child_id]["status"] = "running"
+    reloaded.save()
+    _ingest(tmp_path, reloaded, child_id, payload)
+
+    node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(child_id)
+    assert node.get("fold_primary_values") is None or "fold_primary_values" not in node

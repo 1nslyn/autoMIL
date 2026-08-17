@@ -195,7 +195,7 @@ class RayBackend(Backend):
         """
         from automil.runner import Runner  # noqa: PLC0415
 
-        runner = Runner(self._project_root)
+        runner = Runner(self._project_root, self._automil_dir)
         worktree_path = runner.create_worktree(spec.base_commit, spec.node_id)
         if spec.overlay_dir:
             runner.apply_overlay(

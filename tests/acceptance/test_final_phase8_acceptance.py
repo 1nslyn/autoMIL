@@ -2,7 +2,7 @@
 
 Sub-gate A (CCRCC reproduction; workstation only via requires_ccrcc_data):
     Reuses Phase 1 verify-repro pipeline; asserts CCRCC node_0176 reproduces
-    composite within 0.005 of 0.502 (Phase 1 D-50 baseline).
+    primary_value within 0.005 of 0.502 (Phase 1 D-50 baseline).
     Iter-2 / F-08: project path probe uses the deterministic monorepo
     layout _REPO_ROOT / "benchmarks" / "experiments" / "ccrcc" per
     CLAUDE.md, NOT a guess from AUTOBENCH_CCRCC_ROOT (which is a dataset
@@ -11,7 +11,7 @@ Sub-gate A (CCRCC reproduction; workstation only via requires_ccrcc_data):
 Sub-gate B (sklearn-iris end-to-end; CI default):
     Copies examples/sklearn-iris/ into tmp project, runs automil submit
     + automil orchestrator start (subprocess), asserts terminal state
-    executed and composite >= 0.90 from the resulting graph.json. Load-
+    executed and primary_value >= 0.90 from the resulting graph.json. Load-
     bearing Pitfall 7 anti-acceptance.
     Iter-2 / F-04: drives the FULL orchestrator path so the daemon ingest
     validate hook from 08-05 (validate_result + ValidationError) is
@@ -132,7 +132,7 @@ def test_subgate_b_sklearn_iris_end_to_end(tmp_path: Path):
       4. Launch automil orchestrator start via subprocess.Popen.
       5. Bounded poll for graph.json showing iris_001 in a terminal state.
       6. SIGTERM the orchestrator; wait for clean exit.
-      7. Validate result.json against the schema; assert composite >= 0.90
+      7. Validate result.json against the schema; assert primary_value >= 0.90
          and node terminal status == executed.
     """
     import shutil as _shutil
@@ -231,14 +231,14 @@ def test_subgate_b_sklearn_iris_end_to_end(tmp_path: Path):
 
     # Step 10: assert result contract.
     assert result["status"] == "completed", result
-    composite = float(result.get("composite", 0))
-    assert composite >= 0.90, (
-        f"sklearn-iris composite {composite} below 0.90 floor; "
+    primary_value = float(result.get("primary_value", 0))
+    assert primary_value >= 0.90, (
+        f"sklearn-iris primary_value {primary_value} below 0.90 floor; "
         f"this signals the Pitfall 7 anti-acceptance failure: framework may "
         f"have silently broken the second-consumer path."
     )
     metrics = result.get("metrics", {})
-    assert metrics.get("accuracy", 0) >= 0.90, (
+    assert metrics.get("val_accuracy", 0) >= 0.90, (
         f"sklearn-iris accuracy below 0.90: metrics={metrics}"
     )
 
@@ -298,7 +298,7 @@ def test_subgate_a_ccrcc_node_0176_reproduction(tmp_path: Path, ccrcc_data_root:
     manifest = yaml.safe_load(manifest_path.read_text())
 
     assert manifest.get("status") == "pass", manifest
-    actual = float(manifest.get("actual_composite", 0))
+    actual = float(manifest.get("actual_primary_value", 0))
     assert abs(actual - 0.502) < 0.005, (
         f"CCRCC node_0176 reproduction drifted: actual={actual} vs 0.502 "
         f"baseline; tolerance 0.005."
@@ -316,10 +316,10 @@ def test_subgate_c_heterogeneous_consumers_same_project(
     """D-205 sub-gate C: both consumers register side-by-side in same project.
 
     Asserts the framework supports heterogeneous consumers in one tree:
-      - sklearn-iris (CPU, accuracy-shaped composite)
-      - CCRCC node_0176 (GPU, val_auc/test_auc-shaped composite)
+      - sklearn-iris (CPU, accuracy-shaped primary_value)
+      - CCRCC node_0176 (GPU, val_auc/test_auc-shaped primary_value)
 
-    Both terminal states must be executed; both composites > 0.
+    Both terminal states must be executed; both primary values > 0.
 
     NOTE: workstation-shape-dependent. Body retained as pytest.skip pending
     workstation-shape stabilisation; the harness + marker scaffolding ensures

@@ -147,7 +147,7 @@ from automil.registry import PolicyVariant, VariantSpec, register
 
 @register(VariantSpec(
     name="identity", kind="policy", parent=None, base_commit="abc",
-    composite=0.5, node_id="n1", created_at="2026-08-02T00:00:00+00:00",
+    primary_value=0.5, node_id="n1", created_at="2026-08-02T00:00:00+00:00",
 ))
 class Identity(PolicyVariant):
     def wrap_optimizer(self, opt):
@@ -174,7 +174,7 @@ def test_runtime_loads_policy_from_nested_project_env(tmp_path, monkeypatch):
 from automil.registry import PolicyVariant, VariantSpec, register
 @register(VariantSpec(
     name="nested_identity", kind="policy", parent=None, base_commit="abc",
-    composite=0.5, node_id="n2", created_at="2026-08-02T00:00:00+00:00",
+    primary_value=0.5, node_id="n2", created_at="2026-08-02T00:00:00+00:00",
 ))
 class NestedIdentity(PolicyVariant):
     def wrap_optimizer(self, opt):

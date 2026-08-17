@@ -28,7 +28,7 @@ def _result():
         "status": "completed",
         "metrics": {"val_auc": 0.81, "val_bacc": 0.79},
         "held_out": {"test_auc": 0.77, "test_bacc": 0.75},
-        "composite": 0.80,
+        "primary_value": 0.80,
     }
 
 
@@ -57,7 +57,7 @@ def test_worktree_copy_is_stripped(tmp_path, monkeypatch):
         "test metrics are still readable in the worktree for the whole run"
     )
     assert worktree_payload["metrics"] == {"val_auc": 0.81, "val_bacc": 0.79}
-    assert worktree_payload["composite"] == 0.80
+    assert worktree_payload["primary_value"] == 0.80
 
 
 def test_sealed_copy_keeps_the_test_block(tmp_path, monkeypatch):

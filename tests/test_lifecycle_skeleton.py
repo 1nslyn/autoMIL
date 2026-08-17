@@ -207,11 +207,11 @@ def test_get_node_or_die_returns_node_dict(tmp_path):
     adir = tmp_path / "automil"
     adir.mkdir()
     (adir / "graph.json").write_text(json.dumps({
-        "nodes": {"node_0001": {"id": "node_0001", "composite": 0.5}}
+        "nodes": {"node_0001": {"id": "node_0001", "primary_value": 0.5}}
     }))
 
     node = _get_node_or_die(adir, "node_0001")
-    assert node["composite"] == 0.5
+    assert node["primary_value"] == 0.5
 
 
 def test_get_node_or_die_malformed_json(tmp_path):

@@ -8,6 +8,88 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **BREAKING: the "composite" concept is retired — single-metric optimization
+  is the contract.** The selection signal IS the declared primary validation
+  metric; the result-contract field `composite` is now `primary_value` and
+  `composite_se` is `primary_se` (graph nodes, `meta.best_primary_value`,
+  fold entries, results.tsv columns, viz, registry VariantSpec field +
+  `Primary_value:` doc label, and the scoring API follow). The write-only
+  `metrics.composite_formula` config key is deleted outright — the
+  declaration pair is `scoring.formula` + `metrics.primary` — and
+  `automil rank` prints the declared metric's name in its leaderboard
+  header. Training scripts emitting the old field fail loudly at ingest;
+  graph.json files predating the rename are migrated on load (schema 3).
+  SMMILe is removed entirely (pipeline adapter, vendored lib, tests): it
+  was never reachable from `--framework` and is not in the campaign.
+
+
+- **Protocol `preprint-v3`: per-task-family reporting + val-loss checkpoint
+  selection.** The campaign's reporting primary is now the field's canonical
+  metric per task family (binary/multiclass → `test_auc`, ordinal grade →
+  `test_qwk`, survival → `test_c_index`), with `task_family` frozen into the
+  manifest cell identity (manifest schema 6, campaign `automil-preprint-130-v6`,
+  census-locked 39/13/13/65) and family-EXACT schema locks at both ends of the
+  sealed-evidence chain; selection everywhere stays the primary VALIDATION
+  metric (`scoring.formula: val_auc` / `val_c_index`), so `test_qwk` reports
+  but never selects. Classification checkpoint selection moved off the
+  quantized epoch metric onto continuous validation loss on every tile arm
+  (nnMIL early stopping, ABMIL/DTFD shared CE helper, CLAM upstream-loss
+  with its tracker now UNCONDITIONAL — the tunable `early_stopping` flag
+  only gates early termination, so no legal proposal can revert the arm to
+  final-epoch weights; survival was already loss-selected), and the whole
+  checkpoint-selection layer joined `registry.protected` in the 9 cohort
+  templates. `revert-baseline` probes protected patterns with git's own
+  pathspec engine against the base commit's TREE (read-tree into a
+  throwaway index + `ls-files`), so a protected path with no baseline
+  state can no longer fail the all-or-nothing checkout — and glob patterns
+  still match.
+
+- **Adversarial-review fix round 2 (Codex gpt-5.6-sol xhigh, 17 findings —
+  16 real, 1 rejected).** The firewall's fold-level seams: held-out-named
+  keys inside `validation_folds[*].metrics` now fail the node closed (they
+  fed the recomputed per-fold values — under the mean reducer, straight
+  into the paired margin); a fold entry with no metrics block is dropped,
+  never trusted (bare reported fold values forged as parent+uniform-delta
+  zeroed the paired SE and collapsed the keep bar to the δ floor); the
+  CR-1b recompute/refusal moved OUTSIDE the graph lock so a missing node
+  or lock failure can no longer republish the unvetted reported scalar;
+  an unknown frozen formula refuses instead of trusting (one typo no
+  longer disables CR-1b graph-wide); `verify-repro` sanitizes the repro
+  result with the same ingest contract; `reconcile --from-archive`
+  re-evaluates descendants and recomputes best; schema migrations scrub
+  held-out-named keys and stale `composite` scalars out of node metrics;
+  duplicate fold_index fails recovery closed (phantom "completed") while
+  crash payloads keep measured telemetry; CLAM's upstream EarlyStopping
+  gets a non-finite guard (NaN val loss was saved as an "improvement");
+  the top-level ordinal summary treats a lost held-out component as
+  unestimable; the fresh-rerun escape in repair_baselines requires
+  family-exact evidence on the canonical tree; the examples' configs are
+  brought onto the declaration contract (sklearn-iris could not even
+  seed a graph — its formula "accuracy" fails validation); rank labels
+  the SE basis the gate actually applied; and the init template stays
+  vocabulary-agnostic (mean default) with explicit guidance to declare a
+  single-metric selector once the consumer's metric names are known.
+  Rejected: "the disagreement audit stamp leaks the reported scalar" —
+  that value is agent-authored (the agent wrote result.json), so the
+  stamp discloses nothing new and never drives selection.
+
+- **Adversarial-review fix round (Opus 5 max-effort, 13 findings).**
+  Highlights beyond the two above: a missing nnMIL `val/loss` now reads as
+  NaN (skipped epoch), never a perfect 0.0 loss that captures the
+  checkpoint; a `best_*.pth` left by a prior attempt is deleted at
+  EarlyStopping construction so a same-node relaunch cannot certify stale
+  weights; the CR-1b refusal propagates to `completed/`, archive
+  `result.json` and `results.tsv` (not just the graph node); the schema-3
+  migration also renames the baseline root's `metadata.validation_folds`
+  entries (paired-margin topology); legacy `composite`/`composite_se`
+  results.tsv columns migrate into their successors instead of becoming
+  phantom metrics; per-fold validity spans `held_out`; `reconcile
+  --from-archive`'s val-recompute is status-independent; the daemon PID
+  file writes atomically; and the ordinal invalid-reuse deadlock in
+  `repair_baselines` is resolved (audit accepts a valid fresh rerun when
+  history is unreusable; migrate skips invalid cells per cell instead of
+  refusing the dataset).
+
 - **One-session-per-host limit removed.** Activity metering is now
   multiplexed per project instead of pinned to one host-wide endpoint:
   every project declares `activity.exporter_port` in `config.yaml`

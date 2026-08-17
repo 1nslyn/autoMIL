@@ -210,9 +210,9 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         # Training loop
         self.model.train()
         global_step = 0
-        
+
         self.logger.info(f"Starting training for {num_epochs} epochs (batch_size=1, NLLSurv)")
-        
+
         for epoch in tqdm(range(num_epochs), desc="Training"):
             epoch_start_time = time_module.time()
             self.model.train()
@@ -295,7 +295,7 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
             val_cidx = val_metrics.get('val_c_index', 0.0)
             val_cidx = float(val_cidx.item()) if isinstance(val_cidx, torch.Tensor) else float(val_cidx)
             self.logger.info(f"Val loss: {val_loss:.4f}, Val c-index: {val_cidx:.4f}")
-            early_stopping(val_loss, val_cidx, self.model)
+            early_stopping(val_loss, val_cidx, self.model, epoch=epoch)
             default_stop = early_stopping.early_stop
             if self.policy_runtime is not None:
                 default_stop = self.policy_runtime.should_stop(
@@ -308,15 +308,22 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
                 break
         
         # Load best model (EarlyStopping saves as best_{model_type}.pth)
+        restored = False
         best_model_path = os.path.join(self.save_dir, f'best_{self.model_type}.pth')
         if os.path.exists(best_model_path):
             self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
             self.logger.info(f"Loaded best model from {best_model_path}")
+            restored = True
         elif hasattr(early_stopping, 'best_model_state') and early_stopping.best_model_state is not None:
             # Fallback: load from early_stopping's saved state
             self.model.load_state_dict(early_stopping.best_model_state)
             self.logger.info("Loaded best model from early stopping state")
-        
+            restored = True
+        # A3: source=best when a val-selected checkpoint was restored above,
+        # source=final when the final weights were kept (no restore).
+        print(f"[selected] epoch={early_stopping.best_epoch} "
+              f"source={'best' if restored else 'final'}", flush=True)
+
         self.model.eval()
         torch.set_grad_enabled(False)
         
@@ -451,6 +458,21 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
             for key, value in metrics.items():
                 self.logger.info(f"{key}: {value:.4f}" if isinstance(value, float) else f"{key}: {value}")
         
+        # A4': persist val risk scores under the benchmark's shared name so the
+        # fold carries a hashable no-op detector (mirrors the test CSV below).
+        if split == 'val':
+            save_csv_path = os.path.join(self.save_dir, "predictions_val.csv")
+            risk_for_csv = risk_tensor.squeeze(1) if risk_tensor.dim() > 1 else risk_tensor
+            risk_for_csv_np = risk_for_csv.detach().cpu().numpy() if isinstance(risk_for_csv, torch.Tensor) else risk_for_csv
+            results_df = pd.DataFrame({
+                'patient_id': all_patient_ids,
+                'status': all_status.astype(int),
+                'time': all_time,
+                'risk_score': risk_for_csv_np.flatten()
+            })
+            results_df.to_csv(save_csv_path, index=False)
+            self.logger.info(f"Val predictions saved to {save_csv_path}")
+
         # Save results to CSV if test split (like train_surv_porpoise.py: lines 591-592)
         if split == 'test':
             save_csv_path = os.path.join(self.save_dir, f"results_{self.model_type}.csv")

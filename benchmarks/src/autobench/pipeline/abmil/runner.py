@@ -23,7 +23,11 @@ from autobench.pipeline.clam.runner import _write_fold_result_json
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.results_cache import resolve_results_dir
-from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.evaluate import (
+    compute_confidence_intervals,
+    pooled_val_block,
+    val_prediction_hashes,
+)
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
@@ -104,7 +108,7 @@ def run_abmil_experiment(
             with open(metrics_path) as f:
                 result = json.load(f)
             fold_results.append(result)
-            _write_fold_result_json(fold, result)
+            _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
             continue
 
         fold_policy_runtime = policy_runtime.for_fold()
@@ -139,6 +143,10 @@ def run_abmil_experiment(
             "val_metrics": raw["val_metrics"],
             # CR-3: carry the val risk records through for pooled concordance.
             **({"val_records": raw["val_records"]} if "val_records" in raw else {}),
+            # A4': computed in the fold trainer, right where it writes
+            # fold_dir/predictions_val.csv — the ONE hash home; the runner
+            # only carries it through.
+            "val_predictions_sha256": raw.get("val_predictions_sha256"),
             "fold": fold,
             "elapsed_seconds": int(raw.get("elapsed_seconds", 0) or 0),
         }
@@ -146,7 +154,7 @@ def run_abmil_experiment(
             json.dump(result, f, indent=2)
 
         fold_results.append(result)
-        _write_fold_result_json(fold, result)
+        _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]
@@ -172,6 +180,9 @@ def run_abmil_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
+        # A4': positional with per_fold_val; one hash home — see
+        # val_prediction_hashes.
+        "per_fold_val_predictions_sha256": val_prediction_hashes(fold_results),
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

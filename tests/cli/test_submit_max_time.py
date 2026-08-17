@@ -18,7 +18,7 @@ def _init_minimal_project(tmp_path: Path) -> Path:
 
     (tmp_path / "train.py").write_text(
         "import json, pathlib\n"
-        "pathlib.Path('result.json').write_text(json.dumps({'status':'completed','metrics':{},'composite':0.0}))\n"
+        "pathlib.Path('result.json').write_text(json.dumps({'status':'completed','metrics':{},'primary_value':0.0}))\n"
     )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "t@e.com"], cwd=tmp_path, check=True)
@@ -36,7 +36,7 @@ def _init_minimal_project(tmp_path: Path) -> Path:
         "project:\n  name: test_project\n"
         "task:\n  name: test_task\n"
         "encoders:\n  primary: test_encoder\n"
-        "metrics:\n  composite: {formula: 'val_auc'}\n  required: [val_auc]\n"
+        "metrics:\n  primary_value: {formula: 'val_auc'}\n  required: [val_auc]\n"
         "training: {}\n"
         "cap:\n  budget: 6h\n  safety_buffer: 30m\n  mode: wall_clock\n"
         "run:\n  mil_model: test_model\n"  # D-12: required for submit

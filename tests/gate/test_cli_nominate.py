@@ -35,7 +35,7 @@ def project(tmp_path):
                     "parent_id": None,
                     "type": "executed",
                     "status": "keep",
-                    "composite": 0.85,
+                    "primary_value": 0.85,
                     "description": "fixture keep node",
                     "history": [],
                 }

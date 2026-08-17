@@ -39,8 +39,8 @@ from automil.graph import ExperimentGraph
 def _make_graph(
     *,
     candidate_status: str = "candidate",
-    candidate_composite: float = 0.85,
-    parent_composite: float = 0.80,
+    candidate_primary_value: float = 0.85,
+    parent_primary_value: float = 0.80,
     tmp_path: Path | None = None,
 ) -> ExperimentGraph:
     """Build a two-node graph (parent=node_0001 -> candidate=node_0002).
@@ -58,12 +58,12 @@ def _make_graph(
     graph._data = {
         "schema_version": 1,
         "meta": {
-            "best_composite": 0.0,
+            "best_primary_value": 0.0,
             "best_node_id": None,
             "total_executed": 0,
             "total_proposed": 0,
             "next_id": 3,
-            "baseline_composite": 0.0,
+            "baseline_primary_value": 0.0,
             "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003},
         },
         "nodes": {
@@ -72,7 +72,7 @@ def _make_graph(
                 "parent_id": None,
                 "type": "executed",
                 "status": "keep",
-                "composite": parent_composite,
+                "primary_value": parent_primary_value,
                 "commit": "abc1234",
                 "overlay_files": [],
                 "overlay_dir": "archive/node_0001",
@@ -83,7 +83,7 @@ def _make_graph(
                 "parent_id": "node_0001",
                 "type": "executed",
                 "status": candidate_status,
-                "composite": candidate_composite,
+                "primary_value": candidate_primary_value,
                 "commit": "abc1234",
                 "overlay_files": [],
                 "overlay_dir": "archive/node_0002",
@@ -117,7 +117,7 @@ def _make_manifest(
         K=K,
         p_threshold=p_threshold,
         bootstrap_reps=bootstrap_reps,
-        win_definition="delta_composite > 0 AND p < p_threshold",
+        win_definition="delta_primary_value > 0 AND p < p_threshold",
         schema_version="gate-v1",
     )
 
@@ -135,7 +135,7 @@ class _Job:
             submitted_at=time.time(),
         )
         self.state = state
-        self.node_composite: float = 0.0  # stamped on graph node after submit
+        self.node_primary_value: float = 0.0  # stamped on graph node after submit
 
 
 class RecordingBackend(Backend):
@@ -144,12 +144,12 @@ class RecordingBackend(Backend):
     def __init__(
         self,
         initial_state: JobState = JobState.COMPLETED,
-        per_cell_composites: dict[str, float] | None = None,
+        per_cell_primary_values: dict[str, float] | None = None,
     ) -> None:
         self._jobs: dict[str, _Job] = {}  # opaque_id -> _Job
         self._counter = 0
         self._initial_state = initial_state
-        self._per_cell_composites = per_cell_composites or {}
+        self._per_cell_primary_values = per_cell_primary_values or {}
         self.submitted_specs: list[tuple[JobSpec, str]] = []
 
     @property
@@ -221,8 +221,8 @@ def _patch_evaluate_with_deltas(monkeypatch, deltas: list[float]) -> None:
                 "encoder": "uni_v2",
                 "task": "high_grade",
                 "child_node_id": f"child_{i:04d}",
-                "candidate_composite": 0.80 + d,
-                "parent_composite": 0.80,
+                "candidate_primary_value": 0.80 + d,
+                "parent_primary_value": 0.80,
                 "delta": d,
                 "status": "completed",
             }
@@ -381,8 +381,8 @@ def test_promote_inconclusive_when_K_effective_below_floor(tmp_path, monkeypatch
                 "encoder": "uni_v2",
                 "task": "high_grade",
                 "child_node_id": "child_0000",
-                "candidate_composite": 0.85,
-                "parent_composite": 0.80,
+                "candidate_primary_value": 0.85,
+                "parent_primary_value": 0.80,
                 "delta": 0.05,
                 "status": "completed",
             }
@@ -561,7 +561,7 @@ def test_promote_appends_parent_gate_log(tmp_path, monkeypatch):
         "parent_id": "node_0001",
         "type": "executed",
         "status": "candidate",
-        "composite": 0.84,
+        "primary_value": 0.84,
         "commit": "abc1234",
         "overlay_files": [],
         "overlay_dir": "archive/node_0003",

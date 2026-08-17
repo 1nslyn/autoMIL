@@ -132,7 +132,7 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
             "registry.protected is empty. An empty list disables the protected-file "
             "gate entirely, so the substrate would be declared frozen and not "
             "enforced. List the paths that must not change (splits/prep/evaluate, "
-            "the composite writer, the feature-extraction entry point), or set "
+            "the primary_value writer, the feature-extraction entry point), or set "
             "mode: free."
         )
 

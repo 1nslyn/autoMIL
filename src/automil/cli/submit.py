@@ -128,11 +128,11 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
 
     # Guard against submitting a child before its parent has completed.
     # If the parent is still a pending/running proposal, the Pareto-dominance
-    # keep/discard computed at reconcile time has no basis (parent.composite
+    # keep/discard computed at reconcile time has no basis (parent.primary_value
     # is 0). This was the root cause of orphan subtrees like 0051-0055→0048
     # where the child was submitted before 0048 had ever run. Failed parents
     # (crash/oom/timeout) are allowed but warned: the child's comparison will
-    # be against composite=0, which the agent should know.
+    # be against primary_value=0, which the agent should know.
     if parent:
         parent_node = graph_json.get("nodes", {}).get(parent)
         if parent_node is None:
@@ -148,7 +148,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 f"Refusing to submit: --parent {parent} has type=proposed "
                 f"(status={p_status}) and has not been executed yet. "
                 f"Submitting a child now means the keep/discard Pareto check "
-                f"will compare against composite=0. Wait for {parent} to "
+                f"will compare against primary_value=0. Wait for {parent} to "
                 f"finish, or pick a different --parent."
             )
         if p_type == "executed" and p_status == "running":
@@ -159,7 +159,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         if p_type == "executed" and p_status in ("crash", "oom", "timeout"):
             click.echo(
                 f"Warning: --parent {parent} has status={p_status}; the "
-                f"child's keep/discard will compare against composite=0 "
+                f"child's keep/discard will compare against primary_value=0 "
                 f"for the parent."
             )
 
@@ -614,6 +614,15 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 _campaign_binding["protocol_version"] = _campaign_cfg[
                     "protocol_version"
                 ]
+            from automil.admissibility import enforce_attempt_timeout_cap
+
+            # Timeout cap: --timeout above the audited cell default would
+            # unbind the hash-locked failure-containment constant. RAW config
+            # value — same reference the daemon's launch revalidation uses.
+            enforce_attempt_timeout_cap(
+                timeout,
+                (_automil_cfg.get("orchestrator") or {}).get("default_timeout_min"),
+            )
             _campaign_spec = validate_campaign_binding(
                 _manifest_path,
                 _campaign_binding,

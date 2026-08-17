@@ -20,10 +20,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from autobench import LIB_ROOT
-from autobench.pipeline.hparams import all_overrides, apply_overrides
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything as _seed_everything
-from autobench.pipeline.titan.config import TitanHeadConfig
+from autobench.pipeline.evaluate import file_sha256_or_none, write_survival_predictions_csv
+from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
 from autobench.pipeline.policy_dispatch import PolicyRuntime
@@ -116,16 +116,11 @@ def train_titan_survival_fold(
     patient-level c-index, adapted to TITAN's ``DataLoader``-batched linear
     probe.
     """
-    if head_cfg is None:
-        head_cfg = TitanHeadConfig()
-    # H-3: TitanHeadConfig stays the source of truth for lr/weight_decay/
-    # patience; layer on only the explicitly-set overrides. max_epochs and
-    # early_stopping are deliberately excluded — this arm reads those straight
-    # off exp_cfg.train (its documented mixed provenance), so routing them here
-    # would double-apply and trip the fail-loud guard.
-    _titan_ov = {k: v for k, v in all_overrides(exp_cfg).items()
-                 if k not in ("max_epochs", "early_stopping")}
-    head_cfg = apply_overrides(head_cfg, _titan_ov, arm="titan")
+    # H-3: head-side filtering only — the opaque channel's max_epochs/
+    # early_stopping were already applied onto exp_cfg.train at the RUNNER
+    # level (apply_train_overrides, before config.json was saved), so
+    # exp_cfg.train is read here as already-effective.
+    head_cfg = resolve_head_config(exp_cfg, head_cfg)
 
     fold_dir = os.path.join(results_dir, f"fold_{fold}")
     os.makedirs(fold_dir, exist_ok=True)
@@ -230,7 +225,7 @@ def train_titan_survival_fold(
         )
         # Always save the best (val-loss) checkpoint; early_stopping only gates
         # stopping early (matches classification/DTFD).
-        early_stopping(v_loss, v_cidx, model)
+        early_stopping(v_loss, v_cidx, model, epoch=epoch)
         default_stop = exp_cfg.train.early_stopping and early_stopping.early_stop
         if policy_runtime.should_stop(
             default_stop,
@@ -242,20 +237,33 @@ def train_titan_survival_fold(
     # Restore the best (val-loss) checkpoint from disk before scoring: the
     # in-memory best_model_state is a shallow copy aliasing the live params,
     # so it decays to the last epoch's weights. Mirrors CLAM.
+    restored = False
     best_path = os.path.join(fold_dir, "best_titan.pth")
     if os.path.exists(best_path):
         model.load_state_dict(torch.load(best_path, map_location=torch_device))
+        restored = True
     elif getattr(early_stopping, "best_model_state", None) is not None:
         model.load_state_dict(early_stopping.best_model_state)
+        restored = True
+    # A3: source=best when a val-selected checkpoint was restored above,
+    # source=final when the final weights were kept (no restore).
+    print(f"[selected] epoch={early_stopping.best_epoch} "
+          f"source={'best' if restored else 'final'}", flush=True)
 
     test_metrics = {"c_index": _c_index(test_loader)}
     val_metrics = {"c_index": _c_index(val_loader)}
     # CR-3: pooled cross-fold val concordance is computed by the runner.
     val_records = _risk_records(val_loader)
+    # A4': persist the selected model's val risk scores (the arrays are already
+    # in hand) so the fold carries a hashable no-op detector.
+    val_predictions_path = os.path.join(fold_dir, "predictions_val.csv")
+    write_survival_predictions_csv(val_predictions_path, val_records)
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
         "val_records": val_records,
+        # A4': no-op detector — hash of the persisted val risk scores above.
+        "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, checkpoint restore and
         # final scoring included, so the number is comparable across arms and

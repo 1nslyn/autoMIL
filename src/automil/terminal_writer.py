@@ -175,19 +175,22 @@ def write_terminal_state(
         )
         result = {
             "status": "crash",
-            "composite": 0.0,
+            "primary_value": 0.0,
             "metrics": {},
             "error": f"result.json failed schema validation: {msg}",
         }
 
     # Step 2a — A6 (claims-alignment): a held-out-named key INSIDE ``metrics``
-    # is a val-firewall violation, not a stylistic nit — it would enter every
-    # agent-facing surface and the recomputed composite (test driving
-    # selection). Fail closed exactly like a schema failure: the node crashes
-    # with a pointer naming the offending keys, and no certify.json is minted.
-    from automil.firewall import held_out_metric_keys as _held_out_metric_keys
+    # — or inside any ``validation_folds[*].metrics`` block, which feeds the
+    # recomputed per-fold primary values and stays in the agent-visible
+    # archive result.json — is a val-firewall violation, not a stylistic
+    # nit: it would enter agent-facing surfaces and the recomputed
+    # primary_value (test driving selection). Fail closed exactly like a
+    # schema failure: the node crashes with a pointer naming the offending
+    # keys, and no certify.json is minted.
+    from automil.firewall import held_out_leak_paths as _held_out_leak_paths
 
-    _leaking = _held_out_metric_keys(result.get("metrics"))
+    _leaking = _held_out_leak_paths(result)
     if _leaking:
         logger.error(
             "val-firewall violation for %s: held-out-named metrics key(s) %s — "
@@ -197,7 +200,7 @@ def write_terminal_state(
         )
         result = {
             "status": "crash",
-            "composite": 0.0,
+            "primary_value": 0.0,
             "metrics": {},
             "error": (
                 "val-firewall violation: held-out-named key(s) in `metrics`: "
@@ -218,38 +221,115 @@ def write_terminal_state(
     # it from the result's own val-only per-fold evidence when present; the
     # recomputed value replaces the reported one here so every downstream
     # artifact (graph node, completed/, archive result.json) round-trips it.
-    from automil.scoring import recompute_composite_se as _recompute_se
+    # Formula-aware: the SE is measured over the same recomputed per-fold
+    # projection the graph stores, never the reported fold primary values.
+    from automil.scoring import recompute_primary_se as _recompute_se
 
-    _se_recomputed = _recompute_se(result)
+    _se_recomputed = _recompute_se(
+        result,
+        ((getattr(graph, "meta", None) or {}).get("scoring") or {}).get("formula"),
+    )
     if _se_recomputed is not None:
-        _se_reported = result.get("composite_se")
+        _se_reported = result.get("primary_se")
         if isinstance(_se_reported, (int, float)) and not isinstance(_se_reported, bool) \
                 and abs(float(_se_reported) - _se_recomputed) > 1e-6:
             logger.warning(
-                "terminal_writer: reported composite_se %.6f for %s disagrees with "
+                "terminal_writer: reported primary_se %.6f for %s disagrees with "
                 "the value recomputed from validation_folds (%.6f); using the "
                 "recomputed value (CR-4 noise floor must not be self-reported).",
                 float(_se_reported), node_id, _se_recomputed,
             )
-        result = {**result, "composite_se": _se_recomputed}
+        result = {**result, "primary_se": _se_recomputed}
 
     raw_status = result.get("status", "crash")
 
     # Step 2b — CR-1b (audit 2026-07-23): derive the selection signal from the
     # declared VALIDATION metrics instead of trusting the reported scalar.
-    # result.json is written by agent-editable training code, so a composite
+    # result.json is written by agent-editable training code, so a primary_value
     # computed from the sealed test block would otherwise drive selection
     # undetected — the exact leak the val-firewall exists to prevent. The
     # recomputed value is authoritative; a disagreement is logged at ERROR and
     # recorded on the node so the audit trail survives.
-    # Resolved inside the lock (the formula lives in graph meta.scoring).
-    composite_recomputed: float | None = None
-    composite_disagreement: dict | None = None
+    # Computed BEFORE the graph lock: the artifact rebuild below (completed/,
+    # archive result.json, results.tsv) must not depend on the graph update
+    # succeeding — a missing node or a lock failure would otherwise
+    # republish the unvetted reported scalar to every agent-facing surface.
+    # Safe outside the lock: meta.scoring is seeded at graph creation and
+    # never changes mid-run.
+    from automil.scoring import (
+        primary_value_disagrees, recompute_primary_value, recompute_refused,
+    )
+
+    _pv_formula = ((getattr(graph, "meta", None) or {}).get("scoring") or {}).get("formula")
+    primary_value_reported = result.get("primary_value", 0.0)
+    primary_value = primary_value_reported
+    primary_value_recomputed: float | None = None
+    primary_value_disagreement: dict | None = None
+    try:
+        primary_value_recomputed = recompute_primary_value(
+            result.get("metrics") or {}, _pv_formula
+        )
+    except ValueError as exc:
+        # Unknown frozen formula: fail closed via the refusal branch below
+        # (recompute_refused returns True for it) — one typo'd reducer in a
+        # hand-edited graph must not silently disable CR-1b.
+        logger.error(
+            "terminal_writer: %s — refusing the reported primary_value "
+            "(unknown formula fails closed)", exc,
+        )
+        primary_value_recomputed = None
+    if primary_value_recomputed is not None and primary_value_disagrees(
+        primary_value_reported, primary_value_recomputed
+    ):
+        logger.error(
+            "terminal_writer: VAL-FIREWALL — reported primary_value %.6f for %s "
+            "disagrees with the value recomputed from its val metrics "
+            "(%.6f, formula=%r). Using the val-derived value; the reported "
+            "scalar may have been computed from test.",
+            primary_value_reported, node_id, primary_value_recomputed, _pv_formula,
+        )
+        # The stamp carries NO raw reported value: the training script (which
+        # sees test) wrote that scalar, so republishing it on an agent-facing
+        # surface is a one-scalar exfiltration channel (encode test_auc as
+        # the reported value, read it back from the stamp). The value itself
+        # goes to the operator log above only.
+        primary_value_disagreement = {
+            "recomputed": primary_value_recomputed,
+            "formula": _pv_formula,
+        }
+    if primary_value_recomputed is not None:
+        primary_value = primary_value_recomputed
+    elif recompute_refused(result.get("metrics") or {}, _pv_formula):
+        # Fail-closed (B2/B3): the metrics block is present but cannot
+        # support the declared formula — typo'd selector, stripped selector
+        # key, or an unknown frozen reducer. Trusting the reported scalar
+        # here would silently turn CR-1b off for exactly the payloads it
+        # exists to police.
+        logger.error(
+            "terminal_writer: VAL-FIREWALL — metrics for %s cannot "
+            "support the declared scoring.formula %r (missing or "
+            "non-finite selector key, or unknown formula). Refusing the "
+            "reported primary_value %.6f; scoring the node 0.0.",
+            node_id, _pv_formula, primary_value_reported,
+        )
+        primary_value_disagreement = {
+            "recomputed": None,
+            "formula": _pv_formula,
+            "refused": True,
+        }
+        primary_value = 0.0
 
     # Step 3 — Graph node update via locked_update (D-10, D-01)
-    from automil.graph import (locked_update, _accept, _accept_margin,
-                           effective_accept_margin, merged_metadata,
-                           node_composite_se as _node_se_reader)
+    from automil.graph import (locked_update, keep_or_discard, merged_metadata,
+                           node_primary_se as _node_se_reader)
+    from automil.scoring import fold_primary_value_entries as _fold_entries
+
+    # One projection serves the graph node AND the completion artifact below —
+    # the round-trip contract requires them identical, so compute once, with
+    # the graph's own formula (the meta is seeded at graph creation and never
+    # changes mid-run, so reading it outside the lock is safe).
+    _graph_formula = ((getattr(graph, "meta", None) or {}).get("scoring") or {}).get("formula")
+    _folds = _fold_entries(result, _graph_formula)
     try:
         # _technique_map is the internal attribute on ExperimentGraph
         _tm = getattr(graph, "_technique_map", None)
@@ -263,51 +343,31 @@ def write_terminal_state(
             else:
                 parent_id = gnode.get("parent_id")
                 parent = g.get_node(parent_id) if parent_id else None
-                p_comp = parent.get("composite", 0.0) if parent else 0.0
-                composite = result.get("composite", 0.0)
+                p_comp = parent.get("primary_value", 0.0) if parent else 0.0
+                # CR-1b already resolved pre-lock: `primary_value` is the
+                # val-derived (or refused-to-0.0) value, never the raw
+                # reported scalar.
 
-                # CR-1b: recompute from the val metrics; the val-derived value wins.
-                from automil.scoring import composite_disagrees, recompute_composite
-                _formula = (g.meta.get("scoring") or {}).get("formula")
-                try:
-                    composite_recomputed = recompute_composite(
-                        result.get("metrics") or {}, _formula
-                    )
-                except ValueError as exc:
-                    logger.error("terminal_writer: %s — trusting reported composite", exc)
-                    composite_recomputed = None
-                if composite_recomputed is not None and composite_disagrees(
-                    composite, composite_recomputed
-                ):
-                    logger.error(
-                        "terminal_writer: VAL-FIREWALL — reported composite %.6f for %s "
-                        "disagrees with the value recomputed from its val metrics "
-                        "(%.6f, formula=%r). Using the val-derived value; the reported "
-                        "scalar may have been computed from test.",
-                        composite, node_id, composite_recomputed, _formula,
-                    )
-                    composite_disagreement = {
-                        "reported": composite,
-                        "recomputed": composite_recomputed,
-                        "formula": _formula,
-                    }
-                if composite_recomputed is not None:
-                    composite = composite_recomputed
+                # Paired margin: attach the child evidence BEFORE the accept so
+                # this node pairs with its parent now and serves as a pairable
+                # incumbent for its own children later. Assign-or-CLEAR: a
+                # re-ingest without usable folds must not leave a previous
+                # run's vector beside a new primary_value.
+                if _folds is not None:
+                    gnode["fold_primary_values"] = _folds
+                else:
+                    gnode.pop("fold_primary_values", None)
+                gnode["primary_value"] = primary_value
 
                 # D-01: partial nodes stay quarantined — never get keep/discard
-                # crash nodes stay crash (composite=0.0 should not become discard)
+                # crash nodes stay crash (primary_value=0.0 should not become discard)
                 if raw_status == "partial":
                     graph_status = "partial"  # D-01: quarantined
                 elif raw_status == "crash":
                     graph_status = "crash"    # failure — not a keep/discard candidate
                 else:
                     # completed, budget_killed, cancelled — Ladder-gated dominance
-                    graph_status = (
-                        "keep"
-                        if _accept(composite, p_comp,
-                                   effective_accept_margin(g.meta, parent) if parent else 0.0)
-                        else "discard"
-                    )
+                    graph_status = keep_or_discard(g.meta, parent, gnode)
 
                 # M-7: the daemon's terminal path never maintained the counters.
                 # `meta.total_executed` is the UCB exploration denominator
@@ -322,11 +382,11 @@ def write_terminal_state(
                     )
                 gnode["type"] = "executed"
                 gnode["status"] = graph_status
-                gnode["composite"] = composite
-                # CR-4: the measured cross-fold SE travels with the composite, so
+                gnode["primary_value"] = primary_value
+                # CR-4: the measured cross-fold SE travels with the primary_value, so
                 # this node can serve as an incumbent whose noise sets the bar for
                 # its own children. None when <2 folds were estimable.
-                gnode["composite_se"] = _node_se_reader({"composite_se": result.get("composite_se")})
+                gnode["primary_se"] = _node_se_reader({"primary_se": result.get("primary_se")})
                 # CELL-1: backfill budget-cell membership for nodes that did not
                 # come through `automil submit` (Backend.submit paths stamp the
                 # spec but never touch the graph). Submit-time identity wins.
@@ -344,9 +404,9 @@ def write_terminal_state(
                     gnode["metadata"] = merged_metadata(gnode, result["metadata"])
                 # CR-1b: durable audit trail when the reported scalar could not be
                 # explained by the node's own validation metrics.
-                if composite_disagreement is not None:
+                if primary_value_disagreement is not None:
                     gnode["metadata"] = merged_metadata(
-                        gnode, {"composite_disagreement": composite_disagreement}
+                        gnode, {"primary_value_disagreement": primary_value_disagreement}
                     )
 
                 # Only re-evaluate descendants for non-partial, non-crash completions
@@ -355,7 +415,7 @@ def write_terminal_state(
 
                 # D-01 + H-6 (audit 2026-07-23): only touch best for non-partial,
                 # non-crash completions, and recompute it from keep nodes only. An
-                # inline ``composite > best`` could set best to a node that is (or
+                # inline ``primary_value > best`` could set best to a node that is (or
                 # just became, via _reevaluate_descendants above) discarded — e.g.
                 # under a Ladder δ>0 a within-margin child is discarded yet would
                 # win the inline strict-``>`` update.
@@ -370,32 +430,43 @@ def write_terminal_state(
 
     # CR-1b: keep the downstream artifacts (completed/, archive result.json,
     # results.tsv) consistent with the graph's authoritative val-derived
-    # composite. Rebuilt immutably — never mutating the caller's dict.
-    if composite_recomputed is not None:
-        result = {**result, "composite": composite_recomputed}
-        if composite_disagreement is not None:
-            existing_metadata = (
-                result.get("metadata")
-                if isinstance(result.get("metadata"), Mapping)
-                else {}
-            )
-            result = {
-                **result,
-                "metadata": {
-                    **existing_metadata,
-                    "composite_disagreement": composite_disagreement,
-                },
-            }
+    # primary_value. Rebuilt immutably — never mutating the caller's dict.
+    # The B2/B3 refusal must propagate too: the graph node was scored 0.0
+    # inside the lock, so leaving the refused reported scalar in the
+    # agent-facing artifacts (results.tsv is what the agent tabulates)
+    # would publish exactly the value the framework refused as
+    # untrustworthy, diverging from graph.json with no audit stamp.
+    if primary_value_recomputed is not None:
+        result = {**result, "primary_value": primary_value_recomputed}
+    elif primary_value_disagreement is not None and primary_value_disagreement.get("refused"):
+        result = {**result, "primary_value": 0.0}
+    if primary_value_disagreement is not None:
+        existing_metadata = (
+            result.get("metadata")
+            if isinstance(result.get("metadata"), Mapping)
+            else {}
+        )
+        result = {
+            **result,
+            "metadata": {
+                **existing_metadata,
+                "primary_value_disagreement": primary_value_disagreement,
+            },
+        }
 
     # Step 4 — completed/<node>.json (atomic write)
     completion = {
         "id": node_id,
         "status": result.get("status", "crash"),
-        "composite": result.get("composite", 0.0),
+        "primary_value": result.get("primary_value", 0.0),
         # CR-4: reconcile() rebuilds nodes from this artifact, so the measured
         # noise has to survive the round trip or a recovered node would silently
         # revert to the bare predeclared margin.
-        "composite_se": _node_se_reader({"composite_se": result.get("composite_se")}),
+        "primary_se": _node_se_reader({"primary_se": result.get("primary_se")}),
+        # Paired margin: same round-trip contract for the fold projection —
+        # without it a recovered node falls back to the marginal basis. Same
+        # single projection the graph node received above.
+        "fold_primary_values": _folds,
         "metrics": result.get("metrics", {}),
         "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
         "peak_vram_mb": result.get("peak_vram_mb", 0),

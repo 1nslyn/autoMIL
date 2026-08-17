@@ -63,15 +63,45 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
 
 
-def _folds(indices, base=0.6):
+def _folds(indices, base=0.6, *, ordinal=False):
+    # Fold primary_value IS the primary validation metric (scoring.formula:
+    # val_auc); val_bacc (and val_qwk on ordinal cells) ride along as
+    # recorded companions that never vote.
     return [
         {
             "fold_index": index,
-            "metrics": {"val_auc": base + index / 100, "val_bacc": base},
-            "composite": base + index / 200,
+            "metrics": {
+                "val_auc": base + index / 100,
+                "val_bacc": base,
+                **({"val_qwk": base} if ordinal else {}),
+            },
+            "primary_value": base + index / 100,
         }
         for index in indices
     ]
+
+
+def _set_fold_prediction_hashes(result_path: Path, seed: str) -> None:
+    """Stamp deterministic per-fold val_predictions_sha256 onto a result."""
+    result = json.loads(result_path.read_text())
+    for fold in result["validation_folds"]:
+        fold["val_predictions_sha256"] = hashlib.sha256(
+            f"{seed}:{fold['fold_index']}".encode()
+        ).hexdigest()
+    result_path.write_text(json.dumps(result))
+
+
+def _twin_fold_evidence(archive_root: Path, donor: str, twin: str) -> Path:
+    """Copy donor's public fold evidence onto twin: tied primary_value vectors
+    for two genuinely different configs."""
+    donor_result = json.loads((archive_root / donor / "result.json").read_text())
+    twin_path = archive_root / twin / "result.json"
+    twin_result = json.loads(twin_path.read_text())
+    twin_result["validation_folds"] = donor_result["validation_folds"]
+    twin_result["primary_value"] = donor_result["primary_value"]
+    twin_result["metrics"] = donor_result["metrics"]
+    twin_path.write_text(json.dumps(twin_result))
+    return twin_path
 
 
 AGENT_PROTOCOL = {
@@ -83,7 +113,7 @@ AGENT_PROTOCOL = {
     "runtime_version": "test-runtime-1",
     "model": "test-model",
     "model_version": "test-model-1",
-    "effort": "high",
+    "effort": "max",
     "network_access": "enabled",
     "fallback_model": None,
     "proposal_policy_content": "test proposal policy",
@@ -96,8 +126,7 @@ AGENT_PROTOCOL = {
 }
 
 
-@pytest.fixture
-def staged_cell(tmp_path):
+def _make_staged_cell(tmp_path, *, task_family: str = "binary"):
     cell_root = tmp_path / "dataset__arm__task"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
@@ -106,6 +135,7 @@ def staged_cell(tmp_path):
         "cell_id": "dataset__arm__task",
         "dataset": "dataset",
         "task": "task",
+        "task_family": task_family,
         "encoder": "encoder",
         "framework": "arm",
         "seed": 42,
@@ -194,18 +224,26 @@ def staged_cell(tmp_path):
     return cell_root, adir, cell, state, tmp_path
 
 
+@pytest.fixture
+def staged_cell(tmp_path):
+    return _make_staged_cell(tmp_path)
+
+
 def _baseline(
     cell_root: Path, *, leak=False, invalid_sealed=False,
-    attest_for: Path | None = None,
+    attest_for: Path | None = None, ordinal_val=False,
 ) -> Path:
     archive = cell_root / "baseline" / "archive"
     sealed = archive / "certify"
     sealed.mkdir(parents=True)
     result = {
         "status": "completed",
-        "composite": 0.61,
-        "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
-        "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60),
+        "primary_value": 0.62,
+        "metrics": {
+            "val_auc": 0.62, "val_bacc": 0.60,
+            **({"val_qwk": 0.60} if ordinal_val else {}),
+        },
+        "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60, ordinal=ordinal_val),
     }
     if leak:
         result["held_out"] = {"test_auc": 0.99}
@@ -327,7 +365,7 @@ def _attempts(
         if index < completed:
             result = {
                 "status": "completed",
-                "composite": 0.5 + index / 100,
+                "primary_value": 0.5 + index / 100,
                 "metrics": {"val_auc": 0.5, "val_bacc": 0.5},
                 "validation_folds": _folds(
                     STAGE_FOLDS["discovery"], 0.5 + index / 100,
@@ -344,7 +382,7 @@ def _attempts(
                     },
                 }))
         else:
-            result = {"status": "crash", "composite": 0.0, "metrics": {}}
+            result = {"status": "crash", "primary_value": 0.0, "metrics": {}}
         (archive / "result.json").write_text(json.dumps(result))
 
 
@@ -392,14 +430,14 @@ def test_baseline_registration_hashes_but_does_not_parse_sealed_test(staged_cell
     )
     assert state["baseline"]["candidate_id"] == "baseline"
     assert len(state["baseline"]["sealed_fold_sha256"]) == 5
-    assert state["baseline"]["validation_mean"] == pytest.approx(0.61)
+    assert state["baseline"]["validation_mean"] == pytest.approx(0.62)
     root_id = state["baseline"]["discovery_root_node_id"]
     graph = json.loads((adir / "graph.json").read_text())
     assert list(graph["nodes"]) == [root_id]
     root = graph["nodes"][root_id]
     assert root["parent_id"] is None
     assert root["status"] == "keep"
-    assert root["composite"] == pytest.approx(0.605)
+    assert root["primary_value"] == pytest.approx(0.61)
     assert root["metadata"]["cell_id"] == cell["budget_identity"]["cell_id"]
     assert [
         fold["fold_index"] for fold in root["metadata"]["validation_folds"]
@@ -460,7 +498,7 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
         )
         public = {
             "status": "completed",
-            "composite": 0.61,
+            "primary_value": 0.62,
             "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
             "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60),
         }
@@ -659,7 +697,7 @@ def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
         f"node_{index:04d}" for index in range(12, 2, -1)
     ]
     assert all(set(candidate["validation_folds"][0]) == {
-        "fold_index", "metrics", "composite",
+        "fold_index", "metrics", "primary_value",
     } for candidate in promoted)
     assert all(len(candidate["sealed_fold_sha256"]) == 3 for candidate in promoted)
 
@@ -706,7 +744,7 @@ def test_discovery_excludes_out_of_range_validation_metrics(staged_cell):
     _attempts(adir, cell["cell_id"], completed=1)
     result_path = adir / "orchestrator/archive/node_0001/result.json"
     result = json.loads(result_path.read_text())
-    result["validation_folds"][0]["composite"] = 1.01
+    result["validation_folds"][0]["primary_value"] = 1.01
     result_path.write_text(json.dumps(result))
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
 
@@ -750,6 +788,151 @@ def test_discovery_deduplicates_semantically_identical_hparams(staged_cell):
         candidate["candidate_id"]
         for candidate in state["discovery"]["promoted_candidates"]
     }
+
+
+def test_discovery_deduplicates_outcome_identical_candidates(staged_cell):
+    """LEGACY FALLBACK — hashless artifacts only. Runs are bit-deterministic
+    under the locked seed: two DISTINCT configs with identical per-fold
+    primary values are one measurement wearing two names (uni_v2 canary: a
+    weight-decay value inside the logit-scaling invariant regime reproduced
+    its parent to 16 digits and occupied a second promotion slot). When
+    neither candidate carries val_predictions_sha256 (pre-hash artifacts,
+    e.g. the live canary cells), the primary_value-tuple rule still dedups.
+    Hash-bearing candidates are covered by the tests below."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    _twin_fold_evidence(archive_root, donor="node_0012", twin="node_0011")
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    promoted = {
+        candidate["candidate_id"]
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert state["discovery"]["complete_candidates"] == 12
+    assert state["discovery"]["unique_complete_candidates"] == 11
+    # Equal means tie-break on candidate_id, so the earlier node keeps the slot.
+    assert "node_0011" in promoted
+    assert "node_0012" not in promoted
+    kept = next(
+        candidate for candidate in state["discovery"]["promoted_candidates"]
+        if candidate["candidate_id"] == "node_0011"
+    )
+    assert kept["val_predictions_sha256"] == [None] * len(
+        STAGE_FOLDS["discovery"]
+    )
+
+
+def test_discovery_keeps_tied_primary_values_with_distinct_prediction_hashes(
+    staged_cell,
+):
+    """Quantized primary_values can tie for genuinely different configs. With
+    complete per-fold hash vectors on BOTH candidates, the byte discriminator
+    decides: different predictions => two real candidates, both promoted."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    twin_path = _twin_fold_evidence(
+        archive_root, donor="node_0012", twin="node_0011",
+    )
+    _set_fold_prediction_hashes(twin_path, seed="run-a")
+    _set_fold_prediction_hashes(
+        archive_root / "node_0012" / "result.json", seed="run-b",
+    )
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    by_id = {
+        candidate["candidate_id"]: candidate
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert state["discovery"]["unique_complete_candidates"] == 12
+    assert {"node_0011", "node_0012"} <= set(by_id)
+    fold_count = len(STAGE_FOLDS["discovery"])
+    assert len(by_id["node_0011"]["val_predictions_sha256"]) == fold_count
+    assert all(
+        isinstance(value, str) and len(value) == 64
+        for candidate_id in ("node_0011", "node_0012")
+        for value in by_id[candidate_id]["val_predictions_sha256"]
+    )
+    assert (
+        by_id["node_0011"]["val_predictions_sha256"]
+        != by_id["node_0012"]["val_predictions_sha256"]
+    )
+
+
+def test_discovery_deduplicates_equal_prediction_hash_vectors(staged_cell):
+    """Byte-identical predictions are ONE measurement regardless of config:
+    equal complete hash vectors dedup, earlier node id keeps the slot."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    twin_path = _twin_fold_evidence(
+        archive_root, donor="node_0012", twin="node_0011",
+    )
+    _set_fold_prediction_hashes(twin_path, seed="identical-run")
+    _set_fold_prediction_hashes(
+        archive_root / "node_0012" / "result.json", seed="identical-run",
+    )
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    promoted = {
+        candidate["candidate_id"]
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert state["discovery"]["unique_complete_candidates"] == 11
+    assert "node_0011" in promoted
+    assert "node_0012" not in promoted
+    kept = next(
+        candidate for candidate in state["discovery"]["promoted_candidates"]
+        if candidate["candidate_id"] == "node_0011"
+    )
+    assert kept["val_predictions_sha256"] == [
+        hashlib.sha256(f"identical-run:{fold}".encode()).hexdigest()
+        for fold in STAGE_FOLDS["discovery"]
+    ]
+
+
+def test_discovery_mixed_hash_presence_never_primary_value_dedups(staged_cell):
+    """A hash-bearing candidate must not dedup against a hashless one on
+    primary values alone: the tie is only suspicious, never proven identical."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    twin_path = _twin_fold_evidence(
+        archive_root, donor="node_0012", twin="node_0011",
+    )
+    _set_fold_prediction_hashes(twin_path, seed="hashed-run")
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    state = freeze_discovery(cell_root)
+
+    by_id = {
+        candidate["candidate_id"]: candidate
+        for candidate in state["discovery"]["promoted_candidates"]
+    }
+    assert state["discovery"]["unique_complete_candidates"] == 12
+    assert {"node_0011", "node_0012"} <= set(by_id)
+    assert by_id["node_0012"]["val_predictions_sha256"] == [None] * len(
+        STAGE_FOLDS["discovery"]
+    )
 
 
 def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
@@ -871,14 +1054,14 @@ def _finish_promotion(
         result = (
             {
                 "status": "completed",
-                "composite": job_base,
+                "primary_value": job_base,
                 "metrics": {"val_auc": 0.7, "val_bacc": 0.7},
                 "validation_folds": _folds(
                     STAGE_FOLDS["promotion"], job_base,
                 ),
             }
             if index < completed else
-            {"status": "crash", "composite": 0.0, "metrics": {}}
+            {"status": "crash", "primary_value": 0.0, "metrics": {}}
         )
         (archive / "result.json").write_text(json.dumps(result))
         if index < completed:
@@ -1118,7 +1301,7 @@ def test_fivefold_validation_mean_can_select_searched_candidate(staged_cell):
         0, 1, 2, 3, 4,
     ]
     assert winner["validation_mean"] == pytest.approx(
-        sum(fold["composite"] for fold in winner["validation_folds"]) / 5
+        sum(fold["primary_value"] for fold in winner["validation_folds"]) / 5
     )
     assert winner["lift_over_baseline"] > 0
 
@@ -1157,13 +1340,13 @@ def test_exact_validation_tie_prefers_native_baseline(staged_cell):
     )
     freeze_discovery(cell_root)
     materialize_promotion(cell_root, repo_root=repo_root)
-    # Rank-1 source node_0012 has discovery composites .610/.615/.620.
-    # Promotion .600/.605 makes the exact five-fold mean .610, baseline's mean.
+    # Rank-1 source node_0012 has discovery primary values .610/.620/.630.
+    # Promotion .615/.625 makes the exact five-fold mean .620, baseline's mean.
     _finish_promotion(cell_root, completed=1, promotion_base=0.585)
     freeze_promotion(cell_root)
 
     state = select_winner(cell_root)
-    assert state["winner"]["validation_mean"] == pytest.approx(0.61)
+    assert state["winner"]["validation_mean"] == pytest.approx(0.62)
     assert state["winner"]["kind"] == "baseline"
 
 
@@ -1176,7 +1359,7 @@ def test_searched_tie_uses_stable_discovery_node_id(staged_cell):
     )
     freeze_discovery(cell_root)
     materialize_promotion(cell_root, repo_root=repo_root)
-    # node_0012 has .03 more discovery-composite mass than node_0011;
+    # node_0012 has .03 more discovery-primary_value mass than node_0011;
     # adding .015 to each of node_0011's two promotion folds makes them tie.
     bases = [0.75, 0.765] + [0.5] * 8
     _finish_promotion(
@@ -1670,6 +1853,41 @@ def test_cell_certification_requires_global_campaign_freeze(staged_cell):
         certify_winner(cell_root)
 
 
+def test_baseline_ingest_rejects_val_evidence_that_mismatches_the_family(tmp_path):
+    """The val-side family lock fires at the FIRST ingest: an ordinal cell
+    whose validation evidence carries only the binary key set dies at
+    baseline registration — not at certification five stages later, when
+    its hash-anchored budget would be unrecoverable."""
+    cell_root, adir, cell, _, _ = _make_staged_cell(tmp_path, task_family="ordinal")
+
+    with pytest.raises(
+        CampaignStageError,
+        match="validation metric schema differs from the cell's task family",
+    ):
+        register_baseline(cell_root, _baseline(cell_root))
+
+
+def test_certification_rejects_held_out_evidence_that_mismatches_the_family(tmp_path):
+    """The bundle-build family gate, the sealed twin of the val-side lock:
+    valid ordinal VALIDATION evidence, but sealed fold files still carrying
+    the binary held-out key set — certification must refuse (test_qwk is
+    the family\'s declared reporting primary and cannot be absent)."""
+    cell_root, adir, cell, _, _ = _make_staged_cell(tmp_path, task_family="ordinal")
+    register_baseline(cell_root, _baseline(cell_root, ordinal_val=True))
+    _attempts(adir, cell["cell_id"], completed=0)
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+
+    with pytest.raises(
+        CampaignStageError, match="differs from the cell's task family",
+    ):
+        certify_winner(cell_root)
+
+
 def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
@@ -1926,7 +2144,7 @@ def test_searched_certification_reads_winner_and_never_losers(staged_cell):
         (cell_root.parent / SELECTION_FREEZE_FILE).read_text()
     )
     process = freeze_artifact["cells"][0]["process_evidence"]["discovery"]
-    assert process["baseline_validation_mean"] == pytest.approx(0.605)
+    assert process["baseline_validation_mean"] == pytest.approx(0.61)
     assert process["validation_anytime"][-1][
         "running_best_validation_mean"
     ] > process["baseline_validation_mean"]

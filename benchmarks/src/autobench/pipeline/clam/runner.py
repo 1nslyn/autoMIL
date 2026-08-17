@@ -10,18 +10,34 @@ import torch
 
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.clam.dataset import create_dataset, load_fold_splits
-from autobench.pipeline.evaluate import compute_confidence_intervals, pooled_val_block
+from autobench.pipeline.evaluate import (
+    compute_confidence_intervals,
+    pooled_val_block,
+    val_prediction_hashes,
+)
 from autobench.pipeline.hparams import apply_overrides_to_exp_cfg
 from autobench.pipeline.results_cache import resolve_results_dir
 from autobench.pipeline.clam.train import train_fold
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
-def _write_fold_result_json(fold_index: int, result: dict) -> None:
+def _write_fold_result_json(
+    fold_index: int, result: dict, *, ordinal: bool = False,
+) -> None:
     """Write archive/<node>/fold_<i>_result.json per autoMIL CAP-03 / D-118.
 
     No-op when AUTOMIL_RESULTS_DIR is unset (e.g., running outside the
     autoMIL orchestrator).
+
+    ``ordinal`` is the DECLARED task flag (``exp_cfg.task.ordinal``), never
+    sniffed from whether ``qwk`` happens to be present in the metrics dicts —
+    the same rule as ``summary_to_result_json`` on the aggregate side. When
+    set, ``val_qwk`` joins the recorded fold evidence and ``test_qwk`` the
+    sealed ``held_out`` block, both clamped at 0 (kappa is defined on
+    [-1, 1]; every campaign consumer requires recorded values in [0, 1] —
+    the raw value stays recoverable from the sealed summary and
+    predictions.csv). A declared-but-missing qwk is recorded as ``null`` and
+    invalidates the fold like any other lost component.
 
     Pitfall 5: compute_extended_metrics() returns flat floats at the per-fold
     level. However, this helper defensively unwraps both flat-float and
@@ -30,7 +46,7 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
 
     An unestimable metric is written as ``null``, never NaN: a NaN token makes
     the file invalid JSON and the aggregator that reads it back
-    (``automil.cells.reconcile.aggregate_folds``) skips a null-composite fold
+    (``automil.cells.reconcile.aggregate_folds``) skips a null-primary_value fold
     rather than averaging a hole into the partial result.
     """
     from pathlib import Path
@@ -58,21 +74,20 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         value = float(metric)
         return value if math.isfinite(value) else None
 
-    def _mean(values: list[float | None]) -> float | None:
-        # A half-composite is on a different scale from every other fold, so a
-        # missing component drops the whole fold rather than shrinking the mean.
-        return None if any(v is None for v in values) else sum(values) / len(values)
-
     test_m = result.get("test_metrics", {}) or {}
     val_m = result.get("val_metrics", {}) or {}
     if "c_index" in test_m:
-        # Survival: composite is the VALIDATION concordance index (selection signal).
+        # Survival: primary_value is the VALIDATION concordance index (selection signal).
         # Test lives in a sealed ``held_out`` block — never surfaced to the agent
         # during search; read once by ``automil certify`` (val-firewall).
         metrics = {"val_c_index": _unwrap(val_m.get("c_index"))}
         held_out = {"test_c_index": _unwrap(test_m.get("c_index"))}
-        composite = metrics["val_c_index"]
+        primary = "val_c_index"
     else:
+        def _clamped_qwk(metric) -> float | None:
+            value = _unwrap(metric)
+            return None if value is None else max(0.0, value)
+
         metrics = {
             "val_auc":  _unwrap(val_m.get("auc_roc")),
             "val_bacc": _unwrap(val_m.get("balanced_accuracy")),
@@ -81,7 +96,26 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
             "test_auc":  _unwrap(test_m.get("auc_roc")),
             "test_bacc": _unwrap(test_m.get("balanced_accuracy")),
         }
-        composite = _mean([metrics["val_auc"], metrics["val_bacc"]])
+        if ordinal:
+            metrics["val_qwk"] = _clamped_qwk(val_m.get("qwk"))
+            held_out["test_qwk"] = _clamped_qwk(test_m.get("qwk"))
+        primary = "val_auc"
+    # Selection is the primary validation metric alone (scoring.formula:
+    # val_auc / val_c_index); companions stay recorded but no longer vote —
+    # see run_experiment._primary_components, the aggregate-side authority
+    # this per-fold value must mirror. A fold that lost ANY recorded
+    # component (companion and held_out included) carries a null
+    # primary_value: fold validity spans the FULL evidence set — the
+    # sealed side too, matching aggregate_folds (whose offender check loops
+    # over both blocks) — or a fold with a null test_qwk sails through every
+    # val-side gate as "completed" and dies stages later at certification.
+    primary_value = (
+        None
+        if any(value is None
+               for block in (metrics, held_out)
+               for value in block.values())
+        else metrics[primary]
+    )
 
     payload = {
         "fold_index":      fold_index,
@@ -89,9 +123,17 @@ def _write_fold_result_json(fold_index: int, result: dict) -> None:
         "status":          "completed",
         "metrics":         metrics,
         "held_out":        held_out,
-        "composite":       composite,
+        "primary_value":       primary_value,
         "elapsed_seconds": int(result.get("elapsed_seconds", 0) or 0),
         "peak_vram_mb":    int(result.get("peak_vram_mb", 0) or 0),
+        # A4': no-op detector, ENTRY level — never inside `metrics` (the
+        # exact-key-locked CR-1b input: every value votes under the `mean`
+        # reducer, and any extra key fails the campaign schema lock). Both paths
+        # carry it: the full-run summary -> validation_folds projection here,
+        # and the cap-kill aggregator (automil.cells.reconcile.aggregate_folds),
+        # which rebuilds entries from the sealed fold files. Null means the
+        # fold predates hashing, not "not implemented".
+        "val_predictions_sha256": result.get("val_predictions_sha256"),
     }
     # Atomic: these files are written in exactly the window a cap-kill SIGTERM
     # can land, and a torn one is silently dropped by the aggregator.
@@ -136,7 +178,7 @@ def run_experiment(
                 policy_runtime=fold_policy_runtime,
             )
             fold_results.append(result)
-            _write_fold_result_json(fold, result)
+            _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
     else:
         dataset = create_dataset(
             exp_cfg, benchmark_dir, task_csv_name=exp_cfg.task.name,
@@ -155,7 +197,7 @@ def run_experiment(
                 policy_runtime=fold_policy_runtime,
             )
             fold_results.append(result)
-            _write_fold_result_json(fold, result)
+            _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
 
     test_fold_metrics = [fr["test_metrics"] for fr in fold_results]
     val_fold_metrics = [fr["val_metrics"] for fr in fold_results]
@@ -181,6 +223,9 @@ def run_experiment(
         "val_pooled": pooled_val_block(fold_results),
         "per_fold_test": test_fold_metrics,
         "per_fold_val": val_fold_metrics,
+        # A4': positional with per_fold_val; one hash home — see
+        # val_prediction_hashes.
+        "per_fold_val_predictions_sha256": val_prediction_hashes(fold_results),
     }
 
     summary_path = os.path.join(results_dir, "summary.json")

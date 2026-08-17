@@ -23,7 +23,7 @@ FULL_PAYLOAD = {
     "metrics": {"val_auc": 0.88, "val_bacc": 0.81},
     "held_out": {"test_auc": 0.87, "test_bacc": 0.83},
     "summary": {"folds": [{"val_auc": 0.88}], "test": {"auc": 0.87}},
-    "composite": 0.845,
+    "primary_value": 0.845,
     "elapsed_seconds": 100,
     "peak_vram_mb": 4000,
 }
@@ -69,7 +69,7 @@ class TestSplitWriteWithSealedDir:
         # The val-facing fields must still be there -- this is a strip, not a wipe.
         assert worktree_copy["status"] == "completed"
         assert worktree_copy["metrics"] == {"val_auc": 0.88, "val_bacc": 0.81}
-        assert worktree_copy["composite"] == 0.845
+        assert worktree_copy["primary_value"] == 0.845
 
     def test_payload_without_sealed_keys_is_identical_in_both_copies(self, tmp_path, monkeypatch):
         from automil.runtime_helpers import write_result_json
@@ -78,7 +78,7 @@ class TestSplitWriteWithSealedDir:
         worktree_dir = tmp_path / "worktree"
         worktree_dir.mkdir(parents=True)
         monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(sealed_dir))
-        payload = {"status": "completed", "metrics": {"val_auc": 0.5}, "composite": 0.5}
+        payload = {"status": "completed", "metrics": {"val_auc": 0.5}, "primary_value": 0.5}
 
         write_result_json(dict(payload), worktree_dir=worktree_dir)
 
@@ -185,7 +185,7 @@ class TestRoundTripWithCollectResult:
             ["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True, check=True,
         ).stdout.strip()
 
-        runner = Runner(project_root=project)
+        runner = Runner(project_root=project, automil_dir=project / "automil")
         wt_path = runner.create_worktree(base_commit=base, node_id="node_0099")
         archive_dir = project / "orchestrator" / "archive" / "node_0099"
         archive_dir.mkdir(parents=True)

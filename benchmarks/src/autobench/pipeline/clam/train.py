@@ -19,7 +19,11 @@ import torch
 from autobench.pipeline.clam._imports import clam_train, initiate_model, summary
 from autobench.pipeline.config import ExperimentConfig
 from autobench.pipeline.determinism import seed_everything
-from autobench.pipeline.evaluate import compute_extended_metrics, write_predictions_csv
+from autobench.pipeline.evaluate import (
+    compute_extended_metrics,
+    file_sha256_or_none,
+    write_predictions_csv,
+)
 
 # CLAM's core_utils and utils.utils use a module-level ``device`` variable.
 # We patch it to match the device selected by the benchmark runner so that
@@ -245,6 +249,8 @@ def train_fold(
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,
+        # A4': no-op detector — hash of the persisted val predictions above.
+        "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
         "fold": fold,
         # FOLD-TIMING CONTRACT: covers the whole fold, final evaluation and
         # prediction writing included, so the number is comparable across arms

@@ -36,11 +36,10 @@ baseline:
   framework: "clam"
   test_auc: 0.790
   test_bacc: 0.698
-  composite: 0.744
+  primary_value: 0.744
 
 metrics:
-  primary: "composite"
-  composite_formula: "(val_auc + val_bacc) / 2"
+  primary: "val_auc"
   track: ["val_auc", "val_bacc"]
 
 training:
@@ -93,6 +92,13 @@ registry:
     - "benchmarks/scripts/run_experiment.py"              # entry point + summary_to_result_json
     - "benchmarks/src/autobench/pipeline/results_cache.py"  # CR-5b cache identity
     - "benchmarks/src/autobench/pipeline/results.py"
+    # --- checkpoint selection (which epoch the frozen winner IS) ---
+    - "benchmarks/src/autobench/pipeline/val_loss.py"     # shared CE val-loss helper
+    - "benchmarks/src/autobench/pipeline/abmil/train.py"  # selection inline in train
+    - "benchmarks/src/autobench/pipeline/dtfd/train.py"
+    - "benchmarks/src/autobench/pipeline/titan/train.py"
+    - "benchmarks/lib/nnMIL/training/callbacks/early_stopping.py"
+    - "benchmarks/lib/CLAM/utils/core_utils.py"
     # --- the declared search space itself (A-2) ---
     - "benchmarks/src/autobench/pipeline/search_space.py"
     - "benchmarks/src/autobench/pipeline/hparams.py"
@@ -107,7 +113,7 @@ registry:
 files:
   # H-4: `run_experiment.py` and `pipeline/config.py` were listed here, and the
   # no---files branch auto-detects editable files with NO readonly check at all —
-  # so the split entry point, the composite writer and the fold/seed dataclasses
+  # so the split entry point, the primary_value writer and the fold/seed dataclasses
   # were captured silently. They are now protected instead. Nothing legitimate is
   # lost: hyperparameters travel through --hparams / a variant's HPARAMS (H-3b),
   # and executable policy variants live behind the protected PolicyVariant seam.
@@ -126,7 +132,11 @@ orchestrator:
   # parallel, not serially. If a worker OOMs, lower this cap; never leave
   # it at 1 "just in case."
   max_concurrent_per_gpu: 4
-  default_vram_estimate_gb: 1.0
+  # >= the one measured arm peak (nnMIL ~4.5GB) + headroom, so the
+  # packer's VRAM budget is honest accounting, not fiction: the 4-job
+  # cap binds first on 49GB cards (4x6 + 2 margin < capacity), but an
+  # operator raising the cap must hit a truthful budget, not 1GB.
+  default_vram_estimate_gb: 6.0
 
 # CLN-02 / D-04 / D-05: Subprocess env whitelist, ccrcc declares the
 # consumer-specific env vars its training scripts need. The orchestrator's
@@ -151,3 +161,8 @@ env:
 viz:
   port: 8421
   host: "0.0.0.0"
+
+# Selection primary_value = the primary validation metric alone
+# (companions in metrics.track stay recorded but do not vote).
+scoring:
+  formula: "val_auc"

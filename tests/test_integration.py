@@ -144,7 +144,7 @@ class TestEndToEnd:
             parent_id=None,
             description="baseline",
             techniques=["baseline"],
-            metrics={"test_auc": 0.85, "test_bacc": 0.80, "composite": 0.825},
+            metrics={"test_auc": 0.85, "test_bacc": 0.80, "primary_value": 0.825},
             status="keep",
         )
         graph.save()
@@ -224,7 +224,7 @@ class TestEndToEnd:
             parent_id=None,
             description="baseline",
             techniques=["baseline"],
-            metrics={"test_auc": 0.85, "test_bacc": 0.80, "composite": 0.825},
+            metrics={"test_auc": 0.85, "test_bacc": 0.80, "primary_value": 0.825},
             status="keep",
         )
         graph.save()

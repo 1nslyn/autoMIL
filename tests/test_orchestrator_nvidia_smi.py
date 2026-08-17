@@ -95,7 +95,7 @@ def test_check_reports_nvidia_smi_path(tmp_path, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(main, ["check"])
     # Exit code may be non-zero for unrelated check failures (e.g. missing
-    # baseline composite or training script); what matters is the nvidia-smi:
+    # baseline primary_value or training script); what matters is the nvidia-smi:
     # line appears in stdout (D-18).
     assert "nvidia-smi:" in result.output, (
         f"check output missing nvidia-smi report: {result.output}"

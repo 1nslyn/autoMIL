@@ -6,7 +6,7 @@
   (lr=1e-4, wd=1e-5, dropout=0.25, bag_weight=0.7)
   - val_auc 0.7876, val_bacc 0.6856
   - test_auc 0.7902, test_bacc 0.6984
-  - composite **0.7443**
+  - primary_value **0.7443**
 
 ## Invalidated Round 1 (do NOT trust)
 
@@ -15,7 +15,7 @@ editable `pip install -e .` of `autobench` silently shadowed every
 worktree overlay under `benchmarks/src/autobench/` and `benchmarks/lib/`,
 so every "modified" experiment actually ran the same baseline code.
 Symptoms: node_0007 and node_0008 produced byte-identical training logs
-and identical composite 0.7458 despite different code edits.
+and identical primary_value 0.7458 despite different code edits.
 
 Archived under `automil/orchestrator/archive_invalidated/` for forensics.
 
@@ -35,18 +35,18 @@ point to the worktree, not the main repo.
 
 ## Round 1 Results (with verified isolation)
 
-- **node_0003 — Cosine annealing LR**: composite 0.7458 (+0.0015)
+- **node_0003 — Cosine annealing LR**: primary_value 0.7458 (+0.0015)
   - val_auc 0.7885, val_bacc 0.6976, test_auc 0.7908, test_bacc 0.7009
   - Tiny improvement; probably within noise. LR decay alone isn't the lever.
 
-- **node_0005 — Class-weighted CE (inv-freq, mild 0.85/1.21)**: composite 0.7458 (+0.0015)
+- **node_0005 — Class-weighted CE (inv-freq, mild 0.85/1.21)**: primary_value 0.7458 (+0.0015)
   - Essentially identical to cosine annealing. Weak weights → weak effect.
   - Lesson: the 58/42 class imbalance isn't severe enough for inverse-frequency
     weighting to matter. If we want to push BACC via weighting, we'd need a
     much more aggressive multiplier (e.g., [0.5, 2.0]) — and that risks
     over-biasing toward the minority class.
 
-- **node_0006 — Focal loss γ=2**: composite **0.7273 (−0.0170)** ❌
+- **node_0006 — Focal loss γ=2**: primary_value **0.7273 (−0.0170)** ❌
   - test_auc 0.7776, test_bacc 0.6771 — **both metrics regressed**
   - Focal loss's hard-example focus *hurt* in this MIL setup. Plausible
     explanation: CLAM's attention mechanism already identifies hard
@@ -54,17 +54,17 @@ point to the worktree, not the main repo.
     ambiguous / noisy bags that the attention correctly down-weighted.
     **Don't stack focal loss with CLAM.**
 
-- **node_0004 — Label smoothing 0.1**: composite **0.7673 (+0.0230)** 🏆
+- **node_0004 — Label smoothing 0.1**: primary_value **0.7673 (+0.0230)** 🏆
   - val_auc 0.7984, val_bacc 0.7043, test_auc 0.8084, test_bacc 0.7262
   - **Both metrics improved meaningfully**. BACC +0.028 is 4 % relative.
   - Strong Pareto dominance over baseline — clean keep.
   - Validates the "calibration is the bottleneck" hypothesis.
 
-- **node_0007 — Label smoothing 0.15**: composite **0.7727 (+0.0284)** 🏆🏆
+- **node_0007 — Label smoothing 0.15**: primary_value **0.7727 (+0.0284)** 🏆🏆
   - val_auc 0.8094, val_bacc 0.7301, test_auc 0.8138, test_bacc 0.7317
   - Better than 0.1 on every metric. BACC now +0.033 over baseline.
 
-- **node_0008 — Label smoothing 0.2**: composite 0.7580 (+0.0137)
+- **node_0008 — Label smoothing 0.2**: primary_value 0.7580 (+0.0137)
   - val_auc 0.8113 (highest!), val_bacc 0.7431 (highest!), but
   - test_auc 0.7965 (drops), test_bacc 0.7195 (drops)
   - **Over-regularizes**: val scores peak but test scores regress. The
@@ -129,12 +129,12 @@ variance first (e.g. fix folds across runs, or use larger dataset).
 **Paired t-test:** t = 1.17, df = 3, p ≈ 0.32.
 **95 % CI for mean Δ:** [−0.016, +0.036].
 
-The mean LS effect is **+0.010 composite**, but the CI straddles zero.
+The mean LS effect is **+0.010 primary_value**, but the CI straddles zero.
 Four seeds are not enough to confirm the effect at p < 0.05, though
 the point estimate is stable and positive.
 
 **Honest conclusion:**
-- LS 0.15 probably helps by about +0.01 composite (≈1 % relative).
+- LS 0.15 probably helps by about +0.01 primary_value (≈1 % relative).
 - The *single-seed* 0.7727 "winner" was a lucky initialization; the
   multi-seed mean at LS 0.15 is 0.7633.
 - The task (CCRCC high_grade, n_train=204, n_test=68) is intrinsically
@@ -153,10 +153,10 @@ noise study — used the same train/val/test partition.
 **Proof:** node_0040 (LS 0.15, split_seed=42 forced, train_seed=7) and
 node_0034 (LS 0.15, seed=7 for both) produced byte-identical metrics:
 val_auc 0.7744, val_bacc 0.6598, test_auc 0.8024, test_bacc 0.7114,
-composite 0.7569. Changing the "split seed" had no effect.
+primary_value 0.7569. Changing the "split seed" had no effect.
 
 **Revised variance interpretation:**
-- The ±0.020 composite variance I attributed to "data splits" is
+- The ±0.020 primary_value variance I attributed to "data splits" is
   actually entirely from **model initialization / training
   non-determinism on the same fixed test set**.
 - Hyperparameter comparisons *were* valid (same test set throughout),
@@ -199,7 +199,7 @@ proposal. Never reuse IDs.
 
 ## Multi-Init Ensemble — First Trials (nodes 0041–0043, running 2026-04-10)
 
-The dominant noise source is model-init variance (±0.02 composite on
+The dominant noise source is model-init variance (±0.02 primary_value on
 fixed splits). Ensembling N models trained with different torch seeds
 on the *same* splits and averaging per-slide probs should reduce that
 noise by ~√N.
@@ -232,7 +232,7 @@ Running / completed:
   AUC–BACC gap of ~0.10 means the decision threshold is off, not that the
   model can't discriminate.
 
-Ensemble changes how much we *trust* the composite, not how high the
+Ensemble changes how much we *trust* the primary_value, not how high the
 *ceiling* is. The ceiling sits around **0.765 ± 0.005** for single-model
 LS-regularized CLAM_MB + uni_v2. To break through, we need either
 (a) threshold recalibration for BACC, or (b) a structurally different
@@ -249,7 +249,7 @@ members, improving averaging. If 0.4/0.5 > 0.25, ensembling has headroom.
 ## Literature Shortlist (2026-04-11 research sub-agent)
 
 Source: general-purpose sub-agent, WebSearch + WebFetch. Plateau is at
-composite ~0.765 with test_auc ~0.81 / test_bacc ~0.72 — the AUC–BACC
+primary_value ~0.765 with test_auc ~0.81 / test_bacc ~0.72 — the AUC–BACC
 gap is the specific bottleneck, and the remaining hyperparameter
 headroom is within seed noise. Priority order for implementation:
 
@@ -277,7 +277,7 @@ headroom is within seed noise. Priority order for implementation:
 
 **Skipped by the agent (recorded to prevent re-trying):** ProtoMIL
 (unreliable at small-n per reviewers), SGPMIL (calibrated uncertainty,
-no composite gain), ViLa-MIL / MSCPT / Queryable Prototype MIL
+no primary_value gain), ViLa-MIL / MSCPT / Queryable Prototype MIL
 (require CONCH text encoder, pipeline complexity), HMIL / 2DMamba /
 WSD-MIL (full rewrites, wrong bottleneck).
 
@@ -288,7 +288,7 @@ First *honest* result that beats the 4-seed LS 0.15 mean:
 - `node_0046` — N=3 ensemble + LS 0.1 + **val-optimized threshold** = **0.7721**
   - val_auc 0.8149, val_bacc **0.7854** (+0.034 from thresh-opt on val)
   - test_auc 0.8153, test_bacc **0.7289** (+0.010 transferred to test)
-  - composite 0.7721 vs node_0041 (same config, thresh=0.5) = 0.7672 → **+0.0049**
+  - primary_value 0.7721 vs node_0041 (same config, thresh=0.5) = 0.7672 → **+0.0049**
 
 Threshold opt: for binary tasks, sweep decision thresholds on val, pick
 best BACC, apply to test. AUC is threshold-free so unchanged; BACC gains
@@ -303,16 +303,16 @@ BACC headroom with a better calibrator than pure threshold sweep.
 ## Dropout 0.4 Gives Highest Test AUC (node_0044, 2026-04-11)
 
 `node_0044` (N=3 + LS 0.1 + dropout 0.4) hit **test_auc 0.8205** — the
-highest ever — but test_bacc dropped to 0.714 → composite 0.7672, same
+highest ever — but test_bacc dropped to 0.714 → primary_value 0.7672, same
 as the default-dropout version. Interpretation: more dropout gives a
 **better** model but a **worse**-calibrated decision boundary. The
-combo *dropout 0.4 + threshold-opt* should land around composite
+combo *dropout 0.4 + threshold-opt* should land around primary_value
 (0.8205 + 0.745)/2 ≈ 0.783 — see node_0055 (resubmit of this combo).
 
 ## Ensemble Saturates at N=3 (nodes 0041 / 0042, 2026-04-11)
 
-- N=3 + LS 0.1: composite 0.7672 (val_auc 0.8149, val_bacc 0.7518)
-- N=5 + LS 0.1: composite 0.7598 (val_auc 0.8172, val_bacc 0.7561 — both higher)
+- N=3 + LS 0.1: primary_value 0.7672 (val_auc 0.8149, val_bacc 0.7518)
+- N=5 + LS 0.1: primary_value 0.7598 (val_auc 0.8172, val_bacc 0.7561 — both higher)
 
 More members lower val noise but **hurt test BACC**. Extra members smooth
 predictions toward the mean class probability, which shifts borderline
@@ -362,7 +362,7 @@ honest-best config:
 | val_bacc  | 0.7854                | 0.7906               | +0.005 |
 | test_auc  | 0.8153                | **0.8205**           | +0.005 |
 | test_bacc | 0.7289                | **0.7417**           | +0.013 |
-| composite | 0.7721                | **0.7811**           | **+0.0090** |
+| primary_value | 0.7721                | **0.7811**           | **+0.0090** |
 
 Two independent runs at dropout 0.4 both hit test_auc **0.8205**
 (node_0044 pre-thresh-opt, node_0076 with thresh-opt) → the AUC lift
@@ -372,8 +372,8 @@ is reproducible, not seed noise.
 boundary, and threshold-opt transfers more of the val-side BACC gain
 to test. The val→test BACC gap for drop 0.4 is **0.049**, compared to
 0.056 for default dropout — the smallest gap in the dropout sweep.
-Threshold-opt alone contributes ~+0.005 composite; dropout 0.4 alone
-doesn't shift composite (test_auc up, test_bacc down canceling out);
+Threshold-opt alone contributes ~+0.005 primary_value; dropout 0.4 alone
+doesn't shift primary_value (test_auc up, test_bacc down canceling out);
 **the two together** clear +0.009 over each individual effect.
 
 Dropout sweep at N=3 + LS 0.1 + thresh (single seed 42):
@@ -408,7 +408,7 @@ First literature-driven result back after the 25-batch carnage:
 | 0082 | **AEM 0.08** + drop 0.4 + thresh       | 0.7572 | 0.8108   | 0.7036    |
 
 AEM at paper-default λ regresses test_auc and test_bacc **every time**,
-by ~−0.011 to −0.015 composite. AEM 0.08 and 0.10 produce nearly
+by ~−0.011 to −0.015 primary_value. AEM 0.08 and 0.10 produce nearly
 identical results → the regularization strength is already in a plateau
 region where it's just flattening attention by a fixed amount and
 hurting discrimination proportionally.
@@ -459,7 +459,7 @@ worktree for real experiments.
 Current best still **node_0076 = 0.7811** (drop 0.4 + N=3 + LS 0.1 + thresh).
 
 Dropout fine peak (single seed 42, N=3 + LS 0.1 + thresh):
-| drop | composite |
+| drop | primary_value |
 |------|-----------|
 | 0.25 | 0.7721    |
 | 0.30 | 0.7677    |

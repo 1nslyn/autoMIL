@@ -34,7 +34,7 @@ def test_valid_autobench_result_json_passes_validation():
     """Well-formed autobench result.json passes validate_result without raising."""
     from automil.schemas import validate_result
     payload = {
-        "composite": 0.502,
+        "primary_value": 0.502,
         "metrics": {
             "val_auc": 0.81, "val_bacc": 0.78,
             "test_auc": 0.83, "test_bacc": 0.80,
@@ -47,16 +47,16 @@ def test_valid_autobench_result_json_passes_validation():
 
 
 def test_valid_minimal_result_json_passes_validation():
-    """A minimal result.json with only composite required field passes."""
+    """A minimal result.json with only primary_value required field passes."""
     from automil.schemas import validate_result
-    validate_result({"composite": 0.95})
+    validate_result({"primary_value": 0.95})
 
 
 def test_malformed_result_json_raises_with_nonempty_message():
     """Malformed result.json raises ValidationError with a non-empty message."""
     from automil.schemas import validate_result, ValidationError
     with pytest.raises(ValidationError) as excinfo:
-        validate_result({"composite": "not a number"})
+        validate_result({"primary_value": "not a number"})
     assert excinfo.value.message  # non-empty error string from jsonschema
 
 
@@ -91,14 +91,14 @@ def test_status_enum_violation_raises_validation_error():
     """status not in the locked enum raises ValidationError."""
     from automil.schemas import validate_result, ValidationError
     with pytest.raises(ValidationError):
-        validate_result({"composite": 0.5, "status": "weird_state"})
+        validate_result({"primary_value": 0.5, "status": "weird_state"})
 
 
 def test_negative_peak_vram_mb_raises_validation_error():
     """peak_vram_mb minimum: 0 enforced by schema."""
     from automil.schemas import validate_result, ValidationError
     with pytest.raises(ValidationError):
-        validate_result({"composite": 0.5, "peak_vram_mb": -42.0})
+        validate_result({"primary_value": 0.5, "peak_vram_mb": -42.0})
 
 
 def test_none_result_skips_validation_by_construction():

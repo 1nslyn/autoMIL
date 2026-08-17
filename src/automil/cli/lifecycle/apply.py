@@ -128,7 +128,7 @@ def _derive_variant_selection(node: dict) -> dict[str, dict[str, Optional[str]]]
 def apply(node_id: str):
     """Apply a node's variant selection to automil/config.yaml.
 
-    Workflow: after running an experiment that produced a good composite,
+    Workflow: after running an experiment that produced a good primary_value,
     use `automil apply <node_id>` to set that node's variant choices
     (model.variant, loss.variant, policy.variant) as the active config
     for the next submit. Edits config.yaml only — never modifies the

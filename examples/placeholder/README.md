@@ -15,7 +15,7 @@ cd /path/to/your/project
 #   env.required + env.passthrough
 #   scoring.formula
 #   cap.budget_seconds + cap.safety_buffer_seconds
-#   baseline.composite
+#   baseline.primary_value
 
 uv run automil check                # validates protected files, env.required, backend
 uv run automil orchestrator start

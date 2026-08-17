@@ -38,7 +38,7 @@ def rank(n: int, max_per_branch: int, include_held_out: bool):
     # D-139: held-out isolation — filter unless operator explicitly opts in.
     if include_held_out:
         logger.warning(
-            "rank --include-held-out: held-out cell composites now visible; "
+            "rank --include-held-out: held-out cell primary_values now visible; "
             "this MUST NOT be used during the agent search loop (D-139)."
         )
     else:
@@ -56,18 +56,86 @@ def rank(n: int, max_per_branch: int, include_held_out: bool):
 
     if not proposals:
         click.echo("No proposals available. Time to brainstorm!")
-        return
+    else:
+        click.echo(f"Top {len(proposals)} proposals:\n")
+        for i, node in enumerate(proposals, 1):
+            node_id = node["id"]
+            parent = node.get("parent_id", "root")
+            desc = node.get("description", "")
+            score = node.get("potential", 0)
+            kind = node.get("kind", "unspecified")
+            click.echo(f"  {i}. [{node_id}] [{kind}] (parent: {parent}, score: {score:.4f})")
+            click.echo(f"     {desc}")
+            click.echo()
 
-    click.echo(f"Top {len(proposals)} proposals:\n")
-    for i, node in enumerate(proposals, 1):
-        node_id = node["id"]
-        parent = node.get("parent_id", "root")
-        desc = node.get("description", "")
-        score = node.get("potential", 0)
-        kind = node.get("kind", "unspecified")
-        click.echo(f"  {i}. [{node_id}] [{kind}] (parent: {parent}, score: {score:.4f})")
-        click.echo(f"     {desc}")
-        click.echo()
+    _print_leaderboard(graph)
+
+
+def _print_leaderboard(graph, top: int = 10) -> None:
+    """Completed-node leaderboard: primary_value ± SE, paired Δparent ± SE, and the
+    margin each node faced.
+
+    This is the noise-floor surface the search loop needs in-band: without it,
+    the fold spread and the required keep-bar are visible only by hand-parsing
+    ``archive/<node>/result.json`` per node (both runtime-canary agents spent
+    charged attempts rediscovering exactly these numbers). Validation-only by
+    construction — every value derives from the val ``metrics`` block.
+    """
+    from automil.graph import (effective_accept_margin, margin_se_basis,
+                               node_primary_se)
+
+    executed = [
+        node for node in graph.nodes.values()
+        if node.get("type") == "executed"
+        and node.get("status") in ("keep", "discard", "partial")
+    ]
+    if not executed:
+        return
+    executed.sort(key=lambda node: -float(node.get("primary_value") or 0.0))
+
+    def _pm(value: float | None) -> str:
+        return "±?" if value is None else f"±{value:.4f}"
+
+    # Name the metric next to the number: the primary value IS the declared
+    # primary validation metric (scoring.formula, frozen in graph meta), and
+    # the agent reading this table must never have to guess which one.
+    formula = (graph.meta.get("scoring") or {}).get("formula") or "mean"
+    metric_label = (
+        str(formula) if str(formula).startswith("val_")
+        else f"scoring.formula: {formula}"
+    )
+    click.echo(
+        f"Completed nodes (top {min(top, len(executed))} of {len(executed)} "
+        f"by primary value = {metric_label}):\n"
+    )
+    for node in executed[:top]:
+        primary_value = float(node.get("primary_value") or 0.0)
+        se = node_primary_se(node)
+        parent = graph.get_node(node.get("parent_id")) if node.get("parent_id") else None
+        if parent is not None:
+            delta = primary_value - float(parent.get("primary_value") or 0.0)
+            # Label the evidence with the SAME basis the gate applied: a raw
+            # paired SE beside a bar that fell back to the marginal basis
+            # (non-pairable formula, failed identity guard) would show
+            # "±0.0000" while the decision ran against the much wider
+            # marginal SE.
+            basis, basis_se = margin_se_basis(graph.meta, parent, node)
+            bar = effective_accept_margin(graph.meta, parent, node)
+            if basis == "paired":
+                versus = f"Δparent {delta:+.4f} {_pm(basis_se)} paired (bar {bar:.4f})"
+            elif basis == "marginal":
+                versus = (f"Δparent {delta:+.4f} (marginal SE "
+                          f"{basis_se:.4f}; bar {bar:.4f})")
+            else:
+                versus = f"Δparent {delta:+.4f} (bar {bar:.4f})"
+        else:
+            versus = "root"
+        desc = (node.get("description", "") or "")[:60]
+        click.echo(
+            f"  {node['id']}  {primary_value:.4f} {_pm(se)}  {versus}  "
+            f"[{node.get('status')}]  {desc}"
+        )
+    click.echo()
 
 
 #: Free mode exposes every kind. Architecture-preserving mode is narrower than

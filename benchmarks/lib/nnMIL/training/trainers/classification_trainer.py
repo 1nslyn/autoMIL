@@ -209,10 +209,10 @@ class ClassificationTrainer(BaseTrainer):
         # Training loop
         self.model.train()
         global_step = 0
-        
+
         self.logger.info(f"Starting training for {num_epochs} epochs")
         self.logger.info(f"Total steps: {total_steps}, Warmup steps: {warmup_steps}")
-        
+
         for epoch in tqdm(range(num_epochs), desc="Training"):
             epoch_start_time = time.time()
             self.model.train()
@@ -288,13 +288,19 @@ class ClassificationTrainer(BaseTrainer):
             # Early stopping - extract metrics from val_metrics
             # Note: evaluate() returns prefixed metrics like "val_val/bacc" (split='val' + prefix='val')
             # Check both prefixed and unprefixed keys for compatibility
-            val_loss = val_metrics.get('val_val/loss', val_metrics.get('val/loss', 0.0))
+            # val/loss is only emitted when val probs are finite and the val
+            # split has >1 class; absent must read as NaN so the non-finite
+            # guard skips the epoch — a 0.0 default would be a PERFECT loss
+            # (score -0.0 beats every real loss) and would permanently
+            # capture the checkpoint.
+            val_loss = val_metrics.get('val_val/loss', val_metrics.get('val/loss', float('nan')))
             val_bacc = val_metrics.get('val_val/bacc', val_metrics.get('val/bacc', 0.0))
             val_f1 = val_metrics.get('val_val/weighted_f1', val_metrics.get('val/weighted_f1', 0.0))
             val_auc = val_metrics.get('val_val/auroc', val_metrics.get('val/auroc', 0.0))
             val_kappa = val_metrics.get('val_val/kappa', val_metrics.get('val/kappa', None))
             
-            early_stopping(val_loss, val_bacc, val_f1, val_auc, self.model, val_kappa=val_kappa)
+            early_stopping(val_loss, val_bacc, val_f1, val_auc, self.model,
+                           val_kappa=val_kappa, epoch=epoch)
             default_stop = early_stopping.early_stop
             if self.policy_runtime is not None:
                 default_stop = self.policy_runtime.should_stop(
@@ -317,13 +323,20 @@ class ClassificationTrainer(BaseTrainer):
         self.logger.info(f"Saved latest model to {latest_model_path}")
         
         # Load best model
+        restored = False
         best_model_path = os.path.join(self.save_dir, f'best_{self.model_type}.pth')
         if os.path.exists(best_model_path):
             self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
             self.logger.info("Loaded best model for final evaluation")
+            restored = True
         elif hasattr(early_stopping, 'best_model_state'):
             self.model.load_state_dict(early_stopping.best_model_state)
             self.logger.info("Loaded best model from early stopping state")
+            restored = True
+        # A3: source=best when a val-selected checkpoint was restored above,
+        # source=final when the final weights were kept (no restore).
+        print(f"[selected] epoch={early_stopping.best_epoch} "
+              f"source={'best' if restored else 'final'}", flush=True)
 
         # NOTE: do NOT call torch.set_grad_enabled(False) here.  It is a
         # thread-local *global* switch; leaving it off leaks into whatever runs

@@ -24,9 +24,9 @@ REDACTION = "[REDACTED: held-out metric — val-firewall]"
 #: Deliberately broad: a false positive costs one redacted debug line, a false
 #: negative costs the firewall.
 _HELD_OUT_MARKERS = (
-    "test_auc", "test_bacc", "test_acc", "test_c_index", "test_cindex",
-    "test_f1", "test_auprc", "test_loss", "test_error", "test error",
-    "held_out", "heldout", "held out",
+    "test_auc", "test_bacc", "test_acc", "test_qwk", "test_c_index",
+    "test_cindex", "test_f1", "test_auprc", "test_loss", "test_error",
+    "test error", "held_out", "heldout", "held out",
 )
 
 
@@ -58,7 +58,7 @@ def is_held_out_metric_key(key: str) -> bool:
     The seal strips the ``held_out``/``summary`` blocks, but nothing constrained
     the *names inside* ``metrics`` — a result carrying ``metrics: {"test_auc": …}``
     would flow test into every agent-facing surface and into the recomputed
-    composite (the mean runs over all metric values), i.e. test driving
+    primary_value (the mean runs over all metric values), i.e. test driving
     selection with the firewall's blessing. This predicate deliberately matches
     the campaign controller's freeze-time rule (any key containing ``test``,
     plus the held-out markers) so the two enforcement layers cannot disagree;
@@ -74,6 +74,30 @@ def held_out_metric_keys(metrics: Mapping[str, Any] | None) -> tuple[str, ...]:
     if not isinstance(metrics, Mapping):
         return ()
     return tuple(str(k) for k in metrics if is_held_out_metric_key(str(k)))
+
+
+def held_out_leak_paths(result: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Every held-out-named key in the payload's VALIDATION surfaces.
+
+    Covers the node-level ``metrics`` block AND each
+    ``validation_folds[*].metrics`` block: fold metrics feed the recomputed
+    per-fold primary values (under the ``mean`` reducer a ``test_auc`` there
+    is averaged straight into the paired keep-margin) and the fold block
+    itself stays in the agent-visible archive ``result.json`` — the same
+    leak A6 closes one level up. One predicate, one enforcement.
+    """
+    if not isinstance(result, Mapping):
+        return ()
+    leaks = list(held_out_metric_keys(result.get("metrics")))
+    folds = result.get("validation_folds")
+    if isinstance(folds, list):
+        for i, entry in enumerate(folds):
+            if isinstance(entry, Mapping):
+                leaks.extend(
+                    f"validation_folds[{i}].metrics.{k}"
+                    for k in held_out_metric_keys(entry.get("metrics"))
+                )
+    return tuple(leaks)
 
 
 def held_out_keys(result: Mapping[str, Any]) -> tuple[str, ...]:

@@ -39,11 +39,14 @@ def _find_automil_dir() -> Path:
             f"{_PROJECT_OVERRIDE}. Point --project at the project root or the "
             f"automil/ dir directly."
         )
-    # Existing cwd walk — unchanged:
+    # Existing cwd walk — unchanged, except unreadable ancestors read as
+    # "not here" (automil.paths.probe_exists) rather than crashing the walk.
+    from automil.paths import probe_exists
+
     p = Path.cwd()
     while p != p.parent:
         candidate = p / "automil" / "config.yaml"
-        if candidate.exists():
+        if probe_exists(candidate):
             return p / "automil"
         p = p.parent
     raise click.ClickException(

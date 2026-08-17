@@ -153,8 +153,8 @@ class TestLocksAreDeliberate:
             assert "seed" not in declared_knobs(arm)
 
     def test_unknown_arm_declares_nothing(self):
-        assert declared_knobs("smmile") == frozenset()
-        assert lock_reason("smmile", "lr") is None
+        assert declared_knobs("no_such_arm") == frozenset()
+        assert lock_reason("no_such_arm", "lr") is None
 
 
 class TestMethodsTable:

@@ -66,13 +66,6 @@ class TestSeedEverything:
 # clam named theirs "seed_everything" -- the identity check doesn't care
 # which name a module binds it under, only that it's the SAME function.
 #
-# smmile.train is deliberately excluded here (see
-# TestSmmileInIsolation below): it and clam.train each vendor a top-level
-# `models` package onto sys.path (clam/_imports.py, smmile/_imports.py), and
-# whichever is imported FIRST in a process wins that name in sys.modules --
-# a pre-existing collision unrelated to L-2. smmile is also not in the
-# active Framework roster (pipeline/config.py), so it is checked separately,
-# in a subprocess, rather than in the same process as clam's case below.
 _CONSUMERS = [
     ("autobench.pipeline.clam.train", "seed_everything"),
     ("autobench.pipeline.dtfd.train", "_seed_everything"),
@@ -94,24 +87,3 @@ class TestEveryTrainerUsesTheSharedHelper:
             "which is exactly how the cuDNN-flag drift (L-2) happened."
         )
 
-
-class TestSmmileInIsolation:
-    def test_smmile_binds_the_shared_function_object(self):
-        """Same identity check as above, for smmile.train, in a fresh
-        subprocess so it can't collide with clam.train's same-named vendored
-        `models` package inside this test session (see the _CONSUMERS
-        comment above -- pre-existing, unrelated to L-2)."""
-        import subprocess
-        import sys
-
-        code = (
-            "from autobench.pipeline.determinism import seed_everything\n"
-            "from autobench.pipeline.smmile.train import seed_everything as bound\n"
-            "assert bound is seed_everything, 'smmile.train has its own copy again'\n"
-            "print('OK')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout

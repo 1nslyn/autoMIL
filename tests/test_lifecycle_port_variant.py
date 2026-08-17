@@ -30,7 +30,7 @@ def _setup(tmp_path: Path) -> Path:
 
 
 def _write_archive_spec(adir: Path, node_id: str, *, overlay: dict, parent: str | None,
-                        base_commit: str = "abc1234", composite: float = 0.5,
+                        base_commit: str = "abc1234", primary_value: float = 0.5,
                         techniques: list | None = None):
     archive = adir / "orchestrator" / "archive" / node_id
     archive.mkdir(parents=True, exist_ok=True)
@@ -39,22 +39,22 @@ def _write_archive_spec(adir: Path, node_id: str, *, overlay: dict, parent: str 
         "base_commit": base_commit,
         "overlay_manifest": overlay,
         "deletions": [],
-        "composite": composite,
+        "primary_value": primary_value,
         "graph_metadata": {"parent_id": parent, "techniques": techniques or []},
     }
     (archive / "spec.json").write_text(json.dumps(spec, indent=2))
 
 
-def _write_graph_with_node(adir: Path, node_id: str, *, composite: float = 0.5):
+def _write_graph_with_node(adir: Path, node_id: str, *, primary_value: float = 0.5):
     graph = {
         "schema_version": 1,
-        "meta": {"best_node_id": node_id, "best_composite": composite,
+        "meta": {"best_node_id": node_id, "best_primary_value": primary_value,
                  "total_executed": 1, "total_proposed": 0,
-                 "next_id": 2, "baseline_composite": 0.0,
+                 "next_id": 2, "baseline_primary_value": 0.0,
                  "scoring": {"exploration_weight": 0.005, "novelty_weight": 0.003}},
         "nodes": {
             node_id: {"id": node_id, "type": "executed", "status": "keep",
-                      "composite": composite, "base_commit": "abc1234",
+                      "primary_value": primary_value, "base_commit": "abc1234",
                       "created_at": "2026-05-02T10:00:00Z"}
         },
         "technique_stats": {},
@@ -214,7 +214,7 @@ def test_mismatched_node_id_same_name_hard_fail(tmp_path, cli_runner, monkeypatc
     # Patch graph to ALSO include node_0121.
     graph = json.loads((adir / "graph.json").read_text())
     graph["nodes"]["node_0121"] = {"id": "node_0121", "type": "executed", "status": "keep",
-                                   "composite": 0.5, "base_commit": "abc1234",
+                                   "primary_value": 0.5, "base_commit": "abc1234",
                                    "created_at": "2026-05-02T10:00:00Z"}
     (adir / "graph.json").write_text(json.dumps(graph, indent=2))
 

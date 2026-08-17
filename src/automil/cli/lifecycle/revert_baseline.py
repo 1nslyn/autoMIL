@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -136,16 +138,60 @@ def revert_baseline():
     else:
         click.echo("Working tree clean; no stash needed.")
 
-    # Now safe to checkout protected paths.
-    co = subprocess.run(
-        ["git", "checkout", base_commit, "--", *list(cfg.protected)],
-        cwd=git_root, capture_output=True, text=True,
-    )
-    if co.returncode != 0:
-        raise click.ClickException(
-            f"`git checkout {base_commit[:8]}` for protected paths failed: "
-            f"{co.stderr.strip()}. Inspect with `git status` and resolve manually."
+    # A protected pattern may match nothing checkout can restore — e.g. a
+    # path protected ahead of the branch that introduces it. `git checkout`
+    # is all-or-nothing over its pathspecs: one unmatched pattern fails the
+    # whole command AND leaves every other protected path dirty. With a
+    # commit given, checkout matches pathspecs against that commit's TREE
+    # (a path present only in the index still aborts it), so the probe must
+    # run git's own pathspec engine against exactly that tree: read-tree
+    # into a throwaway GIT_INDEX_FILE, then `ls-files -- <pattern>`.
+    # (`ls-files --with-tree` overlays the tree onto the LIVE index and
+    # lists the union, so index-only paths pass and abort the checkout;
+    # `ls-tree`'s path arguments are not pathspecs at all, so glob patterns
+    # like `lib/CLAM/**` match nothing and everything gets skipped.)
+    revertable = []
+    skipped = []
+    with tempfile.TemporaryDirectory() as _probe_dir:
+        probe_env = {**os.environ, "GIT_INDEX_FILE": str(Path(_probe_dir) / "index")}
+        rt = subprocess.run(
+            ["git", "read-tree", base_commit],
+            cwd=git_root, env=probe_env, capture_output=True, text=True,
         )
+        if rt.returncode != 0:
+            raise click.ClickException(
+                f"`git read-tree {base_commit[:8]}` failed while probing "
+                f"protected patterns: {rt.stderr.strip()}."
+            )
+        for pattern in cfg.protected:
+            probe = subprocess.run(
+                ["git", "ls-files", "--", pattern],
+                cwd=git_root, env=probe_env, capture_output=True, text=True,
+            )
+            if probe.returncode == 0 and probe.stdout.strip():
+                revertable.append(pattern)
+            else:
+                skipped.append(pattern)
 
-    click.echo(f"Reverted protected paths to base_commit {base_commit[:8]}.")
-    click.echo(f"  Patterns: {list(cfg.protected)}")
+    if revertable:
+        co = subprocess.run(
+            ["git", "checkout", base_commit, "--", *revertable],
+            cwd=git_root, capture_output=True, text=True,
+        )
+        if co.returncode != 0:
+            raise click.ClickException(
+                f"`git checkout {base_commit[:8]}` for protected paths failed: "
+                f"{co.stderr.strip()}. Inspect with `git status` and resolve manually."
+            )
+        click.echo(f"Reverted protected paths to base_commit {base_commit[:8]}.")
+        click.echo(f"  Patterns: {revertable}")
+    else:
+        click.echo(
+            f"revert-baseline: no protected pattern has state at base_commit "
+            f"{base_commit[:8]}; nothing checked out. Dirty protected files "
+            f"were cleared into the stash above."
+        )
+    if skipped:
+        click.echo(
+            f"  Skipped (no baseline state at {base_commit[:8]}): {skipped}"
+        )

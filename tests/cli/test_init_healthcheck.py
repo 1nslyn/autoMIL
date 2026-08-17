@@ -81,7 +81,7 @@ def test_init_recomputes_default_vram_from_results_tsv(tmp_path, monkeypatch):
     automil_dir = project / "automil"
     automil_dir.mkdir()
     # Seed results.tsv per _orchestrator_daemon.py:1289 column order.
-    header = "node_id\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tcomposite\tvram_gb\telapsed_min\tstatus\tdescription\n"
+    header = "node_id\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tprimary_value\tvram_gb\telapsed_min\tstatus\tdescription\n"
     rows = []
     vram_values = [4.0 + i * 0.5 for i in range(30)]  # 4.0 .. 18.5 in 0.5 steps
     for i, v in enumerate(vram_values):
@@ -116,7 +116,7 @@ def test_init_uses_conservative_default_below_10_samples(tmp_path, monkeypatch):
 
     automil_dir = project / "automil"
     automil_dir.mkdir()
-    header = "node_id\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tcomposite\tvram_gb\telapsed_min\tstatus\tdescription\n"
+    header = "node_id\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tprimary_value\tvram_gb\telapsed_min\tstatus\tdescription\n"
     rows = "".join(
         f"node_{i:04d}\t0.85\t0.80\t0.85\t0.82\t0.83\t{4.0 + i:.1f}\t10.0\tcompleted\trun\n"
         for i in range(5)  # only 5 rows
