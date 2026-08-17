@@ -175,3 +175,83 @@ class TestCLAMAlreadySelectsOnLoss:
         es(2, 0.50, model, ckpt_name=ck)   # better loss -> reset + save
         assert es.counter == 0
         assert es.val_loss_min == 0.50
+
+
+class TestTITANLoopSelectsOnLoss:
+    def test_titan_keeps_the_loss_minimum(self, monkeypatch, capsys, tmp_path):
+        import numpy as np
+        import torch
+        from autobench.pipeline.titan import train as titan_train
+        from autobench.pipeline.config import (
+            ExperimentConfig, TaskConfig, ModelConfig, TrainConfig, Framework,
+        )
+
+        class _DS(torch.utils.data.Dataset):
+            def __init__(self, n):
+                self.x = torch.randn(n, 768)
+                self.y = torch.tensor([i % 2 for i in range(n)])
+            def __len__(self):
+                return len(self.x)
+            def __getitem__(self, i):
+                return self.x[i], self.y[i]
+
+        losses = [0.40, 0.70, 0.60]
+        aucs = [0.60, 0.95, 0.90]
+        state = {"i": 0}
+
+        real = titan_train._evaluate
+
+        def fake(*a, **kw):
+            if not kw.get("return_probs"):
+                return real(*a, **kw)
+            i = min(state["i"], len(losses) - 1)
+            state["i"] += 1
+            p = float(np.exp(-losses[i]))
+            return ({"auc_roc": aucs[i]}, np.array([0, 1]),
+                    np.array([[p, 1 - p], [1 - p, p]]))
+
+        monkeypatch.setattr(titan_train, "_evaluate", fake)
+        cfg = ExperimentConfig(
+            task=TaskConfig(name="t", label_col="y",
+                            label_dict={"a": 0, "b": 1}, n_classes=2),
+            encoder_key="titan", embed_dim=768,
+            model=ModelConfig(model_type="titan"),
+            train=TrainConfig(max_epochs=3, patience=5, seed=0,
+                              early_stopping=False),
+            n_folds=2, framework=Framework.TITAN, strategy="standard",
+        )
+        titan_train.train_titan_fold(
+            cfg, _DS(6), _DS(2), _DS(2),
+            fold=0, results_dir=str(tmp_path / "r"), device="cpu",
+        )
+        assert "[selected] epoch=0 source=best" in capsys.readouterr().out
+
+
+class TestCELossNonFinite:
+    def test_pos_inf_prob_cannot_win_selection(self):
+        from autobench.pipeline.val_loss import ce_loss
+        assert ce_loss([0], [[float("inf"), 0.0]]) == float("inf")
+
+    def test_neg_inf_prob_is_worst_not_finite(self):
+        from autobench.pipeline.val_loss import ce_loss
+        assert ce_loss([0], [[float("-inf"), 1.0]]) == float("inf")
+
+    def test_nan_prob_is_worst(self):
+        from autobench.pipeline.val_loss import ce_loss
+        assert ce_loss([0], [[float("nan"), 1.0]]) == float("inf")
+
+
+class TestNnMILAllNonFiniteRunSavesNothing:
+    def test_initial_nan_epochs_never_checkpoint(self, tmp_path):
+        import torch
+        import autobench.pipeline.nnmil._imports  # noqa: F401
+        from training.callbacks.early_stopping import EarlyStopping
+
+        es = EarlyStopping(patience=2, metric="bacc", save_dir=str(tmp_path),
+                           model_type="simple_mil")
+        m = torch.nn.Linear(2, 2)
+        es(float("nan"), 0.9, 0.9, 0.9, m, epoch=0)
+        es(float("nan"), 0.9, 0.9, 0.9, m, epoch=1)
+        assert es.best_epoch == -1, "no checkpoint may exist for an all-NaN run"
+        assert es.early_stop, "patience must still count degenerate epochs"
+        assert not list(tmp_path.iterdir()), "no checkpoint file written"

@@ -77,7 +77,16 @@ class EarlyStopping:
         if np.isnan(score) or np.isinf(score):
             score = float("-inf")
             
-        if self.best_score is None:
+        if self.best_score is None and score == float("-inf"):
+            # Non-finite val loss with no checkpoint yet: nothing worth
+            # saving. Count toward patience; an all-non-finite run ends with
+            # no checkpoint at all rather than certifying epoch-0 garbage.
+            self.counter += 1
+            msg = (f'EarlyStopping: non-finite VAL_LOSS at epoch {current_epoch}; '
+                   f'no checkpoint saved ({self.counter}/{self.patience})')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        elif self.best_score is None:
             self.best_score = score
             self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_bacc, val_f1, val_auc, model, val_kappa)
@@ -301,11 +310,26 @@ class EarlyStoppingSurvival:
         if np.isnan(score) or np.isinf(score):
             score = float('inf') if self.mode == 'min' else 0.0
 
+        degenerate = (score == float('inf')) if self.mode == 'min' else (score == 0.0)
+        if self.best_score is None and degenerate:
+            # Non-finite first observation: nothing worth saving; count toward
+            # patience so an all-degenerate run ends with no checkpoint.
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+            msg = (f'EarlyStopping: degenerate {self.primary_metric} at epoch '
+                   f'{current_epoch}; no checkpoint saved ({self.counter}/{self.patience})')
+            if self.logger:
+                self.logger.info(msg)
+            elif self.verbose:
+                print(msg)
+            return
+
         if self.best_score is None:
             self.best_score = score
             self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_c_index, model)
-            msg = f'EarlyStopping: Initial VAL_LOSS = {val_loss:.4f} (v3 loss-selected; plan metric {self.primary_metric} reported, not voting)'
+            msg = f'EarlyStopping: Initial {self.primary_metric} = {score:.4f} ({self.mode}-selected)'
             if self.logger:
                 self.logger.info(msg)
             elif self.verbose:

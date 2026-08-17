@@ -13,9 +13,10 @@ import numpy as np
 def ce_loss(y_true, y_probs) -> float:
     """Mean cross-entropy from predicted probabilities (non-finite -> +inf)."""
     y_true = np.asarray(y_true, dtype=int)
-    p = np.clip(
-        np.asarray(y_probs, dtype=float)[np.arange(len(y_true)), y_true],
-        1e-12, 1.0,
-    )
-    value = float(-np.mean(np.log(p)))
+    raw = np.asarray(y_probs, dtype=float)[np.arange(len(y_true)), y_true]
+    # Finiteness is checked BEFORE clipping: +inf would clip to 1.0 and win
+    # selection with loss -0.0; -inf would clip to a finite large loss.
+    if not np.all(np.isfinite(raw)):
+        return float("inf")
+    value = float(-np.mean(np.log(np.clip(raw, 1e-12, 1.0))))
     return value if np.isfinite(value) else float("inf")
