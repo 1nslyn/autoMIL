@@ -28,7 +28,7 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 
 SCHEMA_VERSION = 6
 CAMPAIGN_ID = "automil-preprint-130-v6"
-PROTOCOL_VERSION = "preprint-v2"
+PROTOCOL_VERSION = "preprint-v3"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
 DATASETS = (
@@ -104,6 +104,8 @@ def classification_task_family(spec: Mapping[str, Any]) -> str:
             "classification task must declare an integer n_classes"
         )
     return "multiclass" if n_classes > 2 else "binary"
+
+
 DISCOVERY_ATTEMPTS = 30
 DISCOVERY_AGENT_ACTIVE_BUDGET = "12h"
 AGENT_TIME_ACCOUNTING = {

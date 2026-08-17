@@ -8,6 +8,23 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Protocol `preprint-v3`: per-task-family reporting + val-loss checkpoint
+  selection.** The campaign's reporting primary is now the field's canonical
+  metric per task family (binary/multiclass → `test_auc`, ordinal grade →
+  `test_qwk`, survival → `test_c_index`), with `task_family` frozen into the
+  manifest cell identity (manifest schema 6, campaign `automil-preprint-130-v6`,
+  census-locked 39/13/13/65) and family-EXACT schema locks at both ends of the
+  sealed-evidence chain; selection everywhere stays the primary VALIDATION
+  metric (`scoring.formula: val_auc` / `val_c_index`), so `test_qwk` reports
+  but never selects. Classification checkpoint selection moved off the
+  quantized epoch metric onto continuous validation loss on every tile arm
+  (nnMIL early stopping, ABMIL/DTFD shared CE helper, CLAM pinned as
+  already-upstream-loss; survival was already loss-selected), and the whole
+  checkpoint-selection layer joined `registry.protected` in the 9 cohort
+  templates. `revert-baseline` filters protected patterns through
+  `git ls-files --with-tree`, so a protected path with no baseline state can
+  no longer fail the all-or-nothing checkout.
+
 - **One-session-per-host limit removed.** Activity metering is now
   multiplexed per project instead of pinned to one host-wide endpoint:
   every project declares `activity.exporter_port` in `config.yaml`

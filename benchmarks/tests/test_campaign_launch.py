@@ -68,7 +68,7 @@ def launch_host(tmp_path):
     """A fake repository with one materialized-enough cell, ready to launch."""
     repo_root = tmp_path / "repo"
     runtime_root = repo_root / "runtime"
-    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v2"
+    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v3"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
     (repo_root / "CLAUDE.md").write_text("# repo dev instructions\n")

@@ -190,7 +190,7 @@ def test_campaign_binding_rejects_protocol_version_drift(tmp_path):
     from automil.admissibility import validate_campaign_binding
 
     manifest, campaign = _campaign_record()
-    campaign["protocol_version"] = "preprint-v2"
+    campaign["protocol_version"] = "preprint-v3"
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="protocol_version"):

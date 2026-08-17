@@ -100,7 +100,7 @@ Your 26 = 13 classification + 13 survival, where 13 = (4 aggregators × 3 tile
 encoders) + 1 TITAN arm. Cell ids look like:
 
 ```
-tcga_luad__kras__uni_v2__clam__s42__preprint-v2
+tcga_luad__kras__uni_v2__clam__s42__preprint-v3
 ```
 
 ---
@@ -219,7 +219,7 @@ Claude session and every command run after `cd` must resolve the same workspace:
 
 ```bash
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
-export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v2"
+export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v3"
 ```
 
 The day-to-day driver is the operator CLI, `campaign_operate.py`. It adds

@@ -478,7 +478,7 @@ carry only non-skill assets (hooks, plugins), and `automil show-skill
 - **[Training-Script Contract](docs/training-script-contract.md)**, the seam between framework and consumer (6 contract items + SIGTERM patterns)
 - **[Agent Compatibility](docs/agent-compatibility.md)**, per-runtime setup, overlay merge model, multi-runtime asset layout
 - **[Implementation Report](docs/implementation-report.md)**, v1.0 architecture, design decisions, and the 9-phase refactor that produced it (point-in-time; the Ladder gate + val-firewall came later — see the contract doc and CHANGELOG)
-- **[CHANGELOG](CHANGELOG.md)**, release notes through v1.2 plus the Unreleased preprint-campaign integration (preprint-v2 protocol, native active-time metering)
+- **[CHANGELOG](CHANGELOG.md)**, release notes through v1.2 plus the Unreleased preprint-campaign integration (preprint-v3 protocol, native active-time metering)
 
 ---
 
