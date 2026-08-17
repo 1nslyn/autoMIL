@@ -3,7 +3,7 @@
 Unlike DTFD's two-tier pseudo-bag distillation, ABMIL is a STANDARD one-tier
 MIL trainer: one forward per slide (full bag, no pseudo-bag split), one
 CrossEntropy loss, one Adam optimizer. Early stopping is on val AUC (shared
-metric) with best-state restore -- same discipline as ``dtfd/train.py``.
+val CE loss, v3) with best-state restore -- same discipline as ``dtfd/train.py``.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import torch
 
 from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSlide, _read_bag
+from autobench.pipeline.val_loss import ce_loss
 from autobench.pipeline.abmil.model import build_abmil_model
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.evaluate import (
@@ -68,6 +69,7 @@ def _evaluate(
     device: torch.device,
     ordinal: bool = False,
     predictions_path: str | None = None,
+    return_probs: bool = False,
 ) -> dict[str, float]:
     """Evaluate a split -> shared-schema metrics dict.
 
@@ -96,7 +98,10 @@ def _evaluate(
             [getattr(sl, "slide_id", None) for sl in slides],
             y_true, y_probs, y_pred,
         )
-    return compute_extended_metrics(y_true, y_probs, y_pred, num_classes, ordinal=ordinal)
+    metrics = compute_extended_metrics(y_true, y_probs, y_pred, num_classes, ordinal=ordinal)
+    if return_probs:
+        return metrics, y_true, y_probs
+    return metrics
 
 
 def _val_auc(metrics: dict[str, float]) -> float:
@@ -146,7 +151,7 @@ def train_abmil_fold(
         policy_runtime = policy_runtime or PolicyRuntime()
         optimizer = policy_runtime.wrap_optimizer(optimizer)
 
-        best_auc = float("-inf")
+        best_loss = float("inf")
         best_snap: dict | None = None
         best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         epochs_no_improve = 0
@@ -156,10 +161,16 @@ def train_abmil_fold(
             _train_one_epoch(model, train_slides, ce_cri, optimizer, device, py_rng)
 
             if val_slides:
-                cur_metrics = _evaluate(model, val_slides, num_classes, device, ordinal=ordinal)
-                cur = _val_auc(cur_metrics)
-                if cur > best_auc:
-                    best_auc = cur
+                cur_metrics, y_true_v, y_probs_v = _evaluate(
+                    model, val_slides, num_classes, device, ordinal=ordinal,
+                    return_probs=True,
+                )
+                cur_auc = _val_auc(cur_metrics)
+                # Protocol v3: the checkpoint is selected on continuous val
+                # CE loss; AUC is reported at that checkpoint, not voting.
+                cur = ce_loss(y_true_v, y_probs_v)
+                if cur < best_loss:
+                    best_loss = cur
                     best_snap = copy.deepcopy(model.state_dict())
                     best_epoch = _epoch
                     epochs_no_improve = 0
@@ -167,7 +178,8 @@ def train_abmil_fold(
                     epochs_no_improve += 1
                 default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
                 if policy_runtime.should_stop(
-                    default_stop, epoch=_epoch, metrics={"val_auc": cur},
+                    default_stop, epoch=_epoch,
+                    metrics={"val_auc": cur_auc, "val_loss": cur},
                 ):
                     break
 

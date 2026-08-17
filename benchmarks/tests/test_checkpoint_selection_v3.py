@@ -68,3 +68,90 @@ class TestLossSelectsTheCheckpoint:
         stopper(val_loss=0.60, val_bacc=0.4, val_f1=0.4, val_auc=0.4,
                 model=m, epoch=1)
         assert stopper.best_epoch == 1
+
+
+class TestSharedCELoss:
+    def test_known_value(self):
+        import numpy as np
+        from autobench.pipeline.val_loss import ce_loss
+        expect = -(np.log(0.8) + np.log(0.7)) / 2
+        assert abs(ce_loss([0, 1], [[0.8, 0.2], [0.3, 0.7]]) - expect) < 1e-12
+
+    def test_zero_prob_clips_instead_of_inf(self):
+        from autobench.pipeline.val_loss import ce_loss
+        v = ce_loss([0], [[0.0, 1.0]])
+        assert v == v and v < float("inf")  # finite, huge
+
+
+class TestArmLoopsSelectOnLoss:
+    """Scripted eval: AUC rises while loss worsens -> epoch 0 must stay
+    selected in both arms. Exercises the real training loops."""
+
+    def _scripted(self, calls, losses, aucs):
+        import numpy as np
+
+        def fake_evaluate(*a, **kw):
+            if not kw.get("return_probs"):
+                return {"auc_roc": aucs[-1], "accuracy": 0.5,
+                        "balanced_accuracy": 0.5, "f1": 0.5,
+                        "sensitivity": 0.5, "specificity": 0.5}
+            i = min(len(calls), len(losses) - 1)
+            calls.append(i)
+            p = float(np.exp(-losses[i]))
+            return ({"auc_roc": aucs[i], "accuracy": 0.5,
+                     "balanced_accuracy": 0.5, "f1": 0.5,
+                     "sensitivity": 0.5, "specificity": 0.5},
+                    np.array([0, 1]),
+                    np.array([[p, 1 - p], [1 - p, p]]))
+        return fake_evaluate
+
+    def test_abmil_keeps_the_loss_minimum(self, monkeypatch, capsys, tmp_path):
+        import numpy as np
+        from autobench.pipeline.abmil import train as abmil_train
+        from test_abmil_arm import _make_split, _smoke_cfg  # same tests pkg
+
+        calls = []
+        monkeypatch.setattr(
+            abmil_train, "_evaluate",
+            self._scripted(calls, losses=[0.40, 0.70, 0.60], aucs=[0.60, 0.95, 0.90]),
+        )
+        rng = np.random.default_rng(0)
+        import dataclasses
+        cfg = dataclasses.replace(_smoke_cfg(), max_epochs=3, early_stopping=False)
+        abmil_train.train_abmil_fold(
+            "abmil", _make_split(rng, "t", 6), _make_split(rng, "v", 2),
+            _make_split(rng, "e", 2), embed_dim=abmil_train_IN_DIM(),
+            num_classes=2, cfg=cfg, device=__import__("torch").device("cpu"),
+            seed=0,
+        )
+        assert "[selected] epoch=0 source=best" in capsys.readouterr().out
+
+
+def abmil_train_IN_DIM():
+    from test_abmil_arm import IN_DIM
+    return IN_DIM
+
+
+class TestDTFDLoopSelectsOnLoss:
+    def test_dtfd_keeps_the_loss_minimum(self, monkeypatch, capsys):
+        import dataclasses
+        import numpy as np
+        import torch
+        from autobench.pipeline.dtfd import train as dtfd_train
+        from test_dtfd_arm import _make_split, _smoke_cfg
+
+        seq = iter([(0.60, 0.40), (0.95, 0.70), (0.90, 0.60)])  # (auc, loss)
+        monkeypatch.setattr(dtfd_train, "val_scores", lambda *a, **k: next(seq))
+        rng = np.random.default_rng(0)
+        cfg = dataclasses.replace(_smoke_cfg(), max_epochs=3, early_stopping=False)
+        dtfd_train.train_dtfd_fold(
+            _make_split(rng, "t", 6), _make_split(rng, "v", 2),
+            _make_split(rng, "e", 2), embed_dim=_dtfd_emb(),
+            num_classes=2, cfg=cfg, device=torch.device("cpu"), seed=0,
+        )
+        assert "[selected] epoch=0 source=best" in capsys.readouterr().out
+
+
+def _dtfd_emb():
+    from test_dtfd_arm import EMB
+    return EMB
