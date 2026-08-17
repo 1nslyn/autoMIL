@@ -213,6 +213,21 @@ Key modules: `autobench.config` (dataset YAML loading), `autobench.pipeline.*`
 - Zero context switching required from the user
 - Go fix failing CI tests without being told how
 
+### 7. Review-Finding Triage (production quality without 屎山)
+- Verify every reviewer finding by hand before acting; reviewers can be wrong
+- Fix ONLY findings with a concrete failure scenario (inputs/state → wrong
+  behavior), with the smallest change that closes it
+- Classify hypothetical scenarios, "while you're at it" extensions, and style
+  opinions as 挑刺 (nitpicking): reject in writing, add zero code
+- New abstractions only when they COLLAPSE existing duplication/divergence
+  into one enforcement point — never speculatively
+- One invariant, one enforcement point; fix causes, not symptoms
+- When a prior choice is proven wrong by a test, revert it wholesale instead
+  of patching around it
+- Elegance is a hard requirement: the result should read as if it was always
+  written that way — no scar tissue. If the "correct" fix comes out ugly, the
+  root cause hasn't been found yet
+
 ## Task Management
 1. **Plan First**: Write plan to "tasks/todo.md' with checkable items
 2. **Verify Plan**: Check in before starting implementation
