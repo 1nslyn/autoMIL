@@ -13,6 +13,8 @@ Structurally ports ``test_attention_DTFD_preFeat_MultipleMean``
 from __future__ import annotations
 
 import numpy as np
+
+from autobench.pipeline.val_loss import ce_loss
 import torch
 
 from autobench.pipeline.dtfd.config import DTFDConfig
@@ -72,8 +74,12 @@ def evaluate_dtfd(
     seed: int,
     ordinal: bool = False,
     predictions_path: str | None = None,
-) -> dict[str, float]:
+    return_probs: bool = False,
+) -> "dict[str, float] | tuple[dict[str, float], np.ndarray, np.ndarray]":
     """Evaluate a split → shared-schema metrics dict.
+
+    ``return_probs=True`` additionally returns ``(y_true, y_probs)`` for the
+    protocol-v3 selection loss, leaving the metrics dict schema untouched.
 
     Returns exactly the keys ``compute_extended_metrics`` emits
     (auc_roc, accuracy, balanced_accuracy, f1, plus sensitivity/specificity
@@ -97,18 +103,30 @@ def evaluate_dtfd(
             [getattr(sl, "slide_id", None) for sl in slides],
             y_true, y_probs, y_pred,
         )
-    return compute_extended_metrics(y_true, y_probs, y_pred, num_classes, ordinal=ordinal)
+    metrics = compute_extended_metrics(y_true, y_probs, y_pred, num_classes, ordinal=ordinal)
+    if return_probs:
+        return metrics, y_true, y_probs
+    return metrics
 
 
-def val_auc(
+def val_scores(
     bundle: DTFDBundle,
     slides: list[DTFDSlide],
     cfg: DTFDConfig,
     num_classes: int,
     device: torch.device,
     seed: int,
-) -> float:
-    """Validation AUC used for early stopping (NaN-safe → -inf)."""
-    metrics = evaluate_dtfd(bundle, slides, cfg, num_classes, device, seed)
+) -> tuple[float, float]:
+    """(val AUC for reporting, val CE loss for v3 checkpoint selection).
+
+    AUC is NaN-safe → -inf; loss is non-finite-safe → +inf, so a
+    degenerate epoch can neither win reporting nor win selection.
+    """
+    metrics, y_true, y_probs = evaluate_dtfd(
+        bundle, slides, cfg, num_classes, device, seed, return_probs=True,
+    )
     auc = metrics.get("auc_roc", float("nan"))
-    return float(auc) if not np.isnan(auc) else float("-inf")
+    return (
+        float(auc) if not np.isnan(auc) else float("-inf"),
+        ce_loss(y_true, y_probs),
+    )
