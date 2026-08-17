@@ -14,7 +14,8 @@ class EarlyStopping:
             patience: Early stopping patience
             verbose: Verbose output
             delta: Minimum change to qualify as improvement
-            metric: Primary metric from plan file ('auc', 'bacc', 'f1', 'kappa', etc.)
+            metric: Plan-file metric, REPORTED at the selected checkpoint
+                only (protocol v3 selects on continuous validation loss).
             save_dir: Directory to save best model
             model_type: Model type name for saving
             logger: Optional logger for logging messages
@@ -51,7 +52,8 @@ class EarlyStopping:
             # Default to BACC for classification
             self.primary_metric = "BACC"
         
-        msg = f"EarlyStopping: Using {self.primary_metric} as primary metric (from plan: {metric})"
+        msg = (f"EarlyStopping: Using VAL_LOSS as selection metric (v3); "
+               f"plan metric {self.primary_metric} (from plan: {metric}) reported, not voting")
         if self.logger:
             self.logger.info(msg)
         else:
