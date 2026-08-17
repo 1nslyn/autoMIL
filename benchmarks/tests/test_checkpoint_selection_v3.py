@@ -255,3 +255,63 @@ class TestNnMILAllNonFiniteRunSavesNothing:
         assert es.best_epoch == -1, "no checkpoint may exist for an all-NaN run"
         assert es.early_stop, "patience must still count degenerate epochs"
         assert not list(tmp_path.iterdir()), "no checkpoint file written"
+
+
+class TestPatienceResetsAtFirstValidCheckpoint:
+    def test_classification_nan_prefix_does_not_linger(self, tmp_path):
+        import torch
+        import autobench.pipeline.nnmil._imports  # noqa: F401
+        from training.callbacks.early_stopping import EarlyStopping
+
+        es = EarlyStopping(patience=3, metric="bacc", save_dir=str(tmp_path),
+                           model_type="simple_mil")
+        m = torch.nn.Linear(2, 2)
+        es(float("nan"), 0.5, 0.5, 0.5, m, epoch=0)
+        es(float("nan"), 0.5, 0.5, 0.5, m, epoch=1)
+        es(0.60, 0.5, 0.5, 0.5, m, epoch=2)  # first valid save
+        assert es.counter == 0 and es.best_epoch == 2 and not es.early_stop
+        es(0.65, 0.5, 0.5, 0.5, m, epoch=3)  # one bad epoch must not stop
+        assert not es.early_stop
+
+
+class TestSurvivalDegenerateGuards:
+    def _es(self, tmp_path, mode):
+        import autobench.pipeline.nnmil._imports  # noqa: F401
+        from training.callbacks.early_stopping import EarlyStoppingSurvival
+        return EarlyStoppingSurvival(patience=2, save_dir=str(tmp_path),
+                                     model_type="simple_mil", mode=mode)
+
+    def test_finite_zero_cindex_is_a_real_score_not_degenerate(self, tmp_path):
+        import torch
+        es = self._es(tmp_path, "max")
+        m = torch.nn.Linear(2, 2)
+        es(0.7, 0.0, m, epoch=0)  # terrible but REAL c-index
+        assert es.best_epoch == 0, "finite 0.0 C-index must checkpoint"
+
+    def test_nan_cindex_saves_nothing_then_recovers(self, tmp_path):
+        import torch
+        es = self._es(tmp_path, "max")
+        m = torch.nn.Linear(2, 2)
+        es(0.7, float("nan"), m, epoch=0)
+        assert es.best_epoch == -1
+        es(0.7, 0.55, m, epoch=1)
+        assert es.best_epoch == 1 and es.counter == 0 and not es.early_stop
+
+    def test_min_mode_nan_loss_saves_nothing(self, tmp_path):
+        import torch
+        es = self._es(tmp_path, "min")
+        m = torch.nn.Linear(2, 2)
+        es(float("nan"), 0.5, m, epoch=0)
+        assert es.best_epoch == -1
+
+
+class TestCacheFingerprintCarriesProtocol:
+    def test_protocol_version_in_payload(self):
+        from autobench.pipeline.results_cache import fingerprint_payload
+        from autobench.campaign import PROTOCOL_VERSION
+
+        class _Cfg:
+            def to_dict(self):
+                return {"task": {"name": "t"}}
+
+        assert fingerprint_payload(_Cfg())["protocol_version"] == PROTOCOL_VERSION
