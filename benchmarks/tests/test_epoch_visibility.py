@@ -260,11 +260,11 @@ class TestCallbackOwnsBestEpoch:
         EarlyStopping, _ = self._callbacks()
         es = EarlyStopping(patience=5, metric="bacc")
         model = self._linear()
-        es(0.5, 0.6, 0.6, 0.6, model, epoch=0)  # initial save
+        es(0.50, 0.6, 0.6, 0.6, model, epoch=0)  # initial save
         assert es.best_epoch == 0
-        es(0.5, 0.5, 0.5, 0.5, model, epoch=1)  # worse: no save
+        es(0.60, 0.5, 0.5, 0.5, model, epoch=1)  # worse loss: no save
         assert es.best_epoch == 0
-        es(0.5, 0.9, 0.9, 0.9, model, epoch=2)  # improved: save
+        es(0.40, 0.9, 0.9, 0.9, model, epoch=2)  # better loss: save
         assert es.best_epoch == 2
 
     def test_survival_records_the_true_epoch_across_warmup_skips(self):
@@ -285,6 +285,6 @@ class TestCallbackOwnsBestEpoch:
         EarlyStopping, _ = self._callbacks()
         es = EarlyStopping(patience=5, metric="bacc")
         model = self._linear()
-        es(0.5, 0.6, 0.6, 0.6, model)
-        es(0.5, 0.9, 0.9, 0.9, model)
+        es(0.50, 0.6, 0.6, 0.6, model)
+        es(0.40, 0.9, 0.9, 0.9, model)
         assert es.best_epoch == 1

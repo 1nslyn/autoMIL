@@ -61,26 +61,27 @@ class EarlyStopping:
         current_epoch = self._epochs_seen if epoch is None else epoch
         self._epochs_seen += 1
 
-        # Use metric from plan file
-        if self.primary_metric == "KAPPA":
-            score = val_kappa if val_kappa is not None else 0.0
-        elif self.primary_metric == "AUC":
-            score = val_auc
-        elif self.primary_metric == "F1":
-            score = val_f1
-        else:
-            # BACC or default
-            score = val_bacc
-        
-        # Handle NaN/inf scores
+        # Protocol v3: the checkpoint is selected on CONTINUOUS validation
+        # loss, never on the reported plan metric. Selecting on plan-BACC
+        # reported the max-over-epochs of a ~34-valued statistic on a
+        # 47-slide validation set, which made epochs-run the strongest
+        # predictor of the reported score (canary 2026-08-16:
+        # corr(epochs_run, composite) = +0.77; the top-10 selected that way
+        # collapsed onto baseline on held folds, corr(disc, held) = -0.28).
+        # The plan metric is still computed and reported AT the selected
+        # checkpoint -- it just does not vote. Loss is continuous, so
+        # running longer buys no extra draws from a max.
+        score = -val_loss
+
+        # A non-finite loss must never become (or defend) the checkpoint.
         if np.isnan(score) or np.isinf(score):
-            score = 0.0
+            score = float("-inf")
             
         if self.best_score is None:
             self.best_score = score
             self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_bacc, val_f1, val_auc, model, val_kappa)
-            msg = f'EarlyStopping: Initial {self.primary_metric} = {score:.4f}'
+            msg = f'EarlyStopping: Initial VAL_LOSS = {val_loss:.4f} (v3 loss-selected; plan metric {self.primary_metric} reported, not voting)'
             if self.logger:
                 self.logger.info(msg)
             else:
@@ -88,7 +89,7 @@ class EarlyStopping:
         elif score <= self.best_score + self.delta:
             # Score did not improve (or improved less than delta)
             self.counter += 1
-            msg = f'EarlyStopping counter: {self.counter}/{self.patience} ({self.primary_metric}: {score:.4f} <= {self.best_score:.4f} + {self.delta:.4f})'
+            msg = f'EarlyStopping counter: {self.counter}/{self.patience} (VAL_LOSS: {val_loss:.4f} >= best {-self.best_score:.4f} - {self.delta:.4f})'
             if self.logger:
                 self.logger.info(msg)
             else:
@@ -108,7 +109,7 @@ class EarlyStopping:
             self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_bacc, val_f1, val_auc, model, val_kappa)
             self.counter = 0
-            msg = f'EarlyStopping: {self.primary_metric} improved from {old_score:.4f} to {self.best_score:.4f} (+{improvement:.4f}). Reset counter.'
+            msg = f'EarlyStopping: VAL_LOSS improved from {-old_score:.4f} to {val_loss:.4f}. Reset counter.'
             if self.logger:
                 self.logger.info(msg)
             else:
@@ -304,7 +305,7 @@ class EarlyStoppingSurvival:
             self.best_score = score
             self.best_epoch = current_epoch
             self.save_checkpoint(val_loss, val_c_index, model)
-            msg = f'EarlyStopping: Initial {self.primary_metric} = {score:.4f}'
+            msg = f'EarlyStopping: Initial VAL_LOSS = {val_loss:.4f} (v3 loss-selected; plan metric {self.primary_metric} reported, not voting)'
             if self.logger:
                 self.logger.info(msg)
             elif self.verbose:

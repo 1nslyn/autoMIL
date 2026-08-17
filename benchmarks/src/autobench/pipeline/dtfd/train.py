@@ -12,7 +12,8 @@ Fidelity notes:
 - ``distill='AFS'`` is locked, so the pseudo-bag feature is the attention-feature
   sum (``af_inst_feat``, Main:337/343-344). The CAM-based top-k ranking
   (Main:326-335) is only consumed by MaxS/MaxMinS and is intentionally omitted.
-- Early stopping is on val AUC (shared metric) with best-state restore — a clean,
+- Early stopping is on val CE loss (protocol v3; AUC reported, not voting)
+  with best-state restore — a clean,
   fair replacement for the reference's best-after-80%-epochs bookkeeping. The
   optimization math per step is unchanged.
 """
@@ -31,7 +32,7 @@ import torch
 from autobench.pipeline.determinism import seed_everything as _seed_everything
 from autobench.pipeline.dtfd.config import DTFDConfig
 from autobench.pipeline.dtfd.dataset import DTFDSlide, _read_bag, min_bag_size
-from autobench.pipeline.dtfd.eval import evaluate_dtfd, val_auc
+from autobench.pipeline.dtfd.eval import evaluate_dtfd, val_scores
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.evaluate import file_sha256_or_none
 from autobench.pipeline.policy_dispatch import PolicyRuntime
@@ -215,7 +216,7 @@ def train_dtfd_fold(
         sched0 = policy_runtime.wrap_scheduler(sched0, role="tier1")
         sched1 = policy_runtime.wrap_scheduler(sched1, role="tier2")
 
-        best_auc = float("-inf")
+        best_loss = float("inf")
         best_snap: dict | None = None
         best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
         epochs_no_improve = 0
@@ -230,9 +231,10 @@ def train_dtfd_fold(
             sched1.step()
 
             if val_slides:
-                cur = val_auc(bundle, val_slides, cfg, num_classes, device, seed)
-                if cur > best_auc:
-                    best_auc = cur
+                cur_auc, cur = val_scores(bundle, val_slides, cfg, num_classes, device, seed)
+                # Protocol v3: select on continuous val CE loss; AUC reports.
+                if cur < best_loss:
+                    best_loss = cur
                     best_snap = _snapshot(bundle)
                     best_epoch = epoch
                     epochs_no_improve = 0
@@ -240,7 +242,8 @@ def train_dtfd_fold(
                     epochs_no_improve += 1
                 default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
                 if policy_runtime.should_stop(
-                    default_stop, epoch=epoch, metrics={"val_auc": cur},
+                    default_stop, epoch=epoch,
+                    metrics={"val_auc": cur_auc, "val_loss": cur},
                 ):
                     break
 
