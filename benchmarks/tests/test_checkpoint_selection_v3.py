@@ -449,3 +449,37 @@ class TestCLAMFlagOffStillSelectsOnLoss:
             "a checkpoint left by a prior attempt in the same results_dir "
             "must not be restorable as this run's selection"
         )
+
+
+class TestCLAMNonFiniteLossGuard:
+    """Upstream's else branch SAVES a NaN epoch (NaN fails `score < best`,
+    so it falls through as an 'improvement'). With the tracker now
+    unconditional, every CLAM run walks this code — the guard must map
+    non-finite to -inf (never displaces a finite best, never saves first)."""
+
+    def test_nan_loss_never_displaces_a_finite_best(self, tmp_path):
+        import torch
+        from autobench.pipeline.clam._imports import EarlyStopping
+
+        es = EarlyStopping(patience=3, stop_epoch=0, verbose=False)
+        m = torch.nn.Linear(2, 2)
+        ck = str(tmp_path / "ck.pt")
+        es(0, 0.60, m, ckpt_name=ck)
+        assert es.best_epoch == 0
+        es(1, float("nan"), m, ckpt_name=ck)
+        assert es.best_epoch == 0, "a NaN epoch must not become the checkpoint"
+        assert es.counter == 1, "a NaN epoch counts toward patience"
+
+    def test_nan_first_epoch_saves_nothing(self, tmp_path):
+        import os
+        import torch
+        from autobench.pipeline.clam._imports import EarlyStopping
+
+        es = EarlyStopping(patience=2, stop_epoch=0, verbose=False)
+        m = torch.nn.Linear(2, 2)
+        ck = str(tmp_path / "ck.pt")
+        es(0, float("nan"), m, ckpt_name=ck)
+        assert es.best_epoch == -1
+        assert not os.path.exists(ck)
+        es(1, 0.5, m, ckpt_name=ck)   # recovery: first finite loss checkpoints
+        assert es.best_epoch == 1 and os.path.exists(ck)

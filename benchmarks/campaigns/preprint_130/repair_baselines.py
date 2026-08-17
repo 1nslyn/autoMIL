@@ -1587,12 +1587,24 @@ def audit_canonical_results(
                     # History is not reusable for THIS cell (e.g. ordinal
                     # history predating qwk — the gate's own message says
                     # "rerun instead of reusing", and preflight classifies
-                    # it invalid-reuse → fresh baseline run). The fresh
-                    # canonical result validated above satisfies the cell;
-                    # demanding it equal a legacy source it was never
-                    # derived from would hold the cell at `pending` forever
-                    # against the sbatch runner's `pending: 0` assert.
-                    pass
+                    # it invalid-reuse → fresh baseline run). A fresh
+                    # canonical result satisfies the cell; demanding it
+                    # equal a legacy source it was never derived from would
+                    # hold the cell at `pending` forever against the sbatch
+                    # runner's `pending: 0` assert. But "fresh" must mean
+                    # family-exact: a legacy-shaped, qwk-less tree copied
+                    # into canonical storage is NOT a preprint-v3 rerun and
+                    # would die at the certification lock — reject it here.
+                    if str(cell.get("task_family")) == "ordinal" and any(
+                        "qwk" not in row["val_metrics"]
+                        or "qwk" not in row["test_metrics"]
+                        for row in validated.get("folds") or ()
+                    ):
+                        raise HistoricalBaselineError(
+                            "history is unreusable and the canonical result "
+                            "lacks qwk — not a fresh preprint-v3 rerun; "
+                            "rerun the cell under the frozen tree"
+                        )
                 else:
                     if _tree_inventory(source) != _tree_inventory(destination):
                         raise HistoricalBaselineError(

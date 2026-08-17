@@ -176,7 +176,18 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
 
                 if payload.get("metrics"):
                     gnode["metrics"] = payload["metrics"]
+                # A refreshed node's value/status/fold vector is a new gate
+                # for everything below it (same contract as terminal_writer):
+                # children screened against the old bar must be re-decided,
+                # or a parent converted to crash keeps advertising decisions
+                # made against a value the refresh just invalidated.
+                if gnode.get("status") not in ("partial", "crash"):
+                    g._reevaluate_descendants(nid)
                 refreshed += 1
+            if refreshed:
+                # And the best pointer must not keep naming a node the
+                # refresh demoted (terminal_writer calls this per ingest).
+                g.recompute_best()
             # g.save() called automatically on context exit
 
         click.echo(f"Refreshed {refreshed} node(s) from archive.")

@@ -238,7 +238,7 @@ def test_subgate_b_sklearn_iris_end_to_end(tmp_path: Path):
         f"have silently broken the second-consumer path."
     )
     metrics = result.get("metrics", {})
-    assert metrics.get("accuracy", 0) >= 0.90, (
+    assert metrics.get("val_accuracy", 0) >= 0.90, (
         f"sklearn-iris accuracy below 0.90: metrics={metrics}"
     )
 

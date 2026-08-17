@@ -31,8 +31,8 @@ def _write_result(*, status: str, partial: bool, variant_dispatched: str | None 
         "status": status,
         "primary_value": float(_state["accuracy"]),
         "metrics": {
-            "accuracy": float(_state["accuracy"]),
-            "f1": float(_state["f1"]),
+            "val_accuracy": float(_state["accuracy"]),
+            "val_f1": float(_state["f1"]),
         },
         "partial": partial,
     }

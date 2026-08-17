@@ -412,3 +412,36 @@ def test_unresolvable_fold_index_drops_the_whole_fold(tmp_path: Path) -> None:
     assert result["partial_folds"] == 2
     assert result["primary_value"] == pytest.approx(0.70)
     assert [e["fold_index"] for e in result["validation_folds"]] == [0, 1]
+
+
+def test_duplicate_fold_index_fails_the_recovery_closed(tmp_path: Path) -> None:
+    """Two files claiming the same fold_index would both count toward
+    n == expected_fold_count (a phantom 'completed') while the fold map
+    collapses them to one entry — inconsistent evidence, fail closed."""
+    archive = tmp_path / "node_0001"
+    archive.mkdir()
+    _write_fold(archive, 0)
+    _write_fold(archive, 1)
+    # Overwrite fold 1's file with a payload CLAIMING fold_index 0.
+    data = json.loads((archive / "fold_1_result.json").read_text())
+    data["fold_index"] = 0
+    (archive / "fold_1_result.json").write_text(json.dumps(data))
+
+    result = aggregate_folds(archive, expected_fold_count=2)
+    assert result["status"] == "crash"
+
+
+def test_crashed_recovery_keeps_measured_telemetry(tmp_path: Path) -> None:
+    """Fail-closed applies to EVIDENCE, not telemetry: folds that ran burned
+    real time and VRAM, and the crash payload must carry the accumulated
+    numbers instead of zeroing the archive/TSV accounting."""
+    archive = tmp_path / "node_0001"
+    archive.mkdir()
+    _write_fold(archive, 0, metrics={"val_auc": 0.8}, elapsed=120, peak_vram=3000)
+    _write_fold(archive, 1, metrics={"val_auc": 0.8, "val_bacc": 0.7},
+                elapsed=200, peak_vram=5000)   # mixed key set → crash
+
+    result = aggregate_folds(archive, expected_fold_count=2)
+    assert result["status"] == "crash"
+    assert result["elapsed_seconds"] == 320
+    assert result["peak_vram_mb"] == 5000

@@ -139,6 +139,22 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
             )
             continue
 
+        # Two files claiming the same fold_index would both count toward
+        # `n == expected_fold_count` (a phantom "completed") while the fold
+        # map collapses them to one entry — evidence inconsistency this
+        # reader cannot adjudicate, same class as a mixed key-set schema:
+        # fail the recovery closed.
+        if any(entry["fold_index"] == fold_index for entry in fold_entries):
+            logger.warning(
+                "Fold archive %s carries duplicate fold_index %d (%s); the "
+                "evidence is inconsistent — failing the recovery closed.",
+                node_archive, fold_index, ff.name,
+            )
+            return _crashed_payload(
+                expected_fold_count,
+                elapsed_seconds=elapsed_total, peak_vram_mb=peak_vram,
+            )
+
         primary_values.append(primary_value)
         # Cross-fold key-set signature: every counted fold must describe the
         # SAME evidence schema. Every writer emits a fixed key set per task
@@ -179,7 +195,10 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
 
     n = len(primary_values)
     if n == 0:
-        return _crashed_payload(expected_fold_count)
+        return _crashed_payload(
+            expected_fold_count,
+            elapsed_seconds=elapsed_total, peak_vram_mb=peak_vram,
+        )
 
     # ONE evidence schema across all counted folds, or nothing. A mixed
     # archive (e.g. 2-key and 3-key held_out from a mid-run code change)
@@ -198,7 +217,10 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
             "surface change?) — failing the recovery closed.",
             node_archive, len(key_signatures),
         )
-        return _crashed_payload(expected_fold_count)
+        return _crashed_payload(
+            expected_fold_count,
+            elapsed_seconds=elapsed_total, peak_vram_mb=peak_vram,
+        )
 
     # B1 (claims-alignment): the fold primary values are in hand — compute the SE
     # here so budget-killed / partial nodes carry a measured noise floor for
@@ -222,7 +244,10 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
     }
 
 
-def _crashed_payload(expected_fold_count: int) -> dict:
+def _crashed_payload(
+    expected_fold_count: int, *,
+    elapsed_seconds: int = 0, peak_vram_mb: int = 0,
+) -> dict:
     return {
         "status": "crash",  # D-06: canonical value (was "crashed")
         "primary_value": 0.0,
@@ -230,8 +255,11 @@ def _crashed_payload(expected_fold_count: int) -> dict:
         "held_out": {},
         "partial_folds": 0,
         "expected_folds": expected_fold_count,
-        "elapsed_seconds": 0,
-        "peak_vram_mb": 0,
+        # Fail-closed on EVIDENCE, not on telemetry: folds that ran really
+        # did burn this time and VRAM, and zeroing it corrupts the archive
+        # and TSV accounting for exactly the runs an operator investigates.
+        "elapsed_seconds": elapsed_seconds,
+        "peak_vram_mb": peak_vram_mb,
     }
 
 

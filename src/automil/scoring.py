@@ -169,9 +169,12 @@ def recompute_refused(
     try:
         return recompute_primary_value(metrics, formula) is None
     except ValueError:
-        # Unknown reducer name: the legacy-graph escape hatch documented on
-        # recompute_primary_value — the caller already logs it loudly.
-        return False
+        # Unknown reducer name: fail CLOSED. B2 blocks the config path at
+        # seeding, so an unknown formula here means a hand-edited or corrupt
+        # frozen graph — trusting the reported scalar would silently turn
+        # CR-1b off for every subsequent result under that graph (one typo,
+        # firewall gone). Same refusal class as a typo'd selector.
+        return True
 
 
 def primary_value_disagrees(reported: float, recomputed: float,
@@ -341,10 +344,14 @@ def fold_primary_value_entries(
     cannot support the formula is DROPPED, never trusted and never
     resurrected on its surviving keys (a selector reading only val_auc would
     otherwise re-validate a fold the trainer explicitly nulled, and the
-    projection would disagree with the payload's own n_valid_folds). The
-    reported value survives only for entries carrying no metrics block at
-    all (legacy state artifacts) or under an unknown legacy formula, both of
-    which the node-level ingest already logs.
+    projection would disagree with the payload's own n_valid_folds). An
+    entry with NO metrics block is dropped too — a bare reported fold value
+    is unverifiable, and trusting it hands the paired margin to the agent:
+    fold values fabricated as ``parent + uniform delta`` (honest aggregate,
+    identity guard satisfied) drive the paired SE to 0.0 and drop the keep
+    bar to the bare δ floor. Verifiable evidence or the marginal basis —
+    nothing in between. Unknown formulas drop the entry for the same
+    reason (the node-level ingest refuses those payloads outright).
     """
     if not isinstance(result, Mapping):
         return None
@@ -358,7 +365,9 @@ def fold_primary_value_entries(
             if not isinstance(entry, Mapping):
                 continue
             metrics_block = entry.get("metrics")
-            if isinstance(metrics_block, Mapping) and metrics_block and any(
+            if not isinstance(metrics_block, Mapping) or not metrics_block:
+                continue   # no fold evidence: never trust a bare reported value
+            if any(
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
                 or not math.isfinite(float(value))
@@ -368,12 +377,10 @@ def fold_primary_value_entries(
             try:
                 fold_value = recompute_primary_value(metrics_block, formula)
             except ValueError:
-                fold_value = None   # unknown formula: keep the reported value
-            if fold_value is not None:
-                entry = {**entry, "primary_value": fold_value}
-            elif recompute_refused(metrics_block, formula):
+                continue   # unknown formula: unverifiable, drop (never trust)
+            if fold_value is None:
                 continue
-            recomputed.append(entry)
+            recomputed.append({**entry, "primary_value": fold_value})
         raw = recomputed
     folds = fold_primary_value_map(raw)
     if folds is None:
@@ -390,38 +397,44 @@ def ingest_signal(
 
     Returns ``(leaking_keys, primary_value_recomputed, se_recomputed, refused)``:
 
-    - ``leaking_keys``: held-out-named keys found inside ``metrics``. Non-empty
-      means the payload violates the val-firewall and the caller must ingest it
-      as a crash (primary_value 0.0, metrics dropped) — recomputing over it would
+    - ``leaking_keys``: held-out-named keys found inside ``metrics`` OR inside
+      any ``validation_folds[*].metrics`` block (fold metrics feed the
+      recomputed per-fold primary values, so a ``test_auc`` there enters the
+      paired margin under the ``mean`` reducer). Non-empty means the payload
+      violates the val-firewall and the caller must ingest it as a crash
+      (primary_value 0.0, metrics dropped) — recomputing over it would
       *average test into selection*, worse than trusting the reported scalar.
     - ``primary_value_recomputed``: the val-derived primary_value, or ``None`` to keep
-      the reported value (opt-out formula, no usable metrics, or an unknown
-      reducer name — the caller logs that case).
+      the reported value (opt-out formula, or no usable metrics).
     - ``se_recomputed``: the val-fold-derived SE, or ``None`` to keep the
       reported value.
     - ``refused``: :func:`recompute_refused` — the metrics block is present but
       cannot support the declared recomputing formula (typo'd selector,
-      stripped selector key). The caller must fail the payload closed
-      (primary_value 0.0 + audit stamp), NOT keep the reported scalar.
+      stripped selector key, or an unknown frozen reducer name — one typo
+      must not silently disable CR-1b for a whole graph). The caller must
+      fail the payload closed (primary_value 0.0 + audit stamp), NOT keep
+      the reported scalar.
     """
-    from automil.firewall import held_out_metric_keys
+    from automil.firewall import held_out_leak_paths
 
     if not isinstance(result, Mapping):
         return (), None, None, False
-    leaking = held_out_metric_keys(result.get("metrics"))
+    leaking = held_out_leak_paths(result)
     if leaking:
         return leaking, None, None, False
     metrics = result.get("metrics") or {}
     try:
         recomputed = recompute_primary_value(metrics, formula)
     except ValueError as exc:
-        # Reachable only via a legacy graph.json whose STORED formula is
-        # invalid (B2 blocks the config path at seeding). Loud, because the
-        # fallback is trusting the reported scalar — CR-1b off for this node.
+        # A frozen graph whose STORED formula is invalid (B2 blocks the
+        # config path at seeding, so this is a hand-edited or corrupt graph).
+        # Fail CLOSED via `refused` below — trusting the reported scalar
+        # would turn CR-1b off for every result under that graph.
         import logging
 
         logging.getLogger(__name__).error(
-            "ingest: %s — trusting the reported primary_value for this payload", exc
+            "ingest: %s — refusing the reported primary_value (unknown formula "
+            "fails closed)", exc
         )
         recomputed = None
     refused = recomputed is None and recompute_refused(metrics, formula)

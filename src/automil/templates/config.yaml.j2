@@ -33,11 +33,16 @@ baseline:
   primary_value: 0.0
 
 metrics:
-  # The declared PRIMARY metric — must agree with scoring.formula below
+  # The declared PRIMARY signal — must agree with scoring.formula below
   # (that is what the framework actually recomputes and selects on at
   # ingest; this block is the agent-facing declaration of the same fact).
-  primary: "val_auc"
-  track: ["val_auc", "val_bacc"]
+  # A fresh overlay does not know your metric vocabulary yet, so the
+  # default is the MEAN over whatever validation metrics train.py emits.
+  # Once you know the names, declare single-metric optimization by setting
+  # BOTH fields: primary: "val_<metric>" here and the same selector in
+  # scoring.formula.
+  primary: ""
+  track: ["val_auc", "val_bacc"]   # example vocabulary — match your train.py
 
 training:
   learning_rate: 3e-4
@@ -179,11 +184,12 @@ env:
 # Used by graph.recalculate_scores' novelty term and by the viz "Techniques"
 # tab. Explicit --techniques on submit/propose still wins over auto-extract.
 scoring:
-  # Seeded to match metrics.primary above: single-metric optimization — the
-  # selection signal IS the declared primary metric. Switch to "" / "mean"
-  # only if you deliberately want a multi-metric reducer, and update
-  # metrics.primary to say so.
-  formula: "val_auc"
+  # "" = the mean reducer over the validation metrics train.py emits —
+  # vocabulary-agnostic, so a fresh overlay works with ANY consumer. Set a
+  # "val_<metric>" selector (and metrics.primary above, to match) as soon
+  # as you know your metric names: single-metric optimization is the
+  # recommended end state.
+  formula: ""
   technique_map: {}
   accept_margin: 0.0   # Ladder keep-margin δ: child kept iff primary_value > parent + δ. Predeclare per-dataset (0.0 = strict dominance). Read from graph.json meta.scoring.
   # CR-4: the margin ACTUALLY applied is max(accept_margin, se_multiplier x the

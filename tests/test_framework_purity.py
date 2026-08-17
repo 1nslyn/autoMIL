@@ -70,8 +70,9 @@ _ALLOWLIST: dict[str, str] = {
     #    +9 by CR-4's se_multiplier documentation in the scoring: block,
     #    +9 by the architecture-preserving command/identity channels,
     #    -1 by the composite_formula key removal (single-metric optimization),
-    #    +3 by the metrics.primary/scoring.formula agreement comment.
-    "src/automil/templates/config.yaml.j2:131":
+    #    +3 by the metrics.primary/scoring.formula agreement comment,
+    #    +5 by the vocabulary-agnostic default guidance (round 6).
+    "src/automil/templates/config.yaml.j2:136":
         "autobench-shaped consumers",
     # (The former entry 5 — an "autobench consumer" formula example in the
     # scoring block — was removed by B2: the rewritten reducer documentation

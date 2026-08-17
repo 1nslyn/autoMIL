@@ -209,10 +209,16 @@ def test_recomputed_se_beats_the_reported_one(tmp_path: Path) -> None:
         "primary_value": 0.75,
         "primary_se": 0.000001,  # self-reported, implausibly small
         "metrics": {"val_auc": 0.8, "val_bacc": 0.7},
+        # Fold entries must carry their own val metrics: a bare reported
+        # fold value is the paired-SE forgery vector and is dropped at
+        # ingest, so an SE recomputed from it would be equally forgeable.
         "validation_folds": [
-            {"fold_index": 0, "primary_value": 0.70},
-            {"fold_index": 1, "primary_value": 0.75},
-            {"fold_index": 2, "primary_value": 0.80},
+            {"fold_index": 0, "primary_value": 0.70,
+             "metrics": {"val_auc": 0.70}},
+            {"fold_index": 1, "primary_value": 0.75,
+             "metrics": {"val_auc": 0.75}},
+            {"fold_index": 2, "primary_value": 0.80,
+             "metrics": {"val_auc": 0.80}},
         ],
     }
     completed_dir, archive_dir = _write(tmp_path, graph, node_id, result)

@@ -257,6 +257,22 @@ def effective_accept_margin(
     drop to 0.01 because one parent happened to have a tight CV.
     """
     delta = _accept_margin(meta)
+    _basis, se = margin_se_basis(meta, parent_node, child_node)
+    if se is None:
+        return delta
+    return max(delta, _se_multiplier(meta) * se)
+
+
+def margin_se_basis(
+    meta: dict | None, parent_node: dict | None, child_node: dict | None = None,
+) -> tuple[str, float | None]:
+    """The SE basis :func:`effective_accept_margin` actually applies.
+
+    Returns ``("paired", se)``, ``("marginal", se)`` or ``("none", None)``.
+    Public so display surfaces (``automil rank``) label the evidence with the
+    SAME choice the gate makes — printing the raw paired SE beside a bar that
+    fell back to the marginal basis misrepresents the decision's evidence.
+    """
     if child_node is not None and _formula_pairs_folds(meta):
         from automil.scoring import paired_delta_se
 
@@ -273,11 +289,11 @@ def effective_accept_margin(
                 _primary_value_matches_folds(parent_node, parent_folds):
             paired_se = paired_delta_se(child_folds, parent_folds)
             if paired_se is not None:
-                return max(delta, _se_multiplier(meta) * paired_se)
+                return "paired", paired_se
     se = node_primary_se(parent_node)
     if se is None:
-        return delta
-    return max(delta, _se_multiplier(meta) * se)
+        return "none", None
+    return "marginal", se
 
 
 def _primary_value_matches_folds(node: dict | None, folds: dict[int, float] | None) -> bool:
@@ -577,12 +593,31 @@ class ExperimentGraph:
                 ("best_composite", "best_primary_value"),
                 ("baseline_composite", "baseline_primary_value"),
             )
+            from automil.firewall import is_held_out_metric_key as _is_held_out
+
             _migrated = 0
             for _node in self._data.get("nodes", {}).values():
                 _hit = False
                 for _old, _new in _RENAMES:
                     if _old in _node:
                         _node.setdefault(_new, _node.pop(_old))
+                        _hit = True
+                # Legacy metrics hygiene: pre-firewall writers copied the
+                # flat test_* keys into `metrics` (DBT-01 above still does,
+                # for schema-1 graphs) and some stored the derived scalar
+                # there too. Held-out-named keys in the validation block are
+                # an A6 violation on every agent-facing surface, and a
+                # derived `composite` scalar is not a metric — the mean
+                # reducer would average it into selection.
+                _metrics_block = _node.get("metrics")
+                if isinstance(_metrics_block, dict):
+                    for _stale in ("composite", "composite_se"):
+                        if _stale in _metrics_block:
+                            _metrics_block.pop(_stale)
+                            _hit = True
+                    for _leak in [k for k in _metrics_block
+                                  if _is_held_out(str(k))]:
+                        _metrics_block.pop(_leak)
                         _hit = True
                 for _entry in _node.get("fold_primary_values") or []:
                     if isinstance(_entry, dict) and "composite" in _entry:

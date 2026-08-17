@@ -70,10 +70,24 @@ class EarlyStopping:
 
         score = -val_loss
 
-        if self.best_score is None:
+        # A non-finite val loss must never become (or defend) the checkpoint:
+        # with a finite best, NaN fails `score < best` and the upstream else
+        # branch would SAVE the non-finite epoch as the new best. Map it to
+        # -inf (always a regression) and never save on a degenerate first
+        # epoch — same contract as the nnMIL callbacks.
+        if np.isnan(score) or np.isinf(score):
+            score = float('-inf')
+
+        if self.best_score is None and score == float('-inf'):
+            self.counter += 1
+            print(f'EarlyStopping: non-finite val loss at epoch {epoch}; no checkpoint saved ({self.counter}/{self.patience})')
+            if self.counter >= self.patience and epoch > self.stop_epoch:
+                self.early_stop = True
+        elif self.best_score is None:
             self.best_score = score
             self.best_epoch = epoch
             self.save_checkpoint(val_loss, model, ckpt_name)
+            self.counter = 0
         elif score < self.best_score:
             self.counter += 1
             print(f'EarlyStopping counter: {self.counter} out of {self.patience}')

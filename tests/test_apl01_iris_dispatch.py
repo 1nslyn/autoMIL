@@ -69,7 +69,7 @@ def test_iris_baseline_no_variant(tmp_path):
 
     assert result["status"] == "completed"
     assert result["primary_value"] > 0, f"primary_value should be > 0, got {result['primary_value']}"
-    assert "accuracy" in result.get("metrics", {})
+    assert "val_accuracy" in result.get("metrics", {})
 
 
 # ---------------------------------------------------------------------------

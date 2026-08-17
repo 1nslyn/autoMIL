@@ -66,10 +66,14 @@ def main() -> int:
         # No variant configured: use the baseline primary_value.
         primary_value = 0.5
 
-    # Write result.json.
+    # Write result.json. Val-firewall contract: `metrics` is validation-only
+    # and must SUPPORT the recompute (CR-1b derives the primary_value from it
+    # — mean or val_auc selector both reproduce it here); test metrics live
+    # in the sealed `held_out` block, never in `metrics`.
     result = {
         "status": "completed",
-        "metrics": {"val_auc": 0.0, "val_bacc": 0.0, "test_auc": 0.0, "test_bacc": 0.0},
+        "metrics": {"val_auc": primary_value, "val_bacc": primary_value},
+        "held_out": {"test_auc": 0.0, "test_bacc": 0.0},
         "primary_value": primary_value,
         "elapsed_seconds": 0.001,
         "peak_vram_mb": 0,

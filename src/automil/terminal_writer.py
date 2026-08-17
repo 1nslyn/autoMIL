@@ -181,13 +181,16 @@ def write_terminal_state(
         }
 
     # Step 2a — A6 (claims-alignment): a held-out-named key INSIDE ``metrics``
-    # is a val-firewall violation, not a stylistic nit — it would enter every
-    # agent-facing surface and the recomputed primary_value (test driving
-    # selection). Fail closed exactly like a schema failure: the node crashes
-    # with a pointer naming the offending keys, and no certify.json is minted.
-    from automil.firewall import held_out_metric_keys as _held_out_metric_keys
+    # — or inside any ``validation_folds[*].metrics`` block, which feeds the
+    # recomputed per-fold primary values and stays in the agent-visible
+    # archive result.json — is a val-firewall violation, not a stylistic
+    # nit: it would enter agent-facing surfaces and the recomputed
+    # primary_value (test driving selection). Fail closed exactly like a
+    # schema failure: the node crashes with a pointer naming the offending
+    # keys, and no certify.json is minted.
+    from automil.firewall import held_out_leak_paths as _held_out_leak_paths
 
-    _leaking = _held_out_metric_keys(result.get("metrics"))
+    _leaking = _held_out_leak_paths(result)
     if _leaking:
         logger.error(
             "val-firewall violation for %s: held-out-named metrics key(s) %s — "
@@ -247,9 +250,71 @@ def write_terminal_state(
     # undetected — the exact leak the val-firewall exists to prevent. The
     # recomputed value is authoritative; a disagreement is logged at ERROR and
     # recorded on the node so the audit trail survives.
-    # Resolved inside the lock (the formula lives in graph meta.scoring).
+    # Computed BEFORE the graph lock: the artifact rebuild below (completed/,
+    # archive result.json, results.tsv) must not depend on the graph update
+    # succeeding — a missing node or a lock failure would otherwise
+    # republish the unvetted reported scalar to every agent-facing surface.
+    # Safe outside the lock: meta.scoring is seeded at graph creation and
+    # never changes mid-run.
+    from automil.scoring import (
+        primary_value_disagrees, recompute_primary_value, recompute_refused,
+    )
+
+    _pv_formula = ((getattr(graph, "meta", None) or {}).get("scoring") or {}).get("formula")
+    primary_value_reported = result.get("primary_value", 0.0)
+    primary_value = primary_value_reported
     primary_value_recomputed: float | None = None
     primary_value_disagreement: dict | None = None
+    try:
+        primary_value_recomputed = recompute_primary_value(
+            result.get("metrics") or {}, _pv_formula
+        )
+    except ValueError as exc:
+        # Unknown frozen formula: fail closed via the refusal branch below
+        # (recompute_refused returns True for it) — one typo'd reducer in a
+        # hand-edited graph must not silently disable CR-1b.
+        logger.error(
+            "terminal_writer: %s — refusing the reported primary_value "
+            "(unknown formula fails closed)", exc,
+        )
+        primary_value_recomputed = None
+    if primary_value_recomputed is not None and primary_value_disagrees(
+        primary_value_reported, primary_value_recomputed
+    ):
+        logger.error(
+            "terminal_writer: VAL-FIREWALL — reported primary_value %.6f for %s "
+            "disagrees with the value recomputed from its val metrics "
+            "(%.6f, formula=%r). Using the val-derived value; the reported "
+            "scalar may have been computed from test.",
+            primary_value_reported, node_id, primary_value_recomputed, _pv_formula,
+        )
+        primary_value_disagreement = {
+            "reported": primary_value_reported,
+            "recomputed": primary_value_recomputed,
+            "formula": _pv_formula,
+        }
+    if primary_value_recomputed is not None:
+        primary_value = primary_value_recomputed
+    elif recompute_refused(result.get("metrics") or {}, _pv_formula):
+        # Fail-closed (B2/B3): the metrics block is present but cannot
+        # support the declared formula — typo'd selector, stripped selector
+        # key, or an unknown frozen reducer. Trusting the reported scalar
+        # here would silently turn CR-1b off for exactly the payloads it
+        # exists to police.
+        logger.error(
+            "terminal_writer: VAL-FIREWALL — metrics for %s cannot "
+            "support the declared scoring.formula %r (missing or "
+            "non-finite selector key, or unknown formula). Refusing the "
+            "reported primary_value %.6f; scoring the node 0.0.",
+            node_id, _pv_formula, primary_value_reported,
+        )
+        primary_value_disagreement = {
+            "reported": primary_value_reported,
+            "recomputed": None,
+            "formula": _pv_formula,
+            "refused": True,
+        }
+        primary_value = 0.0
 
     # Step 3 — Graph node update via locked_update (D-10, D-01)
     from automil.graph import (locked_update, keep_or_discard, merged_metadata,
@@ -276,57 +341,9 @@ def write_terminal_state(
                 parent_id = gnode.get("parent_id")
                 parent = g.get_node(parent_id) if parent_id else None
                 p_comp = parent.get("primary_value", 0.0) if parent else 0.0
-                primary_value = result.get("primary_value", 0.0)
-
-                # CR-1b: recompute from the val metrics; the val-derived value wins.
-                from automil.scoring import (
-                    primary_value_disagrees, recompute_primary_value, recompute_refused,
-                )
-                _formula = (g.meta.get("scoring") or {}).get("formula")
-                try:
-                    primary_value_recomputed = recompute_primary_value(
-                        result.get("metrics") or {}, _formula
-                    )
-                except ValueError as exc:
-                    logger.error("terminal_writer: %s — trusting reported primary_value", exc)
-                    primary_value_recomputed = None
-                if primary_value_recomputed is not None and primary_value_disagrees(
-                    primary_value, primary_value_recomputed
-                ):
-                    logger.error(
-                        "terminal_writer: VAL-FIREWALL — reported primary_value %.6f for %s "
-                        "disagrees with the value recomputed from its val metrics "
-                        "(%.6f, formula=%r). Using the val-derived value; the reported "
-                        "scalar may have been computed from test.",
-                        primary_value, node_id, primary_value_recomputed, _formula,
-                    )
-                    primary_value_disagreement = {
-                        "reported": primary_value,
-                        "recomputed": primary_value_recomputed,
-                        "formula": _formula,
-                    }
-                if primary_value_recomputed is not None:
-                    primary_value = primary_value_recomputed
-                elif recompute_refused(result.get("metrics") or {}, _formula):
-                    # Fail-closed (B2/B3): the metrics block is present but
-                    # cannot support the declared formula — typo'd selector or
-                    # stripped selector key. Trusting the reported scalar here
-                    # would silently turn CR-1b off for exactly the payloads
-                    # it exists to police.
-                    logger.error(
-                        "terminal_writer: VAL-FIREWALL — metrics for %s cannot "
-                        "support the declared scoring.formula %r (missing or "
-                        "non-finite selector key). Refusing the reported "
-                        "primary_value %.6f; scoring the node 0.0.",
-                        node_id, _formula, primary_value,
-                    )
-                    primary_value_disagreement = {
-                        "reported": primary_value,
-                        "recomputed": None,
-                        "formula": _formula,
-                        "refused": True,
-                    }
-                    primary_value = 0.0
+                # CR-1b already resolved pre-lock: `primary_value` is the
+                # val-derived (or refused-to-0.0) value, never the raw
+                # reported scalar.
 
                 # Paired margin: attach the child evidence BEFORE the accept so
                 # this node pairs with its parent now and serves as a pairable

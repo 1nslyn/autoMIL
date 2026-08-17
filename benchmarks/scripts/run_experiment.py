@@ -467,6 +467,14 @@ def summary_to_result_json(
             for name, value in held_out_candidates.items() if value is not None
         }
         unestimable = [name for name, value in candidates.items() if value is None]
+        # The RECORDED evidence set spans the sealed side too: an ordinal
+        # summary with a lost test_qwk would otherwise seal a partial
+        # held_out under `status: completed` and die stages later at the
+        # family-exact certification lock (same rule as the per-fold writer
+        # and aggregate_folds — both blocks or nothing).
+        unestimable += [
+            name for name, value in held_out_candidates.items() if value is None
+        ]
         # ALL-OR-NOTHING over the RECORDED evidence set, deliberately — even
         # though only val_auc votes now. A run that lost a declared companion
         # broke the evidence contract (the campaign schema lock rejects it at
@@ -490,6 +498,7 @@ def summary_to_result_json(
         # one scale.
         if unestimable:
             metrics = {}
+            held_out = {}
             primary_value = 0.0
         else:
             # Selection = the primary metric alone; companions are recorded

@@ -9,11 +9,12 @@ run:
 data:
   seed: 42
 
-# DEC-04 / D-200: scoring.formula is documentation-only; the framework does
-# not evaluate it. The consumer's train.py writes the primary_value scalar in
-# result.json directly. For sklearn-iris, primary_value == accuracy.
+# CR-1b: scoring.formula is ENFORCED — the framework recomputes the
+# primary_value from the validation `metrics` block at ingest and refuses
+# unsupported formulas closed. The selector names the metric train.py
+# emits: primary_value == val_accuracy.
 scoring:
-  formula: "accuracy"
+  formula: "val_accuracy"
 
 # DEC-05 / D-202: env.required is empty; sklearn-iris reads no env vars.
 # env.passthrough is empty for the same reason.

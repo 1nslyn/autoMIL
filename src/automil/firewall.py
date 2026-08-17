@@ -76,6 +76,30 @@ def held_out_metric_keys(metrics: Mapping[str, Any] | None) -> tuple[str, ...]:
     return tuple(str(k) for k in metrics if is_held_out_metric_key(str(k)))
 
 
+def held_out_leak_paths(result: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Every held-out-named key in the payload's VALIDATION surfaces.
+
+    Covers the node-level ``metrics`` block AND each
+    ``validation_folds[*].metrics`` block: fold metrics feed the recomputed
+    per-fold primary values (under the ``mean`` reducer a ``test_auc`` there
+    is averaged straight into the paired keep-margin) and the fold block
+    itself stays in the agent-visible archive ``result.json`` — the same
+    leak A6 closes one level up. One predicate, one enforcement.
+    """
+    if not isinstance(result, Mapping):
+        return ()
+    leaks = list(held_out_metric_keys(result.get("metrics")))
+    folds = result.get("validation_folds")
+    if isinstance(folds, list):
+        for i, entry in enumerate(folds):
+            if isinstance(entry, Mapping):
+                leaks.extend(
+                    f"validation_folds[{i}].metrics.{k}"
+                    for k in held_out_metric_keys(entry.get("metrics"))
+                )
+    return tuple(leaks)
+
+
 def held_out_keys(result: Mapping[str, Any]) -> tuple[str, ...]:
     """Metric names declared in the result's sealed ``held_out`` block."""
     block = (result or {}).get("held_out")

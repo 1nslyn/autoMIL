@@ -582,3 +582,28 @@ def test_migrate_skips_invalid_reuse_cells_instead_of_refusing(
     row = next(r for r in report["cells"] if r["cell_id"] == cell["cell_id"])
     assert row["disposition"] == "skipped-invalid-reuse"
     assert "lacks qwk" in row["reason"]
+
+
+def test_fresh_escape_rejects_a_qwk_less_canonical_tree(tmp_path, monkeypatch):
+    """The fresh-rerun escape must not accept a legacy-shaped tree copied
+    into canonical storage: with unreusable ordinal history, the canonical
+    result must itself carry the family-exact evidence (qwk) or the cell
+    stays pending. Exercises the REAL validate_current_baseline — no
+    stubbing at this boundary."""
+    cell = _cell(task_family="ordinal")
+    legacy = _legacy_result(tmp_path / "legacy", cell)      # no qwk anywhere
+
+    destination = baselines.canonical_result_dir(tmp_path, cell)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copytree(legacy, destination)                    # "fresh" = a legacy copy
+
+    monkeypatch.setattr(baselines, "load_manifest", lambda _: {"cells": [cell]})
+    monkeypatch.setattr(
+        baselines, "historical_result_dir", lambda root, c: legacy,
+    )
+
+    report = baselines.audit_canonical_results(MANIFEST, tmp_path)
+
+    assert report["counts"] == {"complete": 0, "pending": 1}
+    assert "lacks qwk" in report["cells"][0]["reason"]

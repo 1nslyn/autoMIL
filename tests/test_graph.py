@@ -547,8 +547,10 @@ def test_legacy_schema_round_trip(tmp_path):
     assert "metrics" in node, "migration must add 'metrics' dict to legacy node"
     assert node["metrics"]["val_auc"] == 0.85
     assert node["metrics"]["val_bacc"] == 0.80
-    assert node["metrics"]["test_auc"] == 0.87
-    assert node["metrics"]["test_bacc"] == 0.83
+    # A6 hygiene: the metrics dict is the agent-facing VALIDATION block —
+    # the schema-3 pass strips the held-out-named keys the backfill copied.
+    assert "test_auc" not in node["metrics"]
+    assert "test_bacc" not in node["metrics"]
     # Top-level keys preserved (keep-flat strategy)
     assert node["val_auc"] == 0.85
     # Schema version bumped in-memory
@@ -623,11 +625,12 @@ def test_post_d200_graph_not_remigrated(tmp_path):
     graph_path = tmp_path / "graph.json"
     graph_path.write_text(json.dumps(post_graph))
     g = ExperimentGraph(graph_path)
-    # metrics dict unchanged — same object values, no extra keys injected by migration
+    # metrics dict values unchanged — no extra keys injected by migration
     assert g.nodes["node_0001"]["metrics"]["val_auc"] == 0.85
     assert g._data["schema_version"] == 3
-    # Confirm migration did NOT add spurious keys to the metrics dict
-    expected_keys = {"val_auc", "val_bacc", "test_auc", "test_bacc", "primary_value"}
+    # No spurious keys added; the held-out-named legacy keys are STRIPPED
+    # (A6: the metrics dict is the agent-facing validation block).
+    expected_keys = {"val_auc", "val_bacc", "primary_value"}
     assert set(g.nodes["node_0001"]["metrics"].keys()) == expected_keys
 
 
@@ -684,6 +687,57 @@ class TestSchema3CompositeRetirementMigration:
         assert raw["schema_version"] == 3
         assert raw["nodes"]["node_0005"]["primary_value"] == 0.8074
         assert "composite" not in raw["nodes"]["node_0005"]
+
+    def test_legacy_metrics_block_is_scrubbed_on_migration(self, tmp_path):
+        """Pre-firewall writers copied flat test_* keys into `metrics` (the
+        checked-in schema-1 ovarian example demonstrates it) and some stored
+        the derived composite scalar there. Migration must strip both:
+        held-out-named keys in the validation block are an A6 violation on
+        every agent-facing surface, and a derived scalar fed to the mean
+        reducer would average itself into selection."""
+        import json
+        from automil.graph import ExperimentGraph
+        legacy = {
+            "schema_version": 1,
+            "meta": {"total_executed": 1, "total_proposed": 0, "next_id": 2,
+                     "scoring": {}},
+            "nodes": {"node_0001": {
+                "id": "node_0001", "type": "executed", "status": "keep",
+                "composite": 0.814061,
+                "val_auc": 0.80, "val_bacc": 0.78,
+                "test_auc": 0.85, "test_bacc": 0.83,
+            }},
+            "technique_stats": {},
+        }
+        path = tmp_path / "graph.json"
+        path.write_text(json.dumps(legacy))
+        node = ExperimentGraph(path=str(path)).get_node("node_0001")
+        assert node["primary_value"] == 0.814061
+        assert set(node["metrics"]) == {"val_auc", "val_bacc"}, (
+            "the schema-1 metrics backfill must not carry test_* keys into "
+            "the agent-facing validation block"
+        )
+
+    def test_nested_metrics_composite_scalar_is_dropped(self, tmp_path):
+        import json
+        from automil.graph import ExperimentGraph
+        legacy = {
+            "schema_version": 2,
+            "meta": {"total_executed": 1, "total_proposed": 0, "next_id": 2,
+                     "scoring": {}},
+            "nodes": {"node_0001": {
+                "id": "node_0001", "type": "executed", "status": "keep",
+                "composite": 0.85,
+                "metrics": {"val_auc": 0.9, "val_bacc": 0.8,
+                            "composite": 0.85},
+            }},
+            "technique_stats": {},
+        }
+        path = tmp_path / "graph.json"
+        path.write_text(json.dumps(legacy))
+        node = ExperimentGraph(path=str(path)).get_node("node_0001")
+        assert set(node["metrics"]) == {"val_auc", "val_bacc"}
+        assert node["primary_value"] == 0.85
 
     def test_baseline_root_metadata_validation_folds_migrate(self, tmp_path):
         """The discovery baseline root stores its fold vector under

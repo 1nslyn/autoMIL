@@ -44,6 +44,35 @@ autoMIL: F2-readiness framework refactor.
   state can no longer fail the all-or-nothing checkout — and glob patterns
   still match.
 
+- **Adversarial-review fix round 2 (Codex gpt-5.6-sol xhigh, 17 findings —
+  16 real, 1 rejected).** The firewall's fold-level seams: held-out-named
+  keys inside `validation_folds[*].metrics` now fail the node closed (they
+  fed the recomputed per-fold values — under the mean reducer, straight
+  into the paired margin); a fold entry with no metrics block is dropped,
+  never trusted (bare reported fold values forged as parent+uniform-delta
+  zeroed the paired SE and collapsed the keep bar to the δ floor); the
+  CR-1b recompute/refusal moved OUTSIDE the graph lock so a missing node
+  or lock failure can no longer republish the unvetted reported scalar;
+  an unknown frozen formula refuses instead of trusting (one typo no
+  longer disables CR-1b graph-wide); `verify-repro` sanitizes the repro
+  result with the same ingest contract; `reconcile --from-archive`
+  re-evaluates descendants and recomputes best; schema migrations scrub
+  held-out-named keys and stale `composite` scalars out of node metrics;
+  duplicate fold_index fails recovery closed (phantom "completed") while
+  crash payloads keep measured telemetry; CLAM's upstream EarlyStopping
+  gets a non-finite guard (NaN val loss was saved as an "improvement");
+  the top-level ordinal summary treats a lost held-out component as
+  unestimable; the fresh-rerun escape in repair_baselines requires
+  family-exact evidence on the canonical tree; the examples' configs are
+  brought onto the declaration contract (sklearn-iris could not even
+  seed a graph — its formula "accuracy" fails validation); rank labels
+  the SE basis the gate actually applied; and the init template stays
+  vocabulary-agnostic (mean default) with explicit guidance to declare a
+  single-metric selector once the consumer's metric names are known.
+  Rejected: "the disagreement audit stamp leaks the reported scalar" —
+  that value is agent-authored (the agent wrote result.json), so the
+  stamp discloses nothing new and never drives selection.
+
 - **Adversarial-review fix round (Opus 5 max-effort, 13 findings).**
   Highlights beyond the two above: a missing nnMIL `val/loss` now reads as
   NaN (skipped epoch), never a perfect 0.0 loss that captures the

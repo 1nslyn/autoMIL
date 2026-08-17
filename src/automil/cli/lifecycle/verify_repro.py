@@ -116,7 +116,35 @@ def _run_consumer_program(
             )
 
         result = json.loads(result_path.read_text())
-        primary_value = float(result.get("primary_value", 0.0))
+        # Same ingest sanitation as the terminal writer (CR-1b/A6): the repro
+        # run's result.json is consumer-written, so comparing its raw
+        # reported scalar could "verify" a test-derived value against a
+        # contaminated legacy node — the exact laundering this command must
+        # not perform.
+        from automil.scoring import ingest_signal
+
+        graph_path = adir / "graph.json"
+        _formula = None
+        try:
+            _meta = json.loads(graph_path.read_text()).get("meta") or {}
+            _formula = (_meta.get("scoring") or {}).get("formula")
+        except (OSError, json.JSONDecodeError):
+            pass
+        leaking, recomputed, _se, refused = ingest_signal(result, _formula)
+        if leaking:
+            raise click.ClickException(
+                f"repro result.json violates the val-firewall (held-out-named "
+                f"key(s) {', '.join(leaking)}); refusing to compare it."
+            )
+        if refused:
+            raise click.ClickException(
+                "repro result.json metrics cannot support the declared "
+                "scoring.formula; refusing to compare its reported primary_value."
+            )
+        primary_value = (
+            recomputed if recomputed is not None
+            else float(result.get("primary_value", 0.0))
+        )
         return primary_value, runtime_s
 
     finally:

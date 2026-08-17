@@ -32,7 +32,7 @@ baseline:
 
 metrics:
   primary: "val_auc"
-  track: ["val_auc", "val_bacc", "test_auc", "test_bacc"]
+  track: ["val_auc", "val_bacc"]
 
 training:
   learning_rate: 3e-4
@@ -58,3 +58,6 @@ orchestrator:
 viz:
   port: 8420
   host: "0.0.0.0"
+
+scoring:
+  formula: "val_auc"

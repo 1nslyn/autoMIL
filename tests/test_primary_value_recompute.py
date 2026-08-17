@@ -115,12 +115,64 @@ def test_fold_entry_that_cannot_support_the_formula_is_dropped():
     ]
 
 
-def test_fold_entry_without_metrics_keeps_the_reported_value():
-    # Legacy grace: state artifacts predating the fold-metrics contract.
+def test_fold_entry_without_metrics_is_dropped_never_trusted():
+    """A bare reported fold value is unverifiable evidence. Trusting it
+    hands the paired margin to the agent: fold values fabricated as
+    parent + uniform delta (with an honest aggregate, so the mean-identity
+    guard passes) drive the paired delta-SE to 0.0 and drop the keep bar
+    to the bare δ floor. Verifiable fold metrics or the marginal basis —
+    nothing in between."""
     res = {"validation_folds": [{"fold_index": 3, "primary_value": 0.61}]}
-    assert fold_primary_value_entries(res, "val_auc") == [
-        {"fold_index": 3, "primary_value": 0.61},
-    ]
+    assert fold_primary_value_entries(res, "val_auc") is None
+
+
+def test_forged_uniform_delta_folds_cannot_zero_the_paired_se():
+    """The attack shape end to end: every fold entry carries only a
+    reported value (parent fold + constant delta). The projection must
+    yield nothing, forcing the marginal-SE fallback."""
+    res = {
+        "primary_value": 0.75,
+        "metrics": {"val_auc": 0.75},
+        "validation_folds": [
+            {"fold_index": i, "primary_value": 0.70 + 0.01 * i + 0.02}
+            for i in range(3)
+        ],
+    }
+    assert fold_primary_value_entries(res, "val_auc") is None
+
+
+def test_fold_metrics_with_held_out_keys_fail_the_payload_closed():
+    """validation_folds[*].metrics is a validation surface: a test_auc there
+    feeds the recomputed per-fold values (mean reducer averages it straight
+    into the paired margin) and stays in the agent-visible archive."""
+    from automil.scoring import ingest_signal
+
+    res = {
+        "status": "completed",
+        "primary_value": 0.9,
+        "metrics": {"val_auc": 0.9},
+        "validation_folds": [
+            {"fold_index": 0,
+             "metrics": {"val_auc": 0.9, "test_auc": 0.95},
+             "primary_value": 0.9},
+        ],
+    }
+    leaking, recomputed, se, refused = ingest_signal(res, "mean")
+    assert leaking == ("validation_folds[0].metrics.test_auc",)
+    assert recomputed is None and se is None and refused is False
+
+
+def test_unknown_frozen_formula_refuses_instead_of_trusting():
+    """One typo'd reducer in a hand-edited graph must not silently disable
+    CR-1b for every subsequent result."""
+    from automil.scoring import ingest_signal
+
+    m = {"val_auc": 0.90, "val_bacc": 0.60}
+    assert recompute_refused(m, "meen") is True
+    leaking, recomputed, se, refused = ingest_signal(
+        {"status": "completed", "primary_value": 0.99, "metrics": m}, "meen",
+    )
+    assert leaking == () and recomputed is None and refused is True
 
 
 def test_companion_lossy_fold_is_not_resurrected_by_a_selector():
@@ -279,3 +331,42 @@ def test_selector_miss_refusal_reaches_every_agent_facing_artifact(tmp_path):
 
     assert len(tsv_rows) == 1
     assert tsv_rows[0][1]["primary_value"] == 0.0
+
+
+def test_recompute_survives_a_missing_graph_node(tmp_path):
+    """The CR-1b sanitation must not be conditional on the graph update
+    succeeding: with the node absent from the graph (or the lock failing),
+    completed/, the archive result.json and the results.tsv row must still
+    carry the val-derived value, never the raw reported scalar."""
+    import json
+
+    adir = tmp_path / "automil"
+    adir.mkdir()
+    graph = ExperimentGraph(path=str(adir / "graph.json"))
+    graph.meta.setdefault("scoring", {})["formula"] = "val_auc"
+    graph.save()
+
+    completed = adir / "orchestrator" / "completed"
+    archive = adir / "orchestrator" / "archive" / "node_9999"
+    completed.mkdir(parents=True)
+    archive.mkdir(parents=True)
+
+    tsv_rows = []
+    write_terminal_state(
+        node_id="node_9999",              # NOT in the graph
+        result={
+            "status": "completed",
+            "primary_value": 0.99,            # reported — must not survive
+            "metrics": {"val_auc": 0.70},
+        },
+        graph=graph,
+        completed_dir=completed, archive_dir=archive,
+        results_tsv_writer=lambda n, r, **k: tsv_rows.append((n, r)),
+        spec={}, elapsed_s=1.0, gpu_id=0,
+    )
+
+    completion = json.loads((completed / "node_9999.json").read_text())
+    assert completion["primary_value"] == pytest.approx(0.70)
+    archived = json.loads((archive / "result.json").read_text())
+    assert archived["primary_value"] == pytest.approx(0.70)
+    assert tsv_rows[0][1]["primary_value"] == pytest.approx(0.70)

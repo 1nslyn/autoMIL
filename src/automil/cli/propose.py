@@ -81,9 +81,8 @@ def _print_leaderboard(graph, top: int = 10) -> None:
     charged attempts rediscovering exactly these numbers). Validation-only by
     construction — every value derives from the val ``metrics`` block.
     """
-    from automil.graph import (effective_accept_margin, node_primary_se,
-                               node_fold_primary_values)
-    from automil.scoring import paired_delta_se
+    from automil.graph import (effective_accept_margin, margin_se_basis,
+                               node_primary_se)
 
     executed = [
         node for node in graph.nodes.values()
@@ -115,11 +114,20 @@ def _print_leaderboard(graph, top: int = 10) -> None:
         parent = graph.get_node(node.get("parent_id")) if node.get("parent_id") else None
         if parent is not None:
             delta = primary_value - float(parent.get("primary_value") or 0.0)
-            pair_se = paired_delta_se(
-                node_fold_primary_values(node), node_fold_primary_values(parent)
-            )
+            # Label the evidence with the SAME basis the gate applied: a raw
+            # paired SE beside a bar that fell back to the marginal basis
+            # (non-pairable formula, failed identity guard) would show
+            # "±0.0000" while the decision ran against the much wider
+            # marginal SE.
+            basis, basis_se = margin_se_basis(graph.meta, parent, node)
             bar = effective_accept_margin(graph.meta, parent, node)
-            versus = f"Δparent {delta:+.4f} {_pm(pair_se)} (bar {bar:.4f})"
+            if basis == "paired":
+                versus = f"Δparent {delta:+.4f} {_pm(basis_se)} paired (bar {bar:.4f})"
+            elif basis == "marginal":
+                versus = (f"Δparent {delta:+.4f} (marginal SE "
+                          f"{basis_se:.4f}; bar {bar:.4f})")
+            else:
+                versus = f"Δparent {delta:+.4f} (bar {bar:.4f})"
         else:
             versus = "root"
         desc = (node.get("description", "") or "")[:60]
