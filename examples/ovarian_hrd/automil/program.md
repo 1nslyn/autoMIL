@@ -60,7 +60,7 @@ CLAM models hold 5 of the top 10 slots. The overall best (h_optimus_1 + clam_mb,
 - **Encoder:** `hoptimus1` (1536d, best HRD encoder)
 - **Model:** `clam_mb` (best HRD MIL model, CLAM framework)
 - **Baseline Test AUC:** 0.865
-- **Optimization target:** primary_value = (test_auc + test_bacc) / 2
+- **Optimization target:** primary_value = val_auc (the VALIDATION selection signal — test metrics are sealed in `held_out` and never drive selection)
 
 Available `MODEL_TYPE` options:
 - **nnMIL models:** `vision_transformer`, `ab_mil`, `trans_mil`, `ilra_mil`, etc.

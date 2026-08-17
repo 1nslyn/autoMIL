@@ -1596,8 +1596,8 @@ def audit_canonical_results(
                     # into canonical storage is NOT a preprint-v3 rerun and
                     # would die at the certification lock — reject it here.
                     if str(cell.get("task_family")) == "ordinal" and any(
-                        "qwk" not in row["val_metrics"]
-                        or "qwk" not in row["test_metrics"]
+                        row["val_metrics"].get("qwk") is None
+                        or row["test_metrics"].get("qwk") is None
                         for row in validated.get("folds") or ()
                     ):
                         raise HistoricalBaselineError(

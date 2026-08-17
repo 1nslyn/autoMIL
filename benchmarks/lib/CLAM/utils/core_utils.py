@@ -235,9 +235,19 @@ def train(datasets, cur, args):
     if os.path.exists(ckpt_path):
         model.load_state_dict(torch.load(ckpt_path))
         selected_epoch, selected_source = early_stopping.best_epoch, 'best'
+    elif last_epoch >= 0:
+        # Epochs ran but none ever checkpointed: every validation loss was
+        # non-finite. Publishing the final weights would certify garbage
+        # under honest-looking metrics — fail the fold instead (same
+        # contract as the nnMIL callbacks: an all-degenerate run ends with
+        # no checkpoint, not a fallback selection).
+        raise RuntimeError(
+            'CLAM: every epoch had a non-finite validation loss; no '
+            'loss-selected checkpoint exists to certify'
+        )
     else:
-        # No epoch ever checkpointed (max_epochs == 0): score the current
-        # weights so summary() below has something coherent to evaluate.
+        # No epoch ever ran (max_epochs == 0): score the current weights so
+        # summary() below has something coherent to evaluate.
         torch.save(model.state_dict(), ckpt_path)
         selected_epoch, selected_source = last_epoch, 'final'
 

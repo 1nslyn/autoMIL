@@ -249,7 +249,10 @@ def test_test_derived_primary_value_is_overridden_by_val(tmp_path):
     })
     node = g.get_node(nid)
     assert node["primary_value"] == pytest.approx(0.65)
-    assert node["metadata"]["primary_value_disagreement"]["reported"] == pytest.approx(0.99)
+    # The stamp must NOT carry the raw reported scalar: the training
+    # script (which sees test) wrote it, so republishing it on an
+    # agent-facing surface is a one-scalar exfiltration channel.
+    assert "reported" not in node["metadata"]["primary_value_disagreement"]
 
 
 def test_honest_primary_value_passes_through_unflagged(tmp_path):
@@ -274,7 +277,7 @@ def test_selector_end_to_end_scores_on_the_named_metric(tmp_path):
     }, formula="val_auc")
     node = g.get_node(nid)
     assert node["primary_value"] == pytest.approx(0.90)
-    assert node["metadata"]["primary_value_disagreement"]["reported"] == pytest.approx(0.75)
+    assert "reported" not in node["metadata"]["primary_value_disagreement"]
 
 
 def test_selector_miss_fails_the_node_closed(tmp_path):

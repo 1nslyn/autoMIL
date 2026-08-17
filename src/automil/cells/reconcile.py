@@ -228,7 +228,14 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
     from automil.scoring import cross_fold_se
 
     return {
-        "status": "completed" if n == expected_fold_count else "partial",
+        # Completeness is the INDEX SET, not the count: {0,1,3} with three
+        # expected folds is three files but not the declared evidence.
+        "status": (
+            "completed"
+            if {e["fold_index"] for e in fold_entries}
+            == set(range(expected_fold_count))
+            else "partial"
+        ),
         "primary_value": sum(primary_values) / n,
         "primary_se": cross_fold_se(primary_values),
         # Every value here came from a fold that contributed ALL of its values

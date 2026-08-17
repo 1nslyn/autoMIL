@@ -15,7 +15,8 @@ on the iris dataset. Mutations the agent may try:
 
 ## Primary_value definition
 
-`primary_value == accuracy` on a 30% held-out test split (seed=42). Higher is
+`primary_value == val_accuracy` on a 30% validation split (seed=42; the
+framework recomputes it from `metrics.val_accuracy` at ingest). Higher is
 better. Baseline primary_value ~0.95 with `LogisticRegression(max_iter=200)`.
 
 ## Constraints

@@ -42,6 +42,6 @@ exercises this exact path on every Phase 8+ commit.
 | Path | Role |
 |------|------|
 | `train.py` | minimal training script (~80 lines) |
-| `automil/config.yaml` | consumer config: env.required=[], scoring.formula="accuracy" |
+| `automil/config.yaml` | consumer config: env.required=[], scoring.formula="val_accuracy" |
 | `automil/program.md` | narrative for the agent: what to search, primary_value definition |
 | `automil/variants/classifier_v0/logistic_v0.py` | starter variant exporting `make_classifier` |

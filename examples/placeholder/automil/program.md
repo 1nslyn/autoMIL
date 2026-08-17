@@ -25,7 +25,7 @@ TODO: Describe your benchmark results and baseline performance here.
 - **Encoder:** TODO
 - **Model:** TODO
 - **Baseline Test AUC:** TODO
-- **Optimization target:** primary_value = (test_auc + test_bacc) / 2
+- **Optimization target:** primary_value = val_auc (the VALIDATION selection signal — test metrics are sealed in `held_out` and never drive selection)
 
 ## Setup
 

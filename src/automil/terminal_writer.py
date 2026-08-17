@@ -288,8 +288,12 @@ def write_terminal_state(
             "scalar may have been computed from test.",
             primary_value_reported, node_id, primary_value_recomputed, _pv_formula,
         )
+        # The stamp carries NO raw reported value: the training script (which
+        # sees test) wrote that scalar, so republishing it on an agent-facing
+        # surface is a one-scalar exfiltration channel (encode test_auc as
+        # the reported value, read it back from the stamp). The value itself
+        # goes to the operator log above only.
         primary_value_disagreement = {
-            "reported": primary_value_reported,
             "recomputed": primary_value_recomputed,
             "formula": _pv_formula,
         }
@@ -309,7 +313,6 @@ def write_terminal_state(
             node_id, _pv_formula, primary_value_reported,
         )
         primary_value_disagreement = {
-            "reported": primary_value_reported,
             "recomputed": None,
             "formula": _pv_formula,
             "refused": True,

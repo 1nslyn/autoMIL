@@ -453,9 +453,17 @@ def summary_to_result_json(
                 for value in (_component_value(fm.get("qwk"), "test_qwk"),)
                 if value is not None
             ]
+            # EVERY test fold must contribute, or the qwk mean runs over a
+            # different denominator than test_auc/test_bacc beside it (the
+            # mixed-denominator failure this file's all-or-nothing rule
+            # exists to prevent) — one lost fold nulls the component.
+            _n_test_folds = sum(
+                1 for fm in (summary.get("per_fold_test") or [])
+                if isinstance(fm, dict)
+            )
             held_out_candidates["test_qwk"] = (
                 math.fsum(clamped_test_qwk) / len(clamped_test_qwk)
-                if clamped_test_qwk
+                if clamped_test_qwk and len(clamped_test_qwk) == _n_test_folds
                 else None
             )
         metrics = {
