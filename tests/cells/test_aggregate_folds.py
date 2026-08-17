@@ -166,18 +166,63 @@ def test_unexpected_extra_fold_files_handled(tmp_path: Path) -> None:
     assert result["status"] == "partial"
 
 
-def test_metrics_dict_with_mixed_keys_across_folds(tmp_path: Path) -> None:
-    """Folds with different metric keys; mean is per-key across folds that have the key."""
+def test_mixed_metric_key_sets_fail_the_recovery_closed(tmp_path: Path) -> None:
+    """Every counted fold must share ONE evidence schema. Every writer emits a
+    fixed key set per task family, so folds disagreeing on keys means the
+    code surface changed mid-run — the aggregator cannot adjudicate which
+    schema is the declared one, and averaging different keys over different
+    denominators would seal a mixed result as completed/partial."""
     _write_fold(tmp_path, 0, primary_value=0.80, metrics={"val_auc": 0.80, "extra": 1.0})
     _write_fold(tmp_path, 1, primary_value=0.82, metrics={"val_auc": 0.82})
     _write_fold(tmp_path, 2, primary_value=0.84, metrics={"val_auc": 0.84})
 
     result = aggregate_folds(tmp_path, expected_fold_count=5)
 
-    # val_auc: mean of 3 values
-    assert result["metrics"]["val_auc"] == pytest.approx(0.82, rel=1e-6)
-    # extra: mean of 1 value (only fold_0 has it)
-    assert result["metrics"]["extra"] == pytest.approx(1.0, rel=1e-6)
+    assert result["status"] == "crash"
+    assert result["primary_value"] == 0.0
+    assert result["partial_folds"] == 0
+
+
+def test_mixed_held_out_key_sets_fail_the_recovery_closed(tmp_path: Path) -> None:
+    """The ordinal-upgrade shape: 2-key and 3-key held_out in one archive
+    (a fold written before test_qwk threading beside folds written after)
+    must never seal a mixed held-out block into certify.json."""
+    for i, held_out in enumerate((
+        {"test_auc": 0.70, "test_bacc": 0.60},
+        {"test_auc": 0.72, "test_bacc": 0.62, "test_qwk": 0.40},
+    )):
+        (tmp_path / f"fold_{i}_result.json").write_text(json.dumps({
+            "fold_index": i, "fold_count": 3, "status": "completed",
+            "metrics": {"val_auc": 0.80, "val_bacc": 0.70},
+            "held_out": held_out,
+            "primary_value": 0.80, "elapsed_seconds": 10, "peak_vram_mb": 100,
+        }))
+
+    result = aggregate_folds(tmp_path, expected_fold_count=3)
+
+    assert result["status"] == "crash"
+    assert result["held_out"] == {}
+
+
+def test_uniform_ordinal_archive_aggregates_the_full_schema(tmp_path: Path) -> None:
+    """A consistent 3-key ordinal archive aggregates every declared key."""
+    for i in range(2):
+        (tmp_path / f"fold_{i}_result.json").write_text(json.dumps({
+            "fold_index": i, "fold_count": 3, "status": "completed",
+            "metrics": {"val_auc": 0.80 + i / 100, "val_bacc": 0.70,
+                        "val_qwk": 0.50},
+            "held_out": {"test_auc": 0.70, "test_bacc": 0.60,
+                         "test_qwk": 0.40 + i / 100},
+            "primary_value": 0.80 + i / 100,
+            "elapsed_seconds": 10, "peak_vram_mb": 100,
+        }))
+
+    result = aggregate_folds(tmp_path, expected_fold_count=3)
+
+    assert result["status"] == "partial"
+    assert result["partial_folds"] == 2
+    assert result["held_out"]["test_qwk"] == pytest.approx(0.405)
+    assert result["metrics"]["val_qwk"] == pytest.approx(0.50)
 
 
 def test_null_primary_value_fold_is_skipped_not_counted_as_zero(tmp_path: Path) -> None:

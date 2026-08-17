@@ -132,7 +132,11 @@ orchestrator:
   # parallel, not serially. If a worker OOMs, lower this cap; never leave
   # it at 1 "just in case."
   max_concurrent_per_gpu: 4
-  default_vram_estimate_gb: 1.0
+  # >= the one measured arm peak (nnMIL ~4.5GB) + headroom, so the
+  # packer's VRAM budget is honest accounting, not fiction: the 4-job
+  # cap binds first on 49GB cards (4x6 + 2 margin < capacity), but an
+  # operator raising the cap must hit a truthful budget, not 1GB.
+  default_vram_estimate_gb: 6.0
 
 # CLN-02 / D-04 / D-05: Subprocess env whitelist, ccrcc declares the
 # consumer-specific env vars its training scripts need. The orchestrator's

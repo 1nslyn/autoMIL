@@ -143,7 +143,12 @@ orchestrator:
   # reads them from here (_orchestrator_daemon.py:439-444). The shipped template
   # puts them under `cap:`, where nothing reads them.
   max_concurrent_per_gpu: 4
-  default_vram_estimate_gb: 1.0
+  # >= the one measured arm peak (nnMIL ~4.5GB) + headroom, so the
+  # packer's VRAM budget is honest accounting, not fiction: the 4-job
+  # cap binds first on 49GB cards (4x6 + 2 margin < capacity), but an
+  # operator raising the cap must hit a truthful budget, not a
+  # placeholder.
+  default_vram_estimate_gb: 6.0
 
 env:
   passthrough:

@@ -68,6 +68,7 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
     primary_values: list[float] = []
     metrics_by_key: dict[str, list[float]] = {}
     held_out_by_key: dict[str, list[float]] = {}
+    key_signatures: set[tuple[frozenset, frozenset]] = set()
     fold_entries: list[dict] = []
     elapsed_total = 0
     peak_vram = 0
@@ -107,9 +108,6 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         #     under `status: completed`, and that block is what terminal_writer
         #     seals into certify.json -- the number that goes in the table.
         #
-        # A MISSING key is different from a null VALUE and is left alone: a
-        # sparse arm-specific diagnostic that only some folds emit is honest
-        # evidence, and dropping folds for it would discard good data.
         offenders = [
             f"{block}.{k}"
             for block in ("metrics", "held_out")
@@ -142,6 +140,14 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
             continue
 
         primary_values.append(primary_value)
+        # Cross-fold key-set signature: every counted fold must describe the
+        # SAME evidence schema. Every writer emits a fixed key set per task
+        # family, so two folds disagreeing on keys means the code surface
+        # changed mid-run — evidence this reader cannot adjudicate.
+        key_signatures.add((
+            frozenset((data.get("metrics") or {}).keys()),
+            frozenset((data.get("held_out") or {}).keys()),
+        ))
         for k, v in (data.get("metrics") or {}).items():
             metrics_by_key.setdefault(k, []).append(_finite(v))
         # held_out (test) aggregated in parallel but kept sealed — terminal_writer
@@ -175,6 +181,25 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
     if n == 0:
         return _crashed_payload(expected_fold_count)
 
+    # ONE evidence schema across all counted folds, or nothing. A mixed
+    # archive (e.g. 2-key and 3-key held_out from a mid-run code change)
+    # would average different keys over different denominators and seal the
+    # result under `status: completed`/`partial` — the exact
+    # mixed-denominator failure the per-fold all-or-nothing rule exists to
+    # prevent, one level up. The aggregator is a pure reader with no access
+    # to the declared schema, so it cannot pick a side: fail the recovery
+    # closed instead. (No arm emits sparse per-fold diagnostics in
+    # `metrics`/`held_out` — every writer emits a fixed set per family — so
+    # this tolerance-free rule costs no honest evidence.)
+    if len(key_signatures) > 1:
+        logger.warning(
+            "Fold archive %s carries %d different metric key-set schemas "
+            "across its folds; the evidence is inconsistent (mid-run code "
+            "surface change?) — failing the recovery closed.",
+            node_archive, len(key_signatures),
+        )
+        return _crashed_payload(expected_fold_count)
+
     # B1 (claims-alignment): the fold primary values are in hand — compute the SE
     # here so budget-killed / partial nodes carry a measured noise floor for
     # the Ladder margin instead of silently dropping to the bare δ.
@@ -184,10 +209,9 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
         "status": "completed" if n == expected_fold_count else "partial",
         "primary_value": sum(primary_values) / n,
         "primary_se": cross_fold_se(primary_values),
-        # Every value here came from a fold that contributed ALL of its values,
-        # so these means and `primary_value` share one denominator by construction.
-        # A key only SOME folds emit is still reported over the folds that had
-        # it -- sparse arm-specific diagnostics are honest evidence.
+        # Every value here came from a fold that contributed ALL of its values
+        # AND all counted folds share one key-set schema, so every mean and
+        # `primary_value` share one denominator by construction.
         "metrics": {k: sum(v) / len(v) for k, v in metrics_by_key.items()},
         "held_out": {k: sum(v) / len(v) for k, v in held_out_by_key.items()},
         "validation_folds": sorted(fold_entries, key=lambda e: e["fold_index"]),

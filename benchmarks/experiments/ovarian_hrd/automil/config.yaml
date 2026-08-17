@@ -114,7 +114,12 @@ orchestrator:
   safety_margin_gb: 2.0
   default_timeout_min: 150
   max_concurrent_per_gpu: 1
-  default_vram_estimate_gb: 0.5
+  # >= the one measured arm peak (nnMIL ~4.5GB) + headroom, so the
+  # packer's VRAM budget is honest accounting, not fiction: the 4-job
+  # cap binds first on 49GB cards (4x6 + 2 margin < capacity), but an
+  # operator raising the cap must hit a truthful budget, not a
+  # placeholder.
+  default_vram_estimate_gb: 6.0
 
 env:
   dotenv_files:
