@@ -282,7 +282,22 @@ leaderboard header so you never have to guess. Every `result.json`
 `metrics` block you can see is validation-only, and `primary_value` is
 that declared metric recomputed from it by the framework at ingest.
 Companion metrics (`val_bacc`, and `val_qwk` on the ordinal grade task)
-stay recorded and are worth reading for diagnosis, but they do not vote. Held-out test data is sealed at write time and quarantined
+stay recorded and are worth reading for diagnosis, but they do not vote.
+
+**`val_bacc` does hold a veto.** On a classification cell,
+`scoring.guard` declares a non-inferiority margin, and a candidate that
+wins on `val_auc` is still discarded if its `val_bacc` fell more than that
+margin below its parent's. The margin is one quantization step of balanced
+accuracy on this cell's validation splits — the most a single validation
+slide changing side can move the number — so it rejects only drops that
+need two or more slides to explain. It can reject, never promote: your
+objective is still `val_auc` alone and nothing is gained by trading
+`val_auc` for `val_bacc`. Practically, treat a discard whose `val_auc`
+went UP as a signal that the change moved the decision boundary rather
+than the ranking, and propose accordingly instead of re-running the same
+family. `automil rank` marks these `GUARD-FAIL` with the observed drop.
+
+Held-out test data is sealed at write time and quarantined
 outside your reach until a campaign-wide reveal long after this session
 ends.
 

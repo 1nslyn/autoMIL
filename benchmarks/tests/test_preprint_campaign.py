@@ -182,8 +182,10 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
 
 
 def test_manifest_lock_detects_byte_tampering(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
     path = tmp_path / "manifest.json"
-    write_manifest(build_preprint_manifest(REPO_ROOT), path)
+    write_manifest(build_preprint_manifest(fake_repo), path)
     path.write_text(path.read_text().replace('"seed": 42', '"seed": 7', 1))
     with pytest.raises(CampaignManifestError, match="protocol|hash"):
         load_manifest(path)
@@ -215,6 +217,7 @@ def _copy_campaign_sources(fake_repo: Path) -> None:
         REPO_ROOT / "benchmarks/campaigns/preprint_130/analysis_plan.json",
         plan_dst,
     )
+    _write_guard_margins(fake_repo)
     for dataset in DATASETS:
         source_group = "cptac" if dataset.startswith("cptac_") else "tcga"
         dataset_src = REPO_ROOT / "benchmarks/datasets" / source_group / f"{dataset}.yaml"
@@ -225,6 +228,36 @@ def _copy_campaign_sources(fake_repo: Path) -> None:
         template_dst = fake_repo / "benchmarks/experiments" / dataset / "automil/config.yaml"
         template_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(template_src, template_dst)
+
+
+def _write_guard_margins(fake_repo: Path) -> dict[str, dict]:
+    """Companion-guard margins for a fake repo, keyed like the real artifact.
+
+    Synthesized rather than copied: the real file is derived from mounted
+    cohort splits, and a host holding only some of them could not exercise
+    the manifest/materialize/audit chain at all. The VALUES are arbitrary;
+    what these tests assert is that the chain carries whatever was derived,
+    unchanged, from artifact to manifest to cell config.
+    """
+    margins: dict[str, dict] = {}
+    for index, dataset in enumerate(DATASETS):
+        group = "cptac" if dataset.startswith("cptac_") else "tcga"
+        raw = yaml.safe_load(
+            (REPO_ROOT / "benchmarks/datasets" / group / f"{dataset}.yaml").read_text()
+        ) or {}
+        for task, spec in (raw.get("tasks") or {}).items():
+            if (spec or {}).get("task_type", "classification") == "survival":
+                continue
+            margins[f"{dataset}__{task}"] = {
+                "metric": "val_bacc",
+                "margin": round(0.009 + index * 0.001, 6),
+                "basis": f"synthetic fixture margin for {dataset}__{task}",
+                "validation_class_counts": {"0": {"a": 11 + index, "b": 20}},
+            }
+    path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(margins, indent=2, sort_keys=True) + "\n")
+    return margins
 
 
 def test_materializer_creates_130_independent_discovery_states(tmp_path):
@@ -325,6 +358,114 @@ def test_materializer_rejects_drift_in_frozen_agent_axes(
             fake_repo,
             agent_protocol={**AGENT_PROTOCOL, **override},
         )
+
+
+def test_companion_guard_reaches_classification_cells_only(tmp_path):
+    """The derived margin travels artifact → manifest → cell config intact.
+
+    Selection stays single-metric; the guard only adds a veto, so it must land
+    on every cell whose family reports balanced accuracy and on no other.
+    """
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    margins = json.loads(
+        (fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json").read_text()
+    )
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    manifest = build_preprint_manifest(fake_repo)
+    write_manifest(manifest, manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, agent_protocol=AGENT_PROTOCOL,
+    )
+
+    by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
+    seen = {"classification": 0, "survival": 0}
+    for root in roots:
+        cell = by_id[root.parent.name]
+        scoring = yaml.safe_load((root / "config.yaml").read_text())["scoring"]
+        if cell["task_family"] == "survival":
+            assert cell["guard"] is None
+            assert "guard" not in scoring
+        else:
+            expected = margins[f"{cell['dataset']}__{cell['task']}"]
+            assert cell["guard"] == expected
+            assert scoring["guard"] == expected
+            # The guard never displaces the selection signal.
+            assert scoring["formula"] == "val_auc"
+        seen[cell["task_type"]] += 1
+    assert seen == {"classification": 65, "survival": 65}
+
+
+def test_audit_rejects_a_widened_companion_guard(tmp_path):
+    """A cell that loosened its own margin gates on a number the frozen
+    validation counts do not justify."""
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, agent_protocol=AGENT_PROTOCOL,
+    )
+    classification = next(
+        root for root in roots
+        if yaml.safe_load((root / "config.yaml").read_text())["scoring"].get("guard")
+    )
+    config_path = classification / "config.yaml"
+    config = yaml.safe_load(config_path.read_text())
+    config["scoring"]["guard"]["margin"] = 0.5
+    config_path.write_text(yaml.safe_dump(config))
+
+    with pytest.raises(CampaignManifestError, match="companion-guard drift"):
+        audit_materialized_campaign(
+            roots=roots, manifest_path=manifest_path, repo_root=fake_repo,
+        )
+
+
+def test_underived_classification_cell_cannot_be_materialized(tmp_path):
+    """Fail closed at the last honest moment.
+
+    Deriving a margin needs the cohort mounted, so a manifest built on a
+    partial host records the gap as null rather than inventing a number that
+    would be published as if it came from the split. Nothing may RUN on that
+    gap: materialization is the only way to a runnable cell, so that is where
+    the requirement bites.
+    """
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
+    margins = json.loads(path.read_text())
+    margins.pop(next(iter(margins)))
+    path.write_text(json.dumps(margins, indent=2, sort_keys=True))
+
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    manifest = build_preprint_manifest(fake_repo)   # builds; records the gap
+    write_manifest(manifest, manifest_path)
+    assert any(
+        cell["guard"] is None and cell["task_family"] != "survival"
+        for cell in manifest["cells"]
+    )
+    with pytest.raises(CampaignManifestError, match="no companion-guard margin"):
+        materialize_discovery_cells(
+            manifest_path,
+            fake_repo / "benchmarks/campaigns/preprint_130/runtime",
+            fake_repo,
+            agent_protocol=AGENT_PROTOCOL,
+        )
+
+
+def test_manifest_refuses_a_margin_without_its_counts(tmp_path):
+    """The number has to stay checkable by hand from published counts."""
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
+    margins = json.loads(path.read_text())
+    margins[next(iter(margins))].pop("validation_class_counts")
+    path.write_text(json.dumps(margins, indent=2, sort_keys=True))
+
+    with pytest.raises(CampaignManifestError, match="no validation class counts"):
+        build_preprint_manifest(fake_repo)
 
 
 def test_audit_rejects_a_tampered_exporter_port(tmp_path):

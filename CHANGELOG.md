@@ -8,6 +8,35 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Companion non-inferiority guard: a veto without a vote.** Single-metric
+  selection stays exactly as it was — the argmax is taken over
+  `scoring.formula` alone — but a project may now declare
+  `scoring.guard: {metric, margin}`, and a child that wins on the primary
+  signal is discarded if it regressed on the named companion metric by more
+  than `margin`. Because the guard can only reject and never promote, the
+  companion's quantization noise never enters the search, which is what a
+  composite could not avoid. The declaration is frozen into
+  `meta.scoring` at graph seeding on the same terms as `accept_margin`
+  (stored wins over a later config edit); a declared-but-malformed guard
+  fails `automil check` and graph seeding rather than degrading into "no
+  guard", and a child that does not report the metric fails CLOSED —
+  dropping the key must not be an escape. `automil rank` marks a
+  guard rejection `GUARD-FAIL` with the observed drop so it is not mistaken
+  for an ordinary loss.
+
+  The margin is PREDECLARED per dataset+task, never fitted to the comparison
+  it gates. For the preprint campaign it is derived from each cell's frozen
+  validation splits as `1 / (K folds x C classes x smallest validation class)`
+  — exactly the largest change one validation slide can make to the reported
+  balanced accuracy, so only drops needing two or more slides are rejected.
+  `autobench.guard_margin` does the derivation,
+  `campaigns/preprint_130/derive_guard_margins.py` writes the auditable
+  `guard_margins.json` (per-fold class counts included, so the number is
+  re-derivable by hand), and the manifest carries the result per cell
+  (schema 7) with the materializer and audit locking it exact-match.
+  Survival cells report no balanced accuracy and carry no guard.
+  Regenerating the manifest now requires every dataset root mounted.
+
 - **BREAKING: the "composite" concept is retired — single-metric optimization
   is the contract.** The selection signal IS the declared primary validation
   metric; the result-contract field `composite` is now `primary_value` and

@@ -214,6 +214,27 @@ def check():
                 "expressions are not evaluated."
             )
 
+        # The companion non-inferiority guard: same treatment, same reason —
+        # a malformed declaration would read as "no guard" at gate time and
+        # the campaign would claim a protection it never applied.
+        from automil.graph import _guard_declaration
+        try:
+            _guard = _guard_declaration({"scoring": config.get("scoring") or {}})
+        except ValueError as exc:
+            _guard = None
+            issues.append(
+                f"scoring.guard is declared but unusable: {exc}. Expected "
+                "{metric: <validation metric name>, margin: <number >= 0>}."
+            )
+        if _guard is not None:
+            _g_metric, _ = _guard
+            _tracked = (config.get("metrics") or {}).get("track") or []
+            if _tracked and _g_metric not in _tracked:
+                issues.append(
+                    f"scoring.guard.metric {_g_metric!r} is not in metrics.track "
+                    f"({list(_tracked)}); the guard would fail every child closed."
+                )
+
         # An existing graph.json FREEZES meta.scoring at seeding (setdefault
         # semantics — deliberate for accept_margin, inherited by formula), so
         # editing config.yaml after the first run silently changes nothing:
