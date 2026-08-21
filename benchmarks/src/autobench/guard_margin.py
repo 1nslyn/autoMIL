@@ -193,7 +193,7 @@ def _grid_aligned(quantum: float) -> float:
             f"be recorded as {2 * quantum - grid:.8f}, which the one-slide "
             f"margin {aligned:.8f} would not reject"
         )
-    return aligned
+    return round(aligned, RECORDED_DECIMALS)
 
 
 def derived_margin_for_counts(counts: Mapping[str, Mapping[str, int]]) -> float:

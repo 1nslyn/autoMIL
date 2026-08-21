@@ -15,9 +15,12 @@ by hand from the counts it prints.
     uv run python benchmarks/campaigns/preprint_130/derive_guard_margins.py
     uv run python benchmarks/campaigns/preprint_130/derive_guard_margins.py --write
 
-Datasets whose root is not mounted are reported and the run FAILS: a partial
-margins file would freeze a manifest in which some cells silently carry no
-guard. To cross-check a derived count against a cohort that has actually run,
+Cohorts whose root is not mounted are reported and left untouched; the file is
+MERGED, so one host can contribute one cohort and another host the rest. A
+partial artifact is safe by design: the manifest records the gap as
+``guard: null`` and materialization refuses to run such a cell.
+
+To cross-check a derived count against a cohort that has actually run,
 use ``autobench.guard_margin.verify_against_run`` on that cell's baseline
 ``.../certify/results`` directory — it compares the split assignment against
 the slides the run really scored.
@@ -64,30 +67,35 @@ def _benchmark_dir(dataset: str) -> Path:
     return benchmark_dir
 
 
-def derive_all() -> dict[str, dict]:
+def derive_all() -> tuple[dict[str, dict], list[str]]:
+    """``(margins for every MOUNTED cohort, notes about the rest)``.
+
+    Deliberately not all-or-nothing. Materialization refuses a classification
+    cell whose margin is null and tells the operator to derive it "where
+    <dataset> is mounted" — a host that holds one cohort must therefore be able
+    to contribute that cohort. An unmounted cohort is reported and skipped; a
+    cohort that IS mounted but cannot be read is a real defect and raises.
+    """
     import yaml
 
     folds = STAGE_FOLDS["discovery"]
     margins: dict[str, dict] = {}
-    failures: list[str] = []
+    skipped: list[str] = []
     for dataset in DATASETS:
         raw = yaml.safe_load(_dataset_config_path(REPO_ROOT, dataset).read_text()) or {}
         tasks = raw.get("tasks") or {}
+        try:
+            benchmark_dir = _benchmark_dir(dataset)
+        except GuardMarginError as exc:
+            skipped.append(str(exc))
+            continue
         for task, spec in tasks.items():
             if (spec or {}).get("task_type", "classification") == "survival":
                 continue   # no balanced accuracy, no guard
-            try:
-                margins[f"{dataset}__{task}"] = derive_guard(
-                    _benchmark_dir(dataset), "standard", task, folds
-                )
-            except GuardMarginError as exc:
-                failures.append(str(exc))
-    if failures:
-        raise GuardMarginError(
-            "could not derive every classification cell's margin:\n  "
-            + "\n  ".join(failures)
-        )
-    return margins
+            margins[f"{dataset}__{task}"] = derive_guard(
+                benchmark_dir, "standard", task, folds
+            )
+    return margins, skipped
 
 
 def main() -> int:
@@ -97,19 +105,39 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        margins = derive_all()
+        margins, skipped = derive_all()
     except GuardMarginError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if not margins:
+        print("error: no cohort is mounted here:\n  " + "\n  ".join(skipped),
+              file=sys.stderr)
+        return 1
 
-    width = max(len(k) for k in margins)
-    for key, guard in sorted(margins.items()):
-        print(f"{key:{width}}  margin {guard['margin']:.6f}  {guard['basis']}")
+    path = REPO_ROOT / GUARD_MARGINS_PATH
+    # MERGE, never replace: this host may hold one cohort and another host the
+    # rest, and the manifest is designed to consume a partial artifact.
+    existing: dict[str, dict] = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"error: cannot read {path}: {exc}", file=sys.stderr)
+            return 1
+    merged = {**existing, **margins}
+
+    width = max(len(k) for k in merged)
+    for key, guard in sorted(merged.items()):
+        mark = " " if key in margins else "*"
+        print(f"{mark}{key:{width}}  margin {guard['margin']:.6f}  {guard['basis']}")
+    if skipped:
+        print("\nnot mounted here (unchanged" + (", marked *" if existing else "") + "):")
+        for note in skipped:
+            print(f"  {note}")
 
     if args.write:
-        path = REPO_ROOT / GUARD_MARGINS_PATH
-        path.write_text(json.dumps(margins, indent=2, sort_keys=True) + "\n")
-        print(f"\nwrote {len(margins)} margins to {path}")
+        path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+        print(f"\nwrote {len(merged)} margins ({len(margins)} derived here) to {path}")
         print("Now regenerate the manifest so the cells pick them up.")
     return 0
 

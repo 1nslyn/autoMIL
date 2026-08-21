@@ -1265,6 +1265,16 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                     ),
                 }
                 guard_drop = _companion_guard_shortfall(guard_floor, folds)
+                # NOTE: no `continue` here. The ledger append at the bottom of
+                # this loop is what makes the 30-attempt census exact; skipping
+                # it for a guard rejection would short the audit, and a frozen
+                # discovery cannot be re-frozen — the cell would be unable to
+                # finalize its session, produce process evidence, or certify,
+                # and one such cell blocks the campaign-wide selection freeze.
+                audit.update({
+                    "candidate_sha256": candidate_sha,
+                    "validation_mean": candidate["discovery_mean"],
+                })
                 if guard_drop is not None:
                     audit.update({
                         "eligible": False,
@@ -1273,17 +1283,10 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                             f"{guard_drop:.4f} below the baseline (margin "
                             f"{guard_floor['margin']})"
                         ),
-                        "candidate_sha256": candidate_sha,
-                        "validation_mean": candidate["discovery_mean"],
                     })
-                    continue
-                audit.update({
-                    "eligible": True,
-                    "reason": "complete",
-                    "candidate_sha256": candidate_sha,
-                    "validation_mean": candidate["discovery_mean"],
-                })
-                eligible.append(candidate)
+                else:
+                    audit.update({"eligible": True, "reason": "complete"})
+                    eligible.append(candidate)
             except (
                 CampaignStageError, AdmissibilityError, OSError,
                 json.JSONDecodeError, KeyError, TypeError, ValueError,
@@ -1378,20 +1381,33 @@ def _companion_guard_floor(
 
     Both sides come from :func:`_recorded_fold_aggregates`, so the comparison
     happens on the same recorded grid the margin is aligned to.
+
+    The declaration is read from the FROZEN ``graph.json`` meta, not from
+    ``config.yaml``. The config is editable by anything with a shell in the
+    cell root, and this is the decision point that produces the campaign's
+    published winner: reading it here would let a mid-campaign edit silently
+    switch the guard off at exactly the place it matters most, while the
+    parent-relative gate — which reads the frozen value — went on stamping
+    candidates ``discard``. One declaration, one authority.
     """
-    import yaml
+    from automil.graph import _guard_declaration
 
     try:
-        config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        raise CampaignStageError(f"cannot read cell config: {exc}") from exc
-    guard = (config.get("scoring") or {}).get("guard")
-    if not isinstance(guard, Mapping):
+        frozen = (
+            (json.loads((adir / "graph.json").read_text()).get("meta") or {})
+            .get("scoring") or {}
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            f"cannot read the frozen scoring declaration: {exc}"
+        ) from exc
+    try:
+        declared = _guard_declaration({"scoring": frozen})
+    except ValueError as exc:
+        raise CampaignStageError(f"cell froze an unusable scoring.guard: {exc}") from exc
+    if declared is None:
         return None
-    metric, margin = guard.get("metric"), guard.get("margin")
-    if not isinstance(metric, str) or not isinstance(margin, (int, float)) \
-            or isinstance(margin, bool):
-        raise CampaignStageError(f"cell declares an unusable scoring.guard: {guard!r}")
+    metric, margin = declared
     baseline = state.get("baseline") or {}
     discovery_folds = [
         fold for fold in (baseline.get("validation_folds") or [])

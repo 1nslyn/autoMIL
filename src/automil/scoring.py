@@ -38,6 +38,15 @@ DEFAULT_FORMULA = "mean"
 #: faithful writer can differ by ~1e-4 purely from rounding.
 PRIMARY_VALUE_TOLERANCE = 1e-3
 
+#: Decimals a result payload records its metrics to. This is not a preference
+#: the framework imposes — it is the rounding :data:`PRIMARY_VALUE_TOLERANCE`
+#: above already assumes, named so the crash-recovery aggregator can rebuild a
+#: payload on the SAME grid the runner would have written. A recovered
+#: aggregate left at full precision sits off that grid, and anything comparing
+#: a recovered value against a recorded one — the companion guard does — would
+#: then be comparing across two grids.
+RECORDED_DECIMALS = 4
+
 #: Formula values that explicitly disable validation-metric recomputation.
 _OPT_OUT = frozenset({"trust_reported", "none", "reported"})
 
