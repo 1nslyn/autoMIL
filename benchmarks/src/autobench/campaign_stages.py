@@ -626,6 +626,21 @@ def _ensure_discovery_baseline_root(
                 and isinstance(metadata.get("validation_folds"), list)
                 and content_sha256(metadata.get("validation_folds"))
                 == content_sha256(discovery_folds)
+                # The root's recorded aggregates are the ONLY companion
+                # evidence the guard reads (`_node_metric` is single-source),
+                # and this root is the dominant parent of the whole cell. A
+                # root that predates them — or whose block drifted — would
+                # leave the guard OPEN for every first-generation child, the
+                # exact failure this guard exists to prevent, and it would do
+                # so while passing every other identity check. Fail loudly
+                # instead: re-register from a fresh graph.
+                and isinstance(node.get("metrics"), dict)
+                and all(
+                    node["metrics"].get(key) == value
+                    for key, value in _recorded_fold_aggregates(
+                        discovery_folds
+                    ).items()
+                )
                 and not isinstance(recorded_baseline, bool)
                 and isinstance(recorded_baseline, (int, float))
                 and math.isclose(

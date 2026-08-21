@@ -707,6 +707,29 @@ def _set_companion(adir, value):
         path.write_text(json.dumps(result))
 
 
+def test_a_baseline_root_without_its_companion_aggregates_is_refused(staged_cell):
+    """The root is the dominant parent of the whole cell.
+
+    Its recorded aggregates are the only companion evidence the guard reads,
+    so a root that predates them — or whose block drifted — would leave the
+    guard OPEN for every first-generation child while passing every other
+    identity check. That is the exact failure the guard exists to prevent.
+    """
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    archive = _baseline(cell_root)
+    register_baseline(cell_root, archive)
+
+    graph = json.loads((adir / "graph.json").read_text())
+    root = next(iter(graph["nodes"].values()))
+    assert "val_bacc" in root["metrics"]          # recorded on registration
+    root["metrics"].pop("val_bacc")               # a pre-aggregate root
+    (adir / "graph.json").write_text(json.dumps(graph))
+
+    with pytest.raises(CampaignStageError, match="baseline graph root drifted"):
+        register_baseline(cell_root, archive)
+
+
 def test_freeze_guard_rejects_a_collapse_without_shorting_the_ledger(staged_cell):
     """The guard must bind at the freeze — and must not brick the cell doing it.
 
