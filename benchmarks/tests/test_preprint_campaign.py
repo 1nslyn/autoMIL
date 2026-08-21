@@ -430,6 +430,32 @@ def test_audit_rejects_a_widened_companion_guard(tmp_path):
         )
 
 
+def test_the_canary_still_exercises_every_cell_when_a_margin_is_underived(tmp_path):
+    """Readiness is not constructability.
+
+    The canary materializes all 130 cells into a temp dir under a protocol
+    that can never enter a publication freeze, purely to prove the machinery
+    builds them. Refusing there would stop the dry-run from exercising the
+    very cells it exists to exercise, while every REAL materialization is
+    still refused and baseline registration refuses again.
+    """
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
+    margins = json.loads(path.read_text())
+    margins.pop(next(iter(margins)))
+    path.write_text(json.dumps(margins, indent=2, sort_keys=True))
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+
+    summary = run_materialization_canary(manifest_path, repo_root=fake_repo)
+    assert summary["cells"] == 130
+    # ...and the underived cells carry no guard rather than a fabricated one.
+    by_id = {c["cell_id"]: c for c in load_manifest(manifest_path)["cells"]}
+    assert any(c["guard"] is None and c["task_family"] != "survival"
+               for c in by_id.values())
+
+
 def test_underived_classification_cell_cannot_be_materialized(tmp_path):
     """Fail closed at the last honest moment.
 

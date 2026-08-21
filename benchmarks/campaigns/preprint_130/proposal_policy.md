@@ -288,9 +288,12 @@ stay recorded and are worth reading for diagnosis, but they do not vote.
 `scoring.guard` declares a non-inferiority margin, and a candidate that
 wins on `val_auc` is still discarded if its `val_bacc` fell more than that
 margin below its parent's. The margin is one quantization step of balanced
-accuracy on this cell's validation splits — the most a single validation
-slide changing side can move the number — so it rejects only drops that
-need two or more slides to explain. It can reject, never promote: your
+accuracy on this cell's validation splits — the most a single WORST-CASE
+validation slide changing side can move the number — so a drop that size
+passes and anything larger is rejected. The same guard is applied again at
+the candidate freeze, there against the cell BASELINE rather than your
+parent: a balanced-accuracy collapse cannot be promoted and certified even
+if it tops the val_auc leaderboard. It can reject, never promote: your
 objective is still `val_auc` alone and nothing is gained by trading
 `val_auc` for `val_bacc`. Practically, treat a discard whose `val_auc`
 went UP as a signal that the change moved the decision boundary rather

@@ -989,7 +989,17 @@ def materialize_discovery_cells(
         # argmax changes; it just cannot be won by trading balanced accuracy
         # away. Survival cells declare none and the key stays absent.
         if cell["task_family"] != "survival":
-            if cell.get("guard") is None:
+            if cell.get("guard") is None and not allow_canary_protocol:
+                # Readiness, not constructability. The canary materializes all
+                # 130 cells into a temp dir under a protocol that can never
+                # enter a publication freeze, purely to prove the machinery
+                # builds them; refusing there would only stop the dry-run from
+                # exercising the cells it is meant to exercise. Every REAL
+                # materialization is refused here, and a canary cell lives
+                # only inside that temp dir — it is never registered, never
+                # launched, and is deleted when the dry-run returns — so no
+                # cell that could search ever reaches a runnable state without
+                # its declared guard.
                 raise CampaignManifestError(
                     f"{cell['cell_id']}: classification cell has no companion-"
                     f"guard margin. Derive it where {cell['dataset']} is "
@@ -998,7 +1008,10 @@ def materialize_discovery_cells(
                     "manifest; a cell must not search without the guard its "
                     "protocol declares."
                 )
-            config["scoring"]["guard"] = copy.deepcopy(cell["guard"])
+            if cell.get("guard") is not None:
+                config["scoring"]["guard"] = copy.deepcopy(cell["guard"])
+            else:
+                config["scoring"].pop("guard", None)
         else:
             config["scoring"].pop("guard", None)
         adir_rel = adir.relative_to(repo_root).as_posix()
