@@ -147,8 +147,10 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                 # Companion-guard evidence, refreshed before the gate below for
                 # the same reason as the fold vector: deciding on the previous
                 # run's companion metric would gate against stale evidence.
-                if payload.get("metrics"):
-                    gnode["metrics"] = payload["metrics"]
+                # Assign-or-CLEAR, like the fold vector — a refresh whose
+                # metrics went empty must not leave a superseded companion
+                # value for this node's children to be gated against.
+                gnode["metrics"] = dict(payload.get("metrics") or {})
 
                 # CR-03 fix: result.json status enum (completed/budget_killed/crash/
                 # partial/cancelled) must NOT be written directly into gnode["status"].

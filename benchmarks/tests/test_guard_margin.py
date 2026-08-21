@@ -8,13 +8,14 @@ derivation against the slides a completed run actually scored.
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 
 import pytest
 
-from autobench.guard_margin import (GuardMarginError, balanced_accuracy_margin,
-                                    derive_guard, validation_class_counts,
-                                    verify_against_run)
+from autobench.guard_margin import (RECORDED_DECIMALS, GuardMarginError,
+                                    balanced_accuracy_margin, derive_guard,
+                                    validation_class_counts, verify_against_run)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LUAD = REPO_ROOT / "datasets/TCGA-LUAD/benchmark"
@@ -23,6 +24,15 @@ CANARY_RESULTS = (
     / "tcga_luad__kras__virchow2__nnmil__s42__preprint-v2"
     / "baseline-execution/archive/certify/results"
 )
+
+
+def _grid(quantum: float) -> float:
+    """The quantum rounded UP to the grid the metric is RECORDED on.
+
+    The guard compares recorded values, so a margin left on the true lattice
+    would reject one-slide drops that 4-decimal rounding pushed just past it.
+    """
+    return math.ceil(quantum * 10 ** RECORDED_DECIMALS) / 10 ** RECORDED_DECIMALS
 
 
 def _cohort(tmp_path: Path, folds: dict[int, list[str]], labels: dict[str, str],
@@ -66,7 +76,7 @@ class TestMarginArithmetic:
         labels, val = _balanced({"pos": 17, "neg": 30})
         benchmark = _cohort(tmp_path, {0: val, 1: val, 2: val}, labels)
         guard = derive_guard(benchmark, "standard", "t", (0, 1, 2))
-        assert guard["margin"] == pytest.approx(1 / (3 * 2 * 17), abs=1e-6)
+        assert guard["margin"] == pytest.approx(_grid(1 / (3 * 2 * 17)), abs=1e-9)
         assert guard["metric"] == "val_bacc"
         assert "17" in guard["basis"] and "'pos'" in guard["basis"]
 
@@ -75,7 +85,7 @@ class TestMarginArithmetic:
         labels, val = _balanced({"a": 6, "b": 20, "c": 20})
         benchmark = _cohort(tmp_path, {0: val, 1: val, 2: val}, labels)
         guard = derive_guard(benchmark, "standard", "t", (0, 1, 2))
-        assert guard["margin"] == pytest.approx(1 / (3 * 3 * 6), abs=1e-6)
+        assert guard["margin"] == pytest.approx(_grid(1 / (3 * 3 * 6)), abs=1e-9)
 
     def test_margin_tracks_the_smallest_class_of_any_fold(self, tmp_path):
         """A single ragged fold sets the lattice for the averaged number."""
@@ -86,7 +96,7 @@ class TestMarginArithmetic:
             [f"pos_{i}" for i in range(11)]
         benchmark = _cohort(tmp_path, {0: val, 1: val, 2: thin}, labels)
         guard = derive_guard(benchmark, "standard", "t", (0, 1, 2))
-        assert guard["margin"] == pytest.approx(1 / (3 * 2 * 11), abs=1e-6)
+        assert guard["margin"] == pytest.approx(_grid(1 / (3 * 2 * 11)), abs=1e-9)
 
     def test_fewer_folds_give_a_coarser_lattice(self, tmp_path):
         """Averaging over K folds refines the step by exactly K."""
@@ -94,7 +104,7 @@ class TestMarginArithmetic:
         benchmark = _cohort(tmp_path, {0: val, 1: val, 2: val}, labels)
         three = derive_guard(benchmark, "standard", "t", (0, 1, 2))["margin"]
         one = derive_guard(benchmark, "standard", "t", (0,))["margin"]
-        assert one == pytest.approx(3 * three, rel=1e-3)
+        assert one == pytest.approx(3 * three, rel=2e-2)   # +/- one recording grid step
 
     def test_counts_travel_with_the_margin(self, tmp_path):
         """The number must be re-derivable by hand from what it publishes."""
@@ -106,7 +116,8 @@ class TestMarginArithmetic:
         assert counts["0"] == {"neg": 30, "pos": 17}
         k, c = len(counts), len(counts["0"])
         assert guard["margin"] == pytest.approx(
-            1 / (k * c * min(min(f.values()) for f in counts.values())), abs=1e-6
+            _grid(1 / (k * c * min(min(f.values()) for f in counts.values()))),
+            abs=1e-9,
         )
 
 
@@ -175,7 +186,7 @@ class TestRealCohort:
     def test_tcga_luad_kras_margin(self):
         """The number frozen in guard_margins.json, re-derived from the splits."""
         guard = derive_guard(LUAD, "standard", "kras", (0, 1, 2))
-        assert guard["margin"] == pytest.approx(0.009804, abs=5e-7)
+        assert guard["margin"] == pytest.approx(0.0099, abs=1e-9)
         for fold in ("0", "1", "2"):
             assert guard["validation_class_counts"][fold] == {
                 "mutant": 17, "wildtype": 30,

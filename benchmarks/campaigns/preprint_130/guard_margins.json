@@ -1,7 +1,7 @@
 {
   "tcga_luad__kras": {
-    "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-    "margin": 0.009804,
+    "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0099,
     "metric": "val_bacc",
     "validation_class_counts": {
       "0": {

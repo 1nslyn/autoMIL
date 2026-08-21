@@ -98,14 +98,67 @@ class TestGuardFailsClosed:
         assert keep_or_discard(META, _node(0.70, 0.70), child) == "discard"
 
     def test_parent_without_the_metric_opens_the_guard(self):
-        """Nothing to be non-inferior TO — and not an escape hatch.
+        """Nothing to be non-inferior TO — a legacy or pre-guard incumbent.
 
-        Any node the guard KEPT had to carry the metric itself, so the only
-        parents that reach this branch are roots and pre-guard incumbents.
+        The child has already been required to carry the metric (checked
+        first), so this exempts ONE comparison, never a lineage.
         """
         parent, child = _node(0.70), _node(0.75, 0.10)
         assert guard_basis(META, parent, child) == ("none", None, "val_bacc")
         assert keep_or_discard(META, parent, child) == "keep"
+
+    def test_the_parent_exemption_is_not_hereditary(self):
+        """The escape the child-first ordering closes.
+
+        Checking the parent FIRST returned "none" before the child was ever
+        examined, so a metric-less child under a metric-less parent was kept —
+        and became a metric-less parent itself. A trainer that simply never
+        wrote the key then disabled the guard for its entire lineage, which is
+        exactly the dominant strategy the child-side rule exists to prevent.
+        """
+        parent, child = _node(0.70), _node(0.80)     # neither reports val_bacc
+        assert guard_basis(META, parent, child) == ("fail", None, "val_bacc")
+        assert keep_or_discard(META, parent, child) == "discard"
+        # ...so omitting the key cannot propagate down a lineage either: the
+        # grandchild is judged on its OWN evidence, not on what its parent
+        # happened to be missing.
+        assert keep_or_discard(META, child, _node(0.85)) == "discard"
+
+    def test_companion_read_from_fold_evidence_when_aggregate_lacks_it(self):
+        """The campaign's discovery BASELINE ROOT topology.
+
+        That root is created with the framework scalars only — its `metrics`
+        block holds no companion — and it is the dominant parent of the whole
+        cell. Reading only `metrics` left the guard open for every
+        first-generation candidate: exactly the comparisons it exists to make,
+        including the one that first becomes best_node.
+        """
+        root = {
+            "primary_value": 0.70,
+            "metrics": {"primary_value": 0.70},          # no val_bacc here
+            "metadata": {"validation_folds": [
+                {"fold_index": i, "primary_value": 0.70,
+                 "metrics": {"val_auc": 0.70, "val_bacc": 0.70}}
+                for i in range(3)
+            ]},
+        }
+        verdict, delta, _ = guard_basis(META, root, _node(0.80, 0.70 - 3 * QUANTUM))
+        assert verdict == "fail"
+        assert delta == pytest.approx(-3 * QUANTUM)
+        assert keep_or_discard(META, root, _node(0.80, 0.40)) == "discard"
+        assert keep_or_discard(META, root, _node(0.80, 0.72)) == "keep"
+
+    def test_partial_fold_evidence_is_not_averaged(self):
+        """A mean over a subset is a different statistic from the aggregate."""
+        root = {
+            "primary_value": 0.70,
+            "metrics": {"primary_value": 0.70},
+            "metadata": {"validation_folds": [
+                {"fold_index": 0, "metrics": {"val_auc": 0.70, "val_bacc": 0.70}},
+                {"fold_index": 1, "metrics": {"val_auc": 0.70}},   # lost companion
+            ]},
+        }
+        assert guard_basis(META, root, _node(0.80, 0.40)) == ("none", None, "val_bacc")
 
     @pytest.mark.parametrize("bad", [
         {"metric": "val_bacc"},                    # margin missing

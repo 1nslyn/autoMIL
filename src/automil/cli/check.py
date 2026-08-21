@@ -242,12 +242,13 @@ def check():
         graph_file = adir / "graph.json"
         if graph_file.exists():
             try:
-                _frozen = (
+                _frozen_scoring = (
                     (json.loads(graph_file.read_text()).get("meta") or {})
                     .get("scoring") or {}
-                ).get("formula")
+                )
             except (OSError, json.JSONDecodeError):
-                _frozen = None
+                _frozen_scoring = {}
+            _frozen = _frozen_scoring.get("formula")
             if _frozen is not None and (_formula or "mean") != _frozen:
                 warnings.append(
                     f"scoring.formula in config.yaml ({_formula!r}) differs from "
@@ -255,6 +256,18 @@ def check():
                     "value governs every ingest. Start a fresh graph (or edit "
                     "graph.json meta deliberately) to change the selection "
                     "formula."
+                )
+            # The guard is frozen by the same setdefault, so an edited margin
+            # is the same silent no-op the formula warning above exists for.
+            _frozen_guard = _frozen_scoring.get("guard")
+            _config_guard = (config.get("scoring") or {}).get("guard")
+            if "guard" in _frozen_scoring and _config_guard != _frozen_guard:
+                warnings.append(
+                    f"scoring.guard in config.yaml ({_config_guard!r}) differs "
+                    f"from the value frozen in graph.json ({_frozen_guard!r}); "
+                    "the FROZEN declaration governs every keep/discard. Start "
+                    "a fresh graph (or edit graph.json meta deliberately) to "
+                    "change the companion guard."
                 )
 
         # Check files.editable

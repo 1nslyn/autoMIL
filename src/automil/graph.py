@@ -340,24 +340,55 @@ def _guard_declaration(meta: dict | None) -> tuple[str, float] | None:
     return metric, value
 
 
+def _finite(raw: object) -> float | None:
+    """``raw`` as a finite float, or ``None``. ``bool`` is an ``int`` subclass."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if math.isfinite(value) else None
+
+
 def _node_metric(node: dict | None, metric: str) -> float | None:
-    """A finite numeric companion metric out of a node's opaque metrics dict.
+    """A node's companion metric, from whichever source it has.
 
     Reading one named key out of ``metrics`` is the same contract a ``val_*``
     primary selector already uses (:func:`scoring.recompute_primary_value`) —
     the framework stays vocabulary-agnostic and the consumer's declared name
     is the only coupling.
+
+    Two sources, one shape, for the same reason :func:`node_fold_primary_values`
+    has two: a bootstrapped baseline root records its evidence ONLY under
+    ``metadata.validation_folds`` (it is created with the framework scalars and
+    never passes through the terminal writer), and such a root is the dominant
+    parent of an entire search. Without the fallback the guard would be open
+    for exactly the comparisons it exists to make — every first-generation
+    child of the baseline, including the one that first becomes best_node.
+
+    The fold mean is not an approximation: a consumer whose aggregate metric is
+    the mean over folds reports the mean of these very numbers. EVERY fold must
+    carry a finite value — a mean over a subset is a different statistic from
+    the aggregate it stands in for — which is the same fail-closed rule
+    :func:`scoring.fold_primary_value_entries` applies at fold granularity.
     """
     if not isinstance(node, dict):
         return None
     metrics = node.get("metrics")
-    if not isinstance(metrics, dict):
+    if isinstance(metrics, dict):
+        value = _finite(metrics.get(metric))
+        if value is not None:
+            return value
+    meta = node.get("metadata")
+    folds = meta.get("validation_folds") if isinstance(meta, dict) else None
+    if not isinstance(folds, list) or not folds:
         return None
-    raw = metrics.get(metric)
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        return None
-    value = float(raw)
-    return value if math.isfinite(value) else None
+    values = []
+    for entry in folds:
+        block = entry.get("metrics") if isinstance(entry, dict) else None
+        value = _finite(block.get(metric)) if isinstance(block, dict) else None
+        if value is None:
+            return None
+        values.append(value)
+    return sum(values) / len(values)
 
 
 def guard_basis(
@@ -376,13 +407,14 @@ def guard_basis(
 
     Three asymmetries, each load-bearing:
 
+    - **A child without the metric fails closed, whatever the parent has.**
+      ``metrics`` is written by agent-editable training code; if dropping a
+      key disabled the guard, dropping the key would be the dominant strategy.
+      This is checked FIRST so the exemption below can never be inherited.
     - **A parent without the metric opens the guard.** There is nothing to be
-      non-inferior TO. This is not an escape hatch: any *kept* node had to
-      carry the metric itself (see below), so the only parents that reach it
-      are roots and pre-guard incumbents.
-    - **A child without the metric fails closed.** ``metrics`` is written by
-      agent-editable training code; if dropping a key disabled the guard,
-      dropping the key would be the dominant strategy.
+      non-inferior TO — a legacy incumbent, or a guard added mid-campaign.
+      The child has already been required to carry the metric, so this
+      exempts one comparison, never a lineage.
     - **A drop of exactly ``margin`` passes.** ``margin`` is one quantization
       step of the companion metric on this cell's validation splits, so a
       drop that size is arithmetically explainable by a single validation
@@ -400,12 +432,17 @@ def guard_basis(
     if declared is None or parent_node is None:
         return "none", None, None
     metric, margin = declared
-    parent_value = _node_metric(parent_node, metric)
-    if parent_value is None:
-        return "none", None, metric
+    # CHILD FIRST. The child-side rule is the anti-gaming rule, so it must not
+    # be conditional on the parent's evidence: checking the parent first made
+    # the exemption HEREDITARY — a metric-less child under a metric-less parent
+    # was kept, and became a metric-less parent itself, so a trainer that never
+    # wrote the key disabled the guard for its whole lineage.
     child_value = _node_metric(child_node, metric)
     if child_value is None:
         return "fail", None, metric
+    parent_value = _node_metric(parent_node, metric)
+    if parent_value is None:
+        return "none", None, metric
     delta = child_value - parent_value
     return ("fail" if delta < -margin else "pass"), delta, metric
 

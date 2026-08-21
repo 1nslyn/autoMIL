@@ -41,6 +41,7 @@ Survival cells report no balanced accuracy and get no guard.
 from __future__ import annotations
 
 import csv
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -49,6 +50,17 @@ from pathlib import Path
 #: formula below models; guarding a different metric would need a different
 #: derivation, so the name is fixed here rather than passed in.
 GUARD_METRIC = "val_bacc"
+
+#: Decimals the runner rounds every recorded metric to (``run_experiment.py``
+#: writes ``round(value, 4)``). The guard compares RECORDED values, so the
+#: margin has to live on the recording grid too: a true one-slide drop of
+#: 0.0098039 is recorded as 0.0099 whenever the parent rounds up and the child
+#: rounds down, and a margin left on the true lattice rejects it — the one
+#: thing "a drop of exactly `margin` passes" promises cannot happen (21 of 527
+#: reachable one-slide states on tcga_luad/kras). Rounding the margin UP to
+#: this grid admits every one-slide drop while still rejecting every
+#: two-slide drop (>= 0.0111 recorded on these cohorts).
+RECORDED_DECIMALS = 4
 
 
 class GuardMarginError(RuntimeError):
@@ -205,10 +217,12 @@ def derive_guard(
     )
     return {
         "metric": GUARD_METRIC,
-        "margin": round(margin, 6),
+        "margin": math.ceil(margin * 10 ** RECORDED_DECIMALS) / 10 ** RECORDED_DECIMALS,
         "basis": (
             f"one validation slide: 1/({n_folds} folds x {n_classes} classes x "
             f"{smallest} slides in the smallest validation class {smallest_class!r})"
+            f" = {margin:.6f}, rounded up to the {RECORDED_DECIMALS}-decimal "
+            "grid the metric is recorded on"
         ),
         "validation_class_counts": {
             str(fold): dict(sorted(c.items())) for fold, c in sorted(counts.items())

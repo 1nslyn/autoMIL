@@ -362,8 +362,12 @@ def write_terminal_state(
                 # that block is child evidence too and has to land BEFORE the
                 # accept. It used to be assigned after, which left the gate
                 # reading a re-ingested node's PREVIOUS run's companion value.
-                if result.get("metrics"):
-                    gnode["metrics"] = dict(result["metrics"])
+                # Assign-or-CLEAR for the same reason as the fold vector above:
+                # a re-ingest whose metrics went empty (the runner emits `{}`
+                # when any recorded component is unestimable) must not leave a
+                # superseded companion value behind for this node's CHILDREN
+                # to be gated against.
+                gnode["metrics"] = dict(result.get("metrics") or {})
 
                 # D-01: partial nodes stay quarantined — never get keep/discard
                 # crash nodes stay crash (primary_value=0.0 should not become discard)

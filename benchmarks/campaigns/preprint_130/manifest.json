@@ -14,7 +14,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__clam__s42__preprint-v3",
-      "cell_sha256": "dc521c5b0a21f15877a5a02b2f70ea50581cba8fb896f3c8ab9205b9392d6dbb",
+      "cell_sha256": "0a6c3a4418b5955eaaa8467dd7e41d0afc5103add3f4c537cfb119f1a4256b0d",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -26,8 +26,8 @@
       "encoder": "uni_v2",
       "framework": "clam",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -72,7 +72,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__clam__s42__preprint-v3",
-      "cell_sha256": "06db3a88fecbbb20e2d710f00bd40cbab0e90a6fcf63156195c6b35934d197dd",
+      "cell_sha256": "8a36123c48edcc46ecc615382eabfda7257b230cbb1237b154949ea7545cef74",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -84,8 +84,8 @@
       "encoder": "virchow2",
       "framework": "clam",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -130,7 +130,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__clam__s42__preprint-v3",
-      "cell_sha256": "122ff501be1526c82ac18bf3bc8e1959baba6d06ff0c87449cf8c1e5f88c599e",
+      "cell_sha256": "dc1849fd2e8235e8b19c705ab5ed045ea9aec2810be5a36da3a0df4d11735165",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -142,8 +142,8 @@
       "encoder": "hoptimus1",
       "framework": "clam",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -188,7 +188,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__nnmil__s42__preprint-v3",
-      "cell_sha256": "b60678dbc6ead8cf1ede7893be28c4c7786bf07447a0d2f1d7d091e763c5695a",
+      "cell_sha256": "d3d86b36359bae24014d4d2d2f0ea948660c8b67690a0992d78040c9b590e3b8",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -200,8 +200,8 @@
       "encoder": "uni_v2",
       "framework": "nnmil",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -246,7 +246,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__nnmil__s42__preprint-v3",
-      "cell_sha256": "1a90eea8381b0292a2321b1a254a5f6cc59efcff8bab30b7d2c7e788804f7797",
+      "cell_sha256": "66539280a20d5665d0b52ef9708535ba44446c970502bd5223d42caff31b412c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -258,8 +258,8 @@
       "encoder": "virchow2",
       "framework": "nnmil",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -304,7 +304,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__nnmil__s42__preprint-v3",
-      "cell_sha256": "1415009da6f8d592a27a21bedb7b03a56ec2e1a6fdea033c4fe4939d80855e16",
+      "cell_sha256": "1a8d17fa7864ffac80f8f665ce4b0ba302f5c8b1505ab1849795fad935bf9708",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -316,8 +316,8 @@
       "encoder": "hoptimus1",
       "framework": "nnmil",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -362,7 +362,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__abmil__s42__preprint-v3",
-      "cell_sha256": "6c501722f472e98e40c8fdfe70ff97372765fd6ca773e1ae565e4c0d8aab0edc",
+      "cell_sha256": "be19a1b839bfe1bed11ee07cb3518e40c76fa61a6d0b926bfc3f260c5305e8ca",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -374,8 +374,8 @@
       "encoder": "uni_v2",
       "framework": "abmil",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -420,7 +420,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__abmil__s42__preprint-v3",
-      "cell_sha256": "e4f0ef01cc23862fd7972ed4a53eab9962abdde9d1e61c247ebe80e984115fa4",
+      "cell_sha256": "cadbaf042d4271aae18b0c30626c719c47e83a928574951e7652bbc73059ea0b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -432,8 +432,8 @@
       "encoder": "virchow2",
       "framework": "abmil",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -478,7 +478,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__abmil__s42__preprint-v3",
-      "cell_sha256": "d534a031e58c3caabc317fce62223268794b2d108b4e1aaa76e81e459bd8ef0d",
+      "cell_sha256": "78b02652ccb275e0f8d0952caf5893f25c590517276e626e04735d837e6ed5ea",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -490,8 +490,8 @@
       "encoder": "hoptimus1",
       "framework": "abmil",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -536,7 +536,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__dtfd__s42__preprint-v3",
-      "cell_sha256": "919d009990ef7ba0437b9c570372c8c58c843857e94a8a2f8b9d8da9287066f7",
+      "cell_sha256": "2d9c1e74241834f1a5f80c9843e85a055326bc1f238283536ddf554c47647860",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -548,8 +548,8 @@
       "encoder": "uni_v2",
       "framework": "dtfd",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -594,7 +594,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__dtfd__s42__preprint-v3",
-      "cell_sha256": "8a482bbf9c403862885990573dbd06fd7442f7872106d0e1a2ee5576113eb34e",
+      "cell_sha256": "80300596ad2d67105b85db131975fd2f596dde216e7881fa00e7b39901c6fb5b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -606,8 +606,8 @@
       "encoder": "virchow2",
       "framework": "dtfd",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -652,7 +652,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__dtfd__s42__preprint-v3",
-      "cell_sha256": "47d638f32ccc7db95ac07069a51e51ce8cc6a16e54e4a3bb4100c810979a6f9a",
+      "cell_sha256": "80935d195a01f68e4e4ae529914c47ebe95623b92b34a39d815fe248154ff161",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -664,8 +664,8 @@
       "encoder": "hoptimus1",
       "framework": "dtfd",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -710,7 +710,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__titan__titan__s42__preprint-v3",
-      "cell_sha256": "257262e897b9750e4ce88153be119191477b75e08f3429eb99631787715bd5e4",
+      "cell_sha256": "baf0d544e23dd2c85bbf77ae3b0312c64ad20fe3b017bc3e1db984f78e2392a9",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -722,8 +722,8 @@
       "encoder": "titan",
       "framework": "titan",
       "guard": {
-        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant')",
-        "margin": 0.009804,
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0099,
         "metric": "val_bacc",
         "validation_class_counts": {
           "0": {
@@ -5449,7 +5449,7 @@
   },
   "guard_margins": {
     "path": "benchmarks/campaigns/preprint_130/guard_margins.json",
-    "sha256": "f6521d597cea96fb714b1e2d62c17d1a370336d91d186033a8f2b151bc3dd369"
+    "sha256": "bcb4f007007b6d98b0b94300bac0cbb12f17de4cfb2a4f47247b572bcce07c04"
   },
   "policy_sources": {
     "benchmarks/experiments/cptac_gbm/automil/config.yaml": "bee95c7b91e6907ae51b51ada4d2697da3ada9fc6b213ad28fc18baec3b4538f",
