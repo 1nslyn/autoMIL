@@ -161,6 +161,32 @@ class TestMarginIsCheckableFromItsOwnCounts:
             derived_margin_for_counts(counts)
 
 
+class TestRecordingGridMustBeUsable:
+    """A margin that cannot tell one slide from two is not protection."""
+
+    def test_a_quantum_too_fine_for_the_grid_is_refused(self, tmp_path):
+        """Rounding can shrink an observed two-slide drop by a whole grid step.
+
+        At 1112 slides per class the one-slide step is 0.00015, which aligns to
+        0.0002 — but a genuine two-slide drop can be RECORDED as 0.0002 too, so
+        the guard could not reject it. Refuse instead of shipping a number that
+        reads as protection.
+        """
+        labels, val = _balanced({"pos": 1112, "neg": 1112})
+        benchmark = _cohort(tmp_path, {0: val, 1: val, 2: val}, labels)
+        with pytest.raises(GuardMarginError, match="too fine for the"):
+            derive_guard(benchmark, "standard", "t", (0, 1, 2))
+
+    def test_the_campaign_cohort_is_comfortably_inside_the_usable_range(self):
+        """luad/kras: one slide records as <= 0.0099, two as >= 0.0195."""
+        quantum = 1 / (3 * 2 * 17)
+        grid = 10 ** -RECORDED_DECIMALS
+        assert derived_margin_for_counts(
+            {str(f): {"mutant": 17, "wildtype": 30} for f in range(3)}
+        ) == pytest.approx(0.0099, abs=1e-12)
+        assert 0.0099 < 2 * quantum - grid
+
+
 class TestFailsLoud:
     def test_missing_split_file(self, tmp_path):
         labels, val = _balanced({"pos": 5, "neg": 5})

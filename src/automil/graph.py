@@ -359,46 +359,32 @@ def _finite(raw: object) -> float | None:
 
 
 def _node_metric(node: dict | None, metric: str) -> float | None:
-    """A node's companion metric, from whichever source it has.
+    """A node's companion metric out of its opaque metrics dict.
 
     Reading one named key out of ``metrics`` is the same contract a ``val_*``
     primary selector already uses (:func:`scoring.recompute_primary_value`) —
     the framework stays vocabulary-agnostic and the consumer's declared name
     is the only coupling.
 
-    Two sources, one shape, for the same reason :func:`node_fold_primary_values`
-    has two: a bootstrapped baseline root records its evidence ONLY under
-    ``metadata.validation_folds`` (it is created with the framework scalars and
-    never passes through the terminal writer), and such a root is the dominant
-    parent of an entire search. Without the fallback the guard would be open
-    for exactly the comparisons it exists to make — every first-generation
-    child of the baseline, including the one that first becomes best_node.
-
-    The fold mean is not an approximation: a consumer whose aggregate metric is
-    the mean over folds reports the mean of these very numbers. EVERY fold must
-    carry a finite value — a mean over a subset is a different statistic from
-    the aggregate it stands in for — which is the same fail-closed rule
-    :func:`scoring.fold_primary_value_entries` applies at fold granularity.
+    ONE source, deliberately. An earlier version also fell back to the mean of
+    ``metadata.validation_folds`` so that a bootstrapped baseline root — which
+    records no aggregate — could still be guarded. That fallback was worse than
+    the hole it filled, twice over: the fold values are unrounded while every
+    run-recorded aggregate is not, so the two sides of the comparison landed on
+    different grids and the margin's grid alignment stopped covering the
+    guard's most common comparison; and ``metadata`` is merged from the
+    agent-authored result payload, so a node could carry a healthy fold value
+    from one ingest and have it resurrected after a later ingest dropped the
+    metric — defeating the child-side fail-closed rule. The consumer records
+    the aggregate on its own grid instead (see the campaign's baseline root),
+    which is both correct and one mechanism rather than two.
     """
     if not isinstance(node, dict):
         return None
     metrics = node.get("metrics")
-    if isinstance(metrics, dict):
-        value = _finite(metrics.get(metric))
-        if value is not None:
-            return value
-    meta = node.get("metadata")
-    folds = meta.get("validation_folds") if isinstance(meta, dict) else None
-    if not isinstance(folds, list) or not folds:
+    if not isinstance(metrics, dict):
         return None
-    values = []
-    for entry in folds:
-        block = entry.get("metrics") if isinstance(entry, dict) else None
-        value = _finite(block.get(metric)) if isinstance(block, dict) else None
-        if value is None:
-            return None
-        values.append(value)
-    return sum(values) / len(values)
+    return _finite(metrics.get(metric))
 
 
 def guard_basis(

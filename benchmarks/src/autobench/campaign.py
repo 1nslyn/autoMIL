@@ -539,6 +539,15 @@ def _validate_guard(guard: Any, label: str) -> dict[str, Any]:
             f"{label}: companion-guard margin carries no validation class "
             "counts; the number would not be checkable by hand"
         )
+    # The margin's K is the number of folds AVERAGED into the gated number, so
+    # counts published for a different fold set are internally consistent and
+    # still wrong: a five-fold counts block yields a margin 5/3 too tight for a
+    # three-fold discovery mean.
+    if set(counts) != {str(fold) for fold in STAGE_FOLDS["discovery"]}:
+        raise CampaignManifestError(
+            f"{label}: companion-guard counts cover folds {sorted(counts)}; "
+            f"discovery averages {list(STAGE_FOLDS['discovery'])}"
+        )
     # "Re-derivable by hand from the published counts" has to be ENFORCED, not
     # merely asserted: without this, a hand-edited margins file carrying honest
     # counts beside a margin of 0.5 sails through manifest construction,

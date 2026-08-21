@@ -30,8 +30,16 @@ autoMIL: F2-readiness framework refactor.
   — exactly the largest change one validation slide can make to the reported
   balanced accuracy, so a drop that size passes and anything larger is
   rejected. The margin is verified against the very counts published beside
-  it at every freeze, and the cell's baseline must have SCORED that
-  validation composition before discovery may start.
+  it at every freeze (and those counts must cover exactly the discovery
+  folds), a cohort whose one-slide step is too fine for the metric's
+  recording precision is REFUSED rather than given a margin that could not
+  reject two slides, and where the baseline carries per-slide validation
+  predictions it must have SCORED that composition before discovery may
+  start — all-or-nothing, because verifying a subset reads as proof.
+  The guard is applied at BOTH decision points: parent-relative during the
+  search, and baseline-relative at the candidate freeze, so a
+  balanced-accuracy collapse cannot be promoted and certified as the cell's
+  winner.
   `autobench.guard_margin` does the derivation,
   `campaigns/preprint_130/derive_guard_margins.py` writes the auditable
   `guard_margins.json` (per-fold class counts included, so the number is

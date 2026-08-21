@@ -144,41 +144,46 @@ class TestGuardFailsClosed:
         # happened to be missing.
         assert keep_or_discard(META, child, _node(0.85)) == "discard"
 
-    def test_companion_read_from_fold_evidence_when_aggregate_lacks_it(self):
-        """The campaign's discovery BASELINE ROOT topology.
+    def test_fold_evidence_is_never_a_substitute_for_the_recorded_aggregate(self):
+        """ONE source of truth, deliberately.
 
-        That root is created with the framework scalars only — its `metrics`
-        block holds no companion — and it is the dominant parent of the whole
-        cell. Reading only `metrics` left the guard open for every
-        first-generation candidate: exactly the comparisons it exists to make,
-        including the one that first becomes best_node.
+        An earlier version fell back to the mean of
+        `metadata.validation_folds` so a bootstrapped baseline root could be
+        guarded. It was worse than the hole it filled: the fold values are
+        unrounded while every run-recorded aggregate is not, so the two sides
+        of the comparison sat on different grids and the margin's grid
+        alignment stopped covering the guard's most common comparison. The
+        consumer records the aggregate on its own grid instead.
         """
         root = {
             "primary_value": 0.70,
-            "metrics": {"primary_value": 0.70},          # no val_bacc here
+            "metrics": {"primary_value": 0.70},          # no companion recorded
             "metadata": {"validation_folds": [
                 {"fold_index": i, "primary_value": 0.70,
                  "metrics": {"val_auc": 0.70, "val_bacc": 0.70}}
                 for i in range(3)
             ]},
         }
-        verdict, delta, _ = guard_basis(META, root, _node(0.80, 0.70 - 3 * QUANTUM))
-        assert verdict == "fail"
-        assert delta == pytest.approx(-3 * QUANTUM)
-        assert keep_or_discard(META, root, _node(0.80, 0.40)) == "discard"
-        assert keep_or_discard(META, root, _node(0.80, 0.72)) == "keep"
+        assert guard_basis(META, root, _node(0.80, 0.40)) == ("none", None, "val_bacc")
 
-    def test_partial_fold_evidence_is_not_averaged(self):
-        """A mean over a subset is a different statistic from the aggregate."""
-        root = {
-            "primary_value": 0.70,
-            "metrics": {"primary_value": 0.70},
+    def test_stale_fold_metadata_cannot_resurrect_a_cleared_companion(self):
+        """`metadata` is merged from the AGENT-AUTHORED result payload.
+
+        A node could therefore carry a healthy fold value from one ingest and
+        have it resurrected after a later ingest dropped the metric — which
+        would defeat the child-side fail-closed rule through a channel the
+        agent controls.
+        """
+        child = {
+            "primary_value": 0.85,
+            "metrics": {"val_auc": 0.85},                 # companion dropped
             "metadata": {"validation_folds": [
-                {"fold_index": 0, "metrics": {"val_auc": 0.70, "val_bacc": 0.70}},
-                {"fold_index": 1, "metrics": {"val_auc": 0.70}},   # lost companion
+                {"fold_index": i, "metrics": {"val_auc": 0.9, "val_bacc": 0.9}}
+                for i in range(3)
             ]},
         }
-        assert guard_basis(META, root, _node(0.80, 0.40)) == ("none", None, "val_bacc")
+        assert guard_basis(META, _node(0.70, 0.70), child) == ("fail", None, "val_bacc")
+        assert keep_or_discard(META, _node(0.70, 0.70), child) == "discard"
 
     @pytest.mark.parametrize("bad", [
         {"metric": "val_bacc"},                    # margin missing

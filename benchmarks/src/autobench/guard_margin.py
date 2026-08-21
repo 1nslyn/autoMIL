@@ -172,6 +172,30 @@ def balanced_accuracy_margin(fold_counts: dict[int, dict[str, int]]) -> float:
     return 1.0 / (n_folds * n_classes * smallest)
 
 
+def _grid_aligned(quantum: float) -> float:
+    """The one-slide quantum on the recording grid, or a refusal.
+
+    Rounding UP puts the margin on the grid the comparison actually happens on,
+    so a one-slide drop recorded a hair large still passes. It also has to stay
+    able to tell one slide from TWO: rounding can shrink an observed two-slide
+    drop by up to one grid step, so the smallest a genuine two-slide drop can
+    be recorded as is ``2*quantum - grid``. If the aligned margin reaches that,
+    the metric is simply not recorded precisely enough to guard this cohort at
+    single-slide resolution, and a margin that cannot reject two slides must
+    not be shipped as protection.
+    """
+    grid = 10 ** -RECORDED_DECIMALS
+    aligned = math.ceil(quantum / grid) * grid
+    if aligned >= 2 * quantum - grid:
+        raise GuardMarginError(
+            f"a one-slide step of {quantum:.8f} is too fine for the "
+            f"{RECORDED_DECIMALS}-decimal recording grid: a two-slide drop can "
+            f"be recorded as {2 * quantum - grid:.8f}, which the one-slide "
+            f"margin {aligned:.8f} would not reject"
+        )
+    return aligned
+
+
 def derived_margin_for_counts(counts: Mapping[str, Mapping[str, int]]) -> float:
     """The margin a PUBLISHED ``validation_class_counts`` block implies.
 
@@ -194,8 +218,7 @@ def derived_margin_for_counts(counts: Mapping[str, Mapping[str, int]]) -> float:
                 )
             parsed[label] = value
         folds[index] = parsed
-    quantum = balanced_accuracy_margin(folds)
-    return math.ceil(quantum * 10 ** RECORDED_DECIMALS) / 10 ** RECORDED_DECIMALS
+    return _grid_aligned(balanced_accuracy_margin(folds))
 
 
 def verify_against_run(fold_counts: dict[int, dict[str, int]], results_dir: Path | str) -> None:
@@ -249,9 +272,17 @@ def derive_guard(
         ((label, n) for c in counts.values() for label, n in c.items()),
         key=lambda item: item[1],
     )
+    quantum = _grid_aligned(margin)
+    # The recording grid has to be able to tell one slide from two. Rounding
+    # can shrink an observed two-slide drop by up to one grid step, so the
+    # smallest a genuine two-slide drop can be RECORDED as is 2*margin - grid;
+    # if the (grid-aligned) one-slide margin reaches that, the guard cannot
+    # reject two slides and is not worth declaring. Refuse rather than ship a
+    # margin that reads as protection: on cohorts this large the metric simply
+    # is not recorded precisely enough to guard at single-slide resolution.
     return {
         "metric": GUARD_METRIC,
-        "margin": math.ceil(margin * 10 ** RECORDED_DECIMALS) / 10 ** RECORDED_DECIMALS,
+        "margin": quantum,
         "basis": (
             f"one validation slide: 1/({n_folds} folds x {n_classes} classes x "
             f"{smallest} slides in the smallest validation class {smallest_class!r})"

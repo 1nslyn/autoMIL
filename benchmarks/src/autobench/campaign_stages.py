@@ -10,6 +10,7 @@ from __future__ import annotations
 import fcntl
 import copy
 import hashlib
+import logging
 import json
 import math
 import os
@@ -530,6 +531,37 @@ def _sealed_fold_hashes(
     return hashes
 
 
+def _recorded_fold_aggregates(folds: list[Mapping[str, Any]]) -> dict[str, float]:
+    """The aggregate validation metrics a RUN would have recorded for these folds.
+
+    The baseline root is built from fold evidence rather than from a
+    ``result.json``, so without this it carries no aggregate metrics at all.
+    The companion guard would then fall back to a FULL-PRECISION fold mean on
+    the root while every child's value is ``round(mean, 4)`` — the two sides of
+    the comparison land on different grids, and the margin's grid alignment
+    (what makes a drop of exactly one slide pass) stops covering the guard's
+    single most common comparison: every first-generation child of the
+    baseline. Recording the mean the way the runner records it puts both sides
+    back on the same grid.
+
+    A key missing from any fold is dropped rather than averaged over a subset —
+    the same rule ``_node_metric`` applies to the fallback.
+    """
+    from autobench.guard_margin import RECORDED_DECIMALS
+
+    blocks = [fold.get("metrics") or {} for fold in folds]
+    if not blocks:
+        return {}
+    aggregates: dict[str, float] = {}
+    for key in sorted(set().union(*(set(block) for block in blocks))):
+        values = [block[key] for block in blocks if isinstance(block.get(key), (int, float))
+                  and not isinstance(block.get(key), bool)]
+        if len(values) != len(blocks):
+            continue
+        aggregates[key] = round(sum(values) / len(values), RECORDED_DECIMALS)
+    return aggregates
+
+
 def _ensure_discovery_baseline_root(
     cell_root: Path,
     state: Mapping[str, Any],
@@ -619,6 +651,7 @@ def _ensure_discovery_baseline_root(
             metrics={
                 "primary_value": discovery_mean,
                 "primary_se": discovery_se,
+                **_recorded_fold_aggregates(discovery_folds),
             },
             status="keep",
             config_hash=baseline["candidate_sha256"],
@@ -698,12 +731,30 @@ def _verify_guard_counts_against_baseline(
     if not counts:
         return
     results_dir = baseline_archive / "certify" / "results"
-    fold_counts = {
-        int(fold): dict(block) for fold, block in counts.items()
-        if (results_dir / f"fold_{int(fold)}" / "predictions_val.csv").exists()
-    }
-    if not fold_counts:
+    fold_counts = {int(fold): dict(block) for fold, block in counts.items()}
+    scored = [
+        fold for fold in fold_counts
+        if (results_dir / f"fold_{fold}" / "predictions_val.csv").exists()
+    ]
+    if not scored:
+        # Historical conversion imports sealed fold files without the per-slide
+        # validation predictions, so there is nothing to check against. Say so
+        # rather than passing silently — this cell's margin rests on the split
+        # assignment alone.
+        logging.getLogger(__name__).warning(
+            "companion-guard counts unverified for %s: the registered baseline "
+            "carries no per-slide validation predictions (historical import). "
+            "The margin rests on the split assignment alone.",
+            cell_root.name,
+        )
         return
+    if len(scored) != len(fold_counts):
+        # Verifying a SUBSET is worse than not verifying: it reads as proof.
+        raise CampaignStageError(
+            "companion-guard counts can only be partly verified: "
+            f"{sorted(scored)} of {sorted(fold_counts)} discovery folds carry "
+            "scored validation predictions"
+        )
     try:
         verify_against_run(fold_counts, results_dir)
     except GuardMarginError as exc:
@@ -1093,6 +1144,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         )
 
     policy = load_candidate_policy(adir)
+    guard_floor = _companion_guard_floor(adir, state)
     archive_root = adir / "orchestrator" / "archive"
     attempt_audit: list[dict[str, Any]] = []
     eligible: list[dict[str, Any]] = []
@@ -1212,6 +1264,19 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                         archive, STAGE_FOLDS["discovery"],
                     ),
                 }
+                guard_drop = _companion_guard_shortfall(guard_floor, folds)
+                if guard_drop is not None:
+                    audit.update({
+                        "eligible": False,
+                        "reason": (
+                            f"companion guard: {guard_floor['metric']} fell "
+                            f"{guard_drop:.4f} below the baseline (margin "
+                            f"{guard_floor['margin']})"
+                        ),
+                        "candidate_sha256": candidate_sha,
+                        "validation_mean": candidate["discovery_mean"],
+                    })
+                    continue
                 audit.update({
                     "eligible": True,
                     "reason": "complete",
@@ -1293,6 +1358,74 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         "at": frozen_at,
     })
     return _commit_state(cell_root, state)
+
+
+def _companion_guard_floor(
+    adir: Path, state: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """The companion floor a promoted candidate must clear, or ``None``.
+
+    The keep/discard gate is a parent-relative SEARCH screen, and the freeze
+    deliberately ignores it — promotion is the arbitration that screen defers
+    to. But the guard is not a screen: it is a predeclared, deterministic
+    non-inferiority floor, and a guard that only steers the search while a
+    balanced-accuracy collapse still gets promoted and certified is not the
+    protection the protocol claims. So it is applied here too, against the
+    CELL BASELINE rather than against a parent: at arbitration time the parent
+    relation is a search artifact, and the statement worth making about a
+    certified winner is that it is not worse than the native baseline by more
+    than one validation slide.
+
+    Both sides come from :func:`_recorded_fold_aggregates`, so the comparison
+    happens on the same recorded grid the margin is aligned to.
+    """
+    import yaml
+
+    try:
+        config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise CampaignStageError(f"cannot read cell config: {exc}") from exc
+    guard = (config.get("scoring") or {}).get("guard")
+    if not isinstance(guard, Mapping):
+        return None
+    metric, margin = guard.get("metric"), guard.get("margin")
+    if not isinstance(metric, str) or not isinstance(margin, (int, float)) \
+            or isinstance(margin, bool):
+        raise CampaignStageError(f"cell declares an unusable scoring.guard: {guard!r}")
+    baseline = state.get("baseline") or {}
+    discovery_folds = [
+        fold for fold in (baseline.get("validation_folds") or [])
+        if fold.get("fold_index") in STAGE_FOLDS["discovery"]
+    ]
+    if len(discovery_folds) != len(STAGE_FOLDS["discovery"]):
+        raise CampaignStageError(
+            "cannot apply the companion guard at freeze: the registered "
+            "baseline carries no discovery-fold evidence"
+        )
+    floor = _recorded_fold_aggregates(discovery_folds).get(metric)
+    if floor is None:
+        raise CampaignStageError(
+            f"cannot apply the companion guard at freeze: the baseline records "
+            f"no {metric}"
+        )
+    return {"metric": metric, "margin": float(margin), "baseline": floor}
+
+
+def _companion_guard_shortfall(
+    floor: Mapping[str, Any] | None, folds: list[Mapping[str, Any]],
+) -> float | None:
+    """How far a candidate fell below the companion floor, or ``None`` if it
+    cleared it. Fails CLOSED on a candidate that does not record the metric —
+    the same rule the gate applies, for the same reason."""
+    if floor is None:
+        return None
+    value = _recorded_fold_aggregates(folds).get(floor["metric"])
+    if value is None:
+        return float("inf")
+    drop = float(floor["baseline"]) - value
+    # Same ulp slack as the gate: a drop of exactly the margin is a drop of one
+    # validation slide, which is not evidence of harm.
+    return drop if drop - floor["margin"] > 1e-9 else None
 
 
 def _map_overlay_path(path: str, source_adir_rel: str, target_adir_rel: str) -> str:

@@ -482,6 +482,30 @@ def test_manifest_refuses_a_margin_its_own_counts_do_not_imply(tmp_path):
         build_preprint_manifest(fake_repo)
 
 
+def test_manifest_refuses_counts_for_the_wrong_fold_set(tmp_path):
+    """K is the number of folds AVERAGED into the gated number.
+
+    Counts published for the five certification folds are internally
+    consistent and still wrong: they yield a margin 5/3 too tight for a
+    three-fold discovery mean, so genuine one-slide drops would be rejected.
+    """
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
+    margins = json.loads(path.read_text())
+    key = next(iter(margins))
+    counts = margins[key]["validation_class_counts"]
+    block = next(iter(counts.values()))
+    margins[key]["validation_class_counts"] = {str(f): dict(block) for f in range(5)}
+    margins[key]["margin"] = derived_margin_for_counts(
+        margins[key]["validation_class_counts"]
+    )
+    path.write_text(json.dumps(margins, indent=2, sort_keys=True))
+
+    with pytest.raises(CampaignManifestError, match="discovery averages"):
+        build_preprint_manifest(fake_repo)
+
+
 def test_manifest_refuses_a_margin_without_its_counts(tmp_path):
     """The number has to stay checkable by hand from published counts."""
     fake_repo = tmp_path / "repo"
