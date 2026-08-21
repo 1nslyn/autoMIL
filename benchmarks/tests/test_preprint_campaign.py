@@ -468,6 +468,39 @@ def test_manifest_refuses_a_margin_without_its_counts(tmp_path):
         build_preprint_manifest(fake_repo)
 
 
+def test_audit_rejects_a_hand_edited_frozen_guard(tmp_path):
+    """The FROZEN guard is the one that governs every keep/discard.
+
+    `graph.json` `meta.scoring` uses setdefault freeze semantics, so a
+    hand-edited margin wins over `config.yaml` for the rest of the campaign
+    while the config-vs-manifest check above still reports the cell clean —
+    the same mechanism the neighbouring `scoring.formula` lock exists for.
+    """
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    manifest = build_preprint_manifest(fake_repo)
+    write_manifest(manifest, manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, agent_protocol=AGENT_PROTOCOL,
+    )
+    by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
+    target = next(r for r in roots if by_id[r.parent.name]["guard"] is not None)
+    frozen = by_id[target.parent.name]["guard"]
+    (target / "graph.json").write_text(json.dumps({
+        "schema_version": 3,
+        "meta": {"scoring": {"formula": "val_auc",
+                             "guard": {**frozen, "margin": 0.5}}},
+        "nodes": {},
+    }))
+
+    with pytest.raises(CampaignManifestError, match="froze scoring.guard"):
+        audit_materialized_campaign(
+            roots=roots, manifest_path=manifest_path, repo_root=fake_repo,
+        )
+
+
 def test_audit_rejects_a_tampered_exporter_port(tmp_path):
     fake_repo = tmp_path / "repo"
     _copy_campaign_sources(fake_repo)

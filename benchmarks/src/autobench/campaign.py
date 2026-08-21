@@ -1208,15 +1208,26 @@ def audit_materialized_campaign(
         # estimand while passing the config audit above.
         graph_path = adir / "graph.json"
         if graph_path.exists():
-            frozen_formula = (
+            _frozen_scoring = (
                 (json.loads(graph_path.read_text()).get("meta") or {})
                 .get("scoring") or {}
-            ).get("formula")
+            )
+            frozen_formula = _frozen_scoring.get("formula")
             if frozen_formula != _expected_formula:
                 raise CampaignManifestError(
                     f"{cell_id}: graph.json froze scoring.formula "
                     f"{frozen_formula!r}; the campaign selects on "
                     f"{_expected_formula}"
+                )
+            # Same mechanism, same lock: the FROZEN guard is the one that
+            # governs every keep/discard, so a hand-edited margin would run
+            # the cell under a tolerance the manifest does not record while
+            # the config audit above still reports it clean.
+            if _frozen_scoring.get("guard") != cell.get("guard"):
+                raise CampaignManifestError(
+                    f"{cell_id}: graph.json froze scoring.guard "
+                    f"{_frozen_scoring.get('guard')!r}; the manifest records "
+                    f"{cell.get('guard')!r}"
                 )
         policy = load_candidate_policy(adir)
         expected_editable = (

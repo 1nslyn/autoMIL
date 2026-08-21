@@ -35,7 +35,10 @@ autoMIL: F2-readiness framework refactor.
   re-derivable by hand), and the manifest carries the result per cell
   (schema 7) with the materializer and audit locking it exact-match.
   Survival cells report no balanced accuracy and carry no guard.
-  Regenerating the manifest now requires every dataset root mounted.
+  The manifest records what has been DERIVED (`guard: null` for a
+  cohort that was not mounted when it was built) and materialization
+  refuses a classification cell with a null guard, so nothing can
+  search unguarded; only `derive_guard_margins.py` needs the mounts.
 
 - **BREAKING: the "composite" concept is retired — single-metric optimization
   is the contract.** The selection signal IS the declared primary validation

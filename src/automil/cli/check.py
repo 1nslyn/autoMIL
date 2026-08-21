@@ -242,12 +242,14 @@ def check():
         graph_file = adir / "graph.json"
         if graph_file.exists():
             try:
-                _frozen_scoring = (
-                    (json.loads(graph_file.read_text()).get("meta") or {})
-                    .get("scoring") or {}
-                )
+                _graph_data = json.loads(graph_file.read_text())
+                _frozen_scoring = (_graph_data.get("meta") or {}).get("scoring") or {}
+                _executed = [
+                    n for n in (_graph_data.get("nodes") or {}).values()
+                    if isinstance(n, dict) and n.get("type") == "executed"
+                ]
             except (OSError, json.JSONDecodeError):
-                _frozen_scoring = {}
+                _frozen_scoring, _executed = {}, []
             _frozen = _frozen_scoring.get("formula")
             if _frozen is not None and (_formula or "mean") != _frozen:
                 warnings.append(
@@ -269,6 +271,27 @@ def check():
                     "a fresh graph (or edit graph.json meta deliberately) to "
                     "change the companion guard."
                 )
+            # Adding a guard to a graph that already has history is the one
+            # direction the freeze does NOT cover, and it rewrites that
+            # history: the declaration is seeded on the next load, and the
+            # next re-evaluation discards every node that never recorded the
+            # metric — correct under the declaration, but silent.
+            if _guard is not None and "guard" not in _frozen_scoring and _executed:
+                _blind = [
+                    n for n in _executed
+                    if not isinstance(n.get("metrics"), dict)
+                    or _guard[0] not in n["metrics"]
+                ]
+                if _blind:
+                    warnings.append(
+                        f"scoring.guard is new to a graph that already has "
+                        f"{len(_executed)} executed node(s), {len(_blind)} of "
+                        f"which never recorded {_guard[0]!r}. Seeding it will "
+                        "re-decide those nodes on the next re-evaluation and "
+                        "discard them (a node that cannot be shown "
+                        "non-inferior fails closed). Start a fresh graph if "
+                        "that is not what you want."
+                    )
 
         # Check files.editable
         editable = config.get("files", {}).get("editable", [])

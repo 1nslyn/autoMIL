@@ -70,6 +70,26 @@ class TestGuardSemantics:
         assert delta == pytest.approx(-2 * QUANTUM)
         assert keep_or_discard(META, parent, child) == "discard"
 
+    def test_a_drop_of_exactly_the_declared_margin_survives_float_subtraction(self):
+        """The promise has to hold on the RECORDED decimals, not in theory.
+
+        Both the margin and the metrics are decimals, and binary floats put a
+        drop of exactly the margin a few ulps on the wrong side of it
+        (0.5408 - 0.5507 == -0.00990000000000002). A bare `delta < -margin`
+        therefore still rejected 122 of the 182 exact-margin one-slide drops
+        on the campaign's own tcga_luad/kras lattice — two thirds of the
+        cases the grid-aligned margin was introduced to rescue.
+        """
+        meta = {"scoring": {"formula": "val_auc", "accept_margin": 0.0,
+                            "se_multiplier": 0.0,
+                            "guard": {"metric": "val_bacc", "margin": 0.0099}}}
+        parent, child = _node(0.70, 0.5507), _node(0.80, 0.5408)
+        assert (child["metrics"]["val_bacc"] - parent["metrics"]["val_bacc"]) < -0.0099
+        assert guard_basis(meta, parent, child)[0] == "pass"
+        assert keep_or_discard(meta, parent, child) == "keep"
+        # ...and the slack is far too small to admit a genuinely larger drop.
+        assert keep_or_discard(meta, parent, _node(0.80, 0.5407)) == "discard"
+
     def test_guard_never_rescues_a_primary_loser(self):
         """Veto without a vote: the companion can only ever subtract."""
         parent, child = _node(0.70, 0.70), _node(0.65, 0.99)
@@ -332,7 +352,8 @@ class TestCheckCatchesGuardConfigErrors:
     child closed, and the operator would otherwise see 30/30 discards with
     nothing pointing at the cause."""
 
-    def _project(self, tmp_path, monkeypatch, scoring: dict, track: list[str]):
+    def _project(self, tmp_path, monkeypatch, scoring: dict, track: list[str],
+                 nodes: dict | None = None):
         import subprocess
 
         from click.testing import CliRunner
@@ -347,6 +368,11 @@ class TestCheckCatchesGuardConfigErrors:
         cfg.setdefault("scoring", {}).update(scoring)
         cfg.setdefault("metrics", {})["track"] = track
         (adir / "config.yaml").write_text(yaml.safe_dump(cfg))
+        if nodes is not None:
+            (adir / "graph.json").write_text(json.dumps({
+                "schema_version": 3, "meta": {"scoring": {"formula": "val_auc"}},
+                "nodes": nodes,
+            }))
         return CliRunner().invoke(main, ["check"])
 
     def test_guard_on_an_untracked_metric_is_reported(self, tmp_path, monkeypatch):
@@ -364,6 +390,24 @@ class TestCheckCatchesGuardConfigErrors:
             track=["val_auc", "val_bacc"],
         )
         assert "scoring.guard is declared but unusable" in result.output
+
+    def test_adding_a_guard_to_a_graph_with_history_is_flagged(self, tmp_path, monkeypatch):
+        """The one direction the freeze does not cover — and it rewrites history.
+
+        Seeding a new guard makes the next re-evaluation discard every node
+        that never recorded the metric. That is correct under the declaration
+        (a node that cannot be shown non-inferior fails closed) but it is
+        silent, so `check` has to say it before anything runs.
+        """
+        result = self._project(
+            tmp_path, monkeypatch,
+            {"formula": "val_auc", "guard": {"metric": "val_bacc", "margin": 0.0099}},
+            track=["val_auc", "val_bacc"],
+            nodes={"node_0001": {"id": "node_0001", "type": "executed",
+                                 "status": "keep", "primary_value": 0.7,
+                                 "metrics": {"val_auc": 0.7}}},
+        )
+        assert "scoring.guard is new to a graph that already has" in result.output
 
     def test_a_well_formed_guard_is_silent(self, tmp_path, monkeypatch):
         result = self._project(

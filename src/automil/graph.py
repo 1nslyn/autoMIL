@@ -340,6 +340,16 @@ def _guard_declaration(meta: dict | None) -> tuple[str, float] | None:
     return metric, value
 
 
+#: Float-representation slack for the guard comparison. Both the margin and
+#: the metrics it is compared against are DECIMALS, and binary floats put a
+#: drop of exactly the margin a few ulps on the wrong side of it
+#: (``0.5408 - 0.5507 == -0.00990000000000002``, which is "worse than" 0.0099).
+#: Without this, "a drop of exactly `margin` passes" held for only a third of
+#: the cases it names. Five orders of magnitude below any real recording grid,
+#: so it can never admit a genuinely larger drop.
+_GUARD_EPS = 1e-9
+
+
 def _finite(raw: object) -> float | None:
     """``raw`` as a finite float, or ``None``. ``bool`` is an ``int`` subclass."""
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
@@ -444,7 +454,7 @@ def guard_basis(
     if parent_value is None:
         return "none", None, metric
     delta = child_value - parent_value
-    return ("fail" if delta < -margin else "pass"), delta, metric
+    return ("fail" if delta + margin < -_GUARD_EPS else "pass"), delta, metric
 
 
 def _primary_value_matches_folds(node: dict | None, folds: dict[int, float] | None) -> bool:
