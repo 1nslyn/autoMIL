@@ -533,10 +533,30 @@ def _validate_guard(guard: Any, label: str) -> dict[str, Any]:
             f"{label}: companion-guard declaration is malformed ({guard!r}); "
             f"expected metric {GUARD_METRIC!r} and a margin in (0, 1)"
         )
-    if not guard.get("validation_class_counts"):
+    counts = guard.get("validation_class_counts")
+    if not counts:
         raise CampaignManifestError(
             f"{label}: companion-guard margin carries no validation class "
             "counts; the number would not be checkable by hand"
+        )
+    # "Re-derivable by hand from the published counts" has to be ENFORCED, not
+    # merely asserted: without this, a hand-edited margins file carrying honest
+    # counts beside a margin of 0.5 sails through manifest construction,
+    # hashing, materialization and graph seeding as "derived", and a child
+    # could shed 0.4 balanced accuracy and still pass.
+    from autobench.guard_margin import derived_margin_for_counts
+
+    try:
+        expected = derived_margin_for_counts(counts)
+    except Exception as exc:  # noqa: BLE001 — any unusable counts block is fatal here
+        raise CampaignManifestError(
+            f"{label}: companion-guard validation class counts do not support "
+            f"a margin ({exc})"
+        ) from exc
+    if float(margin) != expected:
+        raise CampaignManifestError(
+            f"{label}: companion-guard margin {float(margin)!r} is not the "
+            f"margin its own published counts imply ({expected!r})"
         )
     return dict(guard)
 

@@ -353,7 +353,7 @@ class TestCheckCatchesGuardConfigErrors:
     nothing pointing at the cause."""
 
     def _project(self, tmp_path, monkeypatch, scoring: dict, track: list[str],
-                 nodes: dict | None = None):
+                 nodes: dict | None = None, frozen_scoring: dict | None = None):
         import subprocess
 
         from click.testing import CliRunner
@@ -368,10 +368,11 @@ class TestCheckCatchesGuardConfigErrors:
         cfg.setdefault("scoring", {}).update(scoring)
         cfg.setdefault("metrics", {})["track"] = track
         (adir / "config.yaml").write_text(yaml.safe_dump(cfg))
-        if nodes is not None:
+        if nodes is not None or frozen_scoring is not None:
             (adir / "graph.json").write_text(json.dumps({
-                "schema_version": 3, "meta": {"scoring": {"formula": "val_auc"}},
-                "nodes": nodes,
+                "schema_version": 3,
+                "meta": {"scoring": frozen_scoring or {"formula": "val_auc"}},
+                "nodes": nodes or {},
             }))
         return CliRunner().invoke(main, ["check"])
 
@@ -408,6 +409,37 @@ class TestCheckCatchesGuardConfigErrors:
                                  "metrics": {"val_auc": 0.7}}},
         )
         assert "scoring.guard is new to a graph that already has" in result.output
+
+    def test_a_held_out_metric_cannot_be_the_guard(self, tmp_path, monkeypatch):
+        """The guard reads the AGENT-FACING validation block.
+
+        A held-out key there is a val-firewall violation that fails the node
+        closed; in `held_out` the guard would never see it. Either way the
+        declaration is unusable, so it must not survive preflight.
+        """
+        result = self._project(
+            tmp_path, monkeypatch,
+            {"formula": "val_auc", "guard": {"metric": "test_auc", "margin": 0.01}},
+            track=["val_auc", "test_auc"],
+        )
+        assert "is held-out-named" in result.output
+
+    def test_a_malformed_FROZEN_guard_is_an_issue_not_a_warning(
+            self, tmp_path, monkeypatch):
+        """The frozen declaration is the one every keep/discard consults.
+
+        Config-side validation says nothing about it, and a graph frozen with
+        a broken guard discards every non-root child at run time — so a
+        preflight that only reported drift would be describing a graph that
+        cannot gate at all.
+        """
+        result = self._project(
+            tmp_path, monkeypatch,
+            {"formula": "val_auc", "guard": {"metric": "val_bacc", "margin": 0.0099}},
+            track=["val_auc", "val_bacc"],
+            frozen_scoring={"formula": "val_auc", "guard": {"metric": "val_bacc"}},
+        )
+        assert "froze an unusable scoring.guard" in result.output
 
     def test_a_well_formed_guard_is_silent(self, tmp_path, monkeypatch):
         result = self._project(

@@ -19,8 +19,11 @@ the margin has to be honest about the lattice:
 That expression is exactly the largest change a single validation slide can
 make to the reported number. A drop no bigger than it is arithmetically
 explainable by one borderline slide changing side — the finest distinction the
-metric can draw on this split — so it cannot be evidence of harm. Rejecting
-needs strictly more than one slide.
+metric can draw on this split — so it cannot be evidence of harm. Any larger
+drop is rejected. "One slide" means one WORST-CASE slide: the margin is the
+coarsest single-slide step, so on a very lopsided cohort a couple of
+majority-class slides can fall inside it. That is the metric's resolution,
+not slack in the guard.
 
 Two properties make this defensible where a hand-picked constant would not be:
 
@@ -43,6 +46,7 @@ from __future__ import annotations
 import csv
 import math
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
 
 #: The companion metric guarded on every classification cell. Balanced accuracy
@@ -58,8 +62,12 @@ GUARD_METRIC = "val_bacc"
 #: rounds down, and a margin left on the true lattice rejects it — the one
 #: thing "a drop of exactly `margin` passes" promises cannot happen (21 of 527
 #: reachable one-slide states on tcga_luad/kras). Rounding the margin UP to
-#: this grid admits every one-slide drop while still rejecting every
-#: two-slide drop (>= 0.0111 recorded on these cohorts).
+#: this grid admits every one-slide drop while still rejecting anything
+#: larger than one worst-case slide. ("One WORST-CASE slide", not "one slide
+#: of every class": on a cohort whose majority class is more than twice its
+#: minority, two majority-class slides legitimately fall inside the margin —
+#: that is the metric's own resolution, which is what the guard is
+#: calibrated to.)
 RECORDED_DECIMALS = 4
 
 
@@ -162,6 +170,32 @@ def balanced_accuracy_margin(fold_counts: dict[int, dict[str, int]]) -> float:
     if smallest <= 0:
         raise GuardMarginError("a validation class holds no slides")
     return 1.0 / (n_folds * n_classes * smallest)
+
+
+def derived_margin_for_counts(counts: Mapping[str, Mapping[str, int]]) -> float:
+    """The margin a PUBLISHED ``validation_class_counts`` block implies.
+
+    The auditability claim is that the margin is re-derivable by hand from the
+    counts that travel with it. This is that derivation, in code, so the claim
+    is enforced at every freeze rather than merely stated: it re-runs the same
+    arithmetic ``derive_guard`` ran, from the counts alone.
+    """
+    if not isinstance(counts, Mapping) or not counts:
+        raise GuardMarginError("no validation class counts")
+    folds = {}
+    for index, (fold, block) in enumerate(sorted(counts.items())):
+        if not isinstance(block, Mapping) or not block:
+            raise GuardMarginError(f"fold {fold!r} carries no class counts")
+        parsed = {}
+        for label, value in block.items():
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise GuardMarginError(
+                    f"fold {fold!r} class {label!r} count {value!r} is not an integer"
+                )
+            parsed[label] = value
+        folds[index] = parsed
+    quantum = balanced_accuracy_margin(folds)
+    return math.ceil(quantum * 10 ** RECORDED_DECIMALS) / 10 ** RECORDED_DECIMALS
 
 
 def verify_against_run(fold_counts: dict[int, dict[str, int]], results_dir: Path | str) -> None:

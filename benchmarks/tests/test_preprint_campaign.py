@@ -34,6 +34,7 @@ from autobench.campaign import (
     write_manifest,
 )
 from autobench.campaign_stages import CampaignStageError, freeze_campaign_selections
+from autobench.guard_margin import derived_margin_for_counts
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
@@ -248,11 +249,17 @@ def _write_guard_margins(fake_repo: Path) -> dict[str, dict]:
         for task, spec in (raw.get("tasks") or {}).items():
             if (spec or {}).get("task_type", "classification") == "survival":
                 continue
+            counts = {
+                str(fold): {"a": 11 + index, "b": 20}
+                for fold in range(len(PROTOCOL["stage_folds"]["discovery"]))
+            }
             margins[f"{dataset}__{task}"] = {
                 "metric": "val_bacc",
-                "margin": round(0.009 + index * 0.001, 6),
+                # Self-consistent like a real artifact: the manifest verifies
+                # that a published margin is the one its own counts imply.
+                "margin": derived_margin_for_counts(counts),
                 "basis": f"synthetic fixture margin for {dataset}__{task}",
-                "validation_class_counts": {"0": {"a": 11 + index, "b": 20}},
+                "validation_class_counts": counts,
             }
     path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -453,6 +460,26 @@ def test_underived_classification_cell_cannot_be_materialized(tmp_path):
             fake_repo,
             agent_protocol=AGENT_PROTOCOL,
         )
+
+
+def test_manifest_refuses_a_margin_its_own_counts_do_not_imply(tmp_path):
+    """A hand-edited margin beside honest counts must not pass as "derived".
+
+    Everything downstream — the hash, materialization, graph seeding — treats
+    a manifest guard as derived from the counts travelling with it. Without
+    this check a cell could search under a 0.5 margin (i.e. no guard at all)
+    while publishing counts that imply 0.0099.
+    """
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
+    margins = json.loads(path.read_text())
+    key = next(iter(margins))
+    margins[key]["margin"] = 0.5
+    path.write_text(json.dumps(margins, indent=2, sort_keys=True))
+
+    with pytest.raises(CampaignManifestError, match="its own published counts"):
+        build_preprint_manifest(fake_repo)
 
 
 def test_manifest_refuses_a_margin_without_its_counts(tmp_path):

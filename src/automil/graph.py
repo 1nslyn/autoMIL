@@ -422,14 +422,19 @@ def guard_basis(
       key disabled the guard, dropping the key would be the dominant strategy.
       This is checked FIRST so the exemption below can never be inherited.
     - **A parent without the metric opens the guard.** There is nothing to be
-      non-inferior TO — a legacy incumbent, or a guard added mid-campaign.
-      The child has already been required to carry the metric, so this
-      exempts one comparison, never a lineage.
+      non-inferior TO — a legacy incumbent, a guard added mid-campaign, or a
+      crashed parent whose metrics were cleared at ingest. The child has
+      already been required to carry the metric, so this exempts one
+      comparison, never a lineage. It is not weaker than the primary gate
+      either: a parent with no evidence scores 0.0, so ``_accept`` is equally
+      vacuous against it. Comparing against the nearest healthy ancestor
+      instead of the literal parent would be a change to the whole
+      parent-relative gate, not something for the guard to special-case.
     - **A drop of exactly ``margin`` passes.** ``margin`` is one quantization
       step of the companion metric on this cell's validation splits, so a
       drop that size is arithmetically explainable by a single validation
       slide changing side — the finest distinction the metric can make, and
-      therefore not evidence. Rejection needs strictly more than one slide.
+      therefore not evidence. Anything larger is rejected.
     """
     try:
         declared = _guard_declaration(meta)

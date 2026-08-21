@@ -28,7 +28,10 @@ autoMIL: F2-readiness framework refactor.
   it gates. For the preprint campaign it is derived from each cell's frozen
   validation splits as `1 / (K folds x C classes x smallest validation class)`
   — exactly the largest change one validation slide can make to the reported
-  balanced accuracy, so only drops needing two or more slides are rejected.
+  balanced accuracy, so a drop that size passes and anything larger is
+  rejected. The margin is verified against the very counts published beside
+  it at every freeze, and the cell's baseline must have SCORED that
+  validation composition before discovery may start.
   `autobench.guard_margin` does the derivation,
   `campaigns/preprint_130/derive_guard_margins.py` writes the auditable
   `guard_margins.json` (per-fold class counts included, so the number is

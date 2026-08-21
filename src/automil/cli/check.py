@@ -228,6 +228,15 @@ def check():
             )
         if _guard is not None:
             _g_metric, _ = _guard
+            from automil.firewall import is_held_out_metric_key
+            if is_held_out_metric_key(_g_metric):
+                issues.append(
+                    f"scoring.guard.metric {_g_metric!r} is held-out-named. The "
+                    "guard reads the agent-facing validation metrics; a "
+                    "held-out key there is a val-firewall violation that fails "
+                    "the node closed, and in `held_out` the guard would never "
+                    "see it. Guard on a validation metric."
+                )
             _tracked = (config.get("metrics") or {}).get("track") or []
             if _tracked and _g_metric not in _tracked:
                 issues.append(
@@ -258,6 +267,18 @@ def check():
                     "value governs every ingest. Start a fresh graph (or edit "
                     "graph.json meta deliberately) to change the selection "
                     "formula."
+                )
+            # The FROZEN declaration is the one every keep/discard consults,
+            # so it needs the same validation the config one gets. A malformed
+            # frozen guard fails every non-root child closed at run time; a
+            # preflight that only warned about it would be reporting drift on
+            # a graph that cannot gate at all.
+            try:
+                _guard_declaration({"scoring": _frozen_scoring})
+            except ValueError as exc:
+                issues.append(
+                    f"graph.json froze an unusable scoring.guard: {exc}. Every "
+                    "non-root child will be discarded until it is corrected."
                 )
             # The guard is frozen by the same setdefault, so an edited margin
             # is the same silent no-op the formula warning above exists for.

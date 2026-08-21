@@ -15,6 +15,7 @@ import pytest
 
 from autobench.guard_margin import (RECORDED_DECIMALS, GuardMarginError,
                                     balanced_accuracy_margin, derive_guard,
+                                    derived_margin_for_counts,
                                     validation_class_counts, verify_against_run)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -119,6 +120,45 @@ class TestMarginArithmetic:
             _grid(1 / (k * c * min(min(f.values()) for f in counts.values()))),
             abs=1e-9,
         )
+
+
+class TestMarginIsCheckableFromItsOwnCounts:
+    """"Re-derivable by hand from the published counts" has to be enforced.
+
+    Otherwise a hand-edited margins file carrying honest counts beside an
+    arbitrary margin passes manifest construction, hashing, materialization
+    and graph seeding as "derived" — and the paper quotes it as derived.
+    """
+
+    def test_published_counts_reproduce_the_published_margin(self, tmp_path):
+        labels, val = _balanced({"pos": 17, "neg": 30})
+        benchmark = _cohort(tmp_path, {0: val, 1: val, 2: val}, labels)
+        guard = derive_guard(benchmark, "standard", "t", (0, 1, 2))
+        assert derived_margin_for_counts(
+            guard["validation_class_counts"]
+        ) == pytest.approx(guard["margin"], abs=1e-12)
+
+    def test_frozen_campaign_artifact_is_self_consistent(self):
+        import json
+
+        frozen = json.loads(
+            (REPO_ROOT / "benchmarks/campaigns/preprint_130/guard_margins.json")
+            .read_text()
+        )
+        for key, guard in frozen.items():
+            assert derived_margin_for_counts(
+                guard["validation_class_counts"]
+            ) == pytest.approx(guard["margin"], abs=1e-12), key
+
+    @pytest.mark.parametrize("counts", [
+        {},
+        {"0": {}},
+        {"0": {"a": 5, "b": "5"}},
+        {"0": {"a": 5, "b": 5}, "1": {"a": 10}},
+    ])
+    def test_unusable_counts_refuse(self, counts):
+        with pytest.raises(GuardMarginError):
+            derived_margin_for_counts(counts)
 
 
 class TestFailsLoud:

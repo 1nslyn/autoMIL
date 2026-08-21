@@ -665,6 +665,56 @@ def attest_and_register_baseline(
         return _register_baseline_unlocked(cell_root, baseline_archive)
 
 
+def _verify_guard_counts_against_baseline(
+    cell_root: Path, baseline_archive: Path,
+) -> None:
+    """Refuse a baseline whose scored validation set is not the one the
+    companion margin was derived from.
+
+    The margin is derived from the split ASSIGNMENT, which is what exists at
+    freeze time. A loader may retain fewer slides than were assigned — the
+    retention guard admits a 10% loss and only a per-class floor below that —
+    and a smaller validation set has a COARSER lattice than the frozen margin
+    describes, so genuine one-slide jitter would be discarded as harm. The
+    baseline is the first run of the cell and it scores every validation fold,
+    so this is the earliest point the assumption can be checked instead of
+    assumed. Nothing is guessed or repaired: a mismatch means the frozen
+    margin does not describe this cohort and the margin must be re-derived.
+
+    Silent when the cell declares no guard (survival) or the run predates
+    per-slide validation predictions — the check reports what it can verify,
+    and `verify_against_run` fails loudly on a genuine disagreement.
+    """
+    import yaml
+
+    from autobench.guard_margin import GuardMarginError, verify_against_run
+
+    try:
+        config = yaml.safe_load((cell_root / "automil" / "config.yaml").read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return
+    guard = (config.get("scoring") or {}).get("guard")
+    counts = (guard or {}).get("validation_class_counts")
+    if not counts:
+        return
+    results_dir = baseline_archive / "certify" / "results"
+    fold_counts = {
+        int(fold): dict(block) for fold, block in counts.items()
+        if (results_dir / f"fold_{int(fold)}" / "predictions_val.csv").exists()
+    }
+    if not fold_counts:
+        return
+    try:
+        verify_against_run(fold_counts, results_dir)
+    except GuardMarginError as exc:
+        raise CampaignStageError(
+            f"baseline disagrees with the frozen companion-guard counts: {exc}. "
+            "The margin describes a validation lattice this cohort does not "
+            "have; re-derive it (derive_guard_margins.py) and regenerate the "
+            "manifest."
+        ) from exc
+
+
 def _register_baseline_unlocked(
     cell_root: Path, baseline_archive: Path,
 ) -> dict[str, Any]:
@@ -684,6 +734,7 @@ def _register_baseline_unlocked(
             _cell_task_family(cell_root, state)
         ],
     )
+    _verify_guard_counts_against_baseline(cell_root, baseline_archive)
     sealed_hashes = _sealed_fold_hashes(baseline_archive, CERTIFICATION_FOLDS)
     identity_payload = {
         "result_sha256": file_sha256(result_path),
