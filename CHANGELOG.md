@@ -36,10 +36,14 @@ autoMIL: F2-readiness framework refactor.
   reject two slides, and where the baseline carries per-slide validation
   predictions it must have SCORED that composition before discovery may
   start — all-or-nothing, because verifying a subset reads as proof.
-  The guard is applied at BOTH decision points: parent-relative during the
-  search, and baseline-relative at the candidate freeze, so a
-  balanced-accuracy collapse cannot be promoted and certified as the cell's
-  winner.
+  The guard is applied at all THREE decision points: parent-relative during
+  the search, and baseline-relative at the discovery freeze and again at the
+  promotion freeze — so a collapse cannot be promoted, and a candidate that
+  survived folds 0-2 only to collapse on the held-back folds cannot be
+  certified as the cell's winner either. Each stage averages a different fold
+  set and therefore sits on a different lattice, so each derives its own
+  margin from the one published counts block, which covers every
+  certification fold.
   `autobench.guard_margin` does the derivation,
   `campaigns/preprint_130/derive_guard_margins.py` writes the auditable
   `guard_margins.json` (per-fold class counts included, so the number is

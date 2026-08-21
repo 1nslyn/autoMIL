@@ -185,7 +185,15 @@ def _grid_aligned(quantum: float) -> float:
     not be shipped as protection.
     """
     grid = 10 ** -RECORDED_DECIMALS
-    aligned = math.ceil(quantum / grid) * grid
+    # Half a grid step of headroom on top of the quantum. The margin has to
+    # survive a comparison in which EITHER side may be off the recording grid:
+    # a crash-recovered aggregate is rebuilt from full-precision fold files,
+    # and the runner's own rounding is metric-family dependent (classification
+    # rounds, survival deliberately does not). Absorbing the ambiguity here —
+    # in the consumer that owns the grid — is the only place that can be right
+    # for every producer, and on the campaign's cohorts it costs nothing
+    # (0.0098039 + 5e-5 still aligns to 0.0099).
+    aligned = math.ceil((quantum + grid / 2) / grid) * grid
     if aligned >= 2 * quantum - grid:
         raise GuardMarginError(
             f"a one-slide step of {quantum:.8f} is too fine for the "
@@ -196,29 +204,45 @@ def _grid_aligned(quantum: float) -> float:
     return round(aligned, RECORDED_DECIMALS)
 
 
-def derived_margin_for_counts(counts: Mapping[str, Mapping[str, int]]) -> float:
+def derived_margin_for_counts(
+    counts: Mapping[str, Mapping[str, int]], folds: object = None,
+) -> float:
     """The margin a PUBLISHED ``validation_class_counts`` block implies.
 
     The auditability claim is that the margin is re-derivable by hand from the
     counts that travel with it. This is that derivation, in code, so the claim
     is enforced at every freeze rather than merely stated: it re-runs the same
     arithmetic ``derive_guard`` ran, from the counts alone.
+
+    ``folds`` selects the subset being averaged. The guard binds at stages that
+    average different fold sets — the search gate and the discovery freeze on
+    the discovery folds, the promotion freeze on all five — and K is part of
+    the lattice, so each stage's margin is this same derivation over ITS folds.
+    Default: every fold in the block.
     """
     if not isinstance(counts, Mapping) or not counts:
         raise GuardMarginError("no validation class counts")
-    folds = {}
+    if folds is not None:
+        wanted = {str(fold) for fold in folds}
+        missing = wanted - set(counts)
+        if missing:
+            raise GuardMarginError(
+                f"counts cover {sorted(counts)}; fold(s) {sorted(missing)} missing"
+            )
+        counts = {fold: block for fold, block in counts.items() if fold in wanted}
+    selected = {}
     for index, (fold, block) in enumerate(sorted(counts.items())):
         if not isinstance(block, Mapping) or not block:
             raise GuardMarginError(f"fold {fold!r} carries no class counts")
         parsed = {}
-        for label, value in block.items():
+        for label, value in (block or {}).items():
             if isinstance(value, bool) or not isinstance(value, int):
                 raise GuardMarginError(
                     f"fold {fold!r} class {label!r} count {value!r} is not an integer"
                 )
             parsed[label] = value
-        folds[index] = parsed
-    return _grid_aligned(balanced_accuracy_margin(folds))
+        selected[index] = parsed
+    return _grid_aligned(balanced_accuracy_margin(selected))
 
 
 def verify_against_run(fold_counts: dict[int, dict[str, int]], results_dir: Path | str) -> None:
@@ -257,6 +281,7 @@ def verify_against_run(fold_counts: dict[int, dict[str, int]], results_dir: Path
 
 def derive_guard(
     benchmark_dir: Path | str, strategy: str, task: str, folds,
+    *, margin_folds=None,
 ) -> dict:
     """The frozen ``{metric, margin, basis}`` declaration for one cell.
 
@@ -265,11 +290,20 @@ def derive_guard(
     every frozen artifact records the arithmetic behind its own margin.
     """
     counts = validation_class_counts(benchmark_dir, strategy, task, folds)
-    margin = balanced_accuracy_margin(counts)
-    n_folds = len(counts)
-    n_classes = len(next(iter(counts.values())))
+    # `folds` is what the published COUNTS cover; `margin_folds` is the subset
+    # the DECLARED margin gates. They differ because the guard binds at stages
+    # that average different fold sets: the counts have to cover every stage,
+    # while the one number in the declaration is the one the framework gate
+    # consumes. Every other stage re-derives its own margin from these counts.
+    gated = {
+        fold: block for fold, block in counts.items()
+        if margin_folds is None or fold in set(margin_folds)
+    }
+    margin = balanced_accuracy_margin(gated)
+    n_folds = len(gated)
+    n_classes = len(next(iter(gated.values())))
     smallest_class, smallest = min(
-        ((label, n) for c in counts.values() for label, n in c.items()),
+        ((label, n) for c in gated.values() for label, n in c.items()),
         key=lambda item: item[1],
     )
     quantum = _grid_aligned(margin)

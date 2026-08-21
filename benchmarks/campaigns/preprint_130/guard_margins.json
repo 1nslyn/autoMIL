@@ -15,6 +15,14 @@
       "2": {
         "mutant": 17,
         "wildtype": 30
+      },
+      "3": {
+        "mutant": 17,
+        "wildtype": 30
+      },
+      "4": {
+        "mutant": 17,
+        "wildtype": 30
       }
     }
   }

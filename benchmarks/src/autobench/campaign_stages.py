@@ -718,18 +718,22 @@ def _verify_guard_counts_against_baseline(
     per-slide validation predictions — the check reports what it can verify,
     and `verify_against_run` fails loudly on a genuine disagreement.
     """
-    import yaml
-
     from autobench.guard_margin import GuardMarginError, verify_against_run
 
+    # From `campaign_cell.json` — the hash-bound mirror of the manifest cell,
+    # re-validated against the frozen manifest at submit and launch — never
+    # from `config.yaml`, which anything with a shell in the cell root can
+    # edit. Stripping the counts there would otherwise turn this check into a
+    # silent no-op, which is exactly the failure it exists to prevent.
     try:
-        config = yaml.safe_load((cell_root / "automil" / "config.yaml").read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        return
-    guard = (config.get("scoring") or {}).get("guard")
-    counts = (guard or {}).get("validation_class_counts")
+        cell = json.loads(
+            (cell_root / "automil" / "campaign_cell.json").read_text()
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read campaign cell identity: {exc}") from exc
+    counts = (cell.get("guard") or {}).get("validation_class_counts")
     if not counts:
-        return
+        return   # survival cells declare no guard
     results_dir = baseline_archive / "certify" / "results"
     fold_counts = {int(fold): dict(block) for fold, block in counts.items()}
     scored = [
@@ -1364,7 +1368,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
 
 
 def _companion_guard_floor(
-    adir: Path, state: Mapping[str, Any],
+    adir: Path, state: Mapping[str, Any], folds: object = None,
 ) -> dict[str, Any] | None:
     """The companion floor a promoted candidate must clear, or ``None``.
 
@@ -1408,23 +1412,52 @@ def _companion_guard_floor(
     if declared is None:
         return None
     metric, margin = declared
+    stage_folds = tuple(STAGE_FOLDS["discovery"] if folds is None else folds)
     baseline = state.get("baseline") or {}
-    discovery_folds = [
+    stage_baseline = [
         fold for fold in (baseline.get("validation_folds") or [])
-        if fold.get("fold_index") in STAGE_FOLDS["discovery"]
+        if fold.get("fold_index") in stage_folds
     ]
-    if len(discovery_folds) != len(STAGE_FOLDS["discovery"]):
+    if len(stage_baseline) != len(stage_folds):
         raise CampaignStageError(
             "cannot apply the companion guard at freeze: the registered "
-            "baseline carries no discovery-fold evidence"
+            f"baseline carries no evidence for folds {list(stage_folds)}"
         )
-    floor = _recorded_fold_aggregates(discovery_folds).get(metric)
+    # K is part of the lattice, so a stage that averages MORE folds has a finer
+    # one-slide step and its own margin — derived from the same published
+    # counts, over the folds this stage actually averages.
+    margin = _stage_guard_margin(adir, stage_folds, margin)
+    floor = _recorded_fold_aggregates(stage_baseline).get(metric)
     if floor is None:
         raise CampaignStageError(
             f"cannot apply the companion guard at freeze: the baseline records "
             f"no {metric}"
         )
     return {"metric": metric, "margin": float(margin), "baseline": floor}
+
+
+def _stage_guard_margin(adir: Path, folds, declared: float) -> float:
+    """The margin for a stage that averages ``folds``.
+
+    ``declared`` is the frozen margin for the DISCOVERY folds — the one the
+    framework gate consumes. A stage averaging a different fold set sits on a
+    different lattice, so its margin is the same derivation over its own
+    folds, from the same hash-bound published counts. Falls back to the
+    declared margin only when the counts are not available at all, which for a
+    materialized cell means an operator hand-edit.
+    """
+    from autobench.guard_margin import GuardMarginError, derived_margin_for_counts
+
+    try:
+        cell = json.loads((adir / "campaign_cell.json").read_text())
+        counts = (cell.get("guard") or {}).get("validation_class_counts")
+        if not counts:
+            return declared
+        return derived_margin_for_counts(counts, folds)
+    except (OSError, json.JSONDecodeError, GuardMarginError) as exc:
+        raise CampaignStageError(
+            f"cannot derive the companion margin for folds {list(folds)}: {exc}"
+        ) from exc
 
 
 def _companion_guard_shortfall(
@@ -1955,6 +1988,9 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
     expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
         _cell_task_family(cell_root, state)
     ]
+    promotion_floor = _companion_guard_floor(
+        cell_root / "automil", state, CERTIFICATION_FOLDS,
+    )
     if state["phase"] != "promotion":
         raise CampaignStageError(
             f"promotion can freeze only from promotion phase, got {state['phase']!r}"
@@ -2085,12 +2121,24 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
                 **promotion_sealed,
             },
         }
-        eligible.append(selection_candidate)
-        job.update({
-            "status": "eligible",
-            "reason": "complete five-fold validation",
-            "validation_mean": selection_candidate["validation_mean"],
-        })
+        guard_drop = _companion_guard_shortfall(promotion_floor, five_folds)
+        if guard_drop is not None:
+            job.update({
+                "status": "ineligible",
+                "reason": (
+                    f"companion guard: {promotion_floor['metric']} fell "
+                    f"{guard_drop:.4f} below the baseline over five folds "
+                    f"(margin {promotion_floor['margin']})"
+                ),
+                "validation_mean": selection_candidate["validation_mean"],
+            })
+        else:
+            eligible.append(selection_candidate)
+            job.update({
+                "status": "eligible",
+                "reason": "complete five-fold validation",
+                "validation_mean": selection_candidate["validation_mean"],
+            })
         frozen_jobs.append(job)
 
     frozen_at = _utc_now()

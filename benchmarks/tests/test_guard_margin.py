@@ -31,9 +31,13 @@ def _grid(quantum: float) -> float:
     """The quantum rounded UP to the grid the metric is RECORDED on.
 
     The guard compares recorded values, so a margin left on the true lattice
-    would reject one-slide drops that 4-decimal rounding pushed just past it.
+    would reject one-slide drops that rounding pushed just past it — and
+    either side of the comparison may itself be off-grid by up to half a step
+    (a crash-recovered aggregate is rebuilt from full-precision folds), hence
+    the extra half-step of headroom.
     """
-    return math.ceil(quantum * 10 ** RECORDED_DECIMALS) / 10 ** RECORDED_DECIMALS
+    grid = 10 ** -RECORDED_DECIMALS
+    return math.ceil((quantum + grid / 2) / grid) * grid
 
 
 def _cohort(tmp_path: Path, folds: dict[int, list[str]], labels: dict[str, str],
@@ -138,6 +142,33 @@ class TestMarginIsCheckableFromItsOwnCounts:
             guard["validation_class_counts"]
         ) == pytest.approx(guard["margin"], abs=1e-12)
 
+    def test_each_stage_derives_its_own_margin_from_the_same_counts(self):
+        """K is part of the lattice, so a stage averaging more folds is finer.
+
+        The guard binds at stages that average different fold sets — the
+        search gate and the discovery freeze on folds 0-2, the promotion
+        freeze on all five — and one published counts block has to serve both.
+        """
+        import json
+
+        from autobench.campaign import CERTIFICATION_FOLDS, STAGE_FOLDS
+
+        counts = json.loads(
+            (REPO_ROOT / "benchmarks/campaigns/preprint_130/guard_margins.json")
+            .read_text()
+        )["tcga_luad__kras"]["validation_class_counts"]
+        assert set(counts) == {str(f) for f in CERTIFICATION_FOLDS}
+        three = derived_margin_for_counts(counts, STAGE_FOLDS["discovery"])
+        five = derived_margin_for_counts(counts, CERTIFICATION_FOLDS)
+        assert five < three           # more folds averaged => finer lattice
+        assert three == pytest.approx(0.0099, abs=1e-12)
+        assert five == pytest.approx(0.0060, abs=1e-12)
+
+    def test_a_missing_fold_refuses_rather_than_averaging_a_subset(self):
+        counts = {str(f): {"pos": 17, "neg": 30} for f in range(3)}
+        with pytest.raises(GuardMarginError, match="missing"):
+            derived_margin_for_counts(counts, (0, 1, 2, 3, 4))
+
     def test_frozen_campaign_artifact_is_self_consistent(self):
         import json
 
@@ -145,9 +176,11 @@ class TestMarginIsCheckableFromItsOwnCounts:
             (REPO_ROOT / "benchmarks/campaigns/preprint_130/guard_margins.json")
             .read_text()
         )
+        from autobench.campaign import STAGE_FOLDS
+
         for key, guard in frozen.items():
             assert derived_margin_for_counts(
-                guard["validation_class_counts"]
+                guard["validation_class_counts"], STAGE_FOLDS["discovery"]
             ) == pytest.approx(guard["margin"], abs=1e-12), key
 
     @pytest.mark.parametrize("counts", [
@@ -265,8 +298,11 @@ class TestRealCohort:
             (REPO_ROOT / "benchmarks/campaigns/preprint_130/guard_margins.json")
             .read_text()
         )
+        from autobench.campaign import CERTIFICATION_FOLDS, STAGE_FOLDS
+
         assert frozen["tcga_luad__kras"] == derive_guard(
-            LUAD, "standard", "kras", (0, 1, 2)
+            LUAD, "standard", "kras", CERTIFICATION_FOLDS,
+            margin_folds=STAGE_FOLDS["discovery"],
         )
 
     @pytest.mark.skipif(not CANARY_RESULTS.is_dir(),

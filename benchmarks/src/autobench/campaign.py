@@ -543,10 +543,17 @@ def _validate_guard(guard: Any, label: str) -> dict[str, Any]:
     # counts published for a different fold set are internally consistent and
     # still wrong: a five-fold counts block yields a margin 5/3 too tight for a
     # three-fold discovery mean.
-    if set(counts) != {str(fold) for fold in STAGE_FOLDS["discovery"]}:
+    # Every CERTIFICATION fold: the guard binds at two stages that average
+    # different fold sets — the search gate and the discovery freeze on folds
+    # 0-2, the promotion freeze on all five — and each stage's margin is
+    # derived from the counts of the folds IT averages. Publishing counts for
+    # only some folds would leave one of those margins underivable, and
+    # publishing counts for the wrong set yields a margin that is internally
+    # consistent and still wrong for the mean it gates.
+    if set(counts) != {str(fold) for fold in CERTIFICATION_FOLDS}:
         raise CampaignManifestError(
             f"{label}: companion-guard counts cover folds {sorted(counts)}; "
-            f"discovery averages {list(STAGE_FOLDS['discovery'])}"
+            f"the campaign averages {list(CERTIFICATION_FOLDS)} across its stages"
         )
     # "Re-derivable by hand from the published counts" has to be ENFORCED, not
     # merely asserted: without this, a hand-edited margins file carrying honest
@@ -556,7 +563,7 @@ def _validate_guard(guard: Any, label: str) -> dict[str, Any]:
     from autobench.guard_margin import derived_margin_for_counts
 
     try:
-        expected = derived_margin_for_counts(counts)
+        expected = derived_margin_for_counts(counts, STAGE_FOLDS["discovery"])
     except Exception as exc:  # noqa: BLE001 — any unusable counts block is fatal here
         raise CampaignManifestError(
             f"{label}: companion-guard validation class counts do not support "

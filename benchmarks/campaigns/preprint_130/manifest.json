@@ -14,7 +14,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__clam__s42__preprint-v3",
-      "cell_sha256": "0a6c3a4418b5955eaaa8467dd7e41d0afc5103add3f4c537cfb119f1a4256b0d",
+      "cell_sha256": "c8047433a73576030b5d224a12d94672966d74b2b8cea4e135fcf6136456d9f8",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -39,6 +39,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -72,7 +80,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__clam__s42__preprint-v3",
-      "cell_sha256": "8a36123c48edcc46ecc615382eabfda7257b230cbb1237b154949ea7545cef74",
+      "cell_sha256": "d0ef2c344ff585353f0301ab5584aa538886c478c6ec68c25a16edee732ef9f7",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -97,6 +105,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -130,7 +146,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__clam__s42__preprint-v3",
-      "cell_sha256": "dc1849fd2e8235e8b19c705ab5ed045ea9aec2810be5a36da3a0df4d11735165",
+      "cell_sha256": "d5b098fc267fdbe442a3132601a46237f0301959038f0f45107b2326952830ca",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -155,6 +171,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -188,7 +212,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__nnmil__s42__preprint-v3",
-      "cell_sha256": "d3d86b36359bae24014d4d2d2f0ea948660c8b67690a0992d78040c9b590e3b8",
+      "cell_sha256": "1e5b0b31bf5ad5f78d74f2e0d738a5a88d7049ed13fa2a7eac41e9053dd1bea1",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -213,6 +237,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -246,7 +278,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__nnmil__s42__preprint-v3",
-      "cell_sha256": "66539280a20d5665d0b52ef9708535ba44446c970502bd5223d42caff31b412c",
+      "cell_sha256": "d26ab3c787d22bc3e0dc22d7c6551c8878128bbcee7efc9d8d9c1a4b649082a4",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -271,6 +303,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -304,7 +344,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__nnmil__s42__preprint-v3",
-      "cell_sha256": "1a8d17fa7864ffac80f8f665ce4b0ba302f5c8b1505ab1849795fad935bf9708",
+      "cell_sha256": "921e1bfd6427533c72282ec632fa90a01f07ab662162c1c6158b5f0261cf6816",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -329,6 +369,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -362,7 +410,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__abmil__s42__preprint-v3",
-      "cell_sha256": "be19a1b839bfe1bed11ee07cb3518e40c76fa61a6d0b926bfc3f260c5305e8ca",
+      "cell_sha256": "7d2a786b5c3db17c73ac68f3b6b31296d016a6e8942bbb348f10996f5b4882fc",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -387,6 +435,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -420,7 +476,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__abmil__s42__preprint-v3",
-      "cell_sha256": "cadbaf042d4271aae18b0c30626c719c47e83a928574951e7652bbc73059ea0b",
+      "cell_sha256": "ea80867db3f6f873c717b2ff5740dd01a1c72d065d4c1fb330bf62fb413a9162",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -445,6 +501,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -478,7 +542,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__abmil__s42__preprint-v3",
-      "cell_sha256": "78b02652ccb275e0f8d0952caf5893f25c590517276e626e04735d837e6ed5ea",
+      "cell_sha256": "c7877b25ac5066bd7667741401632fa8e32ed8e0d4b86ac2c61f8e4de26b47ce",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -503,6 +567,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -536,7 +608,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__dtfd__s42__preprint-v3",
-      "cell_sha256": "2d9c1e74241834f1a5f80c9843e85a055326bc1f238283536ddf554c47647860",
+      "cell_sha256": "4bd7d07e9dbc6b830c5a877588c6c5374947a2a358cc319ffdc56a7a8ed5fbd2",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -561,6 +633,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -594,7 +674,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__dtfd__s42__preprint-v3",
-      "cell_sha256": "80300596ad2d67105b85db131975fd2f596dde216e7881fa00e7b39901c6fb5b",
+      "cell_sha256": "c2c05cf93f7a1ffe1ae902d09e80a0823bcb9c1eab56dceb29c6703c3a089e2e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -619,6 +699,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -652,7 +740,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__dtfd__s42__preprint-v3",
-      "cell_sha256": "80935d195a01f68e4e4ae529914c47ebe95623b92b34a39d815fe248154ff161",
+      "cell_sha256": "1f577ebc1de9e39000866cfb27264ebb5b44fca2760e9058dcf6de0faece8f9e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -677,6 +765,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -710,7 +806,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__titan__titan__s42__preprint-v3",
-      "cell_sha256": "baf0d544e23dd2c85bbf77ae3b0312c64ad20fe3b017bc3e1db984f78e2392a9",
+      "cell_sha256": "a13c1d6ff8bc877f049988da7926b98599b8f82be7e5ef1af29c271964ca36be",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -735,6 +831,14 @@
             "wildtype": 30
           },
           "2": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "3": {
+            "mutant": 17,
+            "wildtype": 30
+          },
+          "4": {
             "mutant": 17,
             "wildtype": 30
           }
@@ -5449,7 +5553,7 @@
   },
   "guard_margins": {
     "path": "benchmarks/campaigns/preprint_130/guard_margins.json",
-    "sha256": "bcb4f007007b6d98b0b94300bac0cbb12f17de4cfb2a4f47247b572bcce07c04"
+    "sha256": "01b4d24a2327e01023094bccf54b2cd3ef4e45e8043e2a67a0fa68d83349310d"
   },
   "policy_sources": {
     "benchmarks/experiments/cptac_gbm/automil/config.yaml": "bee95c7b91e6907ae51b51ada4d2697da3ada9fc6b213ad28fc18baec3b4538f",

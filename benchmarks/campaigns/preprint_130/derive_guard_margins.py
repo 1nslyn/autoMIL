@@ -42,8 +42,9 @@ from dotenv import load_dotenv  # noqa: E402
 # benchmarks/.env, so resolve them the way every other entry point does.
 load_dotenv(REPO_ROOT / "benchmarks" / ".env")
 
-from autobench.campaign import (DATASETS, GUARD_MARGINS_PATH,  # noqa: E402
-                                STAGE_FOLDS, _dataset_config_path)
+from autobench.campaign import (CERTIFICATION_FOLDS,  # noqa: E402
+                                DATASETS, GUARD_MARGINS_PATH, STAGE_FOLDS,
+                                _dataset_config_path)
 from autobench.guard_margin import GuardMarginError, derive_guard  # noqa: E402
 
 
@@ -78,7 +79,7 @@ def derive_all() -> tuple[dict[str, dict], list[str]]:
     """
     import yaml
 
-    folds = STAGE_FOLDS["discovery"]
+    folds = CERTIFICATION_FOLDS
     margins: dict[str, dict] = {}
     skipped: list[str] = []
     for dataset in DATASETS:
@@ -93,7 +94,11 @@ def derive_all() -> tuple[dict[str, dict], list[str]]:
             if (spec or {}).get("task_type", "classification") == "survival":
                 continue   # no balanced accuracy, no guard
             margins[f"{dataset}__{task}"] = derive_guard(
-                benchmark_dir, "standard", task, folds
+                # Counts cover every certification fold — the guard binds at
+                # stages that average different subsets — while the declared
+                # margin is the one the framework gate consumes.
+                benchmark_dir, "standard", task, folds,
+                margin_folds=STAGE_FOLDS["discovery"],
             )
     return margins, skipped
 

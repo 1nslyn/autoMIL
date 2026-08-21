@@ -225,11 +225,7 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
     # B1 (claims-alignment): the fold primary values are in hand — compute the SE
     # here so budget-killed / partial nodes carry a measured noise floor for
     # the Ladder margin instead of silently dropping to the bare δ.
-    from automil.scoring import RECORDED_DECIMALS, cross_fold_se
-
-    def _recorded(value: float) -> float:
-        """On the grid the runner records to — this payload stands in for one."""
-        return round(value, RECORDED_DECIMALS)
+    from automil.scoring import cross_fold_se
 
     return {
         # Completeness is the INDEX SET, not the count: {0,1,3} with three
@@ -240,13 +236,13 @@ def aggregate_folds(node_archive: Path, expected_fold_count: int) -> dict:
             == set(range(expected_fold_count))
             else "partial"
         ),
-        "primary_value": _recorded(sum(primary_values) / n),
+        "primary_value": sum(primary_values) / n,
         "primary_se": cross_fold_se(primary_values),
         # Every value here came from a fold that contributed ALL of its values
         # AND all counted folds share one key-set schema, so every mean and
         # `primary_value` share one denominator by construction.
-        "metrics": {k: _recorded(sum(v) / len(v)) for k, v in metrics_by_key.items()},
-        "held_out": {k: _recorded(sum(v) / len(v)) for k, v in held_out_by_key.items()},
+        "metrics": {k: sum(v) / len(v) for k, v in metrics_by_key.items()},
+        "held_out": {k: sum(v) / len(v) for k, v in held_out_by_key.items()},
         "validation_folds": sorted(fold_entries, key=lambda e: e["fold_index"]),
         "partial_folds": n,
         "expected_folds": expected_fold_count,

@@ -134,7 +134,11 @@ def _print_leaderboard(graph, top: int = 10) -> None:
             # not have; here it tells the agent the change moved the decision
             # boundary rather than the ranking.
             g_verdict, g_delta, g_metric = guard_basis(graph.meta, parent, node)
-            if g_verdict == "fail" and delta > bar:
+            # Only for nodes the gate actually ran on. `partial` and `crash`
+            # bypass keep/discard entirely, so labelling them would present a
+            # hypothetical verdict as a real rejection.
+            if g_verdict == "fail" and delta > bar \
+                    and node.get("status") == "discard":
                 versus += (
                     f"  GUARD-FAIL {g_metric or 'companion (declaration invalid)'} "
                     f"{f'{g_delta:+.4f}' if g_delta is not None else 'unreported'}"

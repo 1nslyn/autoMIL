@@ -226,23 +226,32 @@ def check():
                 f"scoring.guard is declared but unusable: {exc}. Expected "
                 "{metric: <validation metric name>, margin: <number >= 0>}."
             )
-        if _guard is not None:
-            _g_metric, _ = _guard
+        def _check_guard_metric(metric: str, where: str) -> None:
+            """Semantic checks, applied to WHICHEVER declaration is in hand.
+
+            The config one is what the operator edits; the frozen one is what
+            every keep/discard consults. Both have to clear the same bar, or
+            a graph frozen on a held-out or untracked metric passes preflight
+            and then fails every non-root child closed at run time.
+            """
             from automil.firewall import is_held_out_metric_key
-            if is_held_out_metric_key(_g_metric):
+            if is_held_out_metric_key(metric):
                 issues.append(
-                    f"scoring.guard.metric {_g_metric!r} is held-out-named. The "
+                    f"{where} guard metric {metric!r} is held-out-named. The "
                     "guard reads the agent-facing validation metrics; a "
                     "held-out key there is a val-firewall violation that fails "
                     "the node closed, and in `held_out` the guard would never "
                     "see it. Guard on a validation metric."
                 )
             _tracked = (config.get("metrics") or {}).get("track") or []
-            if _tracked and _g_metric not in _tracked:
+            if _tracked and metric not in _tracked:
                 issues.append(
-                    f"scoring.guard.metric {_g_metric!r} is not in metrics.track "
+                    f"{where} guard metric {metric!r} is not in metrics.track "
                     f"({list(_tracked)}); the guard would fail every child closed."
                 )
+
+        if _guard is not None:
+            _check_guard_metric(_guard[0], "scoring.guard")
 
         # An existing graph.json FREEZES meta.scoring at seeding (setdefault
         # semantics — deliberate for accept_margin, inherited by formula), so
@@ -274,12 +283,15 @@ def check():
             # preflight that only warned about it would be reporting drift on
             # a graph that cannot gate at all.
             try:
-                _guard_declaration({"scoring": _frozen_scoring})
+                _frozen_declared = _guard_declaration({"scoring": _frozen_scoring})
             except ValueError as exc:
+                _frozen_declared = None
                 issues.append(
                     f"graph.json froze an unusable scoring.guard: {exc}. Every "
                     "non-root child will be discarded until it is corrected."
                 )
+            if _frozen_declared is not None:
+                _check_guard_metric(_frozen_declared[0], "the frozen graph.json")
             # The guard is frozen by the same setdefault, so an edited margin
             # is the same silent no-op the formula warning above exists for.
             _frozen_guard = _frozen_scoring.get("guard")
