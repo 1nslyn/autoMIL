@@ -30,12 +30,13 @@ autoMIL: F2-readiness framework refactor.
   — exactly the largest change one validation slide can make to the reported
   balanced accuracy, so a drop that size passes and anything larger is
   rejected. The margin is verified against the very counts published beside
-  it at every freeze (and those counts must cover exactly the discovery
-  folds), a cohort whose one-slide step is too fine for the metric's
-  recording precision is REFUSED rather than given a margin that could not
-  reject two slides, and where the baseline carries per-slide validation
-  predictions it must have SCORED that composition before discovery may
-  start — all-or-nothing, because verifying a subset reads as proof.
+  it at every freeze (and those counts must cover exactly the certification
+  folds, because the stages average different subsets of them), a cohort
+  whose one-slide step is too fine for the metric's recording precision is
+  REFUSED rather than given a margin that could not reject two slides, and
+  where the baseline carries per-slide validation predictions it must have
+  SCORED that composition before discovery may start — all-or-nothing,
+  because verifying a subset reads as proof.
   The guard is applied at all THREE decision points: parent-relative during
   the search, and baseline-relative at the discovery freeze and again at the
   promotion freeze — so a collapse cannot be promoted, and a candidate that

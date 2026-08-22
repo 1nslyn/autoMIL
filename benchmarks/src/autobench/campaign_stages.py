@@ -771,7 +771,7 @@ def _verify_guard_counts_against_baseline(
         # Verifying a SUBSET is worse than not verifying: it reads as proof.
         raise CampaignStageError(
             "companion-guard counts can only be partly verified: "
-            f"{sorted(scored)} of {sorted(fold_counts)} discovery folds carry "
+            f"{sorted(scored)} of {sorted(fold_counts)} validation folds carry "
             "scored validation predictions"
         )
     try:
