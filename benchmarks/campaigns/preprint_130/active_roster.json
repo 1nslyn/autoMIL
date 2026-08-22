@@ -1,0 +1,6 @@
+{
+  "cohorts": ["tcga_luad", "tcga_hnsc", "cptac_pdac"],
+  "cells": 78,
+  "declared": "2026-08-23",
+  "note": "Roster reduced from the frozen 5-cohort/130-cell manifest by Leo's decision of 2026-08-23 (tcga_lgg and cptac_gbm dropped). Interim declaration: baselines run this subset under the automil-preprint-130-v6 manifest. Superseded when the 130-to-78 manifest contract change lands, after which the roster authority is the manifest itself and this file must be deleted."
+}
