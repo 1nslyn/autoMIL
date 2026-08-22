@@ -55,10 +55,23 @@ from dataclasses import dataclass
 __all__ = [
     "ArmSearchSpace",
     "SEARCH_SPACE",
+    "TRANSPORT_COVERAGE_BEFORE",
     "coverage_table",
     "declared_knobs",
     "lock_reason",
 ]
+
+#: Knobs each arm could actually reach through ``ModelConfig``/``TrainConfig``
+#: before this module declared a space, as measured in the module docstring.
+#: ``(reachable, arm config fields)``. Held here rather than in prose so the
+#: methods figure reads the same numbers the docstring quotes.
+TRANSPORT_COVERAGE_BEFORE: dict[str, tuple[int, int]] = {
+    "clam": (12, 15),
+    "abmil": (5, 8),
+    "dtfd": (5, 15),
+    "titan": (3, 4),
+    "nnmil": (0, 11),
+}
 
 
 @dataclass(frozen=True)
