@@ -1,4 +1,122 @@
 {
+  "cptac_gbm__tp53": {
+    "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0279,
+    "metric": "val_bacc",
+    "validation_class_counts": {
+      "0": {
+        "mutant": 6,
+        "wildtype": 20
+      },
+      "1": {
+        "mutant": 6,
+        "wildtype": 16
+      },
+      "2": {
+        "mutant": 7,
+        "wildtype": 13
+      },
+      "3": {
+        "mutant": 7,
+        "wildtype": 17
+      },
+      "4": {
+        "mutant": 7,
+        "wildtype": 18
+      }
+    }
+  },
+  "cptac_pdac__immune_class": {
+    "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.016,
+    "metric": "val_bacc",
+    "validation_class_counts": {
+      "0": {
+        "high": 7,
+        "low": 9,
+        "medium": 14
+      },
+      "1": {
+        "high": 7,
+        "low": 9,
+        "medium": 9
+      },
+      "2": {
+        "high": 10,
+        "low": 10,
+        "medium": 7
+      },
+      "3": {
+        "high": 9,
+        "low": 10,
+        "medium": 13
+      },
+      "4": {
+        "high": 7,
+        "low": 8,
+        "medium": 9
+      }
+    }
+  },
+  "tcga_hnsc__grade": {
+    "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0186,
+    "metric": "val_bacc",
+    "validation_class_counts": {
+      "0": {
+        "g1": 6,
+        "g2": 26,
+        "g3": 10
+      },
+      "1": {
+        "g1": 6,
+        "g2": 26,
+        "g3": 10
+      },
+      "2": {
+        "g1": 6,
+        "g2": 26,
+        "g3": 10
+      },
+      "3": {
+        "g1": 6,
+        "g2": 26,
+        "g3": 10
+      },
+      "4": {
+        "g1": 6,
+        "g2": 26,
+        "g3": 10
+      }
+    }
+  },
+  "tcga_lgg__idh1": {
+    "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0153,
+    "metric": "val_bacc",
+    "validation_class_counts": {
+      "0": {
+        "mutant": 38,
+        "wildtype": 11
+      },
+      "1": {
+        "mutant": 39,
+        "wildtype": 11
+      },
+      "2": {
+        "mutant": 39,
+        "wildtype": 11
+      },
+      "3": {
+        "mutant": 39,
+        "wildtype": 11
+      },
+      "4": {
+        "mutant": 39,
+        "wildtype": 11
+      }
+    }
+  },
   "tcga_luad__kras": {
     "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
     "margin": 0.0099,

@@ -1392,7 +1392,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__uni_v2__clam__s42__preprint-v3",
-      "cell_sha256": "99afa2f7eec5ed91ba08ea74586a978cebbc1a80a1351ace0986823231a7c88b",
+      "cell_sha256": "76dc5405c51497e3cf051ad34af1379691d7d38fad10eb3a6684989d0a43a8ef",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1403,7 +1403,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "uni_v2",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "tcga_lgg",
@@ -1432,7 +1458,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__virchow2__clam__s42__preprint-v3",
-      "cell_sha256": "014cb966ff1ab3bda5e1da2fdf74c3e6078b80d91461843891da4357353faf13",
+      "cell_sha256": "ea99669c8914f79fb2d1549dd9c8087ca2cfc2d3a5f72884e3a2957c48fb06c7",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1443,7 +1469,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "virchow2",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "tcga_lgg",
@@ -1472,7 +1524,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__hoptimus1__clam__s42__preprint-v3",
-      "cell_sha256": "f0baff461a01fdce84837656ccda429d824f49d62730ddba989df2662daa28ea",
+      "cell_sha256": "e233c82a604f2fe379ae57dd4b4b243805efad62d147be5a2d69f83edc99aa61",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1483,7 +1535,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "hoptimus1",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "tcga_lgg",
@@ -1512,7 +1590,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__uni_v2__nnmil__s42__preprint-v3",
-      "cell_sha256": "32e0032c8d8c1aab2525a2a583a04896e9c3ca2a103758e25002c568b635ac1f",
+      "cell_sha256": "8650f1806381507c22b108d38167cac800bcfdca49a57de82c35b605185c208e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1523,7 +1601,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "uni_v2",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "tcga_lgg",
@@ -1552,7 +1656,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__virchow2__nnmil__s42__preprint-v3",
-      "cell_sha256": "683265b40ca51231c28779534018da25db37f99bf28728beefd00df6eaf281e2",
+      "cell_sha256": "1e771a20c18bd9900180125a94210e086a74d4bc4766d773e72a289e6af838ee",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1563,7 +1667,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "virchow2",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "tcga_lgg",
@@ -1592,7 +1722,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__hoptimus1__nnmil__s42__preprint-v3",
-      "cell_sha256": "1ee72213dc897c3e606b58f06059e81b2bd3c4359f3683d1451df9d8d9fbe230",
+      "cell_sha256": "a8d335da18e91c7327db0f9b1ee299f207ee36d46315675eeb92808f700d4ada",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1603,7 +1733,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "hoptimus1",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "tcga_lgg",
@@ -1632,7 +1788,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__uni_v2__abmil__s42__preprint-v3",
-      "cell_sha256": "c19db423b6ebf1a54bb73e21519387c5ed891325c2bd011995bed80f6f48bfc8",
+      "cell_sha256": "c80bbc0f21012f3c80e2d7197cef2eb339f6caa93b5c59416bbc31b71199f8a0",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1643,7 +1799,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "uni_v2",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "tcga_lgg",
@@ -1672,7 +1854,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__virchow2__abmil__s42__preprint-v3",
-      "cell_sha256": "77b65e663c9d4b1af1325c335cb4e8e2425add3aca117a43d5c32b6accfcecb9",
+      "cell_sha256": "f61b175042868074882152954e29649b0e3ceab8d117640b8528747d1d03395c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1683,7 +1865,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "virchow2",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "tcga_lgg",
@@ -1712,7 +1920,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__hoptimus1__abmil__s42__preprint-v3",
-      "cell_sha256": "4e2ccb9eb86a8708f1c14f248670364457f6943f4835a0c5792c040e25454a06",
+      "cell_sha256": "0dcf8b32dd2bd267ffe8aca117d4febfe06745cdded4860d93f923c778b733f9",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1723,7 +1931,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "hoptimus1",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "tcga_lgg",
@@ -1752,7 +1986,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__uni_v2__dtfd__s42__preprint-v3",
-      "cell_sha256": "e5fd626793d23b3bb569fca7d8c7ae4e668c6f480a6297fd4d58d3813dcb4a3b",
+      "cell_sha256": "35efe00c73ef296ea8bf9a44eafc51b946f3eb80a8b915f96ae725e7adec4376",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1763,7 +1997,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "uni_v2",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "tcga_lgg",
@@ -1792,7 +2052,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__virchow2__dtfd__s42__preprint-v3",
-      "cell_sha256": "7a230d1e4b873659df9cfca84b11841571568313e43c582d4d73bcc69334568f",
+      "cell_sha256": "f923fad1f14096d5f22d93de00238bebbd1d7f6a8342bb9e56bf735cbda52735",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1803,7 +2063,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "virchow2",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "tcga_lgg",
@@ -1832,7 +2118,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__hoptimus1__dtfd__s42__preprint-v3",
-      "cell_sha256": "953059c40c91a54691a4ef8509fb8713f5a379af519f156c7675a49a78fc5e0b",
+      "cell_sha256": "1b364dd265a9e5eaf24492532b9ab8d3677073230ec15ee88c7112a38e7030e5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1843,7 +2129,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "hoptimus1",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "tcga_lgg",
@@ -1872,7 +2184,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__titan__titan__s42__preprint-v3",
-      "cell_sha256": "8116e6b9c787f9c27516553ff0d77ceacd96d7900476afd91a897f71adf59dad",
+      "cell_sha256": "60b2923495dcd3076603824580d5f1d89683c2ded024498c3657e3560bb35809",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -1883,7 +2195,33 @@
       "dataset_config_sha256": "9386ade4470883d63f0750494129c05537f4ad0d1446f65291450c8b879659c4",
       "encoder": "titan",
       "framework": "titan",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0153,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 38,
+            "wildtype": 11
+          },
+          "1": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "2": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "3": {
+            "mutant": 39,
+            "wildtype": 11
+          },
+          "4": {
+            "mutant": 39,
+            "wildtype": 11
+          }
+        }
+      },
       "identity": {
         "arm": "titan",
         "dataset": "tcga_lgg",
@@ -2432,7 +2770,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__uni_v2__clam__s42__preprint-v3",
-      "cell_sha256": "0303cb20412dd349ea630c0cab1b486b883aadc4a6153604050c845291dd0471",
+      "cell_sha256": "f9c51b661637e05cf93cf0b836f3d44e23a39be9b6772547ffe66d13520b4be9",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2443,7 +2781,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "uni_v2",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "cptac_gbm",
@@ -2472,7 +2836,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__virchow2__clam__s42__preprint-v3",
-      "cell_sha256": "773db7afe1ddd552d69dcabc3fad7ec7e472bac3b325493d6ee16a849ad96a90",
+      "cell_sha256": "d2628b4478606125094a317d83a156eee2348724c0fe121851e08e8f23e222dc",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2483,7 +2847,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "virchow2",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "cptac_gbm",
@@ -2512,7 +2902,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__hoptimus1__clam__s42__preprint-v3",
-      "cell_sha256": "429d42fcc474b29d312071db562ebd636178858382584174f7b6eca6c2ae5ef3",
+      "cell_sha256": "89a1b3075fc32147b4701e6ab467c6f330cce9151eab3aa270eef6f0ac660e61",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2523,7 +2913,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "hoptimus1",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "cptac_gbm",
@@ -2552,7 +2968,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__uni_v2__nnmil__s42__preprint-v3",
-      "cell_sha256": "bdd7ac22db482197100f0ea2b473efb35679700201c59548e5fec2090acaf9b4",
+      "cell_sha256": "399569e32dd962937cff1d389b9130d7748f474c147a4e00920dca1a9610911f",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2563,7 +2979,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "uni_v2",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "cptac_gbm",
@@ -2592,7 +3034,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__virchow2__nnmil__s42__preprint-v3",
-      "cell_sha256": "e6d0474527c82bf99a6032c93cdb4d3b27b1d3d7b49001f6a81474eb28e825d5",
+      "cell_sha256": "7acc3968874946ef80afdaf6614250b083cdd657db6afd72d258c2ad463aa450",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2603,7 +3045,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "virchow2",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "cptac_gbm",
@@ -2632,7 +3100,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__hoptimus1__nnmil__s42__preprint-v3",
-      "cell_sha256": "73f552c024fe7e90d6751f537f6da10f15b1f5595cc242ca8a42082ed938fddc",
+      "cell_sha256": "784f85cbded9f7b96d19d33ed8adf538d45fc3c7db0a665d5dfdc3237f39c09d",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2643,7 +3111,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "hoptimus1",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "cptac_gbm",
@@ -2672,7 +3166,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__uni_v2__abmil__s42__preprint-v3",
-      "cell_sha256": "42122df817ad7584ff2bded292d91a6503214b5edf7532e074c62517396f83cc",
+      "cell_sha256": "1d12e2e9094429644fde0c1de7c3cbe0c2b2675c07f1d7871c8bd1fbe60aef35",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2683,7 +3177,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "uni_v2",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "cptac_gbm",
@@ -2712,7 +3232,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__virchow2__abmil__s42__preprint-v3",
-      "cell_sha256": "b2709b72611badc62ffd47fdd954c78486646e43d0f25318d9013c77f305c2e1",
+      "cell_sha256": "13b6318796a7d3fad0c57dc17de96921abc4873963a5ae311f960fcf303051fd",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2723,7 +3243,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "virchow2",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "cptac_gbm",
@@ -2752,7 +3298,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__hoptimus1__abmil__s42__preprint-v3",
-      "cell_sha256": "067e6258ed26ec73e55f31a777b8fdedd37c923c2a63f53e103dc25782705549",
+      "cell_sha256": "cf94e99420fc430851794d9cb08263d08bdda87e0fb3c40f536319b51cc98925",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2763,7 +3309,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "hoptimus1",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "cptac_gbm",
@@ -2792,7 +3364,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__uni_v2__dtfd__s42__preprint-v3",
-      "cell_sha256": "dd55ff8daceedcc59f414ce23c38c109e40a8a72fcece014264f2090260ac846",
+      "cell_sha256": "b9c042fea79c204bfec9976df70264477aeb13a1bdeb4b9efc9fdfd2156e73c2",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2803,7 +3375,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "uni_v2",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "cptac_gbm",
@@ -2832,7 +3430,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__virchow2__dtfd__s42__preprint-v3",
-      "cell_sha256": "7c516b05dd6e61cbb5eb33dea4f9f87814b72403ecad2054642d7d476fc0a7cf",
+      "cell_sha256": "3fc944b1fe6d03d80581f00a42446c214d2a252c0bbf4dda31d0f085b8740acf",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2843,7 +3441,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "virchow2",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "cptac_gbm",
@@ -2872,7 +3496,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__hoptimus1__dtfd__s42__preprint-v3",
-      "cell_sha256": "4396680c2e25d02b8592610706a42f3340b8289b81c83ffa3023640a801f83b1",
+      "cell_sha256": "a6f0f2e27d3537574a375fbf6e4461f33afd486d89d98dbedd683bd3da94c5d3",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2883,7 +3507,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "hoptimus1",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "cptac_gbm",
@@ -2912,7 +3562,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__titan__titan__s42__preprint-v3",
-      "cell_sha256": "bae859a375131b729d08da139d81f3cac7b5c09d8f6da608cdc82e478af3aab5",
+      "cell_sha256": "38c10ea2972bb4a00e860858240ef19c1988869078de71f54ab999942b909cc0",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -2923,7 +3573,33 @@
       "dataset_config_sha256": "addc9ef5394a4039003f64c321c139e54eb7f562ce2c41eef8c33957070af486",
       "encoder": "titan",
       "framework": "titan",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0279,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "mutant": 6,
+            "wildtype": 20
+          },
+          "1": {
+            "mutant": 6,
+            "wildtype": 16
+          },
+          "2": {
+            "mutant": 7,
+            "wildtype": 13
+          },
+          "3": {
+            "mutant": 7,
+            "wildtype": 17
+          },
+          "4": {
+            "mutant": 7,
+            "wildtype": 18
+          }
+        }
+      },
       "identity": {
         "arm": "titan",
         "dataset": "cptac_gbm",
@@ -3472,7 +4148,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__uni_v2__clam__s42__preprint-v3",
-      "cell_sha256": "9b09565d98a21424e54c6ba52e253f15fc83478eb5a6066ab38f81a3f122b8dc",
+      "cell_sha256": "3a43ae1a4950986e56de862eb26f4a9729d44aeb6aaf3139ead89ae2b105f61e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3483,7 +4159,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "uni_v2",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "cptac_pdac",
@@ -3512,7 +4219,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__virchow2__clam__s42__preprint-v3",
-      "cell_sha256": "da736550b520fe9bb2dabd4f099306928423a0e288f7539cf95b4174e3d64478",
+      "cell_sha256": "c0c12ff17735df99258d8c704a109115194201189da47ab9273a12f19a41a11c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3523,7 +4230,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "virchow2",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "cptac_pdac",
@@ -3552,7 +4290,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__hoptimus1__clam__s42__preprint-v3",
-      "cell_sha256": "d6961c11ebca55f6f9a04021194401e2cfc2c55f809671ac1b5c7a32eb9d0cca",
+      "cell_sha256": "238791f41431aa1231643d4c9af3f40a8f87b008a91833238f7e5412afe683c0",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3563,7 +4301,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "hoptimus1",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "cptac_pdac",
@@ -3592,7 +4361,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__uni_v2__nnmil__s42__preprint-v3",
-      "cell_sha256": "e6281b5a2976d7118870fbfa5f323242529cb8c0a2976d7eadcc9aa7b2048968",
+      "cell_sha256": "b01a830a60a111c863a397882365083d6895844bc2fba59c42a7da91956a8889",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3603,7 +4372,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "uni_v2",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "cptac_pdac",
@@ -3632,7 +4432,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__virchow2__nnmil__s42__preprint-v3",
-      "cell_sha256": "00ef7450486e3ff1aab438afb93db92f4a73b02bbc07303a14f427f04e2ee19c",
+      "cell_sha256": "3c399539404e6223829f6bb0393b4a89f88adc85e2295171d8703e023caaf519",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3643,7 +4443,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "virchow2",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "cptac_pdac",
@@ -3672,7 +4503,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__hoptimus1__nnmil__s42__preprint-v3",
-      "cell_sha256": "4851090ae5a39bf68ab2923a2e9fd06977f650cc4f9c4f6907635b4092a79fcf",
+      "cell_sha256": "1e6f9ed7937ac240d8d7b052b23cba8d47f84b84fa6e9dcf1e2d5e9b6217078d",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3683,7 +4514,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "hoptimus1",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "cptac_pdac",
@@ -3712,7 +4574,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__uni_v2__abmil__s42__preprint-v3",
-      "cell_sha256": "320643b37ebf997b2c05325000f0406264b46ddf1711c92a0d04f1cba8bb1236",
+      "cell_sha256": "bd1c5acdb126681e943e21228f26dc6e05e8c0f1c5ff44186f37f4e4db3e811b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3723,7 +4585,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "uni_v2",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "cptac_pdac",
@@ -3752,7 +4645,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__virchow2__abmil__s42__preprint-v3",
-      "cell_sha256": "8c8fd1e593d3a535f2fb9fe2fa016206880e4db635fe569d8a749896dcbaff96",
+      "cell_sha256": "e36df07040475c7c87339fd9f8d816683a2bbb04512bc206ab27aa0e69b8a195",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3763,7 +4656,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "virchow2",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "cptac_pdac",
@@ -3792,7 +4716,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__hoptimus1__abmil__s42__preprint-v3",
-      "cell_sha256": "a0599acac30da6a8432b680d6117dd30e4bd00453e6f8a499628493f11158e8d",
+      "cell_sha256": "58e715e3ab324d4790659906b343e659677eda292899ec9895af47d7e69a528b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3803,7 +4727,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "hoptimus1",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "cptac_pdac",
@@ -3832,7 +4787,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__uni_v2__dtfd__s42__preprint-v3",
-      "cell_sha256": "ffb58a0cd120ca2cd941ff6e62f5ba770c63cbece3de360a7cc39d88ca066b48",
+      "cell_sha256": "3e4aa7e03cbe24545e7e8dae8b1fcdc7d9e2bf9f714256a964833da1e0ddc8b5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3843,7 +4798,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "uni_v2",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "cptac_pdac",
@@ -3872,7 +4858,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__virchow2__dtfd__s42__preprint-v3",
-      "cell_sha256": "36e7acd8c02e1f5219beb85b310b93dd754f3e52442996f941af2e656b4b7da5",
+      "cell_sha256": "7d9549bbf09c3f910816511bb09a9573bcd3c860bf8605dbaea2ffe67651b5aa",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3883,7 +4869,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "virchow2",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "cptac_pdac",
@@ -3912,7 +4929,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__hoptimus1__dtfd__s42__preprint-v3",
-      "cell_sha256": "3431dd85488bc68a6e5f33adcec72c0fb4a1dde0a582259a9689a89e507768c7",
+      "cell_sha256": "65ed28a87cf4aae94dbfc5a37128de1a6acfb74c5fbcb4dd4b450a239921b603",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3923,7 +4940,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "hoptimus1",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "cptac_pdac",
@@ -3952,7 +5000,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__titan__titan__s42__preprint-v3",
-      "cell_sha256": "0b2ae7b67bd8359cafad976f53bbb0453c7da8a45b50b36cfc3cffac21bfd752",
+      "cell_sha256": "690321ece7bdccd4de80ed460313a64349ae28b1e9bdb3d3f9b2f13de220e6ba",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -3963,7 +5011,38 @@
       "dataset_config_sha256": "a2f88bdb35d7d91fc5631a43d31dad8505d3d4a379486ce7e9e2c61fe7a9bbe9",
       "encoder": "titan",
       "framework": "titan",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.016,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "high": 7,
+            "low": 9,
+            "medium": 14
+          },
+          "1": {
+            "high": 7,
+            "low": 9,
+            "medium": 9
+          },
+          "2": {
+            "high": 10,
+            "low": 10,
+            "medium": 7
+          },
+          "3": {
+            "high": 9,
+            "low": 10,
+            "medium": 13
+          },
+          "4": {
+            "high": 7,
+            "low": 8,
+            "medium": 9
+          }
+        }
+      },
       "identity": {
         "arm": "titan",
         "dataset": "cptac_pdac",
@@ -4512,7 +5591,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__uni_v2__clam__s42__preprint-v3",
-      "cell_sha256": "9ddc8506152ed1104c2440e7688140815c8f02f135cf06557e19ef7d0072783e",
+      "cell_sha256": "877a6552c9537d4e5135c20f117f0e8993bffc2e23f964425e691181d4cdeb32",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4523,7 +5602,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "uni_v2",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "tcga_hnsc",
@@ -4552,7 +5662,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__virchow2__clam__s42__preprint-v3",
-      "cell_sha256": "54f1739c7e8f6b2d7845a077b26fa3079c555673574463c5ab4d05f93f5e791c",
+      "cell_sha256": "aaaac2b93630edfc0db98e9967784c6b6f8a209fdbd87d174525da444024b0d5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4563,7 +5673,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "virchow2",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "tcga_hnsc",
@@ -4592,7 +5733,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__hoptimus1__clam__s42__preprint-v3",
-      "cell_sha256": "71c671dbdced649686d7a5dcef54fbf476d2ac68da66953a823a85a1266c340b",
+      "cell_sha256": "cc3ea1095f122bdd46e128c232974e931efda3e891f093901f02e5a88fdeb70b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model clam_mb --framework clam --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4603,7 +5744,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "hoptimus1",
       "framework": "clam",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "clam",
         "dataset": "tcga_hnsc",
@@ -4632,7 +5804,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__uni_v2__nnmil__s42__preprint-v3",
-      "cell_sha256": "7d33b3a6ec284526ef5d89d2be25356fc5e3fa43465a510c80d51ef32953d802",
+      "cell_sha256": "4fd41b7ff75e335d2157b8c30ea565bee7a9b8d23d3b24907c1e334e9af004ee",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4643,7 +5815,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "uni_v2",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "tcga_hnsc",
@@ -4672,7 +5875,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__virchow2__nnmil__s42__preprint-v3",
-      "cell_sha256": "40cf70ce859297cb6bf9f087ab05fef14c4f3d67c5469977693f84d0c7bd3e8c",
+      "cell_sha256": "a56f63232bf762ed13443c4f868fc15fbbbcae3d9db12b51c9d8b37bda7174d5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4683,7 +5886,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "virchow2",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "tcga_hnsc",
@@ -4712,7 +5946,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__hoptimus1__nnmil__s42__preprint-v3",
-      "cell_sha256": "6a7c3405dda16e259dcfdaa2a5d88039f1eb4bdedeebd91ae9b3fd21ed464e56",
+      "cell_sha256": "9d2d82afad3afab2881ddcb984ebbfdfdd89fab28e1e559e9f21a8fa39b1313f",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model simple_mil --framework nnmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4723,7 +5957,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "hoptimus1",
       "framework": "nnmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "nnmil",
         "dataset": "tcga_hnsc",
@@ -4752,7 +6017,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__uni_v2__abmil__s42__preprint-v3",
-      "cell_sha256": "7d4c1d5e2f769ac64fac3c1a33ab0f9a03df761788c91db8b30c9b29ba2677a7",
+      "cell_sha256": "b8acf812628eee44e9196842098ffbc2e889e058d54a1aeaef930311d11aa2c0",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4763,7 +6028,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "uni_v2",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "tcga_hnsc",
@@ -4792,7 +6088,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__virchow2__abmil__s42__preprint-v3",
-      "cell_sha256": "9a3a63299a749583c174815a080f20b871f58f68ea07a3b5063e5cd44ac69e1c",
+      "cell_sha256": "4b87f6f0269b5d76295977ae73201d69a56bcb7a8928f989a52254fd1962760b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4803,7 +6099,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "virchow2",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "tcga_hnsc",
@@ -4832,7 +6159,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__hoptimus1__abmil__s42__preprint-v3",
-      "cell_sha256": "22fe96d7b6ef15c293592dce678fd78f67a9c44030ef44b9f90a471ac2df92fd",
+      "cell_sha256": "9c8267a264c517f5931267afed293dfac8939d9f013534ac5db4d9fa5916549a",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model abmil --framework abmil --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4843,7 +6170,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "hoptimus1",
       "framework": "abmil",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "abmil",
         "dataset": "tcga_hnsc",
@@ -4872,7 +6230,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__uni_v2__dtfd__s42__preprint-v3",
-      "cell_sha256": "006b37076c4877baaa868e9a0fea82c75dd1ef839d7ec03905670383fe064315",
+      "cell_sha256": "ac9b6d0d829b1cd2bba389d0ed721262d8298647bed9a99a8e49fc9c35a19e32",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4883,7 +6241,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "uni_v2",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "tcga_hnsc",
@@ -4912,7 +6301,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__virchow2__dtfd__s42__preprint-v3",
-      "cell_sha256": "150db31a5c9f4207e55fe009dfbb0c044de11b31c3a92bdf3c6e4e2af2f2e4ab",
+      "cell_sha256": "232f5e64b1cf18429fe8b2abb2c60ffc03cb1fdde5fe2261e7e0d5012a7bbe6a",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4923,7 +6312,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "virchow2",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "tcga_hnsc",
@@ -4952,7 +6372,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__hoptimus1__dtfd__s42__preprint-v3",
-      "cell_sha256": "54e44ab3c244a065a7817a1c86f8d368d14c5e8d798b42e66fa58ace69feb520",
+      "cell_sha256": "20e9da48c8a0cb797150edfbc56298dd4ea7ef9fdf5ae149d115683209249b35",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -4963,7 +6383,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "hoptimus1",
       "framework": "dtfd",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "dtfd",
         "dataset": "tcga_hnsc",
@@ -4992,7 +6443,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__titan__titan__s42__preprint-v3",
-      "cell_sha256": "349165dc27b8a199ec6dd994f8dd833a8de767b5d61f432d72bacbe17021a40e",
+      "cell_sha256": "f6c31b8768dd25183353c89f15043f4173fec549be08d56550612fc66046da12",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder titan --model titan --framework titan --strategy standard --seed 42 --n_folds 5 --folds 0,1,2 --no_wandb",
@@ -5003,7 +6454,38 @@
       "dataset_config_sha256": "b10b911581ab334e5986f6178389b1213c73033bc7c69c2ba07e418db9b5a037",
       "encoder": "titan",
       "framework": "titan",
-      "guard": null,
+      "guard": {
+        "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
+        "margin": 0.0186,
+        "metric": "val_bacc",
+        "validation_class_counts": {
+          "0": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "1": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "2": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "3": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          },
+          "4": {
+            "g1": 6,
+            "g2": 26,
+            "g3": 10
+          }
+        }
+      },
       "identity": {
         "arm": "titan",
         "dataset": "tcga_hnsc",
@@ -5553,7 +7035,7 @@
   },
   "guard_margins": {
     "path": "benchmarks/campaigns/preprint_130/guard_margins.json",
-    "sha256": "01b4d24a2327e01023094bccf54b2cd3ef4e45e8043e2a67a0fa68d83349310d"
+    "sha256": "507a2fb83f617d93f85bdeb9b18ef320cf4ce87185f893847cb8cb0c2912133f"
   },
   "policy_sources": {
     "benchmarks/experiments/cptac_gbm/automil/config.yaml": "bee95c7b91e6907ae51b51ada4d2697da3ada9fc6b213ad28fc18baec3b4538f",
