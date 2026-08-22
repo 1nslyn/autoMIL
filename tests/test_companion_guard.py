@@ -350,6 +350,33 @@ class TestGuardAcrossIngestPaths:
         assert graph.get_node("node_0099")["status"] == "discard"
 
 
+class TestLegacyMigrationDoesNotInventEvidence:
+    def test_a_schema_1_node_gets_only_the_keys_it_carried(self, tmp_path):
+        """A synthesised 0.0 is invented evidence.
+
+        The schema-1 migration used to default every legacy metric key to 0.0.
+        A node that never recorded the companion metric then looked as though
+        it had — defeating the guard's child-side fail-closed rule, and
+        silencing `automil check`'s warning about adding a guard to a graph
+        with history (which tests for the key's presence). It also mattered
+        before the guard: an all-zero block makes CR-1b's mean reducer
+        recompute the node's selection signal as 0.0.
+        """
+        graph_path = tmp_path / "graph.json"
+        graph_path.write_text(json.dumps({
+            "nodes": {
+                "node_0001": {"id": "node_0001", "type": "executed",
+                              "status": "keep", "val_auc": 0.72},
+            },
+        }))
+        node = ExperimentGraph(graph_path).get_node("node_0001")
+        assert node["metrics"] == {"val_auc": 0.72}
+        assert "val_bacc" not in node["metrics"]
+
+        # ...so the guard still fails such a node closed.
+        assert keep_or_discard(META, _node(0.70, 0.70), node) == "discard"
+
+
 class TestCheckCatchesGuardConfigErrors:
     """`automil check` runs before a graph exists — the earliest place a bad
     declaration can be caught, and the only place one specific mistake is

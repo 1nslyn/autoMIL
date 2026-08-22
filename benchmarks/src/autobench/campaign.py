@@ -908,6 +908,9 @@ def materialize_discovery_cells(
         agent_protocol, allow_canary=allow_canary_protocol,
     )
     agent_protocol_sha256 = content_sha256(locked_agent_protocol)
+    # The null-guard exemption below belongs to a canary DRY RUN, which is a
+    # property of the validated protocol, not of the caller's flag.
+    _is_canary_dry_run = locked_agent_protocol.get("purpose") == "canary"
     repo_root = repo_root.resolve()
     output_root = output_root.resolve()
     try:
@@ -996,13 +999,19 @@ def materialize_discovery_cells(
         # argmax changes; it just cannot be won by trading balanced accuracy
         # away. Survival cells declare none and the key stays absent.
         if cell["task_family"] != "survival":
-            if cell.get("guard") is None and not allow_canary_protocol:
+            if cell.get("guard") is None and not _is_canary_dry_run:
                 # Readiness, not constructability. The canary materializes all
                 # 130 cells into a temp dir under a protocol that can never
                 # enter a publication freeze, purely to prove the machinery
                 # builds them; refusing there would only stop the dry-run from
-                # exercising the cells it is meant to exercise. Every REAL
-                # materialization is refused here, and a canary cell lives
+                # exercising the cells it is meant to exercise. The exemption
+                # is keyed on the PROTOCOL's declared purpose, not on the
+                # caller's flag: `allow_canary_protocol` only says a canary
+                # protocol is acceptable, so keying on it would let a caller
+                # materialize unguarded cells under a publication protocol
+                # into a persistent runtime — cells the launcher would then
+                # accept. Every REAL materialization is refused here, and a
+                # canary cell lives
                 # only inside that temp dir — it is never registered, never
                 # launched, and is deleted when the dry-run returns — so no
                 # cell that could search ever reaches a runnable state without

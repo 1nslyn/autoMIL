@@ -775,8 +775,17 @@ class ExperimentGraph:
             _migrated = 0
             for _node in self._data.get("nodes", {}).values():
                 if "metrics" not in _node:
+                    # Only keys the node ACTUALLY carried. Defaulting an absent
+                    # key to 0.0 invents evidence: a legacy node that never
+                    # recorded the companion metric would look as though it
+                    # had, which defeats the guard's child-side fail-closed
+                    # rule and silences the `automil check` warning about
+                    # adding a guard to a graph with history (it tests for the
+                    # key's presence). It also mattered before the guard: an
+                    # all-zero synthetic block makes CR-1b's mean reducer
+                    # recompute the node's selection signal as 0.0.
                     _node["metrics"] = {
-                        k: _node.get(k, 0.0) for k in _LEGACY_METRIC_KEYS
+                        k: _node[k] for k in _LEGACY_METRIC_KEYS if k in _node
                     }
                     _migrated += 1
             self._data["schema_version"] = 2
