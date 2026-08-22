@@ -87,7 +87,13 @@ for cell in cells:
     state = json.loads(state_path.read_text())
     if state.get("cell_id") != cell:
         sys.exit(f"{cell}: state carries cell_id {state.get('cell_id')!r}")
-    if state.get("baseline") is not None:
+    baseline = state.get("baseline")
+    if baseline is not None:
+        # Same shape contract as run_native_baseline: a present-but-non-dict
+        # baseline is an invalid registration, never "already done".
+        if not isinstance(baseline, dict):
+            sys.exit(f"{cell}: registered baseline state is invalid "
+                     f"({type(baseline).__name__})")
         continue
     encoder = cell.split("__")[2]
     (canary_first if cell.startswith("tcga_luad__") and encoder in ("uni_v2", "titan")
@@ -108,22 +114,27 @@ echo "$PENDING" > "$QUEUE_FILE"
 trap 'rm -f "$QUEUE_FILE" "$FAIL_FILE"' EXIT
 
 # Resubmit-before-wall: SLURM sends USR1 300s before the wall (see --signal).
-# Skip the resubmit only on a SUCCESSFUL scan that finds nothing pending — a
-# failed scan must resubmit anyway (a spurious resubmit exits cleanly next
-# job; a missed one strands the campaign).
+# Resubmit UNCONDITIONALLY — nothing else runs in the signal path. The trap
+# only fires when work filled the full 24h, so work almost surely remains; in
+# the rare drained case the continuation job scans, finds nothing, and exits
+# cleanly. Running a scan here instead would let one filesystem stall at the
+# wall eat the resubmit and strand the campaign. sbatch is retried because a
+# transient scheduler error must not strand it either.
 _resubmitted=0
 _resubmit_before_wall() {
     if [ "$_resubmitted" -eq 0 ]; then
         _resubmitted=1
-        local remaining scan_rc
-        remaining=$(list_pending); scan_rc=$?
-        if [ "$scan_rc" -eq 0 ] && [ -z "$remaining" ]; then
-            echo "[signal] Wall approaching — no pending work, not resubmitting."
-        else
-            [ "$scan_rc" -eq 0 ] || echo "[signal] WARNING: pending scan failed (rc=$scan_rc); resubmitting to be safe."
-            echo "[signal] Wall approaching — resubmitting to resume..."
-            sbatch --parsable "$SELF" && echo "  resubmitted" || echo "  ERROR: resubmit failed"
-        fi
+        echo "[signal] Wall approaching — resubmitting to resume..."
+        local attempt
+        for attempt in 1 2 3; do
+            if sbatch --parsable "$SELF"; then
+                echo "  resubmitted (attempt $attempt)"
+                return
+            fi
+            echo "  sbatch failed (attempt $attempt)"
+            sleep 20
+        done
+        echo "  ERROR: resubmit failed after 3 attempts — resume manually"
     fi
 }
 trap _resubmit_before_wall USR1
