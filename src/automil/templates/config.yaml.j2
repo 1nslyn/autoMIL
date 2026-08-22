@@ -193,14 +193,41 @@ scoring:
   technique_map: {}
   accept_margin: 0.0   # Ladder keep-margin δ: child kept iff primary_value > parent + δ. Predeclare per-dataset (0.0 = strict dominance). Read from graph.json meta.scoring.
   # CR-4: the margin ACTUALLY applied is max(accept_margin, se_multiplier x the
-  #   PARENT's measured cross-fold SE). The noise floor can only ever raise the
-  #   bar, never lower a predeclared δ, and it is derived from the incumbent —
-  #   if it came from the child, taking the argmax over screened candidates would
-  #   also be taking the argmin over their margins.
+  #   measured SE). The noise floor can only ever raise the bar, never lower a
+  #   predeclared δ. The SE basis is PAIRED (SE of the per-fold child-parent
+  #   deltas) when parent and child carry primary values for the same fold set —
+  #   they share folds under a locked seed, so the fold effect cancels — and
+  #   falls back to the parent's marginal cross-fold SE otherwise.
   #   1.0 = one SE. 0.0 disables the noise floor and reverts to the bare δ.
   #   This is a conservative screen during search, NOT a significance test: the
   #   paired inference lives in the Stage-B gate (gate/stats.py).
   se_multiplier: 1.0
+  # --- Companion non-inferiority guard (optional; unset = no guard) ---
+  # guard:
+  #   metric: val_bacc     # one metric from metrics.track
+  #   margin: 0.0099       # the largest tolerated DROP vs the parent
+  #
+  # Single-metric selection (scoring.formula: val_<metric>) exists because a
+  # threshold-quantized companion cannot vote on a few-dozen-slide validation
+  # split without injecting lattice noise at the decision scale. The guard
+  # gives that companion a VETO WITHOUT A VOTE: a child that wins on the
+  # primary signal is still discarded if it regressed on `metric` by more than
+  # `margin`. Because the guard can only reject, never promote, the argmax is
+  # still taken over the primary signal alone and no companion noise enters it.
+  #
+  # PREDECLARE the margin — never fit it to the comparison it gates, or a
+  # noisy child widens its own acceptance region. Derive it from the metric's
+  # resolution on YOUR validation splits: for balanced accuracy over K
+  # averaged folds and C classes, one validation sample changing side moves
+  # the reported number by at most 1 / (K x C x min-class-count), so that
+  # value is the smallest drop that is not arithmetically explainable by a
+  # single sample. Then round it UP to the precision your metrics are
+  # RECORDED at: the guard compares recorded values, so a margin left on the
+  # true lattice rejects one-slide drops that rounding pushed just past it.
+  # The example above is 1/(3 x 2 x 17) = 0.009804 aligned up to 4 decimals —
+  # declaring the unrounded 0.0098 would reject a genuine one-slide drop.
+  # A declared-but-malformed guard fails `automil check` and graph seeding
+  # rather than degrading to "no guard".
 
 # --- Variant selection (D-35, REG-07) ---
 # The framework resolves these via registry.resolve_model(parent, variant) etc.

@@ -358,6 +358,16 @@ def write_terminal_state(
                 else:
                     gnode.pop("fold_primary_values", None)
                 gnode["primary_value"] = primary_value
+                # The companion guard reads its metric out of `metrics`, so
+                # that block is child evidence too and has to land BEFORE the
+                # accept. It used to be assigned after, which left the gate
+                # reading a re-ingested node's PREVIOUS run's companion value.
+                # Assign-or-CLEAR for the same reason as the fold vector above:
+                # a re-ingest whose metrics went empty (the runner emits `{}`
+                # when any recorded component is unestimable) must not leave a
+                # superseded companion value behind for this node's CHILDREN
+                # to be gated against.
+                gnode["metrics"] = dict(result.get("metrics") or {})
 
                 # D-01: partial nodes stay quarantined — never get keep/discard
                 # crash nodes stay crash (primary_value=0.0 should not become discard)
@@ -393,8 +403,8 @@ def write_terminal_state(
                 _spec_cell_id = (spec.get("metadata") or {}).get("cell_id")
                 if _spec_cell_id and not gnode.get("cell_id"):
                     gnode["cell_id"] = _spec_cell_id
-                if result.get("metrics"):
-                    gnode["metrics"] = dict(result["metrics"])
+                # (`metrics` was assigned above, before the accept — the
+                # companion guard reads it.)
                 # Propagate metadata from result (e.g. budget_killed flag).
                 # L-8a: copy-on-write via merged_metadata — a plain setdefault+
                 # update/assign would mutate node["metadata"] in place, and that

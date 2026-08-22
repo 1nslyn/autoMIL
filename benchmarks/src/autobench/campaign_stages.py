@@ -10,6 +10,7 @@ from __future__ import annotations
 import fcntl
 import copy
 import hashlib
+import logging
 import json
 import math
 import os
@@ -530,6 +531,37 @@ def _sealed_fold_hashes(
     return hashes
 
 
+def _recorded_fold_aggregates(folds: list[Mapping[str, Any]]) -> dict[str, float]:
+    """The aggregate validation metrics a RUN would have recorded for these folds.
+
+    The baseline root is built from fold evidence rather than from a
+    ``result.json``, so without this it carries no aggregate metrics at all.
+    The companion guard would then fall back to a FULL-PRECISION fold mean on
+    the root while every child's value is ``round(mean, 4)`` — the two sides of
+    the comparison land on different grids, and the margin's grid alignment
+    (what makes a drop of exactly one slide pass) stops covering the guard's
+    single most common comparison: every first-generation child of the
+    baseline. Recording the mean the way the runner records it puts both sides
+    back on the same grid.
+
+    A key missing from any fold is dropped rather than averaged over a subset —
+    the same rule ``_node_metric`` applies to the fallback.
+    """
+    from autobench.guard_margin import RECORDED_DECIMALS
+
+    blocks = [fold.get("metrics") or {} for fold in folds]
+    if not blocks:
+        return {}
+    aggregates: dict[str, float] = {}
+    for key in sorted(set().union(*(set(block) for block in blocks))):
+        values = [block[key] for block in blocks if isinstance(block.get(key), (int, float))
+                  and not isinstance(block.get(key), bool)]
+        if len(values) != len(blocks):
+            continue
+        aggregates[key] = round(sum(values) / len(values), RECORDED_DECIMALS)
+    return aggregates
+
+
 def _ensure_discovery_baseline_root(
     cell_root: Path,
     state: Mapping[str, Any],
@@ -594,6 +626,21 @@ def _ensure_discovery_baseline_root(
                 and isinstance(metadata.get("validation_folds"), list)
                 and content_sha256(metadata.get("validation_folds"))
                 == content_sha256(discovery_folds)
+                # The root's recorded aggregates are the ONLY companion
+                # evidence the guard reads (`_node_metric` is single-source),
+                # and this root is the dominant parent of the whole cell. A
+                # root that predates them — or whose block drifted — would
+                # leave the guard OPEN for every first-generation child, the
+                # exact failure this guard exists to prevent, and it would do
+                # so while passing every other identity check. Fail loudly
+                # instead: re-register from a fresh graph.
+                and isinstance(node.get("metrics"), dict)
+                and all(
+                    node["metrics"].get(key) == value
+                    for key, value in _recorded_fold_aggregates(
+                        discovery_folds
+                    ).items()
+                )
                 and not isinstance(recorded_baseline, bool)
                 and isinstance(recorded_baseline, (int, float))
                 and math.isclose(
@@ -619,6 +666,7 @@ def _ensure_discovery_baseline_root(
             metrics={
                 "primary_value": discovery_mean,
                 "primary_se": discovery_se,
+                **_recorded_fold_aggregates(discovery_folds),
             },
             status="keep",
             config_hash=baseline["candidate_sha256"],
@@ -665,6 +713,78 @@ def attest_and_register_baseline(
         return _register_baseline_unlocked(cell_root, baseline_archive)
 
 
+def _verify_guard_counts_against_baseline(
+    cell_root: Path, baseline_archive: Path,
+) -> None:
+    """Refuse a baseline whose scored validation set is not the one the
+    companion margin was derived from.
+
+    The margin is derived from the split ASSIGNMENT, which is what exists at
+    freeze time. A loader may retain fewer slides than were assigned — the
+    retention guard admits a 10% loss and only a per-class floor below that —
+    and a smaller validation set has a COARSER lattice than the frozen margin
+    describes, so genuine one-slide jitter would be discarded as harm. The
+    baseline is the first run of the cell and it scores every validation fold,
+    so this is the earliest point the assumption can be checked instead of
+    assumed. Nothing is guessed or repaired: a mismatch means the frozen
+    margin does not describe this cohort and the margin must be re-derived.
+
+    Silent when the cell declares no guard (survival) or the run predates
+    per-slide validation predictions — the check reports what it can verify,
+    and `verify_against_run` fails loudly on a genuine disagreement.
+    """
+    from autobench.guard_margin import GuardMarginError, verify_against_run
+
+    # From `campaign_cell.json` — the hash-bound mirror of the manifest cell,
+    # re-validated against the frozen manifest at submit and launch — never
+    # from `config.yaml`, which anything with a shell in the cell root can
+    # edit. Stripping the counts there would otherwise turn this check into a
+    # silent no-op, which is exactly the failure it exists to prevent.
+    try:
+        cell = json.loads(
+            (cell_root / "automil" / "campaign_cell.json").read_text()
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read campaign cell identity: {exc}") from exc
+    counts = (cell.get("guard") or {}).get("validation_class_counts")
+    if not counts:
+        return   # survival cells declare no guard
+    results_dir = baseline_archive / "certify" / "results"
+    fold_counts = {int(fold): dict(block) for fold, block in counts.items()}
+    scored = [
+        fold for fold in fold_counts
+        if (results_dir / f"fold_{fold}" / "predictions_val.csv").exists()
+    ]
+    if not scored:
+        # Historical conversion imports sealed fold files without the per-slide
+        # validation predictions, so there is nothing to check against. Say so
+        # rather than passing silently — this cell's margin rests on the split
+        # assignment alone.
+        logging.getLogger(__name__).warning(
+            "companion-guard counts unverified for %s: the registered baseline "
+            "carries no per-slide validation predictions (historical import). "
+            "The margin rests on the split assignment alone.",
+            cell_root.name,
+        )
+        return
+    if len(scored) != len(fold_counts):
+        # Verifying a SUBSET is worse than not verifying: it reads as proof.
+        raise CampaignStageError(
+            "companion-guard counts can only be partly verified: "
+            f"{sorted(scored)} of {sorted(fold_counts)} validation folds carry "
+            "scored validation predictions"
+        )
+    try:
+        verify_against_run(fold_counts, results_dir)
+    except GuardMarginError as exc:
+        raise CampaignStageError(
+            f"baseline disagrees with the frozen companion-guard counts: {exc}. "
+            "The margin describes a validation lattice this cohort does not "
+            "have; re-derive it (derive_guard_margins.py) and regenerate the "
+            "manifest."
+        ) from exc
+
+
 def _register_baseline_unlocked(
     cell_root: Path, baseline_archive: Path,
 ) -> dict[str, Any]:
@@ -684,6 +804,7 @@ def _register_baseline_unlocked(
             _cell_task_family(cell_root, state)
         ],
     )
+    _verify_guard_counts_against_baseline(cell_root, baseline_archive)
     sealed_hashes = _sealed_fold_hashes(baseline_archive, CERTIFICATION_FOLDS)
     identity_payload = {
         "result_sha256": file_sha256(result_path),
@@ -1042,6 +1163,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         )
 
     policy = load_candidate_policy(adir)
+    guard_floor = _companion_guard_floor(adir, state)
     archive_root = adir / "orchestrator" / "archive"
     attempt_audit: list[dict[str, Any]] = []
     eligible: list[dict[str, Any]] = []
@@ -1161,13 +1283,29 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                         archive, STAGE_FOLDS["discovery"],
                     ),
                 }
+                guard_drop = _companion_guard_shortfall(guard_floor, folds)
+                # NOTE: no `continue` here. The ledger append at the bottom of
+                # this loop is what makes the 30-attempt census exact; skipping
+                # it for a guard rejection would short the audit, and a frozen
+                # discovery cannot be re-frozen — the cell would be unable to
+                # finalize its session, produce process evidence, or certify,
+                # and one such cell blocks the campaign-wide selection freeze.
                 audit.update({
-                    "eligible": True,
-                    "reason": "complete",
                     "candidate_sha256": candidate_sha,
                     "validation_mean": candidate["discovery_mean"],
                 })
-                eligible.append(candidate)
+                if guard_drop is not None:
+                    audit.update({
+                        "eligible": False,
+                        "reason": (
+                            f"companion guard: {guard_floor['metric']} fell "
+                            f"{guard_drop:.4f} below the baseline (margin "
+                            f"{guard_floor['margin']})"
+                        ),
+                    })
+                else:
+                    audit.update({"eligible": True, "reason": "complete"})
+                    eligible.append(candidate)
             except (
                 CampaignStageError, AdmissibilityError, OSError,
                 json.JSONDecodeError, KeyError, TypeError, ValueError,
@@ -1242,6 +1380,116 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         "at": frozen_at,
     })
     return _commit_state(cell_root, state)
+
+
+def _companion_guard_floor(
+    adir: Path, state: Mapping[str, Any], folds: object = None,
+) -> dict[str, Any] | None:
+    """The companion floor a promoted candidate must clear, or ``None``.
+
+    The keep/discard gate is a parent-relative SEARCH screen, and the freeze
+    deliberately ignores it — promotion is the arbitration that screen defers
+    to. But the guard is not a screen: it is a predeclared, deterministic
+    non-inferiority floor, and a guard that only steers the search while a
+    balanced-accuracy collapse still gets promoted and certified is not the
+    protection the protocol claims. So it is applied here too, against the
+    CELL BASELINE rather than against a parent: at arbitration time the parent
+    relation is a search artifact, and the statement worth making about a
+    certified winner is that it is not worse than the native baseline by more
+    than one validation slide.
+
+    Both sides come from :func:`_recorded_fold_aggregates`, so the comparison
+    happens on the same recorded grid the margin is aligned to.
+
+    The declaration is read from the FROZEN ``graph.json`` meta, not from
+    ``config.yaml``. The config is editable by anything with a shell in the
+    cell root, and this is the decision point that produces the campaign's
+    published winner: reading it here would let a mid-campaign edit silently
+    switch the guard off at exactly the place it matters most, while the
+    parent-relative gate — which reads the frozen value — went on stamping
+    candidates ``discard``. One declaration, one authority.
+    """
+    from automil.graph import _guard_declaration
+
+    try:
+        frozen = (
+            (json.loads((adir / "graph.json").read_text()).get("meta") or {})
+            .get("scoring") or {}
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            f"cannot read the frozen scoring declaration: {exc}"
+        ) from exc
+    try:
+        declared = _guard_declaration({"scoring": frozen})
+    except ValueError as exc:
+        raise CampaignStageError(f"cell froze an unusable scoring.guard: {exc}") from exc
+    if declared is None:
+        return None
+    metric, margin = declared
+    stage_folds = tuple(STAGE_FOLDS["discovery"] if folds is None else folds)
+    baseline = state.get("baseline") or {}
+    stage_baseline = [
+        fold for fold in (baseline.get("validation_folds") or [])
+        if fold.get("fold_index") in stage_folds
+    ]
+    if len(stage_baseline) != len(stage_folds):
+        raise CampaignStageError(
+            "cannot apply the companion guard at freeze: the registered "
+            f"baseline carries no evidence for folds {list(stage_folds)}"
+        )
+    # K is part of the lattice, so a stage that averages MORE folds has a finer
+    # one-slide step and its own margin — derived from the same published
+    # counts, over the folds this stage actually averages.
+    margin = _stage_guard_margin(adir, stage_folds, margin)
+    floor = _recorded_fold_aggregates(stage_baseline).get(metric)
+    if floor is None:
+        raise CampaignStageError(
+            f"cannot apply the companion guard at freeze: the baseline records "
+            f"no {metric}"
+        )
+    return {"metric": metric, "margin": float(margin), "baseline": floor}
+
+
+def _stage_guard_margin(adir: Path, folds, declared: float) -> float:
+    """The margin for a stage that averages ``folds``.
+
+    ``declared`` is the frozen margin for the DISCOVERY folds — the one the
+    framework gate consumes. A stage averaging a different fold set sits on a
+    different lattice, so its margin is the same derivation over its own
+    folds, from the same hash-bound published counts. Falls back to the
+    declared margin only when the counts are not available at all, which for a
+    materialized cell means an operator hand-edit.
+    """
+    from autobench.guard_margin import GuardMarginError, derived_margin_for_counts
+
+    try:
+        cell = json.loads((adir / "campaign_cell.json").read_text())
+        counts = (cell.get("guard") or {}).get("validation_class_counts")
+        if not counts:
+            return declared
+        return derived_margin_for_counts(counts, folds)
+    except (OSError, json.JSONDecodeError, GuardMarginError) as exc:
+        raise CampaignStageError(
+            f"cannot derive the companion margin for folds {list(folds)}: {exc}"
+        ) from exc
+
+
+def _companion_guard_shortfall(
+    floor: Mapping[str, Any] | None, folds: list[Mapping[str, Any]],
+) -> float | None:
+    """How far a candidate fell below the companion floor, or ``None`` if it
+    cleared it. Fails CLOSED on a candidate that does not record the metric —
+    the same rule the gate applies, for the same reason."""
+    if floor is None:
+        return None
+    value = _recorded_fold_aggregates(folds).get(floor["metric"])
+    if value is None:
+        return float("inf")
+    drop = float(floor["baseline"]) - value
+    # Same ulp slack as the gate: a drop of exactly the margin is a drop of one
+    # validation slide, which is not evidence of harm.
+    return drop if drop - floor["margin"] > 1e-9 else None
 
 
 def _map_overlay_path(path: str, source_adir_rel: str, target_adir_rel: str) -> str:
@@ -1755,6 +2003,9 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
     expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
         _cell_task_family(cell_root, state)
     ]
+    promotion_floor = _companion_guard_floor(
+        cell_root / "automil", state, CERTIFICATION_FOLDS,
+    )
     if state["phase"] != "promotion":
         raise CampaignStageError(
             f"promotion can freeze only from promotion phase, got {state['phase']!r}"
@@ -1885,12 +2136,24 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
                 **promotion_sealed,
             },
         }
-        eligible.append(selection_candidate)
-        job.update({
-            "status": "eligible",
-            "reason": "complete five-fold validation",
-            "validation_mean": selection_candidate["validation_mean"],
-        })
+        guard_drop = _companion_guard_shortfall(promotion_floor, five_folds)
+        if guard_drop is not None:
+            job.update({
+                "status": "ineligible",
+                "reason": (
+                    f"companion guard: {promotion_floor['metric']} fell "
+                    f"{guard_drop:.4f} below the baseline over five folds "
+                    f"(margin {promotion_floor['margin']})"
+                ),
+                "validation_mean": selection_candidate["validation_mean"],
+            })
+        else:
+            eligible.append(selection_candidate)
+            job.update({
+                "status": "eligible",
+                "reason": "complete five-fold validation",
+                "validation_mean": selection_candidate["validation_mean"],
+            })
         frozen_jobs.append(job)
 
     frozen_at = _utc_now()

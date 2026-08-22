@@ -26,10 +26,18 @@ from automil.activity_hooks import (
 )
 from automil.cells.state import make_cell_id, normalize_mil_model
 
-SCHEMA_VERSION = 6
+#: 7 adds the per-cell companion guard. The CAMPAIGN_ID deliberately does NOT
+#: move with it: this is the same 130-cell campaign under the same training
+#: protocol, and bumping it would mean editing an analysis plan whose whole
+#: value is being frozen before certification.
+SCHEMA_VERSION = 7
 CAMPAIGN_ID = "automil-preprint-130-v6"
 PROTOCOL_VERSION = "preprint-v3"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
+#: Per-dataset+task companion-guard margins, derived from the frozen validation
+#: splits by derive_guard_margins.py and checked in so the number in the paper
+#: is in git rather than recomputed. Hashed into the manifest.
+GUARD_MARGINS_PATH = "benchmarks/campaigns/preprint_130/guard_margins.json"
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
 DATASETS = (
     "tcga_luad",
@@ -451,6 +459,7 @@ def _cell_record(
     dataset_config_sha256: str,
     policy_template: str,
     policy_template_sha256: str,
+    guard: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     identity = {
         "dataset": dataset,
@@ -486,6 +495,13 @@ def _cell_record(
         "dataset_config_sha256": dataset_config_sha256,
         "policy_template": policy_template,
         "policy_template_sha256": policy_template_sha256,
+        # The companion non-inferiority guard: balanced accuracy may not
+        # regress by more than one validation slide's worth. Derived per
+        # dataset+task from the frozen split composition (see
+        # autobench.guard_margin) and carried here so the margin is frozen
+        # alongside the counts that justify it. Explicitly null for survival,
+        # which reports no balanced accuracy — a stated fact, not an omission.
+        "guard": dict(guard) if guard is not None else None,
         "budget_identity": {
             "dataset": dataset,
             "task": task,
@@ -505,9 +521,94 @@ def _cell_record(
     return cell
 
 
+def _validate_guard(guard: Any, label: str) -> dict[str, Any]:
+    """Shape-check one companion-guard declaration, or raise naming ``label``."""
+    from autobench.guard_margin import GUARD_METRIC
+
+    margin = guard.get("margin") if isinstance(guard, Mapping) else None
+    if not isinstance(guard, Mapping) or guard.get("metric") != GUARD_METRIC \
+            or isinstance(margin, bool) or not isinstance(margin, (int, float)) \
+            or not 0 < float(margin) < 1:
+        raise CampaignManifestError(
+            f"{label}: companion-guard declaration is malformed ({guard!r}); "
+            f"expected metric {GUARD_METRIC!r} and a margin in (0, 1)"
+        )
+    counts = guard.get("validation_class_counts")
+    if not counts:
+        raise CampaignManifestError(
+            f"{label}: companion-guard margin carries no validation class "
+            "counts; the number would not be checkable by hand"
+        )
+    # The margin's K is the number of folds AVERAGED into the gated number, so
+    # counts published for a different fold set are internally consistent and
+    # still wrong: a five-fold counts block yields a margin 5/3 too tight for a
+    # three-fold discovery mean.
+    # Every CERTIFICATION fold: the guard binds at two stages that average
+    # different fold sets — the search gate and the discovery freeze on folds
+    # 0-2, the promotion freeze on all five — and each stage's margin is
+    # derived from the counts of the folds IT averages. Publishing counts for
+    # only some folds would leave one of those margins underivable, and
+    # publishing counts for the wrong set yields a margin that is internally
+    # consistent and still wrong for the mean it gates.
+    if set(counts) != {str(fold) for fold in CERTIFICATION_FOLDS}:
+        raise CampaignManifestError(
+            f"{label}: companion-guard counts cover folds {sorted(counts)}; "
+            f"the campaign averages {list(CERTIFICATION_FOLDS)} across its stages"
+        )
+    # "Re-derivable by hand from the published counts" has to be ENFORCED, not
+    # merely asserted: without this, a hand-edited margins file carrying honest
+    # counts beside a margin of 0.5 sails through manifest construction,
+    # hashing, materialization and graph seeding as "derived", and a child
+    # could shed 0.4 balanced accuracy and still pass.
+    from autobench.guard_margin import derived_margin_for_counts
+
+    try:
+        expected = derived_margin_for_counts(counts, STAGE_FOLDS["discovery"])
+    except Exception as exc:  # noqa: BLE001 — any unusable counts block is fatal here
+        raise CampaignManifestError(
+            f"{label}: companion-guard validation class counts do not support "
+            f"a margin ({exc})"
+        ) from exc
+    if float(margin) != expected:
+        raise CampaignManifestError(
+            f"{label}: companion-guard margin {float(margin)!r} is not the "
+            f"margin its own published counts imply ({expected!r})"
+        )
+    return dict(guard)
+
+
+def _frozen_guard(
+    margins: Mapping[str, Any], dataset: str, task: str,
+) -> dict[str, Any] | None:
+    """One classification cell's guard, out of the frozen derivation artifact.
+
+    ``None`` when this cohort's margin has not been derived yet — deriving it
+    needs the dataset MOUNTED, so a manifest built on a partial host records
+    the gap honestly instead of inventing a number that would be published as
+    if it came from the split. Nothing runs on the gap: materialization
+    refuses a classification cell whose guard is null, so an under-derived
+    manifest can exist but can never produce a runnable cell.
+
+    A PRESENT but malformed entry still raises: that is a defect in the
+    artifact, not an undone step.
+    """
+    entry = margins.get(f"{dataset}__{task}")
+    if entry is None:
+        return None
+    return _validate_guard(entry, f"{dataset}__{task}")
+
+
 def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
     """Build the exact 130-cell manifest from the five pinned dataset YAMLs."""
     repo_root = repo_root.resolve()
+    guard_margins_path = repo_root / GUARD_MARGINS_PATH
+    try:
+        guard_margins = json.loads(guard_margins_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignManifestError(
+            f"cannot read frozen companion-guard margins {guard_margins_path}: "
+            f"{exc}"
+        ) from exc
     cells: list[dict[str, Any]] = []
     sources: dict[str, str] = {}
     policy_sources: dict[str, str] = {}
@@ -553,6 +654,9 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
             ("os", "survival", "nllsurv", "survival"),
         )
         for task, task_type, loss, task_family in task_pairs:
+            guard = None if task_family == "survival" else _frozen_guard(
+                guard_margins, dataset, task
+            )
             for framework, roster_key in TILE_ARMS:
                 models = list(raw.get(roster_key) or [])
                 if len(models) != 1:
@@ -568,6 +672,7 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
                         dataset_config_sha256=config_hash,
                         policy_template=policy_rel,
                         policy_template_sha256=policy_hash,
+                        guard=guard,
                     ))
             cells.append(_cell_record(
                 dataset=dataset, task=task, task_type=task_type,
@@ -577,6 +682,7 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
                 dataset_config_sha256=config_hash,
                 policy_template=policy_rel,
                 policy_template_sha256=policy_hash,
+                guard=guard,
             ))
     analysis_plan_path = repo_root / ANALYSIS_PLAN_PATH
     try:
@@ -609,6 +715,14 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
         "analysis_plan": {
             "path": ANALYSIS_PLAN_PATH,
             "sha256": file_sha256(analysis_plan_path),
+        },
+        # The companion-guard derivation, hashed like the analysis plan: the
+        # per-cell margins below are only as trustworthy as the split-derived
+        # counts they came from, so the artifact holding those counts is
+        # pinned rather than merely consulted.
+        "guard_margins": {
+            "path": GUARD_MARGINS_PATH,
+            "sha256": file_sha256(guard_margins_path),
         },
         "dataset_sources": sources,
         "policy_sources": policy_sources,
@@ -695,6 +809,20 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
                 f"task_family/task_type disagree for {cell_id}"
             )
         per_task_family[family] = per_task_family.get(family, 0) + 1
+        # A survival cell reports no balanced accuracy, so a guard on one is
+        # incoherent. A classification cell may legitimately carry null — its
+        # cohort was not mounted when the manifest was built — and the
+        # requirement is enforced at materialization, where the gap can no
+        # longer be closed by anything but deriving it.
+        _guard = cell.get("guard")
+        if family == "survival":
+            if _guard is not None:
+                raise CampaignManifestError(
+                    f"{cell_id}: survival cells report no balanced accuracy and "
+                    "must carry no companion guard"
+                )
+        elif _guard is not None:
+            _validate_guard(_guard, cell_id)
         expected_commands = {
             stage: _run_command(cell, stage)
             for stage in ("baseline", *STAGE_FOLDS)
@@ -780,6 +908,9 @@ def materialize_discovery_cells(
         agent_protocol, allow_canary=allow_canary_protocol,
     )
     agent_protocol_sha256 = content_sha256(locked_agent_protocol)
+    # The null-guard exemption below belongs to a canary DRY RUN, which is a
+    # property of the validated protocol, not of the caller's flag.
+    _is_canary_dry_run = locked_agent_protocol.get("purpose") == "canary"
     repo_root = repo_root.resolve()
     output_root = output_root.resolve()
     try:
@@ -862,6 +993,43 @@ def materialize_discovery_cells(
         # The framework-side selector (CR-1b recompute + per-fold projection):
         # campaign-owned, template-independent, audited below.
         config.setdefault("scoring", {})["formula"] = primary
+        # The companion guard rides the same rail: campaign-owned, frozen in
+        # the cell, audited below. Selection stays single-metric — the guard
+        # can only reject a child, never promote one, so nothing about the
+        # argmax changes; it just cannot be won by trading balanced accuracy
+        # away. Survival cells declare none and the key stays absent.
+        if cell["task_family"] != "survival":
+            if cell.get("guard") is None and not _is_canary_dry_run:
+                # Readiness, not constructability. The canary materializes all
+                # 130 cells into a temp dir under a protocol that can never
+                # enter a publication freeze, purely to prove the machinery
+                # builds them; refusing there would only stop the dry-run from
+                # exercising the cells it is meant to exercise. The exemption
+                # is keyed on the PROTOCOL's declared purpose, not on the
+                # caller's flag: `allow_canary_protocol` only says a canary
+                # protocol is acceptable, so keying on it would let a caller
+                # materialize unguarded cells under a publication protocol
+                # into a persistent runtime — cells the launcher would then
+                # accept. Every REAL materialization is refused here, and a
+                # canary cell lives
+                # only inside that temp dir — it is never registered, never
+                # launched, and is deleted when the dry-run returns — so no
+                # cell that could search ever reaches a runnable state without
+                # its declared guard.
+                raise CampaignManifestError(
+                    f"{cell['cell_id']}: classification cell has no companion-"
+                    f"guard margin. Derive it where {cell['dataset']} is "
+                    "mounted (benchmarks/campaigns/preprint_130/"
+                    "derive_guard_margins.py --write) and regenerate the "
+                    "manifest; a cell must not search without the guard its "
+                    "protocol declares."
+                )
+            if cell.get("guard") is not None:
+                config["scoring"]["guard"] = copy.deepcopy(cell["guard"])
+            else:
+                config["scoring"].pop("guard", None)
+        else:
+            config["scoring"].pop("guard", None)
         adir_rel = adir.relative_to(repo_root).as_posix()
         config["files"] = {
             "editable": [f"{adir_rel}/variants/_policies/*.py"],
@@ -1079,6 +1247,16 @@ def audit_materialized_campaign(
                 f"{cell_id}: selection-formula drift (expected "
                 f"{_expected_formula})"
             )
+        # Exact-match, like the formula: a materialized cell whose guard was
+        # edited (widened, retargeted, deleted) would gate on a margin the
+        # manifest does not record, and the frozen counts would no longer
+        # justify the number actually applied.
+        if (config.get("scoring") or {}).get("guard") != cell.get("guard"):
+            raise CampaignManifestError(
+                f"{cell_id}: companion-guard drift (config declares "
+                f"{(config.get('scoring') or {}).get('guard')!r}, manifest "
+                f"froze {cell.get('guard')!r})"
+            )
         # (metrics.primary is covered by the exact-block lock above.)
         # A graph.json seeded under a DIFFERENT formula silently wins over
         # config.yaml forever after (graph meta uses setdefault freeze
@@ -1088,15 +1266,26 @@ def audit_materialized_campaign(
         # estimand while passing the config audit above.
         graph_path = adir / "graph.json"
         if graph_path.exists():
-            frozen_formula = (
+            _frozen_scoring = (
                 (json.loads(graph_path.read_text()).get("meta") or {})
                 .get("scoring") or {}
-            ).get("formula")
+            )
+            frozen_formula = _frozen_scoring.get("formula")
             if frozen_formula != _expected_formula:
                 raise CampaignManifestError(
                     f"{cell_id}: graph.json froze scoring.formula "
                     f"{frozen_formula!r}; the campaign selects on "
                     f"{_expected_formula}"
+                )
+            # Same mechanism, same lock: the FROZEN guard is the one that
+            # governs every keep/discard, so a hand-edited margin would run
+            # the cell under a tolerance the manifest does not record while
+            # the config audit above still reports it clean.
+            if _frozen_scoring.get("guard") != cell.get("guard"):
+                raise CampaignManifestError(
+                    f"{cell_id}: graph.json froze scoring.guard "
+                    f"{_frozen_scoring.get('guard')!r}; the manifest records "
+                    f"{cell.get('guard')!r}"
                 )
         policy = load_candidate_policy(adir)
         expected_editable = (

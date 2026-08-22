@@ -8,6 +8,54 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Companion non-inferiority guard: a veto without a vote.** Single-metric
+  selection stays exactly as it was — the argmax is taken over
+  `scoring.formula` alone — but a project may now declare
+  `scoring.guard: {metric, margin}`, and a child that wins on the primary
+  signal is discarded if it regressed on the named companion metric by more
+  than `margin`. Because the guard can only reject and never promote, the
+  companion's quantization noise never enters the search, which is what a
+  composite could not avoid. The declaration is frozen into
+  `meta.scoring` at graph seeding on the same terms as `accept_margin`
+  (stored wins over a later config edit); a declared-but-malformed guard
+  fails `automil check` and graph seeding rather than degrading into "no
+  guard", and a child that does not report the metric fails CLOSED —
+  dropping the key must not be an escape. `automil rank` marks a
+  guard rejection `GUARD-FAIL` with the observed drop so it is not mistaken
+  for an ordinary loss.
+
+  The margin is PREDECLARED per dataset+task, never fitted to the comparison
+  it gates. For the preprint campaign it is derived from each cell's frozen
+  validation splits as `1 / (K folds x C classes x smallest validation class)`
+  — exactly the largest change one validation slide can make to the reported
+  balanced accuracy, so a drop that size passes and anything larger is
+  rejected. The margin is verified against the very counts published beside
+  it at every freeze (and those counts must cover exactly the certification
+  folds, because the stages average different subsets of them), a cohort
+  whose one-slide step is too fine for the metric's recording precision is
+  REFUSED rather than given a margin that could not reject two slides, and
+  where the baseline carries per-slide validation predictions it must have
+  SCORED that composition before discovery may start — all-or-nothing,
+  because verifying a subset reads as proof.
+  The guard is applied at all THREE decision points: parent-relative during
+  the search, and baseline-relative at the discovery freeze and again at the
+  promotion freeze — so a collapse cannot be promoted, and a candidate that
+  survived folds 0-2 only to collapse on the held-back folds cannot be
+  certified as the cell's winner either. Each stage averages a different fold
+  set and therefore sits on a different lattice, so each derives its own
+  margin from the one published counts block, which covers every
+  certification fold.
+  `autobench.guard_margin` does the derivation,
+  `campaigns/preprint_130/derive_guard_margins.py` writes the auditable
+  `guard_margins.json` (per-fold class counts included, so the number is
+  re-derivable by hand), and the manifest carries the result per cell
+  (schema 7) with the materializer and audit locking it exact-match.
+  Survival cells report no balanced accuracy and carry no guard.
+  The manifest records what has been DERIVED (`guard: null` for a
+  cohort that was not mounted when it was built) and materialization
+  refuses a classification cell with a null guard, so nothing can
+  search unguarded; only `derive_guard_margins.py` needs the mounts.
+
 - **BREAKING: the "composite" concept is retired — single-metric optimization
   is the contract.** The selection signal IS the declared primary validation
   metric; the result-contract field `composite` is now `primary_value` and

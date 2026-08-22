@@ -296,6 +296,158 @@ def margin_se_basis(
     return "marginal", se
 
 
+def _guard_declaration(meta: dict | None) -> tuple[str, float] | None:
+    """``(metric, margin)`` from ``meta.scoring.guard``, or ``None`` when undeclared.
+
+    The companion non-inferiority guard names ONE validation metric a kept
+    child may not regress on by more than ``margin``. It exists because the
+    primary signal is deliberately single-metric: ``val_auc`` navigates
+    because its resolution (one swapped pair) is finer than the effect sizes
+    being searched for, while a threshold-quantized companion like
+    ``val_bacc`` cannot vote without injecting lattice noise at the decision
+    scale. The guard restores the companion's veto without giving it a vote —
+    it can only reject, never promote, so it adds no noise to the argmax.
+
+    ``margin`` is PREDECLARED per dataset+task, never estimated from the
+    comparison it gates: a non-inferiority margin derived from the data under
+    test would let a noisy child widen its own acceptance region. The consumer
+    derives it from its own frozen validation splits — the framework only
+    consumes the declaration and never learns what the metric means.
+
+    Raises:
+        ValueError: the block is PRESENT but unreadable — a partial pair, a
+            non-numeric or negative margin. Refused rather than half-applied:
+            a margin without a metric names nothing to guard, a metric without
+            a margin would guard at zero tolerance, and either read as "no
+            guard" would let a campaign claim a protection it is not applying.
+            :func:`guard_basis` turns this into a fail-CLOSED verdict, the same
+            rule an unknown frozen ``formula`` gets.
+    """
+    raw = ((meta or {}).get("scoring") or {}).get("guard")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"scoring.guard must be a mapping, got {type(raw).__name__}")
+    metric = raw.get("metric")
+    margin = raw.get("margin")
+    if not isinstance(metric, str) or not metric:
+        raise ValueError(f"scoring.guard.metric must be a metric name, got {metric!r}")
+    if isinstance(margin, bool) or not isinstance(margin, (int, float)):
+        raise ValueError(f"scoring.guard.margin must be a number, got {margin!r}")
+    value = float(margin)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"scoring.guard.margin must be finite and >= 0, got {margin!r}")
+    return metric, value
+
+
+#: Float-representation slack for the guard comparison. Both the margin and
+#: the metrics it is compared against are DECIMALS, and binary floats put a
+#: drop of exactly the margin a few ulps on the wrong side of it
+#: (``0.5408 - 0.5507 == -0.00990000000000002``, which is "worse than" 0.0099).
+#: Without this, "a drop of exactly `margin` passes" held for only a third of
+#: the cases it names. Five orders of magnitude below any real recording grid,
+#: so it can never admit a genuinely larger drop.
+_GUARD_EPS = 1e-9
+
+
+def _finite(raw: object) -> float | None:
+    """``raw`` as a finite float, or ``None``. ``bool`` is an ``int`` subclass."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if math.isfinite(value) else None
+
+
+def _node_metric(node: dict | None, metric: str) -> float | None:
+    """A node's companion metric out of its opaque metrics dict.
+
+    Reading one named key out of ``metrics`` is the same contract a ``val_*``
+    primary selector already uses (:func:`scoring.recompute_primary_value`) —
+    the framework stays vocabulary-agnostic and the consumer's declared name
+    is the only coupling.
+
+    ONE source, deliberately. An earlier version also fell back to the mean of
+    ``metadata.validation_folds`` so that a bootstrapped baseline root — which
+    records no aggregate — could still be guarded. That fallback was worse than
+    the hole it filled, twice over: the fold values are unrounded while every
+    run-recorded aggregate is not, so the two sides of the comparison landed on
+    different grids and the margin's grid alignment stopped covering the
+    guard's most common comparison; and ``metadata`` is merged from the
+    agent-authored result payload, so a node could carry a healthy fold value
+    from one ingest and have it resurrected after a later ingest dropped the
+    metric — defeating the child-side fail-closed rule. The consumer records
+    the aggregate on its own grid instead (see the campaign's baseline root),
+    which is both correct and one mechanism rather than two.
+    """
+    if not isinstance(node, dict):
+        return None
+    metrics = node.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+    return _finite(metrics.get(metric))
+
+
+def guard_basis(
+    meta: dict | None, parent_node: dict | None, child_node: dict | None,
+) -> tuple[str, float | None, str | None]:
+    """The companion guard's verdict, observed child−parent delta, and metric.
+
+    Returns ``(verdict, delta, metric)`` where verdict is ``"none"`` (no
+    guard applies), ``"pass"``, or ``"fail"``; ``delta`` is ``None`` whenever
+    it could not be measured, and ``metric`` is ``None`` only when nothing was
+    validly declared. Public so display surfaces label a discard with the SAME
+    evidence the gate used — a node rejected by the guard while winning on
+    the primary signal is otherwise indistinguishable from an ordinary loss —
+    and carrying the metric name here keeps those surfaces from re-parsing a
+    declaration that may be exactly what is broken.
+
+    Three asymmetries, each load-bearing:
+
+    - **A child without the metric fails closed, whatever the parent has.**
+      ``metrics`` is written by agent-editable training code; if dropping a
+      key disabled the guard, dropping the key would be the dominant strategy.
+      This is checked FIRST so the exemption below can never be inherited.
+    - **A parent without the metric opens the guard.** There is nothing to be
+      non-inferior TO — a legacy incumbent, a guard added mid-campaign, or a
+      crashed parent whose metrics were cleared at ingest. The child has
+      already been required to carry the metric, so this exempts one
+      comparison, never a lineage. It is not weaker than the primary gate
+      either: a parent with no evidence scores 0.0, so ``_accept`` is equally
+      vacuous against it. Comparing against the nearest healthy ancestor
+      instead of the literal parent would be a change to the whole
+      parent-relative gate, not something for the guard to special-case.
+    - **A drop of exactly ``margin`` passes.** ``margin`` is one quantization
+      step of the companion metric on this cell's validation splits, so a
+      drop that size is arithmetically explainable by a single validation
+      slide changing side — the finest distinction the metric can make, and
+      therefore not evidence. Anything larger is rejected.
+    """
+    try:
+        declared = _guard_declaration(meta)
+    except ValueError:
+        # Declared but unreadable — a hand-edited or corrupt frozen graph
+        # (the config path raises at seeding). Fail CLOSED for the same
+        # reason an unknown frozen formula does: one typo must not silently
+        # switch a declared protection off for the whole graph.
+        return "fail", None, None
+    if declared is None or parent_node is None:
+        return "none", None, None
+    metric, margin = declared
+    # CHILD FIRST. The child-side rule is the anti-gaming rule, so it must not
+    # be conditional on the parent's evidence: checking the parent first made
+    # the exemption HEREDITARY — a metric-less child under a metric-less parent
+    # was kept, and became a metric-less parent itself, so a trainer that never
+    # wrote the key disabled the guard for its whole lineage.
+    child_value = _node_metric(child_node, metric)
+    if child_value is None:
+        return "fail", None, metric
+    parent_value = _node_metric(parent_node, metric)
+    if parent_value is None:
+        return "none", None, metric
+    delta = child_value - parent_value
+    return ("fail" if delta + margin < -_GUARD_EPS else "pass"), delta, metric
+
+
 def _primary_value_matches_folds(node: dict | None, folds: dict[int, float] | None) -> bool:
     """True when the node's primary_value equals the mean of its fold primary_values
     (within the ingest rounding tolerance) — the identity the paired margin
@@ -320,6 +472,15 @@ def keep_or_discard(meta: dict | None, parent_node: dict | None, child_node: dic
     bar and stamp a genuinely improved node ``discard``, indistinguishable
     from a real rejection (the exact failure the paired margin exists to fix).
     Root semantics (no parent): keep iff primary_value > 0, margin N/A.
+
+    Two conditions, and the second can only ever REJECT: the child must beat
+    its parent on the primary signal by more than the Ladder margin, and it
+    must not have regressed past the declared companion guard
+    (:func:`guard_basis`). Giving the companion metric a veto but no vote is
+    what lets selection stay single-metric — the argmax is taken over the
+    primary signal alone, so the companion's quantization noise never enters
+    it — while still blocking the failure a single-metric search is accused
+    of: an AUC gain bought with a real balanced-accuracy collapse.
     """
     primary_value = child_node.get("primary_value")
     primary_value = float(primary_value) if isinstance(primary_value, (int, float)) \
@@ -330,7 +491,10 @@ def keep_or_discard(meta: dict | None, parent_node: dict | None, child_node: dic
     p_comp = float(p_comp) if isinstance(p_comp, (int, float)) \
         and not isinstance(p_comp, bool) else 0.0
     margin = effective_accept_margin(meta, parent_node, child_node)
-    return "keep" if _accept(primary_value, p_comp, margin) else "discard"
+    if not _accept(primary_value, p_comp, margin):
+        return "discard"
+    return "discard" if guard_basis(meta, parent_node, child_node)[0] == "fail" \
+        else "keep"
 
 
 def _config_accept_margin(graph_path) -> float | None:
@@ -410,6 +574,38 @@ def _config_scoring_formula(graph_path) -> str | None:
             "Arithmetic expressions are not evaluated."
         )
     return value
+
+
+def _config_scoring_guard(graph_path) -> dict | None:
+    """Best-effort read of ``scoring.guard`` from the sibling config.yaml.
+
+    The companion non-inferiority guard, predeclared per-dataset alongside δ
+    and frozen the same way. Returns the ``{metric, margin}`` block (plus any
+    ``basis`` provenance string, carried through verbatim so the frozen graph
+    records WHY its margin is that number) or ``None`` when unset.
+
+    Validated OUTSIDE the blanket except for the same reason
+    :func:`_config_scoring_formula` is: a declared-but-malformed guard must
+    fail at config load, not degrade into "no guard" at gate time and let a
+    campaign claim a protection it never applied.
+    """
+    config_path = Path(graph_path).parent / "config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        import yaml
+        cfg = yaml.safe_load(config_path.read_text()) or {}
+        raw = (cfg.get("scoring") or {}).get("guard")
+    except Exception as exc:  # noqa: BLE001 — best-effort seed; bad config → default
+        logger.warning("Could not read scoring.guard from %s: %s", config_path, exc)
+        return None
+    if raw is None:
+        return None
+    try:
+        _guard_declaration({"scoring": {"guard": raw}})
+    except ValueError as exc:
+        raise ValueError(f"scoring.guard in {config_path} is invalid: {exc}") from exc
+    return dict(raw)
 
 
 @contextlib.contextmanager
@@ -501,6 +697,16 @@ class ExperimentGraph:
         )
         _cfg_mult = None if _has_mult else _config_se_multiplier(self.path)
         _default_mult = _cfg_mult if _cfg_mult is not None else DEFAULT_SE_MULTIPLIER
+        # The companion non-inferiority guard, frozen on the same terms as δ:
+        # its margin is a predeclared per-cell constant derived from that
+        # cell's validation splits, so a mid-campaign config edit must not be
+        # able to widen (or quietly remove) it.
+        _has_guard = (
+            isinstance(_meta, dict)
+            and isinstance(_meta.get("scoring"), dict)
+            and "guard" in _meta["scoring"]
+        )
+        _cfg_guard = None if _has_guard else _config_scoring_guard(self.path)
         # CR-1b: the primary_value reducer, predeclarable per-dataset in config.yaml.
         _cfg_formula = _config_scoring_formula(self.path)
         _default_formula = _cfg_formula if _cfg_formula else _DEFAULT_SCORING_FORMULA
@@ -541,6 +747,11 @@ class ExperimentGraph:
         for _sk, _sv in defaults["meta"]["scoring"].items():
             self._data["meta"]["scoring"].setdefault(_sk, _sv)
         self._data["meta"]["scoring"].setdefault("accept_margin", _default_margin)
+        # Seeded only when declared: an undeclared guard leaves no key at all,
+        # so a project without one keeps a graph.json free of a null it would
+        # have to explain (and `guard_basis` reads "absent" as "no guard").
+        if _cfg_guard is not None:
+            self._data["meta"]["scoring"].setdefault("guard", _cfg_guard)
         if loaded_from_disk and (missing_top or missing_meta):
             # Top-level missing keys are the more alarming signal (file
             # exists but is structurally incomplete). Meta-only gaps are
@@ -564,8 +775,17 @@ class ExperimentGraph:
             _migrated = 0
             for _node in self._data.get("nodes", {}).values():
                 if "metrics" not in _node:
+                    # Only keys the node ACTUALLY carried. Defaulting an absent
+                    # key to 0.0 invents evidence: a legacy node that never
+                    # recorded the companion metric would look as though it
+                    # had, which defeats the guard's child-side fail-closed
+                    # rule and silences the `automil check` warning about
+                    # adding a guard to a graph with history (it tests for the
+                    # key's presence). It also mattered before the guard: an
+                    # all-zero synthetic block makes CR-1b's mean reducer
+                    # recompute the node's selection signal as 0.0.
                     _node["metrics"] = {
-                        k: _node.get(k, 0.0) for k in _LEGACY_METRIC_KEYS
+                        k: _node[k] for k in _LEGACY_METRIC_KEYS if k in _node
                     }
                     _migrated += 1
             self._data["schema_version"] = 2
@@ -1295,6 +1515,10 @@ class ExperimentGraph:
                         "primary_value": primary_value,
                         "primary_se": primary_se,
                         "fold_primary_values": completion.get("fold_primary_values"),
+                        # The companion guard reads its metric here; omitting
+                        # the block would make every recovered child look like
+                        # one that lost the metric, i.e. fail the guard closed.
+                        "metrics": completion.get("metrics", {}),
                     }
                     graph_status = keep_or_discard(self.meta, parent_node, child_evidence)
                 else:
@@ -1474,6 +1698,7 @@ class ExperimentGraph:
                                 "primary_value": primary_value,
                                 "primary_se": primary_se,
                                 "fold_primary_values": _folds_r,
+                                "metrics": r_metrics,   # companion-guard evidence
                             })
                         else:
                             status = raw_status

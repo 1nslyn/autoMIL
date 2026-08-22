@@ -144,6 +144,13 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     gnode["fold_primary_values"] = _folds_refresh
                 else:
                     gnode.pop("fold_primary_values", None)
+                # Companion-guard evidence, refreshed before the gate below for
+                # the same reason as the fold vector: deciding on the previous
+                # run's companion metric would gate against stale evidence.
+                # Assign-or-CLEAR, like the fold vector — a refresh whose
+                # metrics went empty must not leave a superseded companion
+                # value for this node's children to be gated against.
+                gnode["metrics"] = dict(payload.get("metrics") or {})
 
                 # CR-03 fix: result.json status enum (completed/budget_killed/crash/
                 # partial/cancelled) must NOT be written directly into gnode["status"].
@@ -174,8 +181,7 @@ def reconcile(recompute_best: bool, dry_run: bool, from_archive: str | None):
                     # creates gate-eval children via a shallow dict(node) copy).
                     gnode["metadata"] = merged_metadata(gnode, {"result_status": raw_result_status})
 
-                if payload.get("metrics"):
-                    gnode["metrics"] = payload["metrics"]
+                # (`metrics` was refreshed above, before the gate.)
                 # A refreshed node's value/status/fold vector is a new gate
                 # for everything below it (same contract as terminal_writer):
                 # children screened against the old bar must be re-decided,

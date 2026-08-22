@@ -214,6 +214,45 @@ def check():
                 "expressions are not evaluated."
             )
 
+        # The companion non-inferiority guard: same treatment, same reason —
+        # a malformed declaration would read as "no guard" at gate time and
+        # the campaign would claim a protection it never applied.
+        from automil.graph import _guard_declaration
+        try:
+            _guard = _guard_declaration({"scoring": config.get("scoring") or {}})
+        except ValueError as exc:
+            _guard = None
+            issues.append(
+                f"scoring.guard is declared but unusable: {exc}. Expected "
+                "{metric: <validation metric name>, margin: <number >= 0>}."
+            )
+        def _check_guard_metric(metric: str, where: str) -> None:
+            """Semantic checks, applied to WHICHEVER declaration is in hand.
+
+            The config one is what the operator edits; the frozen one is what
+            every keep/discard consults. Both have to clear the same bar, or
+            a graph frozen on a held-out or untracked metric passes preflight
+            and then fails every non-root child closed at run time.
+            """
+            from automil.firewall import is_held_out_metric_key
+            if is_held_out_metric_key(metric):
+                issues.append(
+                    f"{where} guard metric {metric!r} is held-out-named. The "
+                    "guard reads the agent-facing validation metrics; a "
+                    "held-out key there is a val-firewall violation that fails "
+                    "the node closed, and in `held_out` the guard would never "
+                    "see it. Guard on a validation metric."
+                )
+            _tracked = (config.get("metrics") or {}).get("track") or []
+            if _tracked and metric not in _tracked:
+                issues.append(
+                    f"{where} guard metric {metric!r} is not in metrics.track "
+                    f"({list(_tracked)}); the guard would fail every child closed."
+                )
+
+        if _guard is not None:
+            _check_guard_metric(_guard[0], "scoring.guard")
+
         # An existing graph.json FREEZES meta.scoring at seeding (setdefault
         # semantics — deliberate for accept_margin, inherited by formula), so
         # editing config.yaml after the first run silently changes nothing:
@@ -221,12 +260,15 @@ def check():
         graph_file = adir / "graph.json"
         if graph_file.exists():
             try:
-                _frozen = (
-                    (json.loads(graph_file.read_text()).get("meta") or {})
-                    .get("scoring") or {}
-                ).get("formula")
+                _graph_data = json.loads(graph_file.read_text())
+                _frozen_scoring = (_graph_data.get("meta") or {}).get("scoring") or {}
+                _executed = [
+                    n for n in (_graph_data.get("nodes") or {}).values()
+                    if isinstance(n, dict) and n.get("type") == "executed"
+                ]
             except (OSError, json.JSONDecodeError):
-                _frozen = None
+                _frozen_scoring, _executed = {}, []
+            _frozen = _frozen_scoring.get("formula")
             if _frozen is not None and (_formula or "mean") != _frozen:
                 warnings.append(
                     f"scoring.formula in config.yaml ({_formula!r}) differs from "
@@ -235,6 +277,54 @@ def check():
                     "graph.json meta deliberately) to change the selection "
                     "formula."
                 )
+            # The FROZEN declaration is the one every keep/discard consults,
+            # so it needs the same validation the config one gets. A malformed
+            # frozen guard fails every non-root child closed at run time; a
+            # preflight that only warned about it would be reporting drift on
+            # a graph that cannot gate at all.
+            try:
+                _frozen_declared = _guard_declaration({"scoring": _frozen_scoring})
+            except ValueError as exc:
+                _frozen_declared = None
+                issues.append(
+                    f"graph.json froze an unusable scoring.guard: {exc}. Every "
+                    "non-root child will be discarded until it is corrected."
+                )
+            if _frozen_declared is not None:
+                _check_guard_metric(_frozen_declared[0], "the frozen graph.json")
+            # The guard is frozen by the same setdefault, so an edited margin
+            # is the same silent no-op the formula warning above exists for.
+            _frozen_guard = _frozen_scoring.get("guard")
+            _config_guard = (config.get("scoring") or {}).get("guard")
+            if "guard" in _frozen_scoring and _config_guard != _frozen_guard:
+                warnings.append(
+                    f"scoring.guard in config.yaml ({_config_guard!r}) differs "
+                    f"from the value frozen in graph.json ({_frozen_guard!r}); "
+                    "the FROZEN declaration governs every keep/discard. Start "
+                    "a fresh graph (or edit graph.json meta deliberately) to "
+                    "change the companion guard."
+                )
+            # Adding a guard to a graph that already has history is the one
+            # direction the freeze does NOT cover, and it rewrites that
+            # history: the declaration is seeded on the next load, and the
+            # next re-evaluation discards every node that never recorded the
+            # metric — correct under the declaration, but silent.
+            if _guard is not None and "guard" not in _frozen_scoring and _executed:
+                _blind = [
+                    n for n in _executed
+                    if not isinstance(n.get("metrics"), dict)
+                    or _guard[0] not in n["metrics"]
+                ]
+                if _blind:
+                    warnings.append(
+                        f"scoring.guard is new to a graph that already has "
+                        f"{len(_executed)} executed node(s), {len(_blind)} of "
+                        f"which never recorded {_guard[0]!r}. Seeding it will "
+                        "re-decide those nodes on the next re-evaluation and "
+                        "discard them (a node that cannot be shown "
+                        "non-inferior fails closed). Start a fresh graph if "
+                        "that is not what you want."
+                    )
 
         # Check files.editable
         editable = config.get("files", {}).get("editable", [])

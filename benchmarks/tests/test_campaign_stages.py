@@ -677,6 +677,130 @@ def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
         freeze_discovery(cell_root)
 
 
+def _declare_guard(adir, *, margin=0.0099, metric="val_bacc"):
+    config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+    config.setdefault("scoring", {})["guard"] = {
+        "metric": metric,
+        "margin": margin,
+        "validation_class_counts": {
+            str(fold): {"pos": 17, "neg": 30} for fold in range(3)
+        },
+    }
+    (adir / "config.yaml").write_text(yaml.safe_dump(config))
+
+
+def _set_companion(adir, value):
+    """Set every completed attempt's companion metric to ``value``.
+
+    The fixture's attempts record ``val_bacc 0.5`` against a baseline that
+    records 0.60, so a guarded cell rejects them all by default — tests that
+    want a candidate to SURVIVE the guard have to say so explicitly.
+    """
+    for archive in (adir / "orchestrator" / "archive").iterdir():
+        path = archive / "result.json"
+        result = json.loads(path.read_text())
+        if result.get("status") != "completed":
+            continue
+        result["metrics"]["val_bacc"] = value
+        for fold in result["validation_folds"]:
+            fold["metrics"]["val_bacc"] = value
+        path.write_text(json.dumps(result))
+
+
+def test_a_baseline_root_without_its_companion_aggregates_is_refused(staged_cell):
+    """The root is the dominant parent of the whole cell.
+
+    Its recorded aggregates are the only companion evidence the guard reads,
+    so a root that predates them — or whose block drifted — would leave the
+    guard OPEN for every first-generation child while passing every other
+    identity check. That is the exact failure the guard exists to prevent.
+    """
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    archive = _baseline(cell_root)
+    register_baseline(cell_root, archive)
+
+    graph = json.loads((adir / "graph.json").read_text())
+    root = next(iter(graph["nodes"].values()))
+    assert "val_bacc" in root["metrics"]          # recorded on registration
+    root["metrics"].pop("val_bacc")               # a pre-aggregate root
+    (adir / "graph.json").write_text(json.dumps(graph))
+
+    with pytest.raises(CampaignStageError, match="baseline graph root drifted"):
+        register_baseline(cell_root, archive)
+
+
+def test_freeze_guard_rejects_a_collapse_without_shorting_the_ledger(staged_cell):
+    """The guard must bind at the freeze — and must not brick the cell doing it.
+
+    The freeze deliberately ignores graph status, so without this the candidate
+    the guard stamped `discard` is still ranked, promoted and certifiable. But
+    the per-attempt ledger is what makes the 30-attempt census exact, and a
+    frozen discovery can never be re-frozen: dropping a row here would leave
+    the cell unable to finalize its session, produce process evidence, or
+    certify — and one such cell blocks the campaign-wide selection freeze.
+    """
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _set_companion(adir, 0.40)       # baseline records val_bacc 0.60
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    audit = state["discovery"]["attempt_audit"]
+    assert len(audit) == DISCOVERY_ATTEMPTS          # the ledger stays exact
+    assert sum("companion guard" in (row.get("reason") or "") for row in audit) == 12
+    assert state["discovery"]["complete_candidates"] == 0
+    assert state["discovery"]["promoted_candidates"] == []
+    assert state["phase"] == "selection-ready"
+
+
+def test_freeze_guard_reads_the_frozen_declaration_not_the_config(staged_cell):
+    """`config.yaml` is editable by anything with a shell in the cell root.
+
+    This is the decision point that produces the campaign's published winner,
+    so it reads the declaration the GATE reads — the one frozen in graph.json —
+    or a mid-campaign edit would switch the protection off exactly here while
+    the parent-relative gate went on stamping candidates `discard`.
+    """
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))   # freezes it into graph.json
+    config = yaml.safe_load((adir / "config.yaml").read_text())
+    del config["scoring"]["guard"]
+    (adir / "config.yaml").write_text(yaml.safe_dump(config))
+    assert "guard" in json.loads(
+        (adir / "graph.json").read_text()
+    )["meta"]["scoring"]
+
+    _attempts(adir, cell["cell_id"], completed=12)
+    _set_companion(adir, 0.40)
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    assert state["discovery"]["complete_candidates"] == 0
+    assert state["discovery"]["promoted_candidates"] == []
+
+
+def test_freeze_promotes_normally_when_the_companion_holds(staged_cell):
+    """The guard only ever subtracts: a candidate that keeps its companion is
+    promoted exactly as before, and the ranking stays a pure val_auc argmax."""
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _set_companion(adir, 0.60)          # exactly the baseline's companion
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    assert len(state["discovery"]["attempt_audit"]) == DISCOVERY_ATTEMPTS
+    assert state["discovery"]["complete_candidates"] == 12
+    assert [c["candidate_id"] for c in state["discovery"]["promoted_candidates"]] == [
+        f"node_{index:04d}" for index in range(12, 2, -1)
+    ]
+
+
 def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))

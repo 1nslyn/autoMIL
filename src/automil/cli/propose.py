@@ -81,8 +81,8 @@ def _print_leaderboard(graph, top: int = 10) -> None:
     charged attempts rediscovering exactly these numbers). Validation-only by
     construction — every value derives from the val ``metrics`` block.
     """
-    from automil.graph import (effective_accept_margin, margin_se_basis,
-                               node_primary_se)
+    from automil.graph import (effective_accept_margin, guard_basis,
+                               margin_se_basis, node_primary_se)
 
     executed = [
         node for node in graph.nodes.values()
@@ -128,6 +128,21 @@ def _print_leaderboard(graph, top: int = 10) -> None:
                           f"{basis_se:.4f}; bar {bar:.4f})")
             else:
                 versus = f"Δparent {delta:+.4f} (bar {bar:.4f})"
+            # Flag the guard only when it was DECISIVE — the child cleared the
+            # primary bar and the companion vetoed it. On a node that lost on
+            # the primary signal too, the label would suggest a cause it did
+            # not have; here it tells the agent the change moved the decision
+            # boundary rather than the ranking.
+            g_verdict, g_delta, g_metric = guard_basis(graph.meta, parent, node)
+            # Only for nodes the gate actually ran on. `partial` and `crash`
+            # bypass keep/discard entirely, so labelling them would present a
+            # hypothetical verdict as a real rejection.
+            if g_verdict == "fail" and delta > bar \
+                    and node.get("status") == "discard":
+                versus += (
+                    f"  GUARD-FAIL {g_metric or 'companion (declaration invalid)'} "
+                    f"{f'{g_delta:+.4f}' if g_delta is not None else 'unreported'}"
+                )
         else:
             versus = "root"
         desc = (node.get("description", "") or "")[:60]
