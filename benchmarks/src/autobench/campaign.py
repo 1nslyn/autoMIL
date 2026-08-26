@@ -50,6 +50,15 @@ REPRODUCTION_POLICY_PATH = (
 #: Untracked files (benchmarks/.env, logs) are deliberately not dirt. Both
 #: the execution stages and the launch preflight enforce over this one tuple.
 TRAINING_TREE_PATHS = ("src", "benchmarks/src", "benchmarks/scripts")
+#: The committed census authority. The manifest below stays the byte-identical
+#: frozen 130-cell superset forever: exporter ports are manifest-row-indexed
+#: and 78 already-registering cells have that port baked into their locked
+#: ``.claude/settings.json``, and ``manifest_sha256`` is pinned into every
+#: cell's ``campaign_state.json`` at materialization and re-checked at
+#: campaign freeze/certification. So the manifest cannot shrink to match a
+#: roster change — this file is the roster instead, and every campaign-wide
+#: count or set-equality answers to it, never to ``len(manifest["cells"])``.
+ACTIVE_ROSTER_PATH = "benchmarks/campaigns/preprint_130/active_roster.json"
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
 DATASETS = (
     "tcga_luad",
@@ -421,6 +430,62 @@ def content_sha256(value: object) -> str:
 
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_active_roster(repo_root: Path | None = None) -> dict[str, Any]:
+    """Load and validate the committed active-roster census.
+
+    Fails closed on any shape or cross-reference violation: ``cohorts`` must
+    be a non-empty list of unique strings that are all members of
+    ``DATASETS``, and ``cells`` must be the exact count that roster implies
+    (26 cells per dataset, the same per-dataset census the manifest itself
+    enforces). A malformed or missing roster must stop every consumer cold
+    rather than silently fall back to the full manifest.
+    """
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parents[3]
+    roster_path = repo_root / ACTIVE_ROSTER_PATH
+    try:
+        raw = json.loads(roster_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignManifestError(
+            f"cannot read active roster {roster_path}: {exc}"
+        ) from exc
+    cohorts = raw.get("cohorts") if isinstance(raw, dict) else None
+    if (
+        not isinstance(cohorts, list)
+        or not cohorts
+        or any(not isinstance(cohort, str) for cohort in cohorts)
+        or len(set(cohorts)) != len(cohorts)
+    ):
+        raise CampaignManifestError(
+            f"active roster cohorts must be a non-empty list of unique "
+            f"strings, got {cohorts!r}"
+        )
+    unknown = sorted(set(cohorts) - set(DATASETS))
+    if unknown:
+        raise CampaignManifestError(
+            f"active roster names cohort(s) outside DATASETS: {unknown}"
+        )
+    cells = raw.get("cells")
+    expected_cells = 26 * len(cohorts)
+    if (
+        isinstance(cells, bool)
+        or not isinstance(cells, int)
+        or cells != expected_cells
+    ):
+        raise CampaignManifestError(
+            f"active roster cells must equal 26 * len(cohorts) "
+            f"({expected_cells}), got {cells!r}"
+        )
+    return {"cohorts": tuple(cohorts), "cells": cells}
+
+
+#: The campaign's operating roster: a strict, committed-file-validated subset
+#: of DATASETS. Every campaign-wide count and set-equality in this module and
+#: in campaign_stages.py answers to this, never to the raw manifest census.
+ACTIVE_ROSTER = load_active_roster()
+ACTIVE_CELL_COUNT = ACTIVE_ROSTER["cells"]
 
 
 def _dataset_config_path(repo_root: Path, dataset: str) -> Path:
@@ -908,11 +973,17 @@ def materialize_discovery_cells(
     agent_protocol: Mapping[str, Any],
     allow_canary_protocol: bool = False,
 ) -> list[Path]:
-    """Create 130 isolated discovery roots from the immutable manifest.
+    """Create one isolated discovery root per active-roster manifest cell.
 
     Each root has its own graph/plan/learnings/orchestrator namespace.  The
     generated config's run command, budget identity, fold subset, and source
-    hashes all come from the same cell record.
+    hashes all come from the same cell record.  Off-roster cells are skipped
+    under a real (publication) agent protocol; a canary protocol still
+    materializes every manifest cell, since its purpose is proving the
+    machinery builds all 130, not exercising the operating roster (see the
+    guard-check exemption below). Manifest row indices — and so exporter
+    ports — are never renumbered around the skip: both are pinned per row
+    and must survive however many rows end up materialized.
     """
     manifest = load_manifest(manifest_path)
     manifest_hash = file_sha256(manifest_path)
@@ -956,6 +1027,13 @@ def materialize_discovery_cells(
             raise
     written: list[Path] = []
     for cell_index, cell in enumerate(manifest["cells"]):
+        # Off-roster cells are skipped for every REAL materialization; the
+        # canary is exempted (like the guard check below) because its whole
+        # purpose is proving the machinery builds every manifest cell, not
+        # exercising the operating roster. cell_index is never renumbered
+        # around the skip — enumerate() still walks the full manifest.
+        if not _is_canary_dry_run and cell["dataset"] not in ACTIVE_ROSTER["cohorts"]:
+            continue
         # One deterministic exporter port per manifest row, so any number of
         # cells can meter concurrently on one host without contending for a
         # single endpoint. The port is part of the audited cell config and
@@ -1163,7 +1241,14 @@ def audit_materialized_campaign(
     manifest_path: Path,
     repo_root: Path,
 ) -> dict[str, Any]:
-    """Audit all 130 launch roots without executing a GPU training process."""
+    """Audit every launch root the campaign roster requires.
+
+    Executes no GPU training process. A canary protocol requires every
+    manifest cell (its whole purpose is proving materialization builds all
+    130, not exercising the operating roster); a real protocol requires only
+    the active roster's cells — see the matching exemption in
+    ``materialize_discovery_cells``.
+    """
     from automil.admissibility import (
         load_candidate_policy,
         validate_campaign_binding,
@@ -1172,10 +1257,6 @@ def audit_materialized_campaign(
 
     manifest = load_manifest(manifest_path)
     repo_root = repo_root.resolve()
-    if len(roots) != len(manifest["cells"]):
-        raise CampaignManifestError(
-            f"materialized root count mismatch: {len(roots)} != {len(manifest['cells'])}"
-        )
     runtime_roots = {adir.parent.parent.resolve() for adir in roots}
     if len(runtime_roots) != 1:
         raise CampaignManifestError("materialized cells do not share one runtime root")
@@ -1188,6 +1269,17 @@ def audit_materialized_campaign(
     except (OSError, json.JSONDecodeError) as exc:
         raise CampaignManifestError("cannot read locked campaign agent protocol") from exc
     agent_protocol_sha256 = content_sha256(agent_protocol)
+    expected_cells = (
+        manifest["cells"] if agent_protocol.get("purpose") == "canary"
+        else [
+            cell for cell in manifest["cells"]
+            if cell["dataset"] in ACTIVE_ROSTER["cohorts"]
+        ]
+    )
+    if len(roots) != len(expected_cells):
+        raise CampaignManifestError(
+            f"materialized root count mismatch: {len(roots)} != {len(expected_cells)}"
+        )
     by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
     port_by_id = {
         cell["cell_id"]: ACTIVITY_METRICS_PORT + index

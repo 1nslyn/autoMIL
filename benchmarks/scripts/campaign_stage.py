@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from autobench.campaign_stages import (
+    CAMPAIGN_CELL_COUNT,
     CampaignStageError,
     certify_winner,
     finalize_agent_session,
@@ -224,8 +225,9 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(public_status(state), indent=2, sort_keys=True))
         if args.action == "advance" and state["phase"] == "winner-frozen":
             print(
-                "Winner is frozen. Held-out data remains sealed until all 130 "
-                "cells are frozen by campaign_manifest.py freeze-selections."
+                "Winner is frozen. Held-out data remains sealed until all "
+                f"{CAMPAIGN_CELL_COUNT} cells are frozen by campaign_manifest.py "
+                "freeze-selections."
             )
     except CampaignStageError as exc:
         parser.exit(2, f"campaign-stage error: {exc}\n")

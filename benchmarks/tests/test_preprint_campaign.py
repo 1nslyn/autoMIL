@@ -12,6 +12,8 @@ import yaml
 
 from automil.cells.state import make_cell_id, normalize_mil_model
 from autobench.campaign import (
+    ACTIVE_CELL_COUNT,
+    ACTIVE_ROSTER,
     ANALYSIS_PLAN_PATH,
     BASELINE_FOLDS,
     CANARY_AGENT_PROTOCOL,
@@ -27,6 +29,7 @@ from autobench.campaign import (
     build_preprint_manifest,
     content_sha256,
     file_sha256,
+    load_active_roster,
     load_manifest,
     materialize_discovery_cells,
     run_materialization_canary,
@@ -270,25 +273,33 @@ def _write_guard_margins(fake_repo: Path) -> dict[str, dict]:
     return margins
 
 
-def test_materializer_creates_130_independent_discovery_states(tmp_path):
+def test_materializer_creates_roster_count_independent_discovery_states(tmp_path):
     fake_repo = tmp_path / "repo"
     _copy_campaign_sources(fake_repo)
     manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
-    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    manifest = build_preprint_manifest(fake_repo)
+    write_manifest(manifest, manifest_path)
     output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
     roots = materialize_discovery_cells(
         manifest_path, output_root, fake_repo,
         agent_protocol=AGENT_PROTOCOL,
     )
+    # The manifest's own row index per cell — ports are pinned to this, not to
+    # a cell's position within the roster-filtered `roots` list, since
+    # off-roster rows (tcga_lgg, cptac_gbm) are skipped without renumbering
+    # the rows around them.
+    manifest_row = {
+        cell["cell_id"]: index for index, cell in enumerate(manifest["cells"])
+    }
 
-    assert len(roots) == 130
-    assert len(set(roots)) == 130
+    assert len(roots) == ACTIVE_CELL_COUNT
+    assert len(set(roots)) == ACTIVE_CELL_COUNT
     assert all((root / "config.yaml").exists() for root in roots)
     assert all((root / "campaign_cell.json").exists() for root in roots)
     assert not any((root / "graph.json").exists() for root in roots)
     assert json.loads((output_root / "agent_protocol.json").read_text()) == AGENT_PROTOCOL
 
-    for root in (roots[0], roots[64], roots[-1]):
+    for root in (roots[0], roots[30], roots[-1]):
         config = yaml.safe_load((root / "config.yaml").read_text())
         cell = json.loads((root / "campaign_cell.json").read_text())
         assert config["run"]["command"] == cell["commands"]["discovery"]
@@ -310,20 +321,36 @@ def test_materializer_creates_130_independent_discovery_states(tmp_path):
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]
-        index = roots.index(root)
-        assert config["activity"] == {"exporter_port": 9464 + index}
+        # The exporter port is pinned to the cell's MANIFEST row, preserved
+        # even though off-roster rows are skipped in between.
+        expected_port = 9464 + manifest_row[cell["cell_id"]]
+        assert config["activity"] == {"exporter_port": expected_port}
         settings = json.loads((root.parent / ".claude/settings.json").read_text())
-        assert settings["env"]["OTEL_EXPORTER_PROMETHEUS_PORT"] == str(9464 + index)
+        assert settings["env"]["OTEL_EXPORTER_PROMETHEUS_PORT"] == str(expected_port)
 
     # Every cell exports on its own deterministic port, so any number of
-    # cells can meter concurrently on one host.
+    # cells can meter concurrently on one host. Off-roster manifest rows are
+    # skipped without renumbering the rows around them, so the roster's
+    # ports land at their ORIGINAL manifest-row offset (e.g. cptac_pdac
+    # starts at 9464+78, tcga_hnsc at 9464+104) rather than forming one
+    # contiguous 0..77 block.
     ports = [
         yaml.safe_load((root / "config.yaml").read_text())["activity"][
             "exporter_port"
         ]
         for root in roots
     ]
-    assert ports == [9464 + index for index in range(130)]
+    cells_per_dataset = 26
+    expected_ports = [
+        9464 + row
+        for dataset_index, dataset in enumerate(DATASETS)
+        if dataset in ACTIVE_ROSTER["cohorts"]
+        for row in range(
+            dataset_index * cells_per_dataset,
+            (dataset_index + 1) * cells_per_dataset,
+        )
+    ]
+    assert ports == expected_ports
 
 
 def test_materializer_rejects_unresolvable_agent_policy_hashes(tmp_path):
@@ -404,7 +431,11 @@ def test_companion_guard_reaches_classification_cells_only(tmp_path):
             # The guard never displaces the selection signal.
             assert scoring["formula"] == "val_auc"
         seen[cell["task_type"]] += 1
-    assert seen == {"classification": 65, "survival": 65}
+    # Every roster dataset contributes 13 classification + 13 survival cells.
+    assert seen == {
+        "classification": ACTIVE_CELL_COUNT // 2,
+        "survival": ACTIVE_CELL_COUNT // 2,
+    }
 
 
 def test_audit_rejects_a_widened_companion_guard(tmp_path):
@@ -472,7 +503,12 @@ def test_underived_classification_cell_cannot_be_materialized(tmp_path):
     _copy_campaign_sources(fake_repo)
     path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
     margins = json.loads(path.read_text())
-    margins.pop(next(iter(margins)))
+    # Must be an ON-ROSTER cohort's key: an off-roster cell (e.g. cptac_gbm,
+    # dropped from the active roster) is skipped by materialization before
+    # its guard is ever checked, so removing its margin would not exercise
+    # this fail-closed path at all.
+    roster_key = next(key for key in margins if key.split("__")[0] in ACTIVE_ROSTER["cohorts"])
+    margins.pop(roster_key)
     path.write_text(json.dumps(margins, indent=2, sort_keys=True))
 
     manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
@@ -686,3 +722,50 @@ def test_full_campaign_canary_covers_every_arm_task_regime_without_gpu(tmp_path)
     assert len(report["regimes"]) == 10
     assert report["gpu_processes_started"] == 0
     assert not list(manifest_path.parent.glob(".canary-*"))
+
+
+def test_committed_manifest_and_roster_match_the_real_repo():
+    """The exact artifacts the roster-census contract rests on: the checked-in
+    manifest is byte-identical to its own committed lock, and the committed
+    roster loads to the declared 3-cohort/78-cell census — against the REAL
+    repo, not a synthetic fixture."""
+    lock_path = MANIFEST.with_suffix(MANIFEST.suffix + ".sha256")
+    expected_hash = lock_path.read_text().split()[0]
+    assert file_sha256(MANIFEST) == expected_hash
+
+    roster = load_active_roster(REPO_ROOT)
+    assert roster == {
+        "cohorts": ("tcga_luad", "tcga_hnsc", "cptac_pdac"),
+        "cells": 78,
+    }
+
+
+def _write_roster(fake_repo: Path, roster: dict) -> Path:
+    path = fake_repo / "benchmarks/campaigns/preprint_130/active_roster.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(roster))
+    return path
+
+
+@pytest.mark.parametrize(
+    ("roster", "match"),
+    [
+        # A cohort outside DATASETS.
+        ({"cohorts": ["not_a_real_dataset"], "cells": 26}, "outside DATASETS"),
+        # cells is not 26 * len(cohorts).
+        ({"cohorts": ["tcga_luad"], "cells": 25}, "cells must equal"),
+        # Empty cohorts.
+        ({"cohorts": [], "cells": 0}, "non-empty list of unique"),
+        # Duplicate cohorts.
+        (
+            {"cohorts": ["tcga_luad", "tcga_luad"], "cells": 52},
+            "non-empty list of unique",
+        ),
+    ],
+)
+def test_load_active_roster_fails_closed_on_every_violation(tmp_path, roster, match):
+    fake_repo = tmp_path / "repo"
+    _write_roster(fake_repo, roster)
+
+    with pytest.raises(CampaignManifestError, match=match):
+        load_active_roster(fake_repo)

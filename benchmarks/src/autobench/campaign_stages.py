@@ -47,6 +47,8 @@ from automil.cells.state import Cell, CellStatus, read_cell, write_cell
 from automil.launch_binding import LaunchBindingError, validate_launch_binding
 
 from autobench.campaign import (
+    ACTIVE_CELL_COUNT,
+    ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
     ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
@@ -78,7 +80,12 @@ EXECUTION_IDENTITY_FILE = "execution_identity.json"
 SELECTION_FREEZE_FILE = "selection_freeze.json"
 CAMPAIGN_CERTIFICATION_FILE = "campaign_certification.json"
 AGENT_SESSION_FILE = "agent_session.json"
-CAMPAIGN_CELL_COUNT = len(DATASETS) * 26
+# The manifest stays the frozen 130-cell superset (exporter ports and
+# manifest_sha256 bindings are row-indexed and cannot move); the active
+# roster is the census authority every campaign-wide count answers to. The
+# name stays CAMPAIGN_CELL_COUNT — its many consumers below follow the
+# roster automatically.
+CAMPAIGN_CELL_COUNT = ACTIVE_CELL_COUNT
 SELECTION_FREEZE_SCHEMA_VERSION = 4
 #: The legal held-out fold shapes, derived from the one schema authority.
 #: Context-free validators check membership here; the FAMILY-exact lock is
@@ -4248,6 +4255,17 @@ def _process_matches_session(
     )
 
 
+def _roster_cells(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Manifest cells restricted to the active roster's cohorts.
+
+    The manifest stays the frozen 130-cell superset; the roster in
+    ``ACTIVE_ROSTER`` is the census authority for every campaign-wide count
+    and set-equality this module enforces, so every direct read of a raw
+    manifest's ``cells`` list must be filtered through this before use.
+    """
+    return [cell for cell in cells if cell.get("dataset") in ACTIVE_ROSTER["cohorts"]]
+
+
 def _roster_payload(cells: object) -> dict[str, str]:
     if not isinstance(cells, list):
         raise CampaignStageError("campaign roster must be a list")
@@ -4293,13 +4311,12 @@ def _locked_manifest_roster(
     if not isinstance(manifest, dict):
         raise CampaignStageError("locked campaign manifest must be a JSON object")
     cells = manifest.get("cells")
-    if (
-        manifest.get("campaign_id") != CAMPAIGN_ID
-        or not isinstance(cells, list)
-        or len(cells) != CAMPAIGN_CELL_COUNT
-    ):
+    if manifest.get("campaign_id") != CAMPAIGN_ID or not isinstance(cells, list):
         raise CampaignStageError("locked campaign manifest roster is incomplete")
-    return _roster_payload(cells)
+    roster_cells = _roster_cells(cells)
+    if len(roster_cells) != CAMPAIGN_CELL_COUNT:
+        raise CampaignStageError("locked campaign manifest roster is incomplete")
+    return _roster_payload(roster_cells)
 
 
 def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
@@ -4459,7 +4476,8 @@ def _validated_selection_freeze(runtime_root: Path) -> dict[str, Any]:
         artifact = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise CampaignStageError(
-            "held-out certification requires the global 130-cell selection freeze"
+            "held-out certification requires the campaign-wide "
+            f"{CAMPAIGN_CELL_COUNT}-cell selection freeze"
         ) from exc
     return validate_selection_freeze_artifact(artifact)
 
@@ -5029,14 +5047,15 @@ def _verify_selection_freeze_for_cell(
 def freeze_campaign_selections(
     runtime_root: Path, manifest_path: Path,
 ) -> dict[str, Any]:
-    """Freeze all 130 validation winners before any held-out value is opened."""
+    """Freeze the active roster's validation winners before any held-out value is opened."""
     runtime_root = runtime_root.resolve()
     manifest_path = manifest_path.resolve()
     manifest = load_manifest(manifest_path)
     manifest_sha256 = file_sha256(manifest_path)
     _, agent_protocol_sha256 = _locked_agent_protocol(runtime_root)
-    expected = {cell["cell_id"]: cell for cell in manifest["cells"]}
-    expected_roster = _roster_payload(manifest["cells"])
+    roster_cells = _roster_cells(manifest["cells"])
+    expected = {cell["cell_id"]: cell for cell in roster_cells}
+    expected_roster = _roster_payload(roster_cells)
     roster_sha256 = content_sha256(expected_roster)
     if len(expected) != CAMPAIGN_CELL_COUNT:
         raise CampaignStageError(
@@ -5308,7 +5327,8 @@ def certify_campaign(
     runtime_root = runtime_root.resolve()
     manifest_path = manifest_path.resolve()
     manifest = load_manifest(manifest_path)
-    expected_ids = sorted(cell["cell_id"] for cell in manifest["cells"])
+    roster_cells = _roster_cells(manifest["cells"])
+    expected_ids = sorted(cell["cell_id"] for cell in roster_cells)
     if len(expected_ids) != CAMPAIGN_CELL_COUNT:
         raise CampaignStageError(
             f"campaign certification requires {CAMPAIGN_CELL_COUNT} cells"
@@ -5319,7 +5339,7 @@ def certify_campaign(
         if (
             freeze.get("manifest_sha256") != manifest_sha256
             or freeze.get("roster_sha256")
-            != content_sha256(_roster_payload(manifest["cells"]))
+            != content_sha256(_roster_payload(roster_cells))
             or sorted(row["cell_id"] for row in freeze["cells"]) != expected_ids
         ):
             raise CampaignStageError("campaign certification freeze roster mismatch")
