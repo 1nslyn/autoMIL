@@ -2,5 +2,5 @@
   "cohorts": ["tcga_luad", "tcga_hnsc", "cptac_pdac"],
   "cells": 78,
   "declared": "2026-08-23",
-  "note": "Roster reduced from the frozen 5-cohort/130-cell manifest by Leo's decision of 2026-08-23 (tcga_lgg and cptac_gbm dropped). Interim declaration: baselines run this subset under the automil-preprint-130-v6 manifest. Superseded when the 130-to-78 manifest contract change lands, after which the roster authority is the manifest itself and this file must be deleted."
+  "note": "Roster reduced from the frozen 5-cohort/130-cell manifest by Leo's decision of 2026-08-23 (tcga_lgg and cptac_gbm dropped), running under the automil-preprint-130-v6 manifest. The manifest stays a byte-identical 130-cell superset permanently: exporter ports are manifest-row-indexed and manifest_sha256 is pinned into every cell's state at materialization and re-checked at freeze/certification, so it cannot shrink to match this roster. This file is therefore the permanent census authority the framework and launcher validate every campaign-wide count and set-equality against."
 }

@@ -9,6 +9,7 @@ import pytest
 
 import autobench.campaign_stages as campaign_stages
 from autobench.campaign import (
+    ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
     DISCOVERY_ATTEMPTS,
@@ -222,13 +223,16 @@ def _materialize_frozen_roster(runtime_root: Path) -> list[Path]:
     (runtime_root / "manifest.json").write_bytes(MANIFEST.read_bytes())
     manifest = load_manifest(MANIFEST)
     manifest_hash = file_sha256(MANIFEST)
+    # The manifest stays the frozen 130-cell superset; only the active
+    # roster's cells are ever materialized into a real runtime.
     return [
         _freeze_ready_state(runtime_root, cell, manifest_hash)
         for cell in manifest["cells"]
+        if cell["dataset"] in ACTIVE_ROSTER["cohorts"]
     ]
 
 
-def test_campaign_freeze_fails_closed_until_all_130_winners_exist(tmp_path):
+def test_campaign_freeze_fails_closed_until_all_roster_winners_exist(tmp_path):
     runtime_root = tmp_path / "runtime"
     roots = _materialize_frozen_roster(runtime_root)
     missing = roots[-1]
@@ -240,8 +244,8 @@ def test_campaign_freeze_fails_closed_until_all_130_winners_exist(tmp_path):
 
     backup.rename(missing)
     artifact = freeze_campaign_selections(runtime_root, MANIFEST)
-    assert artifact["cell_count"] == CAMPAIGN_CELL_COUNT == 130
-    assert len(artifact["cells"]) == 130
+    assert artifact["cell_count"] == CAMPAIGN_CELL_COUNT
+    assert len(artifact["cells"]) == CAMPAIGN_CELL_COUNT
 
 
 def test_campaign_freeze_validates_before_atomic_publication(tmp_path, monkeypatch):
@@ -321,7 +325,7 @@ def test_global_freeze_binds_every_cell_winner_and_blocks_later_drift(tmp_path):
     assert artifact["freeze_sha256"]
 
 
-def test_certify_campaign_indexes_exactly_the_frozen_130_bundles(
+def test_certify_campaign_indexes_exactly_the_frozen_roster_bundles(
     tmp_path, monkeypatch,
 ):
     runtime_root = tmp_path / "runtime"
@@ -420,8 +424,8 @@ def test_certify_campaign_indexes_exactly_the_frozen_130_bundles(
 
     assert len(visited) == len(set(visited)) == CAMPAIGN_CELL_COUNT
     assert set(visited) == {root.name for root in roots}
-    assert index["cell_count"] == 130
-    assert len(index["cells"]) == 130
+    assert index["cell_count"] == CAMPAIGN_CELL_COUNT
+    assert len(index["cells"]) == CAMPAIGN_CELL_COUNT
     assert restarted == index
     assert (runtime_root / "campaign_certification.json").read_bytes() == first_bytes
     assert (runtime_root / "campaign_certification.json").is_file()
@@ -515,3 +519,25 @@ def test_first_campaign_index_rejects_clock_before_certified_bundles(
     with pytest.raises(CampaignStageError, match="freeze/bundle/index order"):
         certify_campaign(runtime_root, MANIFEST)
     assert not (runtime_root / "campaign_certification.json").exists()
+
+
+def test_campaign_freeze_refuses_an_extra_off_roster_cell_even_with_valid_state(
+    tmp_path,
+):
+    """The roster, not "does this directory look legitimate", is the census
+    authority: an off-roster cell directory is refused even when its
+    campaign_state.json is exactly as well-formed as every roster cell's."""
+    runtime_root = tmp_path / "runtime"
+    _materialize_frozen_roster(runtime_root)
+    manifest = load_manifest(MANIFEST)
+    manifest_hash = file_sha256(MANIFEST)
+    off_roster_cell = next(
+        cell for cell in manifest["cells"]
+        if cell["dataset"] not in ACTIVE_ROSTER["cohorts"]
+    )
+    _freeze_ready_state(runtime_root, off_roster_cell, manifest_hash)
+
+    with pytest.raises(CampaignStageError, match="runtime roster differs") as exc_info:
+        freeze_campaign_selections(runtime_root, MANIFEST)
+    assert "unexpected=" in str(exc_info.value)
+    assert off_roster_cell["cell_id"] in str(exc_info.value)

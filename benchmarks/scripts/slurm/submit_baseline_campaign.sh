@@ -34,9 +34,11 @@ SELF="$PROJECT_DIR/benchmarks/scripts/slurm/submit_baseline_campaign.sh"
 # active_roster.json (cohorts + cell census) — which this launcher executes
 # but never decides. Roster changes are edits to that file, reviewable in
 # git; the scan below verifies the declaration against the frozen manifest
-# and refuses any mismatch. The file is an interim authority until the
-# 130→78 manifest contract change lands (then the manifest itself is the
-# roster and the file is deleted).
+# and refuses any mismatch. The manifest stays a byte-identical 130-cell
+# superset permanently (exporter ports and manifest_sha256 bindings are
+# row-indexed and cannot move), so this file is the permanent census
+# authority the framework and this launcher validate against — not an
+# interim stand-in for a manifest that will one day shrink to match it.
 ROSTER="$PROJECT_DIR/benchmarks/campaigns/preprint_130/active_roster.json"
 # Registered cell archives are mirrored into project storage after each cell
 # finishes: training MUST write into the cell root (the attestation and

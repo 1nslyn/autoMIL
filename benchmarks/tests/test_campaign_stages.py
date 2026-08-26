@@ -23,6 +23,7 @@ from automil.cells.activity import (
 )
 from automil.cells.state import Cell, CellStatus, make_cell_id, read_cell, write_cell
 from autobench.campaign import (
+    ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
@@ -132,9 +133,15 @@ def _make_staged_cell(tmp_path, *, task_family: str = "binary"):
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
     budget_cell_id = make_cell_id("dataset", "encoder", "model", "task")
+    # The top-level "dataset" (and its identity.dataset mirror, which
+    # _expected_baseline_attestation cross-checks against it) must be a real
+    # active-roster cohort: this is the field _roster_cells filters manifest
+    # rows on, and an off-roster (or placeholder) value would make
+    # _locked_manifest_roster see zero roster cells below.
+    roster_dataset = ACTIVE_ROSTER["cohorts"][0]
     cell_without_hash = {
         "cell_id": "dataset__arm__task",
-        "dataset": "dataset",
+        "dataset": roster_dataset,
         "task": "task",
         "task_family": task_family,
         "encoder": "encoder",
@@ -142,7 +149,7 @@ def _make_staged_cell(tmp_path, *, task_family: str = "binary"):
         "seed": 42,
         "model": "model",
         "identity": {
-            "dataset": "dataset",
+            "dataset": roster_dataset,
             "task": "task",
             "encoder": "encoder",
             "arm": "arm",
@@ -174,6 +181,10 @@ def _make_staged_cell(tmp_path, *, task_family: str = "binary"):
         {
             "cell_id": f"fixture-cell-{index:03d}",
             "cell_sha256": "a" * 64,
+            # Also on-roster, so this padding survives _roster_cells and the
+            # manifest's roster-filtered length still matches
+            # CAMPAIGN_CELL_COUNT (see the comment on roster_dataset above).
+            "dataset": roster_dataset,
         }
         for index in range(CAMPAIGN_CELL_COUNT - 1)
     ]
@@ -2024,7 +2035,10 @@ def test_cell_certification_requires_global_campaign_freeze(staged_cell):
     freeze_discovery(cell_root)
     select_winner(cell_root)
 
-    with pytest.raises(CampaignStageError, match="global 130-cell selection freeze"):
+    with pytest.raises(
+        CampaignStageError,
+        match=f"campaign-wide {CAMPAIGN_CELL_COUNT}-cell selection freeze",
+    ):
         certify_winner(cell_root)
 
 

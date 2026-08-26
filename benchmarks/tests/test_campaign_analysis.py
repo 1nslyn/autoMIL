@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from autobench.campaign import (
+    ACTIVE_CELL_COUNT,
+    ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
     DISCOVERY_ATTEMPTS,
@@ -385,6 +387,12 @@ def _write_certified_state(
 
 def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
     manifest = load_manifest(MANIFEST)
+    # The manifest stays the frozen 130-cell superset; only the active
+    # roster's cells are ever certified into a real runtime.
+    roster_cells = [
+        cell for cell in manifest["cells"]
+        if cell["dataset"] in ACTIVE_ROSTER["cohorts"]
+    ]
     runtime_root.mkdir(parents=True, exist_ok=True)
     (runtime_root / AGENT_PROTOCOL_FILE).write_text(json.dumps(AGENT_PROTOCOL))
     usage = {
@@ -410,7 +418,7 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
         "titan": 0.02,
     }
     freeze_entries = []
-    for cell in manifest["cells"]:
+    for cell in roster_cells:
         session_id = f"session-{cell['cell_id']}"
         session_binding = content_sha256({
             "campaign_id": CAMPAIGN_ID,
@@ -530,7 +538,7 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
     frozen_by_cell = {row["cell_id"]: row for row in freeze_entries}
     entries = []
     paths: dict[str, Path] = {}
-    for cell in manifest["cells"]:
+    for cell in roster_cells:
         freeze_entry = frozen_by_cell[cell["cell_id"]]
         baseline = _folds(
             cell["task_family"], framework_baseline[cell["framework"]],
@@ -673,26 +681,32 @@ def test_report_contains_complete_lift_and_cross_arm_ranking_estimands(tmp_path)
         repo_root=REPO_ROOT,
     )
 
-    assert report["cell_count"] == 130
-    assert len(report["cells"]) == 130
-    assert len(report["tile_ranking_blocks"]) == 30
+    # Roster is tcga_luad (binary kras), tcga_hnsc (ordinal grade), and
+    # cptac_pdac (multiclass immune_class) — every roster dataset also
+    # carries "os" (survival). 3 roster datasets x 2 tasks x 3 encoders = 18
+    # tile ranking blocks (9 classification + 9 survival); the titan (slide
+    # regime) census is 1 cell per (dataset, task), so 1 for each of the
+    # single-dataset families and 3 for survival (all three datasets).
+    assert report["cell_count"] == ACTIVE_CELL_COUNT
+    assert len(report["cells"]) == ACTIVE_CELL_COUNT
+    assert len(report["tile_ranking_blocks"]) == 18
     assert report["summaries"]["tile_ranking_response"]["classification"][
         "blocks"
-    ] == 15
+    ] == 9
     assert report["summaries"]["tile_ranking_response"]["survival"][
         "blocks"
-    ] == 15
-    assert report["summaries"]["titan_by_task_family"]["binary"]["n"] == 3
+    ] == 9
+    assert report["summaries"]["titan_by_task_family"]["binary"]["n"] == 1
     assert report["summaries"]["titan_by_task_family"]["multiclass"]["n"] == 1
     assert report["summaries"]["titan_by_task_family"]["ordinal"]["n"] == 1
-    assert report["summaries"]["titan_by_task_family"]["survival"]["n"] == 5
+    assert report["summaries"]["titan_by_task_family"]["survival"]["n"] == 3
     assert "all_cells" not in report["summaries"]
     assert set(report["summaries"]["agentic_lift"]["by_task_family"]) == {
         "binary", "multiclass", "ordinal", "survival",
     }
     assert report["summaries"]["agent_resources"]["input_tokens"] == {
-        "reported_cells": 130,
-        "total": 13000.0,
+        "reported_cells": ACTIVE_CELL_COUNT,
+        "total": 100.0 * ACTIVE_CELL_COUNT,
     }
     assert all(
         block["top_arm_set_changed"]
@@ -701,7 +715,7 @@ def test_report_contains_complete_lift_and_cross_arm_ranking_estimands(tmp_path)
     assert (runtime_root / "publication_report.json").is_file()
 
 
-def test_report_fails_closed_if_one_of_130_certifications_is_missing(tmp_path):
+def test_report_fails_closed_if_one_certification_is_missing(tmp_path):
     runtime_root = tmp_path / "runtime"
     paths = _certified_campaign(runtime_root)
     next(iter(paths.values())).unlink()

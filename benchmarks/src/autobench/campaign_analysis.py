@@ -1,4 +1,4 @@
-"""Fail-closed publication artifact for the frozen 130-cell campaign."""
+"""Fail-closed publication artifact for the frozen preprint campaign."""
 from __future__ import annotations
 
 import json
@@ -10,12 +10,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
 from autobench.campaign import (
+    ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
     ANALYSIS_PLAN_PATH,
     ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
     DISCOVERY_ATTEMPTS,
+    ENCODERS,
     HELD_OUT_SCHEMA_BY_FAMILY,
     PROTOCOL_VERSION,
     TILE_ARMS,
@@ -476,8 +478,14 @@ def _ranking_blocks(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "automil_top_arms": automil_top,
             "top_arm_set_changed": baseline_top != automil_top,
         })
-    if len(blocks) != 30:
-        raise CampaignAnalysisError(f"expected 30 tile ranking blocks, got {len(blocks)}")
+    # One block per (dataset, task, encoder): each roster dataset carries
+    # exactly one classification task plus "os", so 2 tasks x len(ENCODERS)
+    # blocks per roster dataset.
+    expected_blocks = len(ACTIVE_ROSTER["cohorts"]) * 2 * len(ENCODERS)
+    if len(blocks) != expected_blocks:
+        raise CampaignAnalysisError(
+            f"expected {expected_blocks} tile ranking blocks, got {len(blocks)}"
+        )
     return blocks
 
 
@@ -575,7 +583,12 @@ def build_publication_report(
         entry.get("cell_id"): entry for entry in raw_entries
         if isinstance(entry, dict) and isinstance(entry.get("cell_id"), str)
     }
-    manifest_cells = {cell["cell_id"]: cell for cell in manifest["cells"]}
+    # The manifest stays the frozen 130-cell superset; the active roster is
+    # the census authority every count and set-equality below answers to.
+    manifest_cells = {
+        cell["cell_id"]: cell for cell in manifest["cells"]
+        if cell["dataset"] in ACTIVE_ROSTER["cohorts"]
+    }
     if (
         len(entries) != CAMPAIGN_CELL_COUNT
         or set(entries) != set(manifest_cells)
@@ -632,7 +645,7 @@ def build_publication_report(
         if isinstance(row, dict) and isinstance(row.get("cell_id"), str)
     }
     manifest_roster = {
-        cell["cell_id"]: cell["cell_sha256"] for cell in manifest["cells"]
+        cell_id: cell["cell_sha256"] for cell_id, cell in manifest_cells.items()
     }
     freeze_roster = {
         row.get("cell_id"): row.get("cell_sha256")
