@@ -154,12 +154,16 @@ pop_cell() {
     ) 9>>"$QUEUE_FILE.lock"
 }
 
-# Mirror one registered cell's archive into project storage. Export failure
-# is loud (FAIL_FILE -> nonzero job exit -> FAIL mail) but does not undo the
-# local registration; rsync is idempotent, so the next pass repairs it.
+# Mirror one registered cell's archive into project storage, following the
+# version2 hierarchy convention: <cohort>/<framework>/<task>/<encoder>/.
+# Campaign-wide constants (strategy=standard, seed, protocol) stay out of
+# the path — the mirrored state file records them. Export failure is loud
+# (FAIL_FILE -> nonzero job exit -> FAIL mail) but does not undo the local
+# registration; rsync is idempotent, so the next pass repairs it.
 export_cell() {
     local cell="$1" dest
-    dest="$EXPORT_ROOT/${cell%%__*}/$cell"
+    dest=$(echo "$cell" | awk -F'__' -v root="$EXPORT_ROOT" \
+        '{print root "/" $1 "/" $4 "/" $2 "/" $3}')
     mkdir -p "$dest"
     if rsync -a "$RUNTIME/$cell/baseline-execution/archive/" "$dest/" \
         && rsync -a "$RUNTIME/$cell/campaign_state.json" "$dest/"; then
@@ -170,10 +174,17 @@ export_cell() {
 }
 
 # Catch-up: mirror every already-registered cell (covers cells finished by
-# earlier job generations that ran without the export step).
+# earlier job generations that ran without the export step). A failed scan
+# is recorded in FAIL_FILE so the job cannot end claiming "mirrored" on the
+# strength of a scan that never ran.
 export_registered() {
-    local cell
-    for cell in $(list_pending --registered 2>/dev/null); do
+    local cells cell
+    if ! cells=$(list_pending registered); then
+        echo "WARNING: registered-cell scan failed; catch-up mirror skipped"
+        echo "catch-up-scan export-failed" >> "$FAIL_FILE"
+        return 1
+    fi
+    for cell in $cells; do
         export_cell "$cell" || true
     done
 }
