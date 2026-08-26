@@ -38,13 +38,13 @@ SELF="$PROJECT_DIR/benchmarks/scripts/slurm/submit_baseline_campaign.sh"
 # 130→78 manifest contract change lands (then the manifest itself is the
 # roster and the file is deleted).
 ROSTER="$PROJECT_DIR/benchmarks/campaigns/preprint_130/active_roster.json"
-# Registered cell archives are mirrored here (project storage) after each
-# cell finishes: training MUST write into the cell root (the attestation and
+# Registered cell archives are mirrored into project storage after each cell
+# finishes: training MUST write into the cell root (the attestation and
 # sealed-evidence chain verifies those exact paths, and the runtime lives in
-# purge-eligible scratch), so the durable, browsable copy is this mirror.
-# Sealed certify/ files ride along untouched — they are the only held-out
-# evidence and stay unopened until `automil certify`.
-EXPORT_ROOT="/home/yinshuol/projects/rrg-jma/shared/Pathology/autoMIL/version3"
+# purge-eligible scratch), so the durable, browsable copy is the mirror.
+# The mirror mapping, the sealed/public split, and the hash-verified
+# EXPORT_OK marker all live in ONE place — campaign_export.py — and the
+# destination root comes from AUTOBENCH_EXPORT_ROOT in benchmarks/.env.
 N_GPUS=4
 
 cd "$PROJECT_DIR" || { echo "ERROR: project dir not found: $PROJECT_DIR"; exit 1; }
@@ -55,6 +55,8 @@ mkdir -p logs/baseline_cells
 command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required on the compute node"; exit 1; }
 module load cuda/12.2 2>/dev/null || true
 set -a; source benchmarks/.env; set +a
+[ -n "${AUTOBENCH_EXPORT_ROOT:-}" ] || { echo "ERROR: AUTOBENCH_EXPORT_ROOT missing from benchmarks/.env"; exit 1; }
+[ -d "$AUTOBENCH_EXPORT_ROOT" ] || { echo "ERROR: export root not a directory: $AUTOBENCH_EXPORT_ROOT"; exit 1; }
 
 # Pending = roster cells whose stage state has no registered baseline
 # ("baseline" stays null until registration). Gate-1 regime cells first.
@@ -154,39 +156,32 @@ pop_cell() {
     ) 9>>"$QUEUE_FILE.lock"
 }
 
-# Mirror one registered cell's archive into project storage, following the
-# version2 hierarchy convention: <cohort>/<framework>/<task>/<encoder>/.
-# Campaign-wide constants (strategy=standard, seed, protocol) stay out of
-# the path — the mirrored state file records them. Export failure is loud
-# (FAIL_FILE -> nonzero job exit -> FAIL mail) but does not undo the local
-# registration; rsync is idempotent, so the next pass repairs it.
+# Mirror one registered cell into project storage via campaign_export.py
+# (hash-verified, sealed/public split, EXPORT_OK marker, per-cell lock).
+# Export failure is loud (FAIL_FILE -> nonzero job exit -> FAIL mail) but
+# does not undo the local registration; export is idempotent, so the next
+# pass repairs it.
 export_cell() {
-    local cell="$1" dest
-    dest=$(echo "$cell" | awk -F'__' -v root="$EXPORT_ROOT" \
-        '{print root "/" $1 "/" $4 "/" $2 "/" $3}')
-    mkdir -p "$dest"
-    if rsync -a "$RUNTIME/$cell/baseline-execution/archive/" "$dest/" \
-        && rsync -a "$RUNTIME/$cell/campaign_state.json" "$dest/"; then
+    local cell="$1"
+    if uv run --frozen --no-sync --package autobench \
+        python benchmarks/scripts/campaign_export.py --cell "$cell"; then
         return 0
     fi
     echo "$cell export-failed" >> "$FAIL_FILE"
     return 1
 }
 
-# Catch-up: mirror every already-registered cell (covers cells finished by
-# earlier job generations that ran without the export step). A failed scan
-# is recorded in FAIL_FILE so the job cannot end claiming "mirrored" on the
-# strength of a scan that never ran.
+# Catch-up: mirror every already-registered roster cell (covers cells
+# finished by earlier job generations that ran without the export step) and
+# seed the campaign identity artifacts. Failure is recorded in FAIL_FILE so
+# the job cannot end claiming "mirrored" after a pass that never ran.
 export_registered() {
-    local cells cell
-    if ! cells=$(list_pending registered); then
-        echo "WARNING: registered-cell scan failed; catch-up mirror skipped"
-        echo "catch-up-scan export-failed" >> "$FAIL_FILE"
+    if ! uv run --frozen --no-sync --package autobench \
+        python benchmarks/scripts/campaign_export.py --all-registered; then
+        echo "WARNING: catch-up export reported failures"
+        echo "catch-up-export export-failed" >> "$FAIL_FILE"
         return 1
     fi
-    for cell in $cells; do
-        export_cell "$cell" || true
-    done
 }
 
 worker() {
