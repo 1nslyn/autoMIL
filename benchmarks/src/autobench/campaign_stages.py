@@ -1251,18 +1251,30 @@ def _run_baseline_reproduction_locked(
     _verify_baseline_unchanged(cell_root, state, baseline)
     existing = state.get("baseline_reproduction")
     if existing is not None and not force:
+        # Idempotent ONLY for a bound pass earned at the CURRENT HEAD. A
+        # pass recorded at another commit must not short-circuit: the launch
+        # preflight sends the operator here precisely to authorize the new
+        # HEAD, and a success-that-ran-nothing would loop them between a
+        # refusing launch and a stage claiming success.
+        existing_verdict = (
+            existing.get("verdict") if isinstance(existing, dict) else "?"
+        )
+        existing_commit = (
+            str(existing.get("commit"))[:12] if isinstance(existing, dict) else "?"
+        )
         if (
             isinstance(existing, dict)
             and existing.get("mode") == "gate"
             and existing.get("verdict") == "pass"
             and existing.get("candidate_sha256") == baseline.get("candidate_sha256")
+            and existing.get("commit") == _head_commit(repo_root)
         ):
             return state
         raise CampaignStageError(
             "a baseline reproduction is already recorded (verdict="
-            f"{existing.get('verdict') if isinstance(existing, dict) else '?'}); "
-            "rerun with --force to supersede it — the prior verdict stays "
-            "in history, so there is no silent retry-until-pass"
+            f"{existing_verdict}, commit {existing_commit}); rerun with "
+            "--force to supersede it — the prior verdict stays in history, "
+            "so there is no silent retry-until-pass"
         )
     policy = None if measure else _load_reproduction_policy(repo_root)
     try:
