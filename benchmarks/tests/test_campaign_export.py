@@ -30,11 +30,9 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-@pytest.fixture()
-def fabricated_cell(tmp_path):
+def _make_registered_cell(runtime, cell_id):
     """A registered cell root with hash-consistent ledger and archive."""
-    runtime = tmp_path / "runtime"
-    archive = runtime / CELL_ID / "baseline-execution" / "archive"
+    archive = runtime / cell_id / "baseline-execution" / "archive"
     certify = archive / "certify"
     (certify / "results" / "fold_0").mkdir(parents=True)
 
@@ -50,19 +48,24 @@ def fabricated_cell(tmp_path):
     (certify / "result.json").write_text("{\"held_out\": {}}")
     (certify / "results" / "fold_0" / "predictions.csv").write_text("sid,y\n")
 
-    attestation = {"attestation_sha256": "a" * 64, "cell_id": CELL_ID}
+    attestation = {"attestation_sha256": "a" * 64, "cell_id": cell_id}
     (archive / "baseline_attestation.json").write_text(json.dumps(attestation))
 
     state = {
-        "cell_id": CELL_ID,
+        "cell_id": cell_id,
         "baseline": {
             "result_sha256": _sha256_bytes(result_bytes),
             "attestation_sha256": "a" * 64,
             "sealed_fold_sha256": sealed_hashes,
         },
     }
-    (runtime / CELL_ID / "campaign_state.json").write_text(json.dumps(state))
+    (runtime / cell_id / "campaign_state.json").write_text(json.dumps(state))
 
+
+@pytest.fixture()
+def fabricated_cell(tmp_path):
+    runtime = tmp_path / "runtime"
+    _make_registered_cell(runtime, CELL_ID)
     export_root = tmp_path / "version3"
     export_root.mkdir()
     return runtime, export_root
@@ -220,6 +223,78 @@ def test_export_root_is_required(tmp_path, monkeypatch):
     monkeypatch.delenv("AUTOBENCH_EXPORT_ROOT", raising=False)
     with pytest.raises(SystemExit, match="export root is not set"):
         ce._resolve_export_root(None)
+
+
+def test_preexisting_sealed_content_in_public_leaf_refuses(fabricated_cell):
+    """Forged violation: a leaf carrying pre-split sealed bytes must never
+    be stamped as a verified mirror, even when a marker claims currency."""
+    runtime, export_root = fabricated_cell
+    leaf = ce.leaf_dir(export_root, CELL_ID)
+    (leaf / "certify").mkdir(parents=True)
+    (leaf / "certify" / "fold_0_result.json").write_text('{"held_out": {}}')
+    with pytest.raises(ce.ExportError, match="pre-split"):
+        ce.export_cell(runtime, export_root, CELL_ID)
+    assert not (leaf / "EXPORT_OK").exists()
+
+
+def test_legacy_flat_result_in_public_leaf_refuses(fabricated_cell):
+    runtime, export_root = fabricated_cell
+    leaf = ce.leaf_dir(export_root, CELL_ID)
+    leaf.mkdir(parents=True)
+    (leaf / "result.json").write_text("{}")
+    with pytest.raises(ce.ExportError, match="pre-split"):
+        ce.export_cell(runtime, export_root, CELL_ID)
+    assert not (leaf / "EXPORT_OK").exists()
+
+
+def test_oserror_on_one_cell_does_not_truncate_the_sweep(
+    tmp_path, monkeypatch, capsys,
+):
+    """Cluster filesystems raise bare OSError (quota, EIO); one cell's
+    failure must be recorded while the rest of the sweep completes with the
+    accounting line printed."""
+    repo = tmp_path / "repo"
+    campaign = repo / "benchmarks/campaigns/preprint_130"
+    campaign.mkdir(parents=True)
+    other = "tcga_luad__os__uni_v2__clam__s42__preprint-v3"
+    (campaign / "manifest.json").write_text(json.dumps({
+        "cells": [
+            {"cell_id": CELL_ID, "dataset": "tcga_luad"},
+            {"cell_id": other, "dataset": "tcga_luad"},
+        ],
+    }))
+    (campaign / "active_roster.json").write_text(json.dumps({
+        "cohorts": ["tcga_luad"], "cells": 2,
+    }))
+    for name in ce.CAMPAIGN_FILES:
+        path = campaign / name
+        if not path.exists():
+            path.write_text("{}")
+    runtime = campaign / "runtime"
+    _make_registered_cell(runtime, CELL_ID)
+    _make_registered_cell(runtime, other)
+    export_root = tmp_path / "version3"
+    export_root.mkdir()
+
+    original = ce._atomic_copy
+
+    def failing_copy(source, dest):
+        if "/kras/" in str(dest):
+            raise OSError(122, "Disk quota exceeded")
+        original(source, dest)
+
+    monkeypatch.setattr(ce, "_atomic_copy", failing_copy)
+    rc = ce.main([
+        "--all-registered",
+        "--export-root", str(export_root),
+        "--repo-root", str(repo),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "exported=1" in captured.out and "failed=1" in captured.out
+    assert "quota" in captured.err
+    assert (ce.leaf_dir(export_root, other) / "EXPORT_OK").is_file()
+    assert not (ce.leaf_dir(export_root, CELL_ID) / "EXPORT_OK").exists()
 
 
 def test_unknown_roster_cohort_is_refused(tmp_path):

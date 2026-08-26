@@ -38,7 +38,6 @@ import fcntl
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -186,7 +185,7 @@ def _rsync(source: Path, dest: Path, *extra: str) -> None:
         )
 
 
-def _atomic_write(path: Path, payload: dict) -> None:
+def _atomic_write(path: Path, payload: dict, mode: int | None = None) -> None:
     handle = tempfile.NamedTemporaryFile(
         "w", dir=str(path.parent), prefix=f".{path.name}.", delete=False
     )
@@ -194,6 +193,8 @@ def _atomic_write(path: Path, payload: dict) -> None:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
         handle.close()
+        if mode is not None:
+            os.chmod(handle.name, mode)
         os.replace(handle.name, path)
     except OSError:
         handle.close()
@@ -317,6 +318,19 @@ def export_cell(runtime: Path, export_root: Path, cell_id: str) -> str:
     leaf.mkdir(parents=True, exist_ok=True)
     with (leaf / ".export.lock").open("a+") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        # The marker asserts a verified sealed/public split, so any sealed or
+        # pre-split content already sitting in the public leaf must fail
+        # closed — even when a marker claims the leaf is current.
+        stale = [
+            path for path in (leaf / "certify", leaf / "result.json")
+            if path.exists()
+        ]
+        if stale:
+            raise ExportError(
+                f"{cell_id}: public leaf carries pre-split content "
+                f"({', '.join(str(path) for path in stale)}); quarantine it "
+                "manually before mirroring"
+            )
         if _marker_current(leaf, baseline):
             return "current"
         _ensure_sealed_root(export_root)
@@ -325,6 +339,12 @@ def export_cell(runtime: Path, export_root: Path, cell_id: str) -> str:
             _rsync(archive / "certify", sealed_leaf / "certify")
         _atomic_copy(state_path, leaf / "campaign_state.json")
         _verify_destination(leaf, sealed_leaf, baseline)
+        # Modes first, marker last: a kill between the two leaves an
+        # unmarked (repairable) mirror, never a marked owner-only one.
+        _apply_public_modes(
+            export_root, leaf, [leaf / "campaign_state.json"],
+        )
+        _normalize_public_tree(leaf / "baseline")
         _atomic_write(
             leaf / "EXPORT_OK",
             {
@@ -334,13 +354,8 @@ def export_cell(runtime: Path, export_root: Path, cell_id: str) -> str:
                 "exported_at": datetime.now(timezone.utc).isoformat(),
                 "source": str(cell_root),
             },
+            mode=PUBLIC_FILE_MODE,
         )
-        _apply_public_modes(
-            export_root,
-            leaf,
-            [leaf / "campaign_state.json", leaf / "EXPORT_OK"],
-        )
-        _normalize_public_tree(leaf / "baseline")
     return "exported"
 
 
@@ -356,7 +371,7 @@ def seed_campaign_dir(repo_root: Path, export_root: Path) -> None:
         source = repo_root / CAMPAIGN_REL / name
         if not source.is_file():
             raise ExportError(f"campaign artifact missing: {source}")
-        shutil.copy2(source, target / name)
+        _atomic_copy(source, target / name)
     (target / "README.md").write_text(CAMPAIGN_README)
     _apply_public_modes(
         export_root, target, [target / name for name in names + ["README.md"]]
@@ -399,21 +414,34 @@ def main(argv: list[str] | None = None) -> int:
         raise _fail(f"runtime not materialized: {runtime}")
     export_root = _resolve_export_root(args.export_root)
 
+    # Cluster filesystems raise bare OSError (quota, EIO, stale handles) from
+    # any of the copy/lock/chmod calls; one cell's failure must be recorded
+    # and the sweep must continue, never truncate mid-list without the
+    # accounting line.
     if args.cell:
-        known = {cell["cell_id"] for cell in _manifest_cells(repo_root)}
+        try:
+            known = {cell["cell_id"] for cell in _manifest_cells(repo_root)}
+        except (ExportError, OSError) as exc:
+            print(f"campaign_export: {exc}", file=sys.stderr)
+            return 1
         if args.cell not in known:
             raise _fail(f"{args.cell!r} is not a manifest cell")
         try:
             outcome = export_cell(runtime, export_root, args.cell)
-        except ExportError as exc:
+        except (ExportError, OSError) as exc:
             print(f"campaign_export: {exc}", file=sys.stderr)
             return 1
         print(f"{args.cell}: {outcome}")
         return 0
 
+    try:
+        cells = roster_cell_ids(repo_root)
+    except (ExportError, OSError) as exc:
+        print(f"campaign_export: {exc}", file=sys.stderr)
+        return 1
     failures: list[str] = []
     exported = current = pending = 0
-    for cell_id in roster_cell_ids(repo_root):
+    for cell_id in cells:
         state_path = runtime / cell_id / "campaign_state.json"
         if not state_path.is_file():
             failures.append(f"{cell_id}: no materialized state")
@@ -427,11 +455,14 @@ def main(argv: list[str] | None = None) -> int:
         except ExportError as exc:
             failures.append(str(exc))
             continue
+        except OSError as exc:
+            failures.append(f"{cell_id}: {exc!r}")
+            continue
         exported += outcome == "exported"
         current += outcome == "current"
     try:
         seed_campaign_dir(repo_root, export_root)
-    except ExportError as exc:
+    except (ExportError, OSError) as exc:
         failures.append(f"campaign dir: {exc}")
     print(
         f"exported={exported} current={current} pending={pending} "

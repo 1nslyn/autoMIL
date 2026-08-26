@@ -55,8 +55,15 @@ mkdir -p logs/baseline_cells
 command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required on the compute node"; exit 1; }
 module load cuda/12.2 2>/dev/null || true
 set -a; source benchmarks/.env; set +a
-[ -n "${AUTOBENCH_EXPORT_ROOT:-}" ] || { echo "ERROR: AUTOBENCH_EXPORT_ROOT missing from benchmarks/.env"; exit 1; }
-[ -d "$AUTOBENCH_EXPORT_ROOT" ] || { echo "ERROR: export root not a directory: $AUTOBENCH_EXPORT_ROOT"; exit 1; }
+# The mirror must never gate training: a missing or unreachable export root
+# at job start disables exporting for this generation — recorded loudly in
+# FAIL_FILE below (nonzero exit + FAIL mail) — instead of exiting here,
+# BEFORE the resubmit trap exists, which would strand the campaign chain.
+EXPORT_ENABLED=1
+if [ -z "${AUTOBENCH_EXPORT_ROOT:-}" ] || [ ! -d "${AUTOBENCH_EXPORT_ROOT:-}" ]; then
+    echo "WARNING: AUTOBENCH_EXPORT_ROOT missing or not a directory — mirroring disabled this generation"
+    EXPORT_ENABLED=0
+fi
 
 # Pending = roster cells whose stage state has no registered baseline
 # ("baseline" stays null until registration). Gate-1 regime cells first.
@@ -121,6 +128,7 @@ QUEUE_FILE=$(mktemp)
 FAIL_FILE=$(mktemp)
 echo "$PENDING" > "$QUEUE_FILE"
 trap 'rm -f "$QUEUE_FILE" "$FAIL_FILE"' EXIT
+[ "$EXPORT_ENABLED" -eq 1 ] || echo "export-root export-disabled" >> "$FAIL_FILE"
 
 # Resubmit-before-wall: SLURM sends USR1 300s before the wall (see --signal).
 # Resubmit UNCONDITIONALLY — nothing else runs in the signal path. The trap
@@ -163,6 +171,7 @@ pop_cell() {
 # pass repairs it.
 export_cell() {
     local cell="$1"
+    [ "$EXPORT_ENABLED" -eq 1 ] || return 0
     if uv run --frozen --no-sync --package autobench \
         python benchmarks/scripts/campaign_export.py --cell "$cell"; then
         return 0
@@ -176,6 +185,7 @@ export_cell() {
 # seed the campaign identity artifacts. Failure is recorded in FAIL_FILE so
 # the job cannot end claiming "mirrored" after a pass that never ran.
 export_registered() {
+    [ "$EXPORT_ENABLED" -eq 1 ] || return 0
     if ! uv run --frozen --no-sync --package autobench \
         python benchmarks/scripts/campaign_export.py --all-registered; then
         echo "WARNING: catch-up export reported failures"
@@ -210,11 +220,11 @@ echo "Job ${SLURM_JOB_ID:-N/A} | $(hostname) | $(date)"
 echo "================================================"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv 2>/dev/null || true
 
-# Catch-up mirror first, so cells registered by earlier job generations
-# (before the export step existed) reach version3 even when nothing is
-# pending any more.
-export_registered
+# Drained case: nothing to train, so the catch-up mirror (covering cells
+# finished by generations that ran without the export step) runs foreground
+# and the job exits on its accounting.
 if [ -z "$PENDING" ]; then
+    export_registered
     if [ -s "$FAIL_FILE" ]; then
         echo "Nothing pending, but exports failed:"; sed 's/^/  /' "$FAIL_FILE"
         exit 1
@@ -223,9 +233,15 @@ if [ -z "$PENDING" ]; then
     exit 0
 fi
 
+# Workers first, catch-up alongside them: bash defers trapped signals until
+# the current foreground command returns, so a foreground catch-up stalling
+# across the wall would eat the USR1 resubmit and strand the chain — and the
+# GPUs must not idle behind mirror I/O either. The exporter's per-cell
+# destination lock makes the concurrent catch-up and worker exports safe.
 for gpu in $(seq 0 $((N_GPUS - 1))); do
     worker "$gpu" &
 done
+export_registered &
 while [ -n "$(jobs -pr)" ]; do
     wait -n || true
 done
