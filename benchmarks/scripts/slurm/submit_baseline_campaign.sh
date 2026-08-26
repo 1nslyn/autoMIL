@@ -38,6 +38,13 @@ SELF="$PROJECT_DIR/benchmarks/scripts/slurm/submit_baseline_campaign.sh"
 # 130→78 manifest contract change lands (then the manifest itself is the
 # roster and the file is deleted).
 ROSTER="$PROJECT_DIR/benchmarks/campaigns/preprint_130/active_roster.json"
+# Registered cell archives are mirrored here (project storage) after each
+# cell finishes: training MUST write into the cell root (the attestation and
+# sealed-evidence chain verifies those exact paths, and the runtime lives in
+# purge-eligible scratch), so the durable, browsable copy is this mirror.
+# Sealed certify/ files ride along untouched — they are the only held-out
+# evidence and stay unopened until `automil certify`.
+EXPORT_ROOT="/home/yinshuol/projects/rrg-jma/shared/Pathology/autoMIL/version3"
 N_GPUS=4
 
 cd "$PROJECT_DIR" || { echo "ERROR: project dir not found: $PROJECT_DIR"; exit 1; }
@@ -58,10 +65,13 @@ set -a; source benchmarks/.env; set +a
 # never run.
 list_pending() {
     uv run --frozen --no-sync --package autobench python - \
-        "$MANIFEST" "$RUNTIME" "$ROSTER" <<'PYEOF'
+        "$MANIFEST" "$RUNTIME" "$ROSTER" "${1:-pending}" <<'PYEOF'
 import json, sys
 from pathlib import Path
 manifest, runtime, roster_path = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+mode = sys.argv[4]
+if mode not in ("pending", "registered"):
+    sys.exit(f"unknown scan mode {mode!r}")
 try:
     roster = json.loads(roster_path.read_text())
     cohorts, expected = list(roster["cohorts"]), int(roster["cells"])
@@ -79,7 +89,7 @@ if len(cells) != expected:
              f"{sorted(cohorts)}, declared cells={expected}")
 print(f"roster: {sorted(cohorts)} = {len(cells)} cells ({roster_path.name})",
       file=sys.stderr)
-canary_first, rest = [], []
+canary_first, rest, registered = [], [], []
 for cell in cells:
     state_path = runtime / cell / "campaign_state.json"
     if not state_path.is_file():
@@ -94,19 +104,16 @@ for cell in cells:
         if not isinstance(baseline, dict):
             sys.exit(f"{cell}: registered baseline state is invalid "
                      f"({type(baseline).__name__})")
+        registered.append(cell)
         continue
     encoder = cell.split("__")[2]
     (canary_first if cell.startswith("tcga_luad__") and encoder in ("uni_v2", "titan")
      else rest).append(cell)
-print("\n".join(canary_first + rest))
+print("\n".join(registered if mode == "registered" else canary_first + rest))
 PYEOF
 }
 PENDING=$(list_pending) || { echo "ERROR: pending-cell scan failed"; exit 1; }
-if [ -z "$PENDING" ]; then
-    echo "All roster baselines are registered — nothing to do."
-    exit 0
-fi
-echo "$PENDING" | wc -l | xargs echo "pending cells:"
+echo "$PENDING" | grep -c . | xargs echo "pending cells:"
 
 QUEUE_FILE=$(mktemp)
 FAIL_FILE=$(mktemp)
@@ -147,6 +154,30 @@ pop_cell() {
     ) 9>>"$QUEUE_FILE.lock"
 }
 
+# Mirror one registered cell's archive into project storage. Export failure
+# is loud (FAIL_FILE -> nonzero job exit -> FAIL mail) but does not undo the
+# local registration; rsync is idempotent, so the next pass repairs it.
+export_cell() {
+    local cell="$1" dest
+    dest="$EXPORT_ROOT/${cell%%__*}/$cell"
+    mkdir -p "$dest"
+    if rsync -a "$RUNTIME/$cell/baseline-execution/archive/" "$dest/" \
+        && rsync -a "$RUNTIME/$cell/campaign_state.json" "$dest/"; then
+        return 0
+    fi
+    echo "$cell export-failed" >> "$FAIL_FILE"
+    return 1
+}
+
+# Catch-up: mirror every already-registered cell (covers cells finished by
+# earlier job generations that ran without the export step).
+export_registered() {
+    local cell
+    for cell in $(list_pending --registered 2>/dev/null); do
+        export_cell "$cell" || true
+    done
+}
+
 worker() {
     local gpu="$1" cell rc
     while :; do
@@ -159,7 +190,11 @@ worker() {
             > "logs/baseline_cells/${cell}.log" 2>&1
         rc=$?
         echo "[gpu$gpu] $(date +%H:%M:%S) done  $cell rc=$rc"
-        [ "$rc" -eq 0 ] || echo "$cell rc=$rc" >> "$FAIL_FILE"
+        if [ "$rc" -eq 0 ]; then
+            export_cell "$cell" && echo "[gpu$gpu] exported $cell"
+        else
+            echo "$cell rc=$rc" >> "$FAIL_FILE"
+        fi
     done
 }
 
@@ -168,6 +203,19 @@ echo "preprint campaign v3 baselines — roster: $ROSTER"
 echo "Job ${SLURM_JOB_ID:-N/A} | $(hostname) | $(date)"
 echo "================================================"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv 2>/dev/null || true
+
+# Catch-up mirror first, so cells registered by earlier job generations
+# (before the export step existed) reach version3 even when nothing is
+# pending any more.
+export_registered
+if [ -z "$PENDING" ]; then
+    if [ -s "$FAIL_FILE" ]; then
+        echo "Nothing pending, but exports failed:"; sed 's/^/  /' "$FAIL_FILE"
+        exit 1
+    fi
+    echo "All roster baselines are registered and mirrored — nothing to do."
+    exit 0
+fi
 
 for gpu in $(seq 0 $((N_GPUS - 1))); do
     worker "$gpu" &
