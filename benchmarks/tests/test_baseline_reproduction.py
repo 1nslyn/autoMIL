@@ -41,7 +41,9 @@ def _declare_policy(repo_root: Path, epsilon=0.005) -> Path:
     return path
 
 
-def _fake_execution(monkeypatch, *, fold_values, fold_hashes=None, observed=None):
+def _fake_execution(
+    monkeypatch, *, fold_values, fold_hashes=None, observed=None, head="c" * 40,
+):
     """Fake subprocess for the reproduction run.
 
     Handles the identity git calls, the worktree lifecycle, and the frozen
@@ -52,7 +54,7 @@ def _fake_execution(monkeypatch, *, fold_values, fold_hashes=None, observed=None
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "rev-parse"]:
-            return SimpleNamespace(returncode=0, stdout="c" * 40 + "\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout=head + "\n", stderr="")
         if command[:3] == ["git", "diff", "--quiet"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if command[:3] == ["git", "worktree", "add"]:
@@ -375,3 +377,41 @@ def test_forged_session_verdict_bound_to_other_baseline_is_refused(
     _commit_state(cell_root, state)
     with pytest.raises(CampaignStageError, match="passing baseline reproduction"):
         _open_session(cell_root, adir)
+
+
+def test_pass_at_another_head_does_not_short_circuit(staged_cell, monkeypatch):
+    """The recovery the launch preflight prescribes must actually run: a
+    recorded pass earned at a different commit refuses (pointing at --force)
+    instead of returning a success that ran nothing."""
+    cell_root, _, _, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _declare_policy(repo_root)
+    base = _baseline_fold_values(cell_root)
+    _fake_execution(
+        monkeypatch, fold_values=[base[fold] for fold in DISCOVERY_FOLDS],
+    )
+    run_baseline_reproduction(cell_root, repo_root=repo_root)
+
+    def moved_head(command, **kwargs):
+        if command[:2] == ["git", "rev-parse"]:
+            return SimpleNamespace(returncode=0, stdout="d" * 40 + "\n", stderr="")
+        raise AssertionError(f"no execution expected, got {command[:3]}")
+
+    monkeypatch.setattr("autobench.campaign_stages.subprocess.run", moved_head)
+    with pytest.raises(CampaignStageError, match="--force"):
+        run_baseline_reproduction(cell_root, repo_root=repo_root)
+
+    _fake_execution(
+        monkeypatch,
+        fold_values=[base[fold] for fold in DISCOVERY_FOLDS],
+        head="d" * 40,
+    )
+    state = run_baseline_reproduction(
+        cell_root, repo_root=repo_root, force=True,
+    )
+    assert state["baseline_reproduction"]["verdict"] == "pass"
+    assert state["baseline_reproduction"]["commit"] == "d" * 40
+    # And now the same-head re-run is a true idempotent no-op again.
+    assert run_baseline_reproduction(
+        cell_root, repo_root=repo_root,
+    )["baseline_reproduction"]["commit"] == "d" * 40
