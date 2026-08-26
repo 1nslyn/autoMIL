@@ -207,7 +207,9 @@ worker() {
         rc=$?
         echo "[gpu$gpu] $(date +%H:%M:%S) done  $cell rc=$rc"
         if [ "$rc" -eq 0 ]; then
-            export_cell "$cell" && echo "[gpu$gpu] exported $cell"
+            if export_cell "$cell" && [ "$EXPORT_ENABLED" -eq 1 ]; then
+                echo "[gpu$gpu] exported $cell"
+            fi
         else
             echo "$cell rc=$rc" >> "$FAIL_FILE"
         fi

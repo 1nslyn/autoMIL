@@ -418,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     # any of the copy/lock/chmod calls; one cell's failure must be recorded
     # and the sweep must continue, never truncate mid-list without the
     # accounting line.
-    if args.cell:
+    if args.cell is not None:
         try:
             known = {cell["cell_id"] for cell in _manifest_cells(repo_root)}
         except (ExportError, OSError) as exc:
