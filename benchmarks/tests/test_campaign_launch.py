@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -97,12 +98,30 @@ def launch_host(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     claude_bin = _fake_claude(tmp_path / "claude")
+    # A real git repo with one commit: the identity gate re-derives HEAD and
+    # tree cleanliness from git at every launch. Everything the fixture
+    # writes stays untracked, which doubles as the standing no-false-positive
+    # check (untracked files are not dirt).
+    subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo_root), "-c", "user.email=t@test",
+         "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"],
+        check=True,
+    )
+    head = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    (cell_root / "campaign_state.json").write_text(json.dumps({
+        "baseline": {"execution_identity": {"commit": head, "clean": True}},
+    }))
     return {
         "repo_root": repo_root,
         "cell_root": cell_root,
         "protocol": protocol,
         "home": home,
         "claude_bin": claude_bin,
+        "head": head,
     }
 
 
@@ -496,3 +515,94 @@ def test_launch_script_refuses_a_cell_outside_the_repo(tmp_path):
     outside.mkdir()
     with pytest.raises(SystemExit, match="campaign-launch refusal"):
         script.main(["preflight", "--cell-root", str(outside)])
+
+
+# --- launch-time code-identity gate --------------------------------------
+
+
+def _commit_all(repo_root: Path, message: str) -> str:
+    subprocess.run(
+        ["git", "-C", str(repo_root), "add", "-A"], check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_root), "-c", "user.email=t@test",
+         "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", message],
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_preflight_refuses_a_moved_head(launch_host):
+    _commit_all(launch_host["repo_root"], "drift")
+    with pytest.raises(CampaignLaunchError, match="code identity drift"):
+        _preflight(launch_host)
+
+
+def test_preflight_refuses_a_forged_identity_commit(launch_host):
+    """Forged violation: editing the recorded commit cannot defeat the gate.
+
+    The check re-derives HEAD from git, so pointing the ledger at another
+    commit only passes when HEAD actually IS that commit — at which point
+    the launch runs that code, which is exactly the contract.
+    """
+    state_path = launch_host["cell_root"] / "campaign_state.json"
+    state = json.loads(state_path.read_text())
+    state["baseline"]["execution_identity"]["commit"] = "a" * 40
+    state_path.write_text(json.dumps(state))
+    with pytest.raises(CampaignLaunchError, match="code identity drift"):
+        _preflight(launch_host)
+
+
+def test_preflight_refuses_a_dirty_training_tree(launch_host):
+    repo_root = launch_host["repo_root"]
+    tracked = repo_root / "src" / "module.py"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("VALUE = 1\n")
+    head = _commit_all(repo_root, "add training file")
+    state_path = launch_host["cell_root"] / "campaign_state.json"
+    state = json.loads(state_path.read_text())
+    state["baseline"]["execution_identity"]["commit"] = head
+    state_path.write_text(json.dumps(state))
+    plan = _preflight(launch_host)
+    assert plan is not None
+
+    tracked.write_text("VALUE = 2\n")
+    with pytest.raises(CampaignLaunchError, match="tracked modifications"):
+        _preflight(launch_host)
+
+
+def test_preflight_untracked_files_are_not_dirt(launch_host):
+    (launch_host["repo_root"] / "src").mkdir(exist_ok=True)
+    (launch_host["repo_root"] / "src" / "scratch.log").write_text("x\n")
+    assert _preflight(launch_host) is not None
+
+
+def test_preflight_legacy_baseline_anchors_through_reproduction_verdict(
+    launch_host,
+):
+    state_path = launch_host["cell_root"] / "campaign_state.json"
+    state_path.write_text(json.dumps({"baseline": {}}))
+    with pytest.raises(CampaignLaunchError, match="code-identity anchor"):
+        _preflight(launch_host)
+
+    state_path.write_text(json.dumps({
+        "baseline": {},
+        "baseline_reproduction": {
+            "mode": "gate", "verdict": "pass",
+            "commit": launch_host["head"],
+        },
+    }))
+    assert _preflight(launch_host) is not None
+
+    state_path.write_text(json.dumps({
+        "baseline": {},
+        "baseline_reproduction": {
+            "mode": "measurement", "verdict": "measured",
+            "commit": launch_host["head"],
+        },
+    }))
+    with pytest.raises(CampaignLaunchError, match="code-identity anchor"):
+        _preflight(launch_host)

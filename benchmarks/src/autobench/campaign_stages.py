@@ -59,8 +59,10 @@ from autobench.campaign import (
     PROMOTION_WALL_CLOCK_CONTAINMENT,
     PROTOCOL,
     PROTOCOL_VERSION,
+    REPRODUCTION_POLICY_PATH,
     STAGE_FOLDS,
     SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
+    TRAINING_TREE_PATHS,
     classify_attempt_outcome,
     content_sha256,
     expected_promotion_sources,
@@ -72,6 +74,7 @@ from autobench.campaign import (
 STATE_SCHEMA_VERSION = 3
 STATE_FILE = "campaign_state.json"
 BASELINE_ATTESTATION_FILE = "baseline_attestation.json"
+EXECUTION_IDENTITY_FILE = "execution_identity.json"
 SELECTION_FREEZE_FILE = "selection_freeze.json"
 CAMPAIGN_CERTIFICATION_FILE = "campaign_certification.json"
 AGENT_SESSION_FILE = "agent_session.json"
@@ -845,6 +848,13 @@ def _register_baseline_unlocked(
         "resources": baseline_resources,
         "registered_at": _utc_now(),
     }
+    # Execution identity is written by run_native_baseline at execution time;
+    # archives registered without one (external imports, pre-gate campaigns)
+    # simply carry none, and the launch preflight then binds the launch HEAD
+    # to the reproduction verdict's commit instead.
+    identity_path = baseline_archive / EXECUTION_IDENTITY_FILE
+    if identity_path.is_file():
+        baseline["execution_identity"] = _load_execution_identity(identity_path)
     current = state.get("baseline")
     if current is not None:
         if current.get("candidate_sha256") != baseline["candidate_sha256"]:
@@ -865,6 +875,178 @@ def _register_baseline_unlocked(
     return _commit_state(cell_root, state)
 
 
+def _head_commit(repo_root: Path) -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    commit = (completed.stdout or "").strip()
+    if completed.returncode != 0 or len(commit) != 40:
+        raise CampaignStageError(
+            "cannot resolve the repository HEAD commit: "
+            f"{(completed.stderr or '').strip()}"
+        )
+    return commit
+
+
+def _require_clean_training_tree(repo_root: Path) -> None:
+    """Refuse to execute a frozen command over locally-modified training code.
+
+    ``git diff --quiet`` exits 0 clean, 1 dirty, anything else is a git
+    failure. Untracked files never register as dirt, so machine-local
+    benchmarks/.env and logs stay allowed.
+    """
+    completed = subprocess.run(
+        ["git", "diff", "--quiet", "HEAD", "--", *TRAINING_TREE_PATHS],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode == 0:
+        return
+    if completed.returncode == 1:
+        raise CampaignStageError(
+            "training tree is dirty: tracked modifications under "
+            f"{', '.join(TRAINING_TREE_PATHS)}; commit or revert them before "
+            "executing a frozen campaign command"
+        )
+    raise CampaignStageError(
+        "cannot verify training-tree cleanliness: "
+        f"{(completed.stderr or '').strip()}"
+    )
+
+
+def _load_execution_identity(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read execution identity: {exc}") from exc
+    commit = payload.get("commit") if isinstance(payload, dict) else None
+    if (
+        not isinstance(commit, str)
+        or len(commit) != 40
+        or any(char not in "0123456789abcdef" for char in commit)
+        or payload.get("clean") is not True
+    ):
+        raise CampaignStageError("execution identity record is invalid")
+    return {
+        "commit": commit,
+        "clean": True,
+        "recorded_at": payload.get("recorded_at"),
+        "training_tree_paths": list(TRAINING_TREE_PATHS),
+    }
+
+
+def _execute_frozen_command(
+    *,
+    cell_root: Path,
+    repo_root: Path,
+    command_string: str,
+    worktree_prefix: str,
+    node_id: str,
+    fold_count: int,
+    gpu_id: int,
+    results_dir: Path,
+    archive_dir: Path,
+    inject_worktree_pythonpath: bool,
+    extra_env: Mapping[str, str] | None = None,
+) -> str:
+    """Run one frozen manifest command in a detached worktree at HEAD.
+
+    Returns the executed commit. The stripped (validation-only) result the
+    command writes to its cwd is copied to ``archive_dir/result.json``; the
+    sealed full payload is born under ``results_dir`` via AUTOMIL_RESULTS_DIR.
+    ``inject_worktree_pythonpath`` selects code resolution: the native
+    baseline resolves both packages from the worktree, while loop-parity
+    execution leaves PYTHONPATH alone so ``automil`` resolves from the
+    installed environment exactly as it does under the orchestrator daemon.
+    """
+    tokens = shlex.split(str(command_string))
+    if len(tokens) < 2 or tokens[1] != "benchmarks/scripts/run_experiment.py":
+        raise CampaignStageError("manifest command has an invalid entrypoint")
+    commit = _head_commit(repo_root)
+    worktree_parent = Path(tempfile.mkdtemp(
+        prefix=worktree_prefix, dir=str(cell_root),
+    ))
+    worktree = worktree_parent / "repo"
+    worktree_added = False
+    returncode: int | None = None
+    try:
+        subprocess.run(
+            [
+                "git", "worktree", "add", "--detach", str(worktree),
+                "HEAD",
+            ],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        worktree_added = True
+        command = [
+            sys.executable,
+            str(worktree / "benchmarks/scripts/run_experiment.py"),
+            *tokens[2:],
+        ]
+        env = os.environ.copy()
+        for key, value in dotenv_values(repo_root / "benchmarks/.env").items():
+            if value is not None:
+                env.setdefault(str(key), str(value))
+        if inject_worktree_pythonpath:
+            python_paths = [
+                str(worktree / "src"),
+                str(worktree / "benchmarks/src"),
+            ]
+            if env.get("PYTHONPATH"):
+                python_paths.append(env["PYTHONPATH"])
+            env["PYTHONPATH"] = os.pathsep.join(python_paths)
+        env.update({
+            "CUDA_VISIBLE_DEVICES": str(gpu_id),
+            "AUTOMIL_GPU": "0",
+            "AUTOMIL_NODE_ID": node_id,
+            "AUTOMIL_RESULTS_DIR": str(results_dir.resolve()),
+            "AUTOMIL_FOLD_COUNT": str(fold_count),
+        })
+        if extra_env:
+            env.update({str(key): str(value) for key, value in extra_env.items()})
+        log_path = archive_dir / "run.log"
+        with log_path.open("a") as log:
+            completed = subprocess.run(
+                command,
+                cwd=worktree,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        returncode = completed.returncode
+        public_result = worktree / "result.json"
+        if returncode == 0 and public_result.is_file():
+            shutil.copy2(public_result, archive_dir / "result.json")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise CampaignStageError(f"cannot execute {node_id}: {exc}") from exc
+    finally:
+        if worktree_added:
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", str(worktree)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+            )
+        shutil.rmtree(worktree_parent, ignore_errors=True)
+
+    if returncode != 0:
+        raise CampaignStageError(
+            f"{node_id} exited with code {returncode}; see "
+            f"{archive_dir / 'run.log'}"
+        )
+    return commit
+
+
 def run_native_baseline(
     cell_root: Path,
     *,
@@ -873,9 +1055,12 @@ def run_native_baseline(
 ) -> dict[str, Any]:
     """Run and register the frozen five-fold baseline outside agentic budget.
 
-    Training executes in a detached worktree at the repository's current HEAD.
-    That commit is execution metadata only and is not part of campaign identity
-    or baseline reuse.
+    Training executes in a detached worktree at the repository's current
+    HEAD; the training tree must be clean, and the executed commit is
+    recorded into the registration as the baseline's execution identity —
+    the launch preflight later refuses a session whose HEAD differs from it.
+    The commit stays outside the archive-REUSE decision (six-field identity),
+    which is unchanged.
     Its public result is validation-only; full and per-fold held-out artifacts
     are born under ``baseline-execution/archive/certify`` and are parsed only
     after validation selection freezes a winner.
@@ -926,85 +1111,292 @@ def run_native_baseline(
                 return register_baseline(cell_root, execution_archive)
             sealed_dir.mkdir(parents=True, exist_ok=True)
 
-            tokens = shlex.split(str(cell["commands"]["baseline"]))
-            if len(tokens) < 2 or tokens[1] != "benchmarks/scripts/run_experiment.py":
-                raise CampaignStageError("manifest baseline command has an invalid entrypoint")
-            worktree_parent = Path(tempfile.mkdtemp(
-                prefix=".baseline-worktree-", dir=str(cell_root),
-            ))
-            worktree = worktree_parent / "repo"
-            worktree_added = False
-            returncode: int | None = None
-            try:
-                subprocess.run(
-                    [
-                        "git", "worktree", "add", "--detach", str(worktree),
-                        "HEAD",
-                    ],
-                    cwd=repo_root,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                worktree_added = True
-                command = [
-                    sys.executable,
-                    str(worktree / "benchmarks/scripts/run_experiment.py"),
-                    *tokens[2:],
-                ]
-                env = os.environ.copy()
-                for key, value in dotenv_values(repo_root / "benchmarks/.env").items():
-                    if value is not None:
-                        env.setdefault(str(key), str(value))
-                python_paths = [
-                    str(worktree / "src"),
-                    str(worktree / "benchmarks/src"),
-                ]
-                if env.get("PYTHONPATH"):
-                    python_paths.append(env["PYTHONPATH"])
-                env.update({
-                    "PYTHONPATH": os.pathsep.join(python_paths),
-                    "CUDA_VISIBLE_DEVICES": str(gpu_id),
-                    "AUTOMIL_GPU": "0",
-                    "AUTOMIL_NODE_ID": "native-baseline",
-                    "AUTOMIL_RESULTS_DIR": str(sealed_dir.resolve()),
-                    "AUTOMIL_FOLD_COUNT": str(len(CERTIFICATION_FOLDS)),
-                })
-                log_path = execution_archive / "run.log"
-                with log_path.open("a") as log:
-                    completed = subprocess.run(
-                        command,
-                        cwd=worktree,
-                        env=env,
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
-                        check=False,
-                    )
-                returncode = completed.returncode
-                public_result = worktree / "result.json"
-                if returncode == 0 and public_result.is_file():
-                    shutil.copy2(public_result, execution_archive / "result.json")
-            except (OSError, subprocess.CalledProcessError) as exc:
-                raise CampaignStageError(f"cannot execute native baseline: {exc}") from exc
-            finally:
-                if worktree_added:
-                    subprocess.run(
-                        ["git", "worktree", "remove", "--force", str(worktree)],
-                        cwd=repo_root,
-                        check=False,
-                        capture_output=True,
-                    )
-                shutil.rmtree(worktree_parent, ignore_errors=True)
-
-            if returncode != 0:
-                raise CampaignStageError(
-                    f"native baseline exited with code {returncode}; see "
-                    f"{execution_archive / 'run.log'}"
-                )
+            _require_clean_training_tree(repo_root)
+            commit = _execute_frozen_command(
+                cell_root=cell_root,
+                repo_root=repo_root,
+                command_string=str(cell["commands"]["baseline"]),
+                worktree_prefix=".baseline-worktree-",
+                node_id="native-baseline",
+                fold_count=len(CERTIFICATION_FOLDS),
+                gpu_id=gpu_id,
+                results_dir=sealed_dir,
+                archive_dir=execution_archive,
+                inject_worktree_pythonpath=True,
+            )
+            _atomic_write_json(
+                execution_archive / EXECUTION_IDENTITY_FILE,
+                {
+                    "commit": commit,
+                    "clean": True,
+                    "training_tree_paths": list(TRAINING_TREE_PATHS),
+                    "recorded_at": _utc_now(),
+                },
+            )
             _write_baseline_attestation(cell_root, state, execution_archive)
             return register_baseline(cell_root, execution_archive)
         finally:
             fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
+
+
+def _load_reproduction_policy(repo_root: Path) -> dict[str, Any]:
+    """The predeclared gate tolerance. Absent file = the gate cannot run.
+
+    There is deliberately no default epsilon: the tolerance is set once from
+    the measured reproduction spread of registered cells (--measure runs)
+    and committed, so a gate that passes always passes against a declared,
+    reviewable number.
+    """
+    path = repo_root / REPRODUCTION_POLICY_PATH
+    if not path.is_file():
+        raise CampaignStageError(
+            "reproduction policy is not declared: commit "
+            f"{REPRODUCTION_POLICY_PATH} with the epsilon measured from "
+            "--measure runs; the gate has no default tolerance"
+        )
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read reproduction policy: {exc}") from exc
+    epsilon = payload.get("epsilon") if isinstance(payload, dict) else None
+    if (
+        isinstance(epsilon, bool)
+        or not isinstance(epsilon, (int, float))
+        or not math.isfinite(float(epsilon))
+        or float(epsilon) <= 0
+    ):
+        raise CampaignStageError(
+            "reproduction policy epsilon must be a finite number > 0"
+        )
+    return {"epsilon": float(epsilon), "policy_sha256": file_sha256(path)}
+
+
+def _archive_fold_prediction_hashes(result: Mapping[str, Any]) -> dict[int, Any]:
+    """Raw per-fold val-prediction hashes from an agent-facing result.
+
+    The ledger's normalized fold entries drop them, so both sides of the
+    reproduction comparison read them from raw result.json payloads. They
+    are recorded as diagnosis only — most arms are not bit-deterministic,
+    so inequality is expected and never gates.
+    """
+    hashes: dict[int, Any] = {}
+    for raw in result.get("validation_folds") or []:
+        if isinstance(raw, Mapping) and type(raw.get("fold_index")) is int:
+            hashes[raw["fold_index"]] = raw.get("val_predictions_sha256")
+    return hashes
+
+
+def run_baseline_reproduction(
+    cell_root: Path,
+    *,
+    repo_root: Path,
+    gpu_id: int = 0,
+    measure: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Re-run the frozen discovery command and compare it to the baseline.
+
+    The search loop's root is a ledger import, never a second measurement —
+    this stage is the double-check that the setup the loop is about to
+    search from still reproduces the registered grid baseline: same
+    discovery command, discovery folds only, loop-parity code resolution
+    (no worktree PYTHONPATH). Per-fold primary-value deltas gate against
+    the predeclared epsilon; ``measure=True`` records the spread without
+    a verdict (used to derive epsilon in the first place). The passing
+    verdict is what ``open_agent_session`` requires before any proposal.
+    """
+    if gpu_id < 0:
+        raise CampaignStageError("reproduction gpu_id must be non-negative")
+    cell_root = cell_root.resolve()
+    repo_root = repo_root.resolve()
+    try:
+        cell_root.relative_to(repo_root)
+    except ValueError as exc:
+        raise CampaignStageError(
+            "campaign cell root must live inside repo_root"
+        ) from exc
+    lock_path = cell_root / ".baseline_reproduction.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as run_lock:
+        try:
+            fcntl.flock(run_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise CampaignStageError(
+                "baseline reproduction is already running"
+            ) from exc
+        try:
+            return _run_baseline_reproduction_locked(
+                cell_root, repo_root, gpu_id, measure, force,
+            )
+        finally:
+            fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
+
+
+def _run_baseline_reproduction_locked(
+    cell_root: Path,
+    repo_root: Path,
+    gpu_id: int,
+    measure: bool,
+    force: bool,
+) -> dict[str, Any]:
+    state = load_stage_state(cell_root)
+    baseline = state.get("baseline")
+    if not isinstance(baseline, dict):
+        raise CampaignStageError(
+            "baseline reproduction requires a registered native baseline"
+        )
+    # Byte-verify the registered evidence FIRST: a recorded pass must never
+    # survive baseline tamper, and a fresh run must never compare against
+    # drifted bytes.
+    _verify_baseline_unchanged(cell_root, state, baseline)
+    existing = state.get("baseline_reproduction")
+    if existing is not None and not force:
+        if (
+            isinstance(existing, dict)
+            and existing.get("mode") == "gate"
+            and existing.get("verdict") == "pass"
+            and existing.get("candidate_sha256") == baseline.get("candidate_sha256")
+        ):
+            return state
+        raise CampaignStageError(
+            "a baseline reproduction is already recorded (verdict="
+            f"{existing.get('verdict') if isinstance(existing, dict) else '?'}); "
+            "rerun with --force to supersede it — the prior verdict stays "
+            "in history, so there is no silent retry-until-pass"
+        )
+    policy = None if measure else _load_reproduction_policy(repo_root)
+    try:
+        cell = json.loads(
+            (cell_root / "automil" / "campaign_cell.json").read_text()
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read campaign cell: {exc}") from exc
+    if cell.get("cell_id") != state["cell_id"]:
+        raise CampaignStageError("reproduction cell identity differs from stage state")
+
+    discovery_folds = list(STAGE_FOLDS["discovery"])
+    baseline_rows = {
+        int(fold["fold_index"]): fold
+        for fold in baseline["validation_folds"]
+        if int(fold["fold_index"]) in set(discovery_folds)
+    }
+    if sorted(baseline_rows) != discovery_folds:
+        raise CampaignStageError("baseline lacks exact discovery-fold evidence")
+    try:
+        baseline_result = json.loads(
+            (cell_root / baseline["archive"] / "result.json").read_text()
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            f"cannot read registered baseline result: {exc}"
+        ) from exc
+    baseline_hashes = _archive_fold_prediction_hashes(baseline_result)
+
+    _require_clean_training_tree(repo_root)
+    reproduction_root = cell_root / "baseline-reproduction"
+    reproduction_root.mkdir(exist_ok=True)
+    # A fresh directory per attempt: the trainers' fold-level resume
+    # short-circuit returns cached artifacts whenever predictions/metrics
+    # files already exist, which would make a reused directory a guaranteed
+    # false pass.
+    attempt_dir = Path(tempfile.mkdtemp(
+        prefix="attempt-", dir=str(reproduction_root),
+    ))
+    archive_dir = attempt_dir / "archive"
+    sealed_dir = archive_dir / "certify"
+    sealed_dir.mkdir(parents=True)
+    commit = _execute_frozen_command(
+        cell_root=cell_root,
+        repo_root=repo_root,
+        command_string=str(cell["commands"]["discovery"]),
+        worktree_prefix=".reproduction-worktree-",
+        node_id="baseline-reproduction",
+        fold_count=len(discovery_folds),
+        gpu_id=gpu_id,
+        results_dir=sealed_dir,
+        archive_dir=archive_dir,
+        inject_worktree_pythonpath=False,
+        extra_env={"CUDA_DEVICE_ORDER": "PCI_BUS_ID", "PYTHONUNBUFFERED": "1"},
+    )
+    try:
+        result = json.loads((archive_dir / "result.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(
+            f"cannot read reproduction result: {exc}"
+        ) from exc
+    repro_folds = _validation_folds(
+        result, tuple(discovery_folds),
+        expected_metrics=VALIDATION_SCHEMA_BY_FAMILY[
+            _cell_task_family(cell_root, state)
+        ],
+    )
+    repro_rows = {fold["fold_index"]: fold for fold in repro_folds}
+    repro_hashes = _archive_fold_prediction_hashes(result)
+
+    rows: list[dict[str, Any]] = []
+    exceeding: list[int] = []
+    for fold_index in discovery_folds:
+        base_value = float(baseline_rows[fold_index]["primary_value"])
+        repro_value = float(repro_rows[fold_index]["primary_value"])
+        delta = repro_value - base_value
+        base_hash = baseline_hashes.get(fold_index)
+        repro_hash = repro_hashes.get(fold_index)
+        rows.append({
+            "fold_index": fold_index,
+            "baseline_primary_value": base_value,
+            "reproduction_primary_value": repro_value,
+            "delta": delta,
+            "prediction_hash_match": (
+                None if base_hash is None or repro_hash is None
+                else base_hash == repro_hash
+            ),
+            "baseline_val_predictions_sha256": base_hash,
+            "reproduction_val_predictions_sha256": repro_hash,
+        })
+        if policy is not None and abs(delta) > policy["epsilon"]:
+            exceeding.append(fold_index)
+
+    if measure:
+        mode, verdict = "measurement", "measured"
+    else:
+        mode, verdict = "gate", ("pass" if not exceeding else "fail")
+    block = {
+        "mode": mode,
+        "verdict": verdict,
+        "epsilon": None if policy is None else policy["epsilon"],
+        "policy_sha256": None if policy is None else policy["policy_sha256"],
+        "commit": commit,
+        "pythonpath_injected": False,
+        "candidate_sha256": baseline["candidate_sha256"],
+        "cell_sha256": state["cell_sha256"],
+        "folds": rows,
+        "exceeding_folds": exceeding,
+        "archive": str(attempt_dir.relative_to(cell_root)),
+        "executed_at": _utc_now(),
+    }
+    previous = state.get("baseline_reproduction")
+    state["baseline_reproduction"] = block
+    state["revision"] += 1
+    state["updated_at"] = _utc_now()
+    event: dict[str, Any] = {
+        "event": "baseline-reproduction-recorded",
+        "mode": mode,
+        "verdict": verdict,
+        "at": state["updated_at"],
+    }
+    if previous is not None:
+        event["superseded_verdict"] = (
+            previous.get("verdict") if isinstance(previous, dict) else None
+        )
+    state["history"].append(event)
+    state = _commit_state(cell_root, state)
+    if verdict == "fail":
+        raise CampaignStageError(
+            "baseline reproduction FAILED: per-fold deltas exceed epsilon "
+            f"{policy['epsilon']} on folds {exceeding}; discovery stays "
+            "blocked and the verdict is recorded in campaign_state.json"
+        )
+    return state
 
 
 def _candidate_identity(
@@ -2825,6 +3217,26 @@ def open_agent_session(
             raise CampaignStageError(
                 "agent session requires a registered native baseline — run "
                 "`campaign_stage.py run-baseline` (or register-baseline) first"
+            )
+        # The reproduction gate is the loop-start double-check: the incumbent
+        # the agent searches from must have been re-measured through the
+        # loop's own execution path and landed inside the predeclared
+        # tolerance. A measurement-mode record, a failed verdict, or a
+        # verdict bound to a different baseline/cell all refuse.
+        registered = state.get("baseline")
+        reproduction = state.get("baseline_reproduction")
+        if (
+            not isinstance(reproduction, dict)
+            or reproduction.get("mode") != "gate"
+            or reproduction.get("verdict") != "pass"
+            or not isinstance(registered, dict)
+            or reproduction.get("candidate_sha256")
+            != registered.get("candidate_sha256")
+            or reproduction.get("cell_sha256") != state.get("cell_sha256")
+        ):
+            raise CampaignStageError(
+                "agent session requires a passing baseline reproduction — "
+                "run `campaign_stage.py run-baseline-reproduction` first"
             )
         target = cell_root / AGENT_SESSION_FILE
         adir = cell_root / "automil"

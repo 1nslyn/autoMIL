@@ -17,6 +17,7 @@ from autobench.campaign_stages import (
     materialize_promotion,
     open_agent_session,
     register_baseline,
+    run_baseline_reproduction,
     run_native_baseline,
     select_winner,
 )
@@ -43,6 +44,20 @@ def public_status(state: dict[str, Any]) -> dict[str, Any]:
         "phase": state["phase"],
         "revision": state["revision"],
         "baseline_registered": state.get("baseline") is not None,
+        "baseline_reproduction": ({
+            "mode": (state.get("baseline_reproduction") or {}).get("mode"),
+            "verdict": (state.get("baseline_reproduction") or {}).get("verdict"),
+            "max_abs_delta": max(
+                (
+                    abs(float(fold.get("delta", 0.0)))
+                    for fold in (
+                        (state.get("baseline_reproduction") or {}).get("folds")
+                        or []
+                    )
+                ),
+                default=None,
+            ),
+        } if state.get("baseline_reproduction") else None),
         "discovery_root_node_id": (
             (state.get("baseline") or {}).get("discovery_root_node_id")
         ),
@@ -110,14 +125,33 @@ def main(argv: list[str] | None = None) -> None:
         choices=(
             "status", "register-baseline", "freeze-discovery",
             "materialize-promotion", "freeze-promotion", "select-winner",
-            "certify", "baseline-command", "run-baseline", "advance",
+            "certify", "baseline-command", "run-baseline",
+            "run-baseline-reproduction", "advance",
             "open-agent-session", "finalize-agent-session",
         ),
     )
     parser.add_argument("--cell-root", required=True)
     parser.add_argument(
         "--gpu", type=int, default=0,
-        help="Physical GPU id used by run-baseline (default: 0).",
+        help=(
+            "Physical GPU id used by run-baseline and "
+            "run-baseline-reproduction (default: 0)."
+        ),
+    )
+    parser.add_argument(
+        "--measure", action="store_true",
+        help=(
+            "run-baseline-reproduction only: record the reproduction spread "
+            "without a pass/fail verdict (used to derive the predeclared "
+            "epsilon; a measurement never satisfies the session gate)."
+        ),
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help=(
+            "run-baseline-reproduction only: supersede an already-recorded "
+            "reproduction; the prior verdict is kept in state history."
+        ),
     )
     parser.add_argument(
         "--baseline-archive",
@@ -151,6 +185,11 @@ def main(argv: list[str] | None = None) -> None:
         elif args.action == "run-baseline":
             state = run_native_baseline(
                 cell_root, repo_root=repo_root, gpu_id=args.gpu,
+            )
+        elif args.action == "run-baseline-reproduction":
+            state = run_baseline_reproduction(
+                cell_root, repo_root=repo_root, gpu_id=args.gpu,
+                measure=args.measure, force=args.force,
             )
         elif args.action in {"open-agent-session", "finalize-agent-session"}:
             if not args.agent_session:

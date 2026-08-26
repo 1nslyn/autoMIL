@@ -125,6 +125,43 @@ The archive is reusable when its six-field declared identity matches and its
 public validation plus sealed evidence covers exactly folds `0,1,2,3,4`.
 Git commit, diff, and command provenance do not enter this decision.
 
+## 3b. Verify the incumbent reproduces (loop-start gate)
+
+Discovery imports the registered baseline as its graph root; it never
+re-measures it on its own. Before any agent session can open, the cell must
+therefore pass the baseline reproduction gate: the manifest's frozen
+discovery command (folds 0/1/2) runs once more under loop-parity code
+resolution (no worktree PYTHONPATH — `automil` resolves from the installed
+environment exactly as it does under the orchestrator daemon), and every
+fold's validation primary value must land within the predeclared epsilon of
+the registered baseline:
+
+```bash
+uv run python benchmarks/scripts/campaign_stage.py run-baseline-reproduction \
+  --cell-root "$CAMPAIGN_CELL_ROOT" --gpu 0
+```
+
+The tolerance lives in `reproduction_policy.json` next to this file and has
+no in-code default: derive it first by running the stage with `--measure` on
+a few registered cells (a measurement records the spread but never satisfies
+the session gate), then commit the epsilon. A failed verdict blocks
+`open-agent-session` and stays recorded; superseding it requires an explicit
+`--force`, which keeps the prior verdict in state history. Per-fold
+`val_predictions_sha256` agreement is recorded as diagnosis only — most arms
+are not bit-deterministic, so hash inequality is expected and never gates.
+
+`run-baseline` also records the executing commit as the baseline's execution
+identity, and the launcher preflight refuses to start a session when the
+launch HEAD differs from it (or, for baselines registered before identity
+recording existed, from the passing reproduction verdict's commit), or when
+`src/`, `benchmarks/src/`, or `benchmarks/scripts/` carry tracked
+modifications. Practically: the checkout is frozen while any campaign job is
+running — baselines and discovery alike, because discovery resolves
+`automil` from the live checkout and a mid-search `git pull` changes
+framework code under running attempts. Pull only between jobs; mid-campaign
+delivery is limited to files no running worker imports (spooled SLURM
+scripts, new standalone scripts), byte-identical to a commit.
+
 ## 4. Run discovery
 
 Start the scheduler for the selected cell from the repository root:
@@ -340,3 +377,17 @@ Operate all 130 roots with an external scheduler if desired, but invoke these
 same per-cell commands and preserve the one-GPU-per-training-process contract.
 Never infer campaign progress from directory counts alone; use the validated
 stage ledger and public `status` surface.
+
+## Storage mirror and job hygiene
+
+Registered baseline evidence is mirrored one-way from the runtime (scratch)
+into durable project storage by `benchmarks/scripts/campaign_export.py`
+(`--cell <cell_id>` after each registration, `--all-registered` as
+catch-up), rooted at `AUTOBENCH_EXPORT_ROOT` from `benchmarks/.env`. The
+mirror is write-only — nothing in the framework reads it back. A leaf
+without `EXPORT_OK` is a partial copy: rerun the exporter; the marker is
+written only after destination hashes verify against the cell ledger.
+Sealed held-out evidence mirrors to the owner-only `sealed/` tree, opened
+by nobody until `automil certify`. During SLURM generation overlap, a
+FAIL-file entry reading "native baseline is already running" is benign
+flock contention — the next generation re-runs that cell cleanly.

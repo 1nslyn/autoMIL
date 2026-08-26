@@ -41,6 +41,7 @@ from autobench.campaign_stages import (
     SELECTION_FREEZE_SCHEMA_VERSION,
     CampaignStageError,
     _baseline_sealed_sources,
+    _commit_state,
     _process_evidence,
     _source_fold_anchors,
     _winner_sealed_sources,
@@ -232,6 +233,7 @@ def staged_cell(tmp_path):
 def _baseline(
     cell_root: Path, *, leak=False, invalid_sealed=False,
     attest_for: Path | None = None, ordinal_val=False,
+    val_hashes: dict | None = None,
 ) -> Path:
     archive = cell_root / "baseline" / "archive"
     sealed = archive / "certify"
@@ -245,6 +247,11 @@ def _baseline(
         },
         "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60, ordinal=ordinal_val),
     }
+    if val_hashes:
+        for fold_entry in result["validation_folds"]:
+            fold_entry["val_predictions_sha256"] = val_hashes.get(
+                fold_entry["fold_index"]
+            )
     if leak:
         result["held_out"] = {"test_auc": 0.99}
     (archive / "result.json").write_text(json.dumps(result))
@@ -277,6 +284,33 @@ def _baseline(
     return archive
 
 
+def _reproduced(cell_root: Path) -> None:
+    """Record a passing reproduction-gate verdict bound to the baseline.
+
+    The session gate requires it; execution itself is exercised by
+    test_baseline_reproduction.py, so fixtures write the ledger block
+    directly through the same commit path the stage uses.
+    """
+    state = load_stage_state(cell_root)
+    baseline = state["baseline"]
+    state["baseline_reproduction"] = {
+        "mode": "gate",
+        "verdict": "pass",
+        "epsilon": 0.005,
+        "policy_sha256": "e" * 64,
+        "commit": "f" * 40,
+        "pythonpath_injected": False,
+        "candidate_sha256": baseline["candidate_sha256"],
+        "cell_sha256": state["cell_sha256"],
+        "folds": [],
+        "exceeding_folds": [],
+        "archive": "baseline-reproduction/attempt-fixture",
+        "executed_at": state["updated_at"],
+    }
+    _commit_state(cell_root, state)
+
+
+
 def _open_budget_cell(adir: Path, budget_id: str, consumed: int) -> None:
     write_cell(
         Cell(
@@ -303,6 +337,9 @@ def _attempts(
     cell_root = adir.parent
     session_path = cell_root / "agent_session.json"
     if not session_path.exists():
+        state = load_stage_state(cell_root)
+        if state.get("baseline_reproduction") is None:
+            _reproduced(cell_root)
         _record_session_start(adir)
         open_agent_session(cell_root, {
             "session_id": "fixture-session",
@@ -481,6 +518,12 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
     observed: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
+        if command[:2] == ["git", "rev-parse"]:
+            observed["head"] = True
+            return SimpleNamespace(returncode=0, stdout="c" * 40 + "\n", stderr="")
+        if command[:3] == ["git", "diff", "--quiet"]:
+            observed["clean_checked"] = command[5:]
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if command[:3] == ["git", "worktree", "add"]:
             worktree = Path(command[4])
             worktree.mkdir(parents=True)
@@ -667,6 +710,7 @@ def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
             ).isoformat(),
         })
     register_baseline(cell_root, _baseline(cell_root))
+    _reproduced(cell_root)
     _attempts(adir, cell["cell_id"])
     _open_budget_cell(
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS - 1,
@@ -1730,6 +1774,7 @@ def test_agent_session_is_prebound_to_every_proposal_then_finalized(
 ):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))  # B7: baseline precedes the session
+    _reproduced(cell_root)
     _record_session_start(adir)
     opened = open_agent_session(cell_root, {
         "session_id": "fixture-session",
@@ -1769,6 +1814,7 @@ def test_agent_session_is_prebound_to_every_proposal_then_finalized(
 def test_checked_in_session_templates_execute_the_controller_contract(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
+    _reproduced(cell_root)
     start = json.loads((CAMPAIGN_DIR / "agent_session.template.json").read_text())
     start.update({
         "session_id": "fixture-session",
@@ -1809,6 +1855,7 @@ def test_checked_in_session_templates_execute_the_controller_contract(staged_cel
 def test_agent_session_open_rejects_preexisting_graph_proposal(staged_cell):
     cell_root, adir, _, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
+    _reproduced(cell_root)
     graph_path = adir / "graph.json"
     graph = json.loads(graph_path.read_text())
     graph["nodes"]["node_9999"] = {"type": "proposed", "status": "pending"}
@@ -1826,6 +1873,7 @@ def test_agent_session_open_rejects_preexisting_graph_proposal(staged_cell):
 def test_agent_session_open_rejects_preexisting_candidate_file(staged_cell):
     cell_root, adir, _, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))  # B7
+    _reproduced(cell_root)
     policy = adir / "variants/_policies/prebuilt.py"
     policy.parent.mkdir(parents=True)
     policy.write_text("# created before the bound session\n")
@@ -1842,6 +1890,7 @@ def test_agent_session_open_rejects_preexisting_candidate_file(staged_cell):
 def test_agent_session_id_is_reserved_across_cells_at_open(staged_cell):
     cell_root, _, _, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))  # B7
+    _reproduced(cell_root)
     sibling = cell_root.parent / "other-cell"
     sibling.mkdir()
     (sibling / "agent_session.json").write_text(json.dumps({
@@ -1860,6 +1909,7 @@ def test_agent_session_id_is_reserved_across_cells_at_open(staged_cell):
 def test_agent_session_open_rejects_nonobject_sibling_reservation(staged_cell):
     cell_root, _, _, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))  # B7
+    _reproduced(cell_root)
     sibling = cell_root.parent / "other-cell"
     sibling.mkdir()
     (sibling / "agent_session.json").write_text("[]")
@@ -1876,6 +1926,7 @@ def test_agent_session_open_rejects_nonobject_sibling_reservation(staged_cell):
 def test_agent_session_open_rejects_nonobject_nested_sibling_record(staged_cell):
     cell_root, _, _, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))  # B7
+    _reproduced(cell_root)
     sibling = cell_root.parent / "other-cell"
     sibling.mkdir()
     (sibling / "agent_session.json").write_text(json.dumps({"session": [1]}))
