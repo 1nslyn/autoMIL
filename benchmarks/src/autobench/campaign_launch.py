@@ -250,17 +250,26 @@ def _check_orchestrator_running(cell_root: Path) -> None:
         ) from exc
 
 
+def _is_commit(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
 def _check_execution_identity(cell_root: Path, repo_root: Path) -> None:
     """Launch-time code-identity gate.
 
-    The commit whose behavior produced the incumbent baseline must be the
-    commit the loop is about to run, with a clean training tree — otherwise
-    the searched candidates and their incumbent were measured by different
-    code. Baselines registered before identity recording exist anchor
-    through the passing reproduction verdict instead: its result equality
-    is what ties that commit's behavior to the baseline. Both anchors are
-    re-derived from git at every launch; the check never trusts a commit
-    string alone against a moved HEAD.
+    The launch HEAD must match one of the two evidence anchors: the commit
+    recorded when the baseline trained (execution identity), or the commit a
+    PASSING reproduction verdict ran at — re-running the gate is how a new
+    HEAD earns the right to launch, since its result equality ties the new
+    commit's behavior to the baseline. Requiring the identity commit alone
+    would deadlock every legitimate HEAD move (committing
+    reproduction_policy.json itself moves HEAD) with no recovery path.
+    HEAD and tree cleanliness are re-derived from git at every launch; a
+    commit string alone never wins against a moved HEAD.
     """
     try:
         state = json.loads((cell_root / "campaign_state.json").read_text())
@@ -271,27 +280,29 @@ def _check_execution_identity(cell_root: Path, repo_root: Path) -> None:
         raise CampaignLaunchError(
             "launch requires a registered native baseline"
         )
+    anchors: list[tuple[str, str]] = []
     identity = baseline.get("execution_identity")
-    if isinstance(identity, dict):
-        expected_commit = identity.get("commit")
-        anchor = "the baseline's execution identity"
-    else:
-        reproduction = state.get("baseline_reproduction")
-        if (
-            not isinstance(reproduction, dict)
-            or reproduction.get("mode") != "gate"
-            or reproduction.get("verdict") != "pass"
-        ):
-            raise CampaignLaunchError(
-                "launch requires a code-identity anchor: this baseline "
-                "predates execution-identity recording and no passing "
-                "reproduction verdict exists — run "
-                "`campaign_stage.py run-baseline-reproduction` first"
-            )
-        expected_commit = reproduction.get("commit")
-        anchor = "the passing reproduction verdict"
-    if not isinstance(expected_commit, str) or len(expected_commit) != 40:
-        raise CampaignLaunchError(f"{anchor} carries no valid commit")
+    if isinstance(identity, dict) and _is_commit(identity.get("commit")):
+        anchors.append(
+            ("the baseline's execution identity", identity["commit"])
+        )
+    reproduction = state.get("baseline_reproduction")
+    if (
+        isinstance(reproduction, dict)
+        and reproduction.get("mode") == "gate"
+        and reproduction.get("verdict") == "pass"
+        and _is_commit(reproduction.get("commit"))
+    ):
+        anchors.append(
+            ("the passing reproduction verdict", reproduction["commit"])
+        )
+    if not anchors:
+        raise CampaignLaunchError(
+            "launch requires a code-identity anchor: no execution identity "
+            "was recorded with this baseline and no passing reproduction "
+            "verdict exists — run `campaign_stage.py "
+            "run-baseline-reproduction` first"
+        )
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repo_root, check=False, capture_output=True, text=True,
@@ -301,10 +312,14 @@ def _check_execution_identity(cell_root: Path, repo_root: Path) -> None:
         raise CampaignLaunchError(
             f"cannot resolve the launch HEAD commit: {(head.stderr or '').strip()}"
         )
-    if observed != expected_commit:
+    if observed not in {commit for _, commit in anchors}:
+        described = "; ".join(
+            f"{name} commit {commit[:12]}" for name, commit in anchors
+        )
         raise CampaignLaunchError(
-            f"code identity drift: launch HEAD {observed[:12]} differs from "
-            f"{anchor} commit {expected_commit[:12]}"
+            f"code identity drift: launch HEAD {observed[:12]} matches no "
+            f"anchor ({described}) — re-run the reproduction gate at this "
+            "HEAD to authorize it"
         )
     dirty = subprocess.run(
         ["git", "diff", "--quiet", "HEAD", "--", *TRAINING_TREE_PATHS],

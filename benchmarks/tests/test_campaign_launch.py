@@ -606,3 +606,25 @@ def test_preflight_legacy_baseline_anchors_through_reproduction_verdict(
     }))
     with pytest.raises(CampaignLaunchError, match="code-identity anchor"):
         _preflight(launch_host)
+
+
+def test_preflight_moved_head_is_rescued_by_a_passing_verdict_at_head(
+    launch_host,
+):
+    """A new HEAD is authorized by re-running the reproduction gate at it —
+    identity-bearing baselines must not deadlock on legitimate HEAD moves
+    (committing reproduction_policy.json itself moves HEAD)."""
+    new_head = _commit_all(launch_host["repo_root"], "policy commit")
+    state_path = launch_host["cell_root"] / "campaign_state.json"
+    state = json.loads(state_path.read_text())
+    assert state["baseline"]["execution_identity"]["commit"] != new_head
+    state["baseline_reproduction"] = {
+        "mode": "gate", "verdict": "pass", "commit": new_head,
+    }
+    state_path.write_text(json.dumps(state))
+    assert _preflight(launch_host) is not None
+
+    state["baseline_reproduction"]["commit"] = "b" * 40
+    state_path.write_text(json.dumps(state))
+    with pytest.raises(CampaignLaunchError, match="matches no anchor"):
+        _preflight(launch_host)
