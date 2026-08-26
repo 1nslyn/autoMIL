@@ -38,6 +38,18 @@ ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 #: splits by derive_guard_margins.py and checked in so the number in the paper
 #: is in git rather than recomputed. Hashed into the manifest.
 GUARD_MARGINS_PATH = "benchmarks/campaigns/preprint_130/guard_margins.json"
+#: Predeclared tolerance for the baseline reproduction gate: the loop-start
+#: re-run must land within epsilon of the registered baseline on every
+#: discovery fold. Deliberately NOT defaulted in code — the file is written
+#: from the measured reproduction spread of registered cells and committed,
+#: so the gate can never pass by construction.
+REPRODUCTION_POLICY_PATH = (
+    "benchmarks/campaigns/preprint_130/reproduction_policy.json"
+)
+#: Tracked paths whose modification means "different training code ran".
+#: Untracked files (benchmarks/.env, logs) are deliberately not dirt. Both
+#: the execution stages and the launch preflight enforce over this one tuple.
+TRAINING_TREE_PATHS = ("src", "benchmarks/src", "benchmarks/scripts")
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
 DATASETS = (
     "tcga_luad",

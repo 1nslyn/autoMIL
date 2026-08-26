@@ -26,6 +26,7 @@ from automil.activity_hooks import (
 
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
+    TRAINING_TREE_PATHS,
     content_sha256,
     validate_agent_protocol,
 )
@@ -249,6 +250,78 @@ def _check_orchestrator_running(cell_root: Path) -> None:
         ) from exc
 
 
+def _check_execution_identity(cell_root: Path, repo_root: Path) -> None:
+    """Launch-time code-identity gate.
+
+    The commit whose behavior produced the incumbent baseline must be the
+    commit the loop is about to run, with a clean training tree — otherwise
+    the searched candidates and their incumbent were measured by different
+    code. Baselines registered before identity recording exist anchor
+    through the passing reproduction verdict instead: its result equality
+    is what ties that commit's behavior to the baseline. Both anchors are
+    re-derived from git at every launch; the check never trusts a commit
+    string alone against a moved HEAD.
+    """
+    try:
+        state = json.loads((cell_root / "campaign_state.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignLaunchError(f"cannot read campaign state: {exc}") from exc
+    baseline = state.get("baseline") if isinstance(state, dict) else None
+    if not isinstance(baseline, dict):
+        raise CampaignLaunchError(
+            "launch requires a registered native baseline"
+        )
+    identity = baseline.get("execution_identity")
+    if isinstance(identity, dict):
+        expected_commit = identity.get("commit")
+        anchor = "the baseline's execution identity"
+    else:
+        reproduction = state.get("baseline_reproduction")
+        if (
+            not isinstance(reproduction, dict)
+            or reproduction.get("mode") != "gate"
+            or reproduction.get("verdict") != "pass"
+        ):
+            raise CampaignLaunchError(
+                "launch requires a code-identity anchor: this baseline "
+                "predates execution-identity recording and no passing "
+                "reproduction verdict exists — run "
+                "`campaign_stage.py run-baseline-reproduction` first"
+            )
+        expected_commit = reproduction.get("commit")
+        anchor = "the passing reproduction verdict"
+    if not isinstance(expected_commit, str) or len(expected_commit) != 40:
+        raise CampaignLaunchError(f"{anchor} carries no valid commit")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root, check=False, capture_output=True, text=True,
+    )
+    observed = (head.stdout or "").strip()
+    if head.returncode != 0 or len(observed) != 40:
+        raise CampaignLaunchError(
+            f"cannot resolve the launch HEAD commit: {(head.stderr or '').strip()}"
+        )
+    if observed != expected_commit:
+        raise CampaignLaunchError(
+            f"code identity drift: launch HEAD {observed[:12]} differs from "
+            f"{anchor} commit {expected_commit[:12]}"
+        )
+    dirty = subprocess.run(
+        ["git", "diff", "--quiet", "HEAD", "--", *TRAINING_TREE_PATHS],
+        cwd=repo_root, check=False, capture_output=True, text=True,
+    )
+    if dirty.returncode == 1:
+        raise CampaignLaunchError(
+            "code identity drift: tracked modifications under "
+            + ", ".join(TRAINING_TREE_PATHS)
+        )
+    if dirty.returncode != 0:
+        raise CampaignLaunchError(
+            "cannot verify training-tree cleanliness at launch: "
+            f"{(dirty.stderr or '').strip()}"
+        )
+
+
 def preflight(
     cell_root: Path,
     repo_root: Path,
@@ -303,6 +376,8 @@ def preflight(
             f"{observed_version}, the frozen protocol requires "
             f"{protocol['runtime_version']}"
         )
+
+    _check_execution_identity(cell_root, repo_root)
 
     present = [name for name in toolset["forbidden_env"] if name in environ]
     if present:
