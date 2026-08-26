@@ -155,7 +155,11 @@ identity, and the launcher preflight refuses to start a session when the
 launch HEAD differs from it (or, for baselines registered before identity
 recording existed, from the passing reproduction verdict's commit), or when
 `src/`, `benchmarks/src/`, or `benchmarks/scripts/` carry tracked
-modifications. Practically: the checkout is frozen while any campaign job is
+modifications. Moving HEAD after baselines recorded their identity is
+recovered by re-running the reproduction gate at the new HEAD — the passing
+verdict is the anchor that authorizes the new commit (committing
+`reproduction_policy.json` itself moves HEAD, so this path is routine, not
+exceptional). Practically: the checkout is frozen while any campaign job is
 running — baselines and discovery alike, because discovery resolves
 `automil` from the live checkout and a mid-search `git pull` changes
 framework code under running attempts. Pull only between jobs; mid-campaign
