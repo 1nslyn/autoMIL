@@ -395,3 +395,16 @@ Sealed held-out evidence mirrors to the owner-only `sealed/` tree, opened
 by nobody until `automil certify`. During SLURM generation overlap, a
 FAIL-file entry reading "native baseline is already running" is benign
 flock contention — the next generation re-runs that cell cleanly.
+
+The frozen input trees are protected by deep guard-root shims
+(`benchmarks/scripts/build_guard_root_shims.py`): each cohort's
+`guard_roots/<cohort>/benchmark` is a real directory that byte-copies the
+small write-prone subtrees (`dataset_csv/`, `splits/`, `titan/`, `nnmil/`),
+per-file-symlinks the heavy read-only `features/`, and turns the legacy
+output dirs into empty write sinks — so every campaign-reachable prepare
+write (including TITAN's unconditional per-run manifest rewrite) lands in
+the shim, never in the frozen source. Rebuild only while NO campaign job is
+running (`--i-know-idle`); an unknown top-level source entry fails the
+build closed until the write map is re-audited. After any rebuild, audit by
+stamping a marker file, running the three prepare entrypoints per cohort,
+and asserting `find <frozen source> -newer <marker>` returns nothing.
