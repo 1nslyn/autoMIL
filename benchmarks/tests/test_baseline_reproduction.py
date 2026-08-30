@@ -114,6 +114,17 @@ def _open_session(cell_root: Path, adir: Path, *, record: bool = True):
     })
 
 
+def test_committed_policy_declares_the_signed_off_epsilon():
+    """The predeclared tolerance is a committed, reviewable artifact."""
+    from pathlib import Path
+
+    from autobench.campaign_stages import _load_reproduction_policy
+
+    repo_root = Path(__file__).resolve().parents[2]
+    policy = _load_reproduction_policy(repo_root)
+    assert policy["epsilon"] == 0.025
+
+
 def test_reproduction_requires_a_registered_baseline(staged_cell):
     cell_root, _, _, _, repo_root = staged_cell
     _declare_policy(repo_root)

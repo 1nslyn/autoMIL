@@ -1,0 +1,16 @@
+{
+  "epsilon": 0.025,
+  "declared": "2026-08-31",
+  "signed_off_by": "Leo",
+  "basis": {
+    "measurement_job": "fir:57534278",
+    "mode": "run-baseline-reproduction --measure",
+    "cells": [
+      "tcga_luad__kras__titan__titan__s42__preprint-v3",
+      "tcga_luad__kras__uni_v2__nnmil__s42__preprint-v3",
+      "tcga_luad__kras__uni_v2__clam__s42__preprint-v3"
+    ],
+    "observed_max_abs_delta": 0.021569,
+    "note": "Max benign per-fold delta 0.0216 (nnmil, weakest fold) measured on a 2g.20gb MIG slice against full-H100 baselines; cross-device algorithm selection likely inflates the spread, so 0.025 is conservative-loose relative to matched-hardware gate runs. Real substrate drift (wrong splits/features/labels) manifests at >=0.05. Prediction hashes differed on all nine folds while metrics landed on or near the AUC lattice; hashes stay diagnosis-only by design."
+  }
+}
