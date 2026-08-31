@@ -14,11 +14,14 @@
 # cell, then chains the next job itself. USR1 firing at all means the
 # budget was mis-sized; it logs the cells at risk and nothing else.
 #
-# Cells are claimed via an atomic marker carrying this job id, so several
-# chains can run concurrently without double-driving a cell (stale claims
-# from dead jobs are reaped at scan time). Cells whose reproduction gate
-# fails, or that carry session evidence without a finished ladder
-# (stranded), are reported and skipped — never retried silently.
+# Cells are claimed via an atomic ONCE-ONLY marker carrying this job id:
+# taken at cell start, never released for the life of this job (success and
+# failure alike), so several chains can run concurrently without ever
+# double-driving a cell — a dead generation's claims are stolen by
+# take_claim's compare-and-swap in later jobs, whose fresh scan classifies
+# each cell by its evidence. Cells whose reproduction gate fails, or that
+# carry session evidence without a finished ladder (stranded), are reported
+# and skipped — never retried silently.
 #
 # Usage (from the repo root):
 #   sbatch benchmarks/scripts/slurm/submit_discovery_campaign.sh
@@ -185,7 +188,7 @@ trap 'rm -f "$QUEUE_FILE" "$FAIL_FILE"' EXIT
 # from the signal path: chaining happens only at a clean end.
 _usr1_report() {
     echo "[signal] CRITICAL: wall reached with cells possibly mid-session:"
-    ls "$RUNTIME"/*/.discovery_claim 2>/dev/null | sed 's/^/  /'
+    grep -l "^${SLURM_JOB_ID:-manual}\$" "$RUNTIME"/*/.discovery_claim 2>/dev/null | sed 's/^/  /'
     echo "  these cells may be PERMANENTLY stranded (no session relaunch exists)"
 }
 trap _usr1_report USR1
@@ -208,9 +211,14 @@ pop_cell() {
 # Atomically take a cell for this job, or refuse. O_EXCL (noclobber) is the
 # single enforcement point that makes concurrent chains safe: every queue is
 # built from a scan-time snapshot, so two chains WILL both queue the same
-# cell — only one may ever drive it. A dead holder's claim is stolen once
-# (its cell was already re-scanned or the deep session guards will refuse);
-# a live holder's cell is skipped silently, which is normal contention.
+# cell — only one may ever drive it. Claims are ONCE-ONLY tombstones, never
+# released within a job's lifetime (success and failure alike): releasing on
+# failure would let a concurrent chain's queued entry re-drive the cell with
+# scan-stale knowledge (mutual exclusion is not once-only). A cell becomes
+# drivable again only in a LATER generation — its dead holder's tmux (and
+# any pre-bind runtime in it) died with the job, the fresh scan classifies
+# the cell by its evidence, and take_claim steals the dead holder's claim
+# under a compare-and-swap. A live holder's cell is skipped silently.
 take_claim() {
     local cell="$1" claim="$RUNTIME/$1/.discovery_claim" me holder
     me="${SLURM_JOB_ID:-manual}"
@@ -342,12 +350,10 @@ run_cell() {
         # Recovery lane: the session already ended after a full budget; the
         # finish ladder is idempotent and just needs a GPU for promotion.
         if operate finish "$RUNTIME/$cell" --gpu "$gpu" >> "$log" 2>&1; then
-            rm -f "$RUNTIME/$cell/.discovery_claim"
             echo "[gpu$gpu] $(date +%m-%d\ %H:%M) DONE $cell (finish-only)"
             return 0
         fi
         echo "$cell finish-failed (see $log)" >> "$FAIL_FILE"
-        rm -f "$RUNTIME/$cell/.discovery_claim"
         return 1
     fi
 
@@ -366,7 +372,6 @@ sys.exit(0 if b.get('mode')=='measurement' else 1)" 2>/dev/null; then
         else
             echo "$cell reproduction-error (see $log)" >> "$FAIL_FILE"
         fi
-        rm -f "$RUNTIME/$cell/.discovery_claim"
         return 1
     fi
 
@@ -387,7 +392,12 @@ print(m.RELEASE_LINE)")
                 "bind $RUNTIME/$cell --timeout-s 900"; do
         if ! operate $step >> "$log" 2>&1; then
             echo "$cell operate-${step%% *}-failed (see $log)" >> "$FAIL_FILE"
-            rm -f "$RUNTIME/$cell/.discovery_claim"
+            if [ "${step%% *}" != "up" ]; then
+                # A runtime may already be booting: kill its tmux session so
+                # it can never journal a late session_open after this job
+                # concluded the step failed.
+                tmux kill-session -t "=$name" 2>/dev/null || true
+            fi
             return 1
         fi
     done
@@ -425,11 +435,9 @@ print(m.RELEASE_LINE)")
     fi
     if ! operate finish "$RUNTIME/$cell" --gpu "$gpu" >> "$log" 2>&1; then
         echo "$cell finish-failed (see $log)" >> "$FAIL_FILE"
-        rm -f "$RUNTIME/$cell/.discovery_claim"
         return 1
     fi
     tmux kill-session -t "=$name" 2>/dev/null || true
-    rm -f "$RUNTIME/$cell/.discovery_claim"
     echo "[gpu$gpu] $(date +%m-%d\ %H:%M) DONE $cell (winner finalized)"
     return 0
 }
