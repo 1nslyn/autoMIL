@@ -118,7 +118,11 @@ for cell in cells:
     if claim.is_file():
         holder = claim.read_text().strip()
         if alive is not None and holder not in alive and holder != job_id:
-            claim.unlink()  # stale claim from a dead job
+            # Stale claim from a dead job: classify as pending and leave the
+            # file alone — take_claim() is the ONE place that may replace a
+            # claim (compare-and-swap under flock). Unlinking here could
+            # delete a claim another chain just legitimately stole.
+            pass
         else:
             claimed.append(cell)
             continue
@@ -199,6 +203,42 @@ pop_cell() {
         head -n 1 "$QUEUE_FILE"
         sed -i '1d' "$QUEUE_FILE"
     ) 9>>"$QUEUE_FILE.lock"
+}
+
+# Atomically take a cell for this job, or refuse. O_EXCL (noclobber) is the
+# single enforcement point that makes concurrent chains safe: every queue is
+# built from a scan-time snapshot, so two chains WILL both queue the same
+# cell — only one may ever drive it. A dead holder's claim is stolen once
+# (its cell was already re-scanned or the deep session guards will refuse);
+# a live holder's cell is skipped silently, which is normal contention.
+take_claim() {
+    local cell="$1" claim="$RUNTIME/$1/.discovery_claim" me holder
+    me="${SLURM_JOB_ID:-manual}"
+    if ( set -C; echo "$me" > "$claim" ) 2>/dev/null; then
+        return 0
+    fi
+    holder=$(cat "$claim" 2>/dev/null)
+    [ "$holder" = "$me" ] && return 0
+    # Steal only when a SUCCESSFUL full queue listing omits the holder — a
+    # scheduler hiccup must never read as "holder dead" (a fail-open steal
+    # from a live chain is exactly the race this function exists to close),
+    # and probing the job id directly exits nonzero for purged jobs, which
+    # would make genuinely-dead holders unreapable. The replacement itself
+    # is a compare-and-swap under flock: re-read the holder under the lock
+    # and replace only the exact dead holder we verified — a bare
+    # rm-then-create lets several stealers each clobber the previous
+    # winner's fresh claim in sequence.
+    local alive_list
+    if [ -n "$holder" ] && alive_list=$(squeue -h -o %i 2>/dev/null) \
+        && ! echo "$alive_list" | grep -qx "$holder"; then
+        (
+            flock -n 9 || exit 1
+            [ "$(cat "$claim" 2>/dev/null)" = "$holder" ] || exit 1
+            rm -f "$claim"
+            ( set -C; echo "$me" > "$claim" ) 2>/dev/null
+        ) 9>>"$claim.lock" && return 0
+    fi
+    return 1
 }
 
 stage() {
@@ -292,7 +332,10 @@ PYEOF
 run_cell() {
     local gpu="$1" mode="$2" cell="$3" name log rc force_flag=""
     log="logs/discovery_cells/${cell}.log"
-    echo "$SLURM_JOB_ID" > "$RUNTIME/$cell/.discovery_claim"
+    if ! take_claim "$cell"; then
+        echo "[gpu$gpu] $cell is claimed by another live chain — skipping"
+        return 0
+    fi
     echo "[gpu$gpu] $(date +%m-%d\ %H:%M) start $cell (mode=$mode)"
 
     if [ "$mode" = "finish" ]; then
