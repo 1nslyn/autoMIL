@@ -279,7 +279,11 @@ scripted.
 **Shared tree.** `/project/6114359/shared/Pathology/autoMIL/work/autoMIL`
 (group `rrg-jma`, directories setgid `2770`, files `0660`), created once by
 `benchmarks/scripts/migrate_campaign_tree.sh`. Dataset stand-ins live beside
-it in `work/guard_roots/`. Rules while any discovery job is queued or
+it in `work/guard_roots/`. Project space is inode-limited (500K files per
+project on fir), so the Python environment and the per-attempt git worktrees
+live in a group-traversable scratch directory named by the script's
+`--scratch` option; `benchmarks/.env` records the environment as
+`UV_PROJECT_ENVIRONMENT`, and `.automil_worktrees` is a symlink to it. Rules while any discovery job is queued or
 running: no `git pull`, no edits under `src/`, `benchmarks/src/`,
 `benchmarks/scripts/`; the repository `CLAUDE.md` stays byte-identical to
 the protocol's pinned hash (every launch checks it; a test pins it); no

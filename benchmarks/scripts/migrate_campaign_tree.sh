@@ -5,12 +5,22 @@
 # campaign job is running.
 #
 #   migrate_campaign_tree.sh --source ~/scratch/autoMIL --dest /project/6114359/shared/Pathology/autoMIL/work \
-#                            --group rrg-jma --commit <sha> [--verify-only]
+#                            --group rrg-jma --commit <sha> --scratch /scratch/<owner>/autoMIL/work-scratch \
+#                            [--verify-only]
+#
+# Project space on fir is INODE-limited (500K files per project, most already
+# used), so the two file-heavy, rebuildable pieces live in --scratch (a
+# group-traversable directory in the owner's scratch): the Python environment
+# (UV_PROJECT_ENVIRONMENT, ~50K files) and the per-attempt git worktrees
+# (.automil_worktrees, symlinked). Both are recorded in dest's benchmarks/.env
+# so every launcher, hook and daemon resolves them the same way.
 #
 # Steps (each skipped when already done):
-#   1. dest/autoMIL: git clone of the campaign repo at --commit, .venv via
-#      `uv sync --frozen --all-packages`, benchmarks/.env rewritten so every
-#      AUTOBENCH_*_ROOT points at dest/guard_roots/<cohort>;
+#   1. dest/autoMIL: git clone of the campaign repo at --commit, environment
+#      via `uv sync --frozen --all-packages` into --scratch/venv, worktree
+#      directory --scratch/worktrees symlinked as .automil_worktrees,
+#      benchmarks/.env rewritten so every AUTOBENCH_*_ROOT points at
+#      dest/guard_roots/<cohort> and UV_PROJECT_ENVIRONMENT at the venv;
 #   2. the 78 cell roots + runtime/agent_protocol.json + logs/ rsync'd
 #      (additive, never --delete) and verified by sha256 of every
 #      campaign_state.json;
@@ -24,19 +34,22 @@
 # has finished in the new tree.
 
 set -euo pipefail
-SOURCE=""; DEST=""; GROUP="rrg-jma"; COMMIT=""; VERIFY_ONLY=0
+SOURCE=""; DEST=""; GROUP="rrg-jma"; COMMIT=""; VERIFY_ONLY=0; SCRATCH=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --source) SOURCE="$2"; shift ;;
         --dest) DEST="$2"; shift ;;
         --group) GROUP="$2"; shift ;;
         --commit) COMMIT="$2"; shift ;;
+        --scratch) SCRATCH="$2"; shift ;;
         --verify-only) VERIFY_ONLY=1 ;;
         *) echo "unknown option: $1"; exit 2 ;;
     esac
     shift
 done
-[ -n "$SOURCE" ] && [ -n "$DEST" ] || { echo "usage: --source <scratch/autoMIL> --dest <work> [--group G] --commit <sha>"; exit 2; }
+[ -n "$SOURCE" ] && [ -n "$DEST" ] && [ -n "$SCRATCH" ] || { echo "usage: --source <scratch/autoMIL> --dest <work> --scratch <group-traversable scratch dir> [--group G] --commit <sha>"; exit 2; }
+VENV="$SCRATCH/venv"; WORKTREES="$SCRATCH/worktrees"
+export UV_PROJECT_ENVIRONMENT="$VENV"
 SRC_REPO="$SOURCE/autoMIL"
 DST_REPO="$DEST/autoMIL"
 CAMPAIGN_REL="benchmarks/campaigns/preprint_130"
@@ -57,17 +70,33 @@ if [ "$VERIFY_ONLY" = 0 ]; then
     fi
     git -C "$DST_REPO" fetch --quiet origin
     git -C "$DST_REPO" checkout --quiet "$COMMIT"
+    # Scratch pieces: group-traversable parents, group-writable worktree dir.
+    mkdir -p "$SCRATCH" "$WORKTREES"; chgrp "$GROUP" "$SCRATCH" "$WORKTREES"
+    chmod 2750 "$SCRATCH"; chmod 2770 "$WORKTREES"
+    # The owner's scratch parents stay private; the group only gets traverse
+    # (an ACL, so ownership and the listing bit are untouched).
+    parent="$(dirname "$SCRATCH")"
+    while [ "$parent" != "/" ] && [ "$parent" != "/scratch" ] && [ "$parent" != "/home" ]; do
+        setfacl -m "g:$GROUP:x" "$parent"
+        parent="$(dirname "$parent")"
+    done
+    [ -e "$DST_REPO/.automil_worktrees" ] || ln -s "$WORKTREES" "$DST_REPO/.automil_worktrees"
+    rm -rf "$DST_REPO/.venv"   # never in project space (inodes)
     (cd "$DST_REPO" && uv sync --frozen --all-packages)
-    python3 - "$SRC_REPO/benchmarks/.env" "$DST_REPO/benchmarks/.env" "$DEST/guard_roots" <<'PYEOF'
+    chgrp -R "$GROUP" "$VENV"; chmod -R g+rX "$VENV"
+    python3 - "$SRC_REPO/benchmarks/.env" "$DST_REPO/benchmarks/.env" "$DEST/guard_roots" "$VENV" <<'PYEOF'
 import re, sys
 from pathlib import Path
-src, dst, roots = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+src, dst, roots, venv = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
 lines = []
 for line in src.read_text().splitlines():
+    if line.startswith("UV_PROJECT_ENVIRONMENT="):
+        continue
     m = re.match(r'^(AUTOBENCH_([A-Z0-9]+)_ROOT)=(.*)$', line)
     if m and m.group(2) != "EXPORT":
         line = f"{m.group(1)}={roots}/{m.group(2).lower()}"
     lines.append(line)
+lines.append(f"UV_PROJECT_ENVIRONMENT={venv}")
 dst.write_text("\n".join(lines) + "\n")
 print(f"wrote {dst}")
 PYEOF
@@ -90,6 +119,7 @@ PYEOF
     chgrp -R "$GROUP" "$DEST"
     find "$DEST" -type d -exec chmod 2770 {} +
     find "$DEST" -type f -exec chmod g+rw {} +
+    [ -x "$VENV/bin/python" ] || { echo "ERROR: $VENV has no python — uv sync failed"; exit 1; }
     git -C "$DST_REPO" worktree prune
 fi
 

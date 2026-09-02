@@ -51,6 +51,10 @@ disc_env() {
     set -a; source "$PROJECT_DIR/benchmarks/.env"; set +a
     export DISABLE_AUTOUPDATER=1
     export UV_FROZEN=1 UV_NO_SYNC=1
+    # The project-space tree keeps its Python environment in scratch (inode
+    # quota); benchmarks/.env names it as UV_PROJECT_ENVIRONMENT, sourced above.
+    [ -n "${UV_PROJECT_ENVIRONMENT:-}" ] && [ -x "$UV_PROJECT_ENVIRONMENT/bin/python" ] \
+        || { echo "ERROR: UV_PROJECT_ENVIRONMENT (from benchmarks/.env) does not name a usable environment"; return 1; }
     export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$PROJECT_DIR"
     # The frozen toolset forbids these; a stray module could have set them.
     unset ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL ANTHROPIC_BASE_URL \
@@ -95,8 +99,11 @@ disc_static_preflight() {
     [ -f "$HOME/.claude/.credentials.json" ] || {
         echo "ERROR: no Claude login on this account — run 'claude login' on a login node"; return 1; }
     [ ! -e "$HOME/.claude/CLAUDE.md" ] || { echo "ERROR: remove $HOME/.claude/CLAUDE.md (user memory must be absent)"; return 1; }
+    # The runtime recreates ~/.claude/plugins (marketplace metadata) on every
+    # start, so the job clears it immediately before launch (clear_plugins);
+    # here it is only reported.
     if [ -d "$HOME/.claude/plugins" ] && [ -n "$(ls -A "$HOME/.claude/plugins" 2>/dev/null)" ]; then
-        echo "ERROR: $HOME/.claude/plugins is not empty — move it aside for the campaign"; return 1
+        echo "note: $HOME/.claude/plugins is not empty; the job clears it right before launch"
     fi
     local tree_group
     tree_group=$(stat -c %G "$PROJECT_DIR" 2>/dev/null)
@@ -193,6 +200,11 @@ disc_usage_probe() {
     fi
     return 0
 }
+
+# The launch preflight refuses a non-empty ~/.claude/plugins; the runtime
+# recreates marketplace metadata there on each start, so clear it right
+# before the formal launch (the toolset pins plugins absent).
+clear_plugins() { rm -rf "$HOME/.claude/plugins"; }
 
 # Every file the owner leaves behind becomes group read/write so a later
 # member can finish or scan the cell. Owner-only by construction; errors on
