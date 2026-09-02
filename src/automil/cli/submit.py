@@ -22,6 +22,23 @@ from automil.cli._helpers import (
 )
 
 
+def _git_lines(git_root: Path, *args: str) -> list[str]:
+    """Run ``git <args>`` and return stdout lines, refusing on any non-zero exit.
+
+    Reading an empty stdout after a failed git call as "no changed files"
+    would archive an EMPTY overlay and burn a charged attempt for nothing.
+    """
+    result = subprocess.run(
+        ["git", *args], cwd=git_root, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise click.ClickException(
+            f"git {' '.join(args)} failed (exit {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+    return result.stdout.strip().splitlines()
+
+
 @main.command()
 @click.option("--node", required=True, help="Node ID (e.g., node_0042)")
 @click.option("--desc", required=True, help="Experiment description")
@@ -212,30 +229,10 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         else:
             editable = set()
 
-        # Get all changed files from git (paths relative to git root).
-        # Fail closed on a git error instead of treating stderr as "no
-        # output" -- a silent empty changed-file list here would archive an
-        # empty overlay and burn a charged attempt for nothing.
-        tracked_result = subprocess.run(
-            ["git", "diff", "--name-only"],
-            cwd=git_root, capture_output=True, text=True,
-        )
-        if tracked_result.returncode != 0:
-            raise click.ClickException(
-                f"git diff --name-only failed (exit {tracked_result.returncode}): "
-                f"{tracked_result.stderr.strip()}"
-            )
-        tracked = tracked_result.stdout.strip().splitlines()
-        untracked_result = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
-            cwd=git_root, capture_output=True, text=True,
-        )
-        if untracked_result.returncode != 0:
-            raise click.ClickException(
-                f"git ls-files --others --exclude-standard failed "
-                f"(exit {untracked_result.returncode}): {untracked_result.stderr.strip()}"
-            )
-        untracked = untracked_result.stdout.strip().splitlines()
+        # Changed files from git (paths relative to git root); a git failure
+        # refuses the submit rather than archiving an empty overlay.
+        tracked = _git_lines(git_root, "diff", "--name-only")
+        untracked = _git_lines(git_root, "ls-files", "--others", "--exclude-standard")
         # Exclude automil, runtime-config dirs, and AGENTS.md from auto-detect.
         # AGENTS.md is framework-managed (rendered by `automil init`), not user code.
         # .claude/, .opencode/, .codex/ are runtime overlay dirs installed by init.

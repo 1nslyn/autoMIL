@@ -304,9 +304,10 @@ finishable / stranded / blocked / done), takes the first drivable one
 (finish-only recoveries first), fits the job to the cell
 (`campaign_shape.py`: predicted wall from the cell's baseline elapsed time,
 30 attempts packed 4 per GPU as the frozen cell config allows, 1, 2 or 4 GPUs,
-12 h or 24 h wall, 12 cores and 128 GB per GPU; the cheapest fitting shape
-by default, `--prefer fast` for the shortest wall), submits it, and only
-then claims the cell with the new job id. Against the registered 78 cells
+12 h or 24 h wall, 12 cores and 128 GB per GPU, a 4-GPU shape takes the
+whole node's memory; the cheapest fitting shape by default, `--prefer fast`
+for the shortest wall), submits it, and only then claims the cell with the
+new job id. Against the registered 78 cells
 (2026-09-03) every cell fits: cheap gives 35 cells 1 GPU/12 h, 22 cells
 1 GPU/24 h, 18 cells 2 GPU/24 h, 3 cells 4 GPU/24 h (about 1,200 GPU-hours
 predicted for the campaign); fast puts 72 cells in the 12 h tier for about
@@ -317,9 +318,10 @@ classification and every cell's shape without submitting; `--cell` picks a
 cell; `--max-gpus` caps the shape.
 
 **The job** (`submit_discovery_campaign.sh`) refuses to run a cell whose
-claim does not carry its own id, reads the plan's remaining allocation from
-a throwaway `/status` before opening the one-shot session (refuses above
-85 % of the weekly window; the claim then waits for a later job), runs the
+claim does not carry its own id, records the plan's remaining allocation
+from a throwaway `/status` (the submit script already refused above 85 % of
+the weekly window before claiming, so no claim is ever burned on a spent
+seat), runs the
 reproduction gate on its first GPU, brings the daemon up on all its GPUs,
 launches and binds the session in a job-private tmux server, sends the
 release line, watches until 30 charged attempts and drained queues, then

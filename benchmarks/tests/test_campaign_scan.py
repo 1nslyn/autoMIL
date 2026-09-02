@@ -153,3 +153,13 @@ def test_cli_missing_runtime_exits_2(tmp_path):
         capture_output=True, text=True,
     ).returncode
     assert rc == 2
+
+
+def test_cli_session_ended_query_exit_codes(tmp_path):
+    names = ["tcga_luad__a__e__m__s42__v"]
+    runtime, roster = _runtime(tmp_path, names)
+    journal = runtime / names[0] / "automil" / ".activity.jsonl"
+    base = [sys.executable, str(SCRIPT), "--runtime", str(runtime), "--session-ended", names[0]]
+    assert subprocess.run(base).returncode == 1
+    journal.write_text('{"event":"session_open"}\n{"event":"session_end"}\n')
+    assert subprocess.run(base).returncode == 0

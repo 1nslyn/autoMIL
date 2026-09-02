@@ -21,8 +21,8 @@ DISC_CAMPAIGN_REL="benchmarks/campaigns/preprint_130"
 # imported from there at run time; the nudge is the launcher's own, sent only
 # when the runtime's active time has been flat for NUDGE_IDLE_S while the
 # queue is drained and attempts remain (see watch_discovery).
-DISC_NUDGE_LINE="Operator note: no agent activity has been observed for 30 minutes while attempts remain. Continue per your policy."
 DISC_NUDGE_IDLE_S=1800
+DISC_NUDGE_LINE="Operator note: no agent activity has been observed for $((DISC_NUDGE_IDLE_S / 60)) minutes while attempts remain. Continue per your policy."
 DISC_NUDGE_MIN_GAP_S=3600
 DISC_NUDGE_MAX=3
 DISC_WEEKLY_USAGE_MAX_PCT=85
@@ -59,6 +59,11 @@ disc_env() {
     mkdir -p "$PROJECT_DIR/logs/discovery_cells"
 }
 
+# Every tmux call in the launchers goes through tmx so the job-private
+# server (AUTOMIL_TMUX_SOCKET, honored by campaign_operate too) is the one
+# enforcement point: a bare `tmux` would talk to the default server and
+# never find the session campaign_operate created.
+tmx() { tmux ${AUTOMIL_TMUX_SOCKET:+-L "$AUTOMIL_TMUX_SOCKET"} "$@"; }
 pyrun() { uv run --frozen --no-sync --package autobench python "$@"; }
 stage() { pyrun benchmarks/scripts/campaign_stage.py "$@"; }
 operate() { pyrun benchmarks/scripts/campaign_operate.py "$@"; }
@@ -92,6 +97,11 @@ disc_static_preflight() {
     [ ! -e "$HOME/.claude/CLAUDE.md" ] || { echo "ERROR: remove $HOME/.claude/CLAUDE.md (user memory must be absent)"; return 1; }
     if [ -d "$HOME/.claude/plugins" ] && [ -n "$(ls -A "$HOME/.claude/plugins" 2>/dev/null)" ]; then
         echo "ERROR: $HOME/.claude/plugins is not empty — move it aside for the campaign"; return 1
+    fi
+    local tree_group
+    tree_group=$(stat -c %G "$PROJECT_DIR" 2>/dev/null)
+    if [ -n "$tree_group" ] && ! id -nG | tr ' ' '\n' | grep -qx "$tree_group"; then
+        echo "ERROR: you are not in group $tree_group that owns $PROJECT_DIR"; return 1
     fi
     pyrun - "$RUNTIME" "$PROJECT_DIR" <<'PYEOF' || return 1
 import sys
@@ -152,6 +162,36 @@ remaining_hours() {
     end=$(squeue -h -j "${SLURM_JOB_ID:-0}" -o %e 2>/dev/null | head -1)
     if [ -z "$end" ] || [ "$end" = "N/A" ]; then echo 0; return; fi
     echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 3600 ))
+}
+
+# Read the plan's remaining allocation from a throwaway runtime in $HOME
+# (/status is local to the runtime; no model turn). $1 = refuse|log: the
+# wrapper refuses a submission above DISC_WEEKLY_USAGE_MAX_PCT before any
+# claim exists; the job only records the value it saw. Unparsable output
+# warns. $2 = output file.
+disc_usage_probe() {
+    local mode="$1" out="$2" pct
+    if ! tmx new-session -d -s usage_probe -c "$HOME" \
+            "claude --setting-sources project --strict-mcp-config" 2>/dev/null; then
+        echo "WARNING: could not start the usage probe (tmux/claude); weekly window unchecked"
+        return 0
+    fi
+    sleep 15
+    tmx send-keys -t "=usage_probe" -l "/status"; tmx send-keys -t "=usage_probe" Enter
+    sleep 10
+    tmx capture-pane -p -t "=usage_probe" -S -80 > "$out" 2>/dev/null
+    tmx kill-session -t "=usage_probe" 2>/dev/null || true
+    pct=$(grep -iE 'week' "$out" | grep -oE '[0-9]{1,3}%' | head -1 | tr -d '%')
+    if [ -z "$pct" ]; then
+        echo "WARNING: could not parse the weekly usage window from /status (see $out)"
+        return 0
+    fi
+    echo "usage window: weekly ${pct}% used"
+    if [ "$mode" = refuse ] && [ "$pct" -ge "$DISC_WEEKLY_USAGE_MAX_PCT" ]; then
+        echo "ERROR: weekly usage ${pct}% >= ${DISC_WEEKLY_USAGE_MAX_PCT}% — not submitting a cell on this seat now"
+        return 1
+    fi
+    return 0
 }
 
 # Every file the owner leaves behind becomes group read/write so a later

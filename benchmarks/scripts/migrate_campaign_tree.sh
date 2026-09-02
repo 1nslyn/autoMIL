@@ -76,9 +76,11 @@ PYEOF
     mkdir -p "$DST_REPO/$CAMPAIGN_REL/runtime" "$DST_REPO/logs"
     rsync -a "$SRC_REPO/$CAMPAIGN_REL/runtime/" "$DST_REPO/$CAMPAIGN_REL/runtime/"
     rsync -a "$SRC_REPO/logs/" "$DST_REPO/logs/"
-    (cd "$SRC_REPO/$CAMPAIGN_REL/runtime" && find . -name campaign_state.json -exec sha256sum {} + | sort) > /tmp/migrate_src.sha
-    (cd "$DST_REPO/$CAMPAIGN_REL/runtime" && find . -name campaign_state.json -exec sha256sum {} + | sort) > /tmp/migrate_dst.sha
-    diff /tmp/migrate_src.sha /tmp/migrate_dst.sha && echo "state files identical: $(wc -l < /tmp/migrate_dst.sha)"
+    SRC_SHA=$(mktemp); DST_SHA=$(mktemp)
+    (cd "$SRC_REPO/$CAMPAIGN_REL/runtime" && find . -name campaign_state.json -exec sha256sum {} + | sort) > "$SRC_SHA"
+    (cd "$DST_REPO/$CAMPAIGN_REL/runtime" && find . -name campaign_state.json -exec sha256sum {} + | sort) > "$DST_SHA"
+    diff "$SRC_SHA" "$DST_SHA" && echo "state files identical: $(wc -l < "$DST_SHA")"
+    rm -f "$SRC_SHA" "$DST_SHA"
 
     step "3. guard roots"
     (cd "$DST_REPO" && uv run --frozen --no-sync --package autobench python \
@@ -91,14 +93,31 @@ PYEOF
     git -C "$DST_REPO" worktree prune
 fi
 
-step "5. verification"
+step "5. verification (each check fails the script)"
 cd "$DST_REPO"
+ROSTER_CELLS=$(python3 -c "import json;print(json.load(open('$CAMPAIGN_REL/active_roster.json'))['cells'])")
 uv run --frozen --no-sync --package autobench python benchmarks/scripts/campaign_manifest.py materialize \
-    --agent-protocol "$CAMPAIGN_REL/agent_protocol.json" | tail -3
-uv run --frozen --no-sync --package autobench python benchmarks/scripts/campaign_scan.py \
-    --runtime "$CAMPAIGN_REL/runtime" --roster "$CAMPAIGN_REL/active_roster.json" \
-    | python3 -c "import json,sys;d=json.load(sys.stdin);print('scan:',{k:len(d[k]) for k in ('pending','done','claimed','stranded','blocked','finishable')})"
-git diff --quiet HEAD -- src benchmarks/src benchmarks/scripts && echo "training tree clean at $(git rev-parse --short HEAD)"
+    --agent-protocol "$CAMPAIGN_REL/agent_protocol.json" > /dev/null \
+    && echo "materialize: every existing root bound to identical inputs"
+PENDING=$(uv run --frozen --no-sync --package autobench python benchmarks/scripts/campaign_scan.py \
+    --runtime "$CAMPAIGN_REL/runtime" --roster "$CAMPAIGN_REL/active_roster.json" --class pending | grep -c .)
+[ "$PENDING" = "$ROSTER_CELLS" ] || { echo "ERROR: scan sees $PENDING pending cells, roster declares $ROSTER_CELLS"; exit 1; }
+echo "scan: $PENDING pending"
+git diff --quiet HEAD -- src benchmarks/src benchmarks/scripts || { echo "ERROR: training tree is dirty"; exit 1; }
+echo "training tree clean at $(git rev-parse --short HEAD)"
 PIN=$(python3 -c "import json;print(json.load(open('$CAMPAIGN_REL/toolset.json'))['ancestor_memory']['CLAUDE.md'])")
-[ "$(sha256sum CLAUDE.md | cut -c1-64)" = "$PIN" ] && echo "CLAUDE.md matches the pinned hash" || { echo "ERROR: CLAUDE.md drifted from the pinned hash"; exit 1; }
-echo "done"
+[ "$(sha256sum CLAUDE.md | cut -c1-64)" = "$PIN" ] || { echo "ERROR: CLAUDE.md drifted from the pinned hash"; exit 1; }
+echo "CLAUDE.md matches the pinned hash"
+cat <<EOM
+
+done. Before any member submits, run one reproduction gate per cohort so a
+guard-root regression cannot block a cohort fleet-wide (sticky verdict); the
+launcher's rule applies: --force only supersedes a measurement-mode block.
+  sbatch --account=def-jma-ab --time=3:00:00 --gpus-per-node=h100:1 --cpus-per-task=12 --mem=64G \\
+    --chdir="$DST_REPO" --wrap='set -a; source benchmarks/.env; set +a
+      for c in tcga_luad__os__titan__titan tcga_hnsc__os__titan__titan cptac_pdac__os__titan__titan; do
+        root=$CAMPAIGN_REL/runtime/\${c}__s42__preprint-v3
+        force=\$(python3 -c "import json,sys;b=(json.load(open(\"\$root/campaign_state.json\")).get(\"baseline_reproduction\") or {});print(\"--force\" if b.get(\"mode\")==\"measurement\" else \"\")")
+        uv run --frozen --no-sync --package autobench python benchmarks/scripts/campaign_stage.py run-baseline-reproduction --cell-root "\$root" --gpu 0 \$force
+      done'
+EOM
