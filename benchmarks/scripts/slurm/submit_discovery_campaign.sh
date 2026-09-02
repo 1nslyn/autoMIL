@@ -139,10 +139,12 @@ port = (yaml.safe_load(open(sys.argv[1])).get("activity") or {}).get("exporter_p
 sys.exit("cell config declares no activity.exporter_port") if port is None else print(port)
 PYEOF
     ) || return 1
-    curl -s "http://127.0.0.1:$port/metrics" | pyrun - "$2" <<'PYEOF'
-import json, re, sys, datetime as dt
+    local metrics
+    metrics=$(curl -s "http://127.0.0.1:$port/metrics") || return 1
+    METRICS="$metrics" pyrun - "$2" <<'PYEOF'
+import json, os, re, sys, datetime as dt
 out = sys.argv[1]; tokens = {}; cost = 0.0
-for line in sys.stdin:
+for line in os.environ["METRICS"].splitlines():
     m = re.match(r'claude_code_token_usage_total\{([^}]*)\}\s+([0-9.eE+-]+)', line)
     if m:
         kind = re.search(r'type="([^"]+)"', m.group(1)).group(1)
