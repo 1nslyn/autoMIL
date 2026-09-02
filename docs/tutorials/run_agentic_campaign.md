@@ -254,8 +254,9 @@ before the formal session can start:
   pid+starttime semantics and **refuses if another cell's live daemon claims
   `--gpu N`**. This cell's own discovery/promotion pair on one GPU is exempt
   — that is the normal finish-time state.
-- **tmux session** named from the cell id's distinguishing tokens (encoder +
-  arm, e.g. `uni_v2-clam`), with three windows: `baseline`, `orch`, `agent`.
+- **tmux session** named from the full cell id, sanitized for tmux (e.g.
+  `tcga_luad__kras__uni_v2__clam__s42__preprint-v3`), with three windows:
+  `baseline`, `orch`, `agent`.
 - **`baseline` window**: the manifest-locked five-fold native baseline
   (outside the 30-attempt budget; it takes a lock, so a duplicate refuses).
 - **`orch` window**: the discovery orchestrator, foreground, with
@@ -412,6 +413,15 @@ Running two cells in parallel is supported exactly when all four hold:
   id and keeps all three windows for that cell inside it.
 
 ---
+
+## 4h. Running cells as SLURM jobs (optional)
+
+Everything above is the interactive path and stays the default. On a SLURM
+cluster the same sequence can run unattended, one cell per job, with the
+launcher acting as the operator of 4a–4f: see
+`benchmarks/campaigns/preprint_130/README.md` §4b and
+`benchmarks/scripts/slurm/submit_discovery_cell.sh`. Nothing in the framework
+requires it, and nothing in the protocol changes for it.
 
 ## 5. Certification — Leo only, once, after all 130
 

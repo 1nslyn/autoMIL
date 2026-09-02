@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import socket
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -76,11 +77,20 @@ def write_agent_session(cell: Path, status: str = "finalized", session_id: str =
     ))
 
 
-def write_live_daemon(orch_dir: Path, pid: int = 4242, gpus: list[int] | None = None) -> None:
+def write_live_daemon(
+    orch_dir: Path,
+    pid: int = 4242,
+    gpus: list[int] | None = None,
+    hostname: str | None = None,
+    slurm_job_id: str | None = None,
+) -> None:
     orch_dir.mkdir(parents=True, exist_ok=True)
-    (orch_dir / "orchestrator.pid").write_text(json.dumps(
-        {"pid": pid, "starttime_ticks": 7, "starttime_iso": "2026-08-15T00:00:00"}
-    ) + "\n")
+    payload = {"pid": pid, "starttime_ticks": 7, "starttime_iso": "2026-08-15T00:00:00"}
+    if hostname is not None:
+        payload["hostname"] = hostname
+    if slurm_job_id is not None:
+        payload["slurm_job_id"] = slurm_job_id
+    (orch_dir / "orchestrator.pid").write_text(json.dumps(payload) + "\n")
     if gpus is not None:
         (orch_dir / "gpu_state.json").write_text(json.dumps({
             "gpus": {str(index): {"running": []} for index in gpus},
@@ -269,21 +279,245 @@ def test_launcher_argv_form(operate, tmp_path):
 
 def test_orchestrator_window_command_sets_gpu_partition_inline(operate, tmp_path):
     cell = tmp_path / "cell"
-    command = operate.orchestrator_window_command(cell, 3)
+    command = operate.orchestrator_window_command(cell, [3])
     assert command.startswith("AUTOMIL_VISIBLE_GPUS=3 ")
     assert command.endswith("orchestrator start")
     assert str(cell) in command
 
 
+def test_orchestrator_window_command_joins_a_multi_gpu_list(operate, tmp_path):
+    cell = tmp_path / "cell"
+    command = operate.orchestrator_window_command(cell, [0, 1])
+    assert command.startswith("AUTOMIL_VISIBLE_GPUS=0,1 ")
+
+
 def test_baseline_window_command_carries_gpu(operate, tmp_path):
-    command = operate.baseline_window_command(tmp_path / "cell", 0)
+    command = operate.baseline_window_command(tmp_path / "cell", [0])
     assert "run-baseline" in command
     assert command.endswith("--gpu 0")
 
 
-def test_session_name_uses_distinguishing_tokens(operate, tmp_path):
-    assert operate._session_name(tmp_path / CELL_NAME) == "uni_v2-clam"
+def test_baseline_window_command_uses_only_the_first_gpu_index(operate, tmp_path):
+    command = operate.baseline_window_command(tmp_path / "cell", [2, 3])
+    assert command.endswith("--gpu 2")
+
+
+# ---------------------------------------------------------------------------
+# --gpu parsing: single index or comma list
+# ---------------------------------------------------------------------------
+def test_parse_gpu_list_accepts_single_index(operate):
+    assert operate._parse_gpu_list("0") == [0]
+
+
+def test_parse_gpu_list_accepts_comma_list(operate):
+    assert operate._parse_gpu_list("0,1,2,3") == [0, 1, 2, 3]
+
+
+def test_parse_gpu_list_rejects_duplicates(operate):
+    with pytest.raises(operate.argparse.ArgumentTypeError):
+        operate._parse_gpu_list("1,1")
+
+
+def test_parse_gpu_list_rejects_non_integer(operate):
+    with pytest.raises(operate.argparse.ArgumentTypeError):
+        operate._parse_gpu_list("a")
+
+
+def test_parse_gpu_list_rejects_negative(operate):
+    with pytest.raises(operate.argparse.ArgumentTypeError):
+        operate._parse_gpu_list("-1")
+
+
+def test_parse_gpu_list_rejects_empty(operate):
+    with pytest.raises(operate.argparse.ArgumentTypeError):
+        operate._parse_gpu_list("")
+    with pytest.raises(operate.argparse.ArgumentTypeError):
+        operate._parse_gpu_list("0,,1")
+
+
+def test_up_gpu_argparse_accepts_comma_list(operate, tmp_path):
+    parser = operate.build_parser()
+    args = parser.parse_args(["up", str(tmp_path / "cell"), "--gpu", "0,1"])
+    assert args.gpu == [0, 1]
+
+
+def test_up_gpu_argparse_single_index_unchanged(operate, tmp_path):
+    parser = operate.build_parser()
+    args = parser.parse_args(["up", str(tmp_path / "cell"), "--gpu", "0"])
+    assert args.gpu == [0]
+
+
+def test_up_gpu_argparse_rejects_duplicate(operate, tmp_path, capsys):
+    parser = operate.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["up", str(tmp_path / "cell"), "--gpu", "1,1"])
+    assert "--gpu" in capsys.readouterr().err
+
+
+def test_up_gpu_argparse_rejects_non_integer(operate, tmp_path, capsys):
+    parser = operate.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["up", str(tmp_path / "cell"), "--gpu", "a"])
+    assert "--gpu" in capsys.readouterr().err
+
+
+def test_finish_gpu_argparse_accepts_comma_list(operate, tmp_path):
+    parser = operate.build_parser()
+    args = parser.parse_args(["finish", str(tmp_path / "cell"), "--gpu", "0,1,2,3"])
+    assert args.gpu == [0, 1, 2, 3]
+
+
+def test_finish_gpu_argparse_default_is_none(operate, tmp_path):
+    parser = operate.build_parser()
+    args = parser.parse_args(["finish", str(tmp_path / "cell")])
+    assert args.gpu is None
+
+
+def test_session_name_uses_the_full_sanitized_cell_id(operate, tmp_path):
+    assert operate._session_name(tmp_path / CELL_NAME) == CELL_NAME
     assert operate._session_name(tmp_path / "throwaway.cell") == "throwaway_cell"
+
+
+def test_session_name_distinguishes_cells_sharing_encoder_and_arm(operate, tmp_path):
+    """Two cells with the same encoder+arm tokens (different dataset/task/seed)
+    must not collapse onto one tmux session name."""
+    one = operate._session_name(tmp_path / "tcga_luad__kras__uni_v2__clam__s42__v3")
+    other = operate._session_name(tmp_path / "tcga_luad__egfr__uni_v2__clam__s43__v3")
+    assert one != other
+    for name in (one, other):
+        assert ":" not in name
+        assert "." not in name
+
+
+def test_session_name_sanitizes_colons_and_dots(operate, tmp_path):
+    name = operate._session_name(tmp_path / "weird:name.with.dots")
+    assert name == "weird_name_with_dots"
+
+
+# ---------------------------------------------------------------------------
+# tmux socket isolation (AUTOMIL_TMUX_SOCKET)
+# ---------------------------------------------------------------------------
+def test_tmux_prepends_dash_l_when_socket_env_var_set(operate, monkeypatch):
+    monkeypatch.setenv("AUTOMIL_TMUX_SOCKET", "automil-campaign")
+    captured: list[list[str]] = []
+
+    def fake_capture(argv, env=None):
+        captured.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(operate, "_capture", fake_capture)
+    operate._tmux("has-session", "-t", "=foo")
+
+    assert captured == [["tmux", "-L", "automil-campaign", "has-session", "-t", "=foo"]]
+
+
+def test_tmux_unchanged_when_socket_env_var_unset(operate, monkeypatch):
+    monkeypatch.delenv("AUTOMIL_TMUX_SOCKET", raising=False)
+    captured: list[list[str]] = []
+
+    def fake_capture(argv, env=None):
+        captured.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(operate, "_capture", fake_capture)
+    operate._tmux("has-session", "-t", "=foo")
+
+    assert captured == [["tmux", "has-session", "-t", "=foo"]]
+
+
+def test_tmux_unchanged_when_socket_env_var_empty(operate, monkeypatch):
+    monkeypatch.setenv("AUTOMIL_TMUX_SOCKET", "")
+    captured: list[list[str]] = []
+
+    def fake_capture(argv, env=None):
+        captured.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(operate, "_capture", fake_capture)
+    operate._tmux("list-windows", "-t", "=foo")
+
+    assert captured == [["tmux", "list-windows", "-t", "=foo"]]
+
+
+# ---------------------------------------------------------------------------
+# daemon liveness — host/job scoping (co-scheduled SLURM jobs on one node)
+# ---------------------------------------------------------------------------
+def test_daemon_alive_ignores_pid_file_from_another_hostname(
+    operate, tmp_path, monkeypatch,
+):
+    orch = tmp_path / "automil" / "orchestrator"
+    write_live_daemon(orch, pid=999, hostname="other-node")
+    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
+    monkeypatch.setattr(operate.socket, "gethostname", lambda: "this-node")
+
+    assert operate._daemon_alive(orch) is None
+
+
+def test_daemon_alive_ignores_pid_file_from_another_slurm_job(
+    operate, tmp_path, monkeypatch,
+):
+    orch = tmp_path / "automil" / "orchestrator"
+    write_live_daemon(orch, pid=999, slurm_job_id="111")
+    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
+    monkeypatch.setattr(operate.socket, "gethostname", socket.gethostname)
+    monkeypatch.setenv("SLURM_JOB_ID", "222")
+
+    assert operate._daemon_alive(orch) is None
+
+
+def test_daemon_alive_same_host_and_job_id_is_alive(
+    operate, tmp_path, monkeypatch,
+):
+    orch = tmp_path / "automil" / "orchestrator"
+    write_live_daemon(orch, pid=999, hostname="this-node", slurm_job_id="222")
+    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
+    monkeypatch.setattr(operate.socket, "gethostname", lambda: "this-node")
+    monkeypatch.setenv("SLURM_JOB_ID", "222")
+
+    assert operate._daemon_alive(orch) == 999
+
+
+def test_daemon_alive_workstation_no_job_ids_unaffected(
+    operate, tmp_path, monkeypatch,
+):
+    """Neither the pid file nor our own environment carries a SLURM job id —
+    liveness is decided by pid+starttime alone, as before."""
+    orch = tmp_path / "automil" / "orchestrator"
+    write_live_daemon(orch, pid=999)
+    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+
+    assert operate._daemon_alive(orch) == 999
+
+
+def test_daemon_alive_old_format_pid_file_unaffected(
+    operate, tmp_path, monkeypatch,
+):
+    """A pid file written before hostname/slurm_job_id existed carries
+    neither field — treated as present-or-None, never a mismatch."""
+    orch = tmp_path / "automil" / "orchestrator"
+    orch.mkdir(parents=True)
+    (orch / "orchestrator.pid").write_text(json.dumps(
+        {"pid": 999, "starttime_ticks": 7, "starttime_iso": "2026-08-15T00:00:00"}
+    ) + "\n")
+    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
+    monkeypatch.setenv("SLURM_JOB_ID", "222")
+
+    assert operate._daemon_alive(orch) == 999
+
+
+def test_daemon_alive_still_dead_when_starttime_mismatches(
+    operate, tmp_path, monkeypatch,
+):
+    """Host/job scoping is a new pre-filter, not a replacement for the
+    existing pid+starttime cross-check."""
+    orch = tmp_path / "automil" / "orchestrator"
+    write_live_daemon(orch, pid=999, hostname="this-node", slurm_job_id="222")
+    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: False)
+    monkeypatch.setattr(operate.socket, "gethostname", lambda: "this-node")
+    monkeypatch.setenv("SLURM_JOB_ID", "222")
+
+    assert operate._daemon_alive(orch) is None
 
 
 # ---------------------------------------------------------------------------
@@ -295,8 +529,8 @@ def test_gpu_claim_refuses_other_cells_live_partition(operate, tmp_path, monkeyp
     write_live_daemon(other / "automil" / "orchestrator", pid=1234, gpus=[1])
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
 
-    assert operate._gpu_claim_conflicts(ours, 1)
-    assert operate._gpu_claim_conflicts(ours, 0) == []
+    assert operate._gpu_claim_conflicts(ours, [1])
+    assert operate._gpu_claim_conflicts(ours, [0]) == []
 
 
 def test_gpu_claim_covers_sibling_promotion_daemons(operate, tmp_path, monkeypatch):
@@ -307,7 +541,7 @@ def test_gpu_claim_covers_sibling_promotion_daemons(operate, tmp_path, monkeypat
     )
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
 
-    conflicts = operate._gpu_claim_conflicts(ours, 2)
+    conflicts = operate._gpu_claim_conflicts(ours, [2])
     assert conflicts and "promotion" in conflicts[0]
 
 
@@ -317,7 +551,7 @@ def test_gpu_claim_covers_twin_runtime_roots(operate, tmp_path, monkeypatch):
     write_live_daemon(twin / "automil" / "orchestrator", pid=1234, gpus=[0])
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
 
-    assert operate._gpu_claim_conflicts(ours, 0)
+    assert operate._gpu_claim_conflicts(ours, [0])
 
 
 def test_gpu_claim_same_cell_discovery_promotion_pair_is_exempt(
@@ -330,7 +564,7 @@ def test_gpu_claim_same_cell_discovery_promotion_pair_is_exempt(
     )
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
 
-    assert operate._gpu_claim_conflicts(ours, 1) == []
+    assert operate._gpu_claim_conflicts(ours, [1]) == []
 
 
 def test_gpu_claim_ignores_dead_daemons(operate, tmp_path, monkeypatch):
@@ -339,7 +573,7 @@ def test_gpu_claim_ignores_dead_daemons(operate, tmp_path, monkeypatch):
     write_live_daemon(other / "automil" / "orchestrator", pid=1234, gpus=[1])
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: False)
 
-    assert operate._gpu_claim_conflicts(ours, 1) == []
+    assert operate._gpu_claim_conflicts(ours, [1]) == []
 
 
 def test_gpu_claim_treats_legacy_plain_int_pid_file_as_stale(
@@ -352,7 +586,7 @@ def test_gpu_claim_treats_legacy_plain_int_pid_file_as_stale(
     (orch / "orchestrator.pid").write_text("1234\n")  # legacy shape
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
 
-    assert operate._gpu_claim_conflicts(ours, 1) == []
+    assert operate._gpu_claim_conflicts(ours, [1]) == []
 
 
 def test_gpu_claim_unknown_partition_conflicts_on_every_gpu(
@@ -364,7 +598,7 @@ def test_gpu_claim_unknown_partition_conflicts_on_every_gpu(
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
 
     for gpu in (0, 1, 7):
-        conflicts = operate._gpu_claim_conflicts(ours, gpu)
+        conflicts = operate._gpu_claim_conflicts(ours, [gpu])
         assert conflicts and "unknown" in conflicts[0]
 
 
@@ -385,7 +619,7 @@ def test_gpu_claim_empty_slot_state_conflicts_on_every_gpu(
 
     assert operate._claimed_gpus(orch) is None
     for gpu in (0, 1, 7):
-        conflicts = operate._gpu_claim_conflicts(ours, gpu)
+        conflicts = operate._gpu_claim_conflicts(ours, [gpu])
         assert conflicts and "unknown" in conflicts[0]
 
 
@@ -409,8 +643,52 @@ def test_gpu_claim_non_cuda_slot_state_conflicts_on_every_gpu(
 
     assert operate._claimed_gpus(orch) is None
     for gpu in (0, 3):
-        conflicts = operate._gpu_claim_conflicts(ours, gpu)
+        conflicts = operate._gpu_claim_conflicts(ours, [gpu])
         assert conflicts and "unknown" in conflicts[0]
+
+
+def test_gpu_claim_scans_every_index_in_a_multi_gpu_request(
+    operate, tmp_path, monkeypatch,
+):
+    """A cell requesting a multi-GPU partition (e.g. --gpu 0,1) must be
+    refused if ANY of its requested indexes is claimed elsewhere, and must
+    scan the full set — not just the first index."""
+    ours = make_cell(tmp_path, name="a__b__uni_v2__clam__s42__v2")
+    other = make_cell(tmp_path, name="a__b__uni_v2__abmil__s42__v2", port=9582)
+    write_live_daemon(other / "automil" / "orchestrator", pid=1234, gpus=[3])
+    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
+
+    assert operate._gpu_claim_conflicts(ours, [0, 1, 2]) == []
+    conflicts = operate._gpu_claim_conflicts(ours, [2, 3])
+    assert conflicts and "3" in conflicts[0]
+
+
+# ---------------------------------------------------------------------------
+# nvidia-smi index validation (must scan every requested index, not just one)
+# ---------------------------------------------------------------------------
+def _fake_nvidia_smi_capture(argv, env=None):
+    csv = "0, 24000, 20000, 5\n1, 24000, 22000, 2\n"
+    return subprocess.CompletedProcess(argv, 0, stdout=csv, stderr="")
+
+
+def test_nvidia_smi_report_passes_when_every_requested_index_present(
+    operate, monkeypatch, capsys,
+):
+    monkeypatch.setattr(operate, "_capture", _fake_nvidia_smi_capture)
+    operate._nvidia_smi_report([0, 1])
+    out = capsys.readouterr().out
+    assert "GPU 0" in out
+    assert "GPU 1" in out
+
+
+def test_nvidia_smi_report_fails_when_any_requested_index_missing(
+    operate, monkeypatch, capsys,
+):
+    monkeypatch.setattr(operate, "_capture", _fake_nvidia_smi_capture)
+    with pytest.raises(SystemExit):
+        operate._nvidia_smi_report([1, 3])
+    err = capsys.readouterr().err
+    assert "3" in err
 
 
 # ---------------------------------------------------------------------------
@@ -777,6 +1055,50 @@ def test_finish_starts_supervised_promotion_child_with_gpu_partition(
     assert env["AUTOMIL_VISIBLE_GPUS"] == "3"
     assert Path(stdout.name) == padir / "orchestrator" / "operate_supervisor.log"
     assert ("stage", "freeze-promotion") in actions(boundary.run_or_die)
+
+
+def test_finish_starts_supervised_promotion_child_with_multi_gpu_partition(
+    operate, tmp_path, monkeypatch,
+):
+    """--gpu 0,1 must reach the promotion daemon's env as the normalized
+    comma string, not a Python list repr."""
+    cell = make_cell(tmp_path)
+    append_journal(cell, session_open_event())
+    append_journal(cell, session_end_event())
+    write_agent_session(cell, status="finalized")
+    padir = make_promotion_project(cell, queued=("0001",), consumed=0, budget=1)
+    queue = padir / "orchestrator" / "queue"
+    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
+
+    boundary = FakeBoundary(operate, statuses=[
+        {"phase": "promotion"},
+        {"phase": "selection-ready"},
+        {"phase": "winner-frozen"},
+    ])
+
+    def drain():
+        if (queue / "0001.json").exists():
+            (queue / "0001.json").unlink()
+            complete_promotion_node(padir, "0001")
+            write_budget_cell(padir, 1, 1)
+
+    def stop_promotion(argv):
+        pid_file = padir / "orchestrator" / "orchestrator.pid"
+        if pid_file.exists():
+            pid_file.unlink()
+
+    boundary.behaviors[("automil", ("orchestrator", "stop"))] = stop_promotion
+    boundary.install(monkeypatch)
+    clock = FakeClock()
+    clock.on_sleep = drain
+    monkeypatch.setattr(operate, "_now", clock.now)
+    monkeypatch.setattr(operate, "_sleep", clock.sleep)
+
+    operate.main(["finish", str(cell), "--gpu", "0,1"])
+
+    assert len(boundary.popens) == 1
+    _, env, _ = boundary.popens[0]
+    assert env["AUTOMIL_VISIBLE_GPUS"] == "0,1"
 
 
 def test_finish_reentry_skips_completed_transitions(operate, tmp_path, monkeypatch):
