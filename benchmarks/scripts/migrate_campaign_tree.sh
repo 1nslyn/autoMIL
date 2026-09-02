@@ -87,22 +87,7 @@ if [ "$VERIFY_ONLY" = 0 ]; then
     rm -rf "$DST_REPO/.venv"   # never in project space (inodes)
     (cd "$DST_REPO" && uv sync --frozen --all-packages)
     chgrp -R "$GROUP" "$VENV"; chmod -R g+rX "$VENV"
-    python3 - "$SRC_REPO/benchmarks/.env" "$DST_REPO/benchmarks/.env" "$GUARD_ROOTS" "$VENV" <<'PYEOF'
-import re, sys
-from pathlib import Path
-src, dst, roots, venv = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
-lines = []
-for line in src.read_text().splitlines():
-    if line.startswith("UV_PROJECT_ENVIRONMENT="):
-        continue
-    m = re.match(r'^(AUTOBENCH_([A-Z0-9]+)_ROOT)=(.*)$', line)
-    if m and m.group(2) != "EXPORT":
-        line = f"{m.group(1)}={roots}/{m.group(2).lower()}"
-    lines.append(line)
-lines.append(f"UV_PROJECT_ENVIRONMENT={venv}")
-dst.write_text("\n".join(lines) + "\n")
-print(f"wrote {dst}")
-PYEOF
+
 
     step "2. cell roots + protocol + logs"
     mkdir -p "$DST_REPO/$CAMPAIGN_REL/runtime" "$DST_REPO/logs"
@@ -120,6 +105,31 @@ PYEOF
     (cd "$DST_REPO" && uv run --frozen --no-sync --package autobench python \
         benchmarks/scripts/build_guard_root_shims.py --guard-roots "$GUARD_ROOTS" --i-know-idle)
     chgrp -R "$GROUP" "$GUARD_ROOTS"; chmod -R g+rX "$GUARD_ROOTS"
+    # benchmarks/.env for the new tree: cohort roots -> the copied stand-ins,
+    # other paths canonicalized, the environment named.
+    python3 - "$SRC_REPO/benchmarks/.env" "$DST_REPO/benchmarks/.env" "$GUARD_ROOTS" "$VENV" <<'PYEOF'
+import os, re, sys
+from pathlib import Path
+src, dst, roots, venv = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
+lines = []
+for line in src.read_text().splitlines():
+    if line.startswith("UV_PROJECT_ENVIRONMENT="):
+        continue
+    m = re.match(r'^(AUTOBENCH_([A-Z0-9_]+)_ROOT)=(.*)$', line)
+    if m:
+        cohort = m.group(2).lower()
+        if (roots / cohort).is_dir():
+            # A cohort with a stand-in tree points at the copied stand-in.
+            line = f"{m.group(1)}={roots / cohort}"
+        elif os.path.isabs(m.group(3)) and os.path.exists(m.group(3)):
+            # Everything else keeps its target, but by its canonical path
+            # (a ~/projects symlink only exists in the owner's home).
+            line = f"{m.group(1)}={os.path.realpath(m.group(3))}"
+    lines.append(line)
+lines.append(f"UV_PROJECT_ENVIRONMENT={venv}")
+dst.write_text("\n".join(lines) + "\n")
+print(f"wrote {dst}")
+PYEOF
 
     step "4. group + modes"
     chgrp -R "$GROUP" "$DEST"
