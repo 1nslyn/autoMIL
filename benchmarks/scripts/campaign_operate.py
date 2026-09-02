@@ -29,6 +29,7 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -89,6 +90,44 @@ def _fail(message: str, code: int = 2) -> None:
 
 
 # ---------------------------------------------------------------------------
+# --gpu parsing — a job may use 1, 2 or 4 GPUs, given as "0" or "0,1,2,3"
+# ---------------------------------------------------------------------------
+def _parse_gpu_list(raw: str) -> list[int]:
+    """argparse ``type=`` for ``--gpu``: a single index or comma list.
+
+    Validates non-empty, all non-negative integers, no duplicates — a
+    malformed value refuses startup rather than quietly scheduling on every
+    GPU (an unset AUTOMIL_VISIBLE_GPUS would do exactly that).
+    """
+    tokens = raw.split(",")
+    if not raw or any(not token for token in tokens):
+        raise argparse.ArgumentTypeError(
+            f"--gpu must be a non-empty index or comma list, e.g. '0' or "
+            f"'0,1,2,3' (got {raw!r})"
+        )
+    try:
+        indexes = [int(token) for token in tokens]
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--gpu must contain only integers (got {raw!r})"
+        )
+    if any(index < 0 for index in indexes):
+        raise argparse.ArgumentTypeError(
+            f"--gpu indexes must be non-negative (got {raw!r})"
+        )
+    if len(set(indexes)) != len(indexes):
+        raise argparse.ArgumentTypeError(
+            f"--gpu indexes must not repeat (got {raw!r})"
+        )
+    return indexes
+
+
+def _gpu_list_env_value(gpus: list[int]) -> str:
+    """The normalized AUTOMIL_VISIBLE_GPUS value for a parsed --gpu list."""
+    return ",".join(str(index) for index in gpus)
+
+
+# ---------------------------------------------------------------------------
 # Command construction — the exact audited invocation forms
 # ---------------------------------------------------------------------------
 def stage_argv(action: str, cell_root: Path, *extra: str) -> list[str]:
@@ -116,16 +155,22 @@ def automil_argv(project_root: Path, *command: str) -> list[str]:
     ]
 
 
-def orchestrator_window_command(cell_root: Path, gpu: int) -> str:
-    """Foreground discovery-orchestrator command line for the orch window."""
+def orchestrator_window_command(cell_root: Path, gpus: list[int]) -> str:
+    """Foreground discovery-orchestrator command line for the orch window.
+
+    ``gpus`` may be a single-index or multi-index partition (a job may use
+    1, 2 or 4 GPUs); AUTOMIL_VISIBLE_GPUS takes the normalized comma list.
+    """
     return (
-        f"AUTOMIL_VISIBLE_GPUS={gpu} "
+        f"AUTOMIL_VISIBLE_GPUS={_gpu_list_env_value(gpus)} "
         + shlex.join(automil_argv(cell_root, "orchestrator", "start"))
     )
 
 
-def baseline_window_command(cell_root: Path, gpu: int) -> str:
-    return shlex.join(stage_argv("run-baseline", cell_root, "--gpu", str(gpu)))
+def baseline_window_command(cell_root: Path, gpus: list[int]) -> str:
+    """The native baseline is single-GPU; it always takes the FIRST index of
+    the cell's partition."""
+    return shlex.join(stage_argv("run-baseline", cell_root, "--gpu", str(gpus[0])))
 
 
 def agent_window_command(cell_root: Path) -> str:
@@ -186,11 +231,27 @@ def _try_stage_status(cell_root: Path) -> tuple[dict | None, str]:
 # Daemon liveness and GPU claims (daemon's own pid-file semantics)
 # ---------------------------------------------------------------------------
 def _daemon_alive(orch_dir: Path) -> int | None:
-    """Return the live daemon's pid for one orchestrator dir, else None."""
+    """Return the live daemon's pid for one orchestrator dir, else None.
+
+    Several SLURM jobs (different users, or the same user) can be
+    co-scheduled on one 4-GPU node, each seeing its own GPU as index 0
+    inside its cgroup. A pid file's ``hostname``/``slurm_job_id`` (present
+    or None; absent on pre-upgrade pid files) scope liveness to THIS host
+    and THIS job before falling back to the pid+starttime cross-check —
+    otherwise a co-scheduled job's daemon claiming "GPU 0" would look like
+    a same-host conflict it is not.
+    """
     loaded = load_pid_file(orch_dir / "orchestrator.pid")
-    if loaded and is_pid_alive_with_starttime(
-        loaded["pid"], loaded["starttime_ticks"]
-    ):
+    if not loaded:
+        return None
+    hostname = loaded.get("hostname")
+    if hostname is not None and hostname != socket.gethostname():
+        return None
+    slurm_job_id = loaded.get("slurm_job_id")
+    current_job_id = os.environ.get("SLURM_JOB_ID")
+    if slurm_job_id is not None and current_job_id and slurm_job_id != current_job_id:
+        return None
+    if is_pid_alive_with_starttime(loaded["pid"], loaded["starttime_ticks"]):
         return int(loaded["pid"])
     return None
 
@@ -260,13 +321,17 @@ def _candidate_cell_roots(cell_root: Path) -> list[Path]:
     return cells
 
 
-def _gpu_claim_conflicts(cell_root: Path, gpu: int) -> list[str]:
-    """Other cells' LIVE daemons whose partition covers *gpu*.
+def _gpu_claim_conflicts(cell_root: Path, gpus: list[int]) -> list[str]:
+    """Other cells' LIVE daemons whose partition covers ANY of *gpus*.
+
+    A cell's own partition may span several GPUs (a job may use 1, 2 or 4);
+    every requested index is scanned, not just the first.
 
     Same-cell discovery/promotion pairs are exempt: this cell's own daemons
     on the same GPU are the normal finish-time state.
     """
     cell_root = cell_root.resolve()
+    requested = set(gpus)
     conflicts: list[str] = []
     for candidate in _candidate_cell_roots(cell_root):
         if candidate.resolve() == cell_root:
@@ -286,7 +351,7 @@ def _gpu_claim_conflicts(cell_root: Path, gpu: int) -> list[str]:
                     "unparseable, or no cuda slots) — its GPU partition is "
                     "unknown, so it may claim every GPU"
                 )
-            elif gpu in claimed:
+            elif claimed & requested:
                 conflicts.append(
                     f"{orch_dir} has a live daemon (pid {pid}) claiming "
                     f"GPU(s) {sorted(claimed)}"
@@ -358,15 +423,19 @@ def _has_session_evidence(cell_root: Path) -> bool:
 # tmux (subprocess only; required for the interactive agent window)
 # ---------------------------------------------------------------------------
 def _session_name(cell_root: Path) -> str:
-    """Derive the tmux session name from the cell id's distinguishing tokens
-    (encoder + arm, e.g. ``uni_v2-clam``); fall back to the sanitized name."""
-    tokens = cell_root.name.split("__")
-    raw = "-".join(tokens[2:4]) if len(tokens) >= 4 else cell_root.name
-    return raw.replace(":", "_").replace(".", "_")
+    """Derive the tmux session name from the full cell id, sanitized for
+    tmux. Distinguishing tokens alone (e.g. encoder + arm) collide across
+    cells that differ only in dataset/task/seed; the full id is unique."""
+    return cell_root.name.replace(":", "_").replace(".", "_")
 
 
 def _tmux(*args: str) -> subprocess.CompletedProcess:
-    return _capture(["tmux", *args])
+    """Every tmux invocation goes through here so socket isolation is one
+    enforcement point: several co-scheduled cells on one host must not
+    share tmux's default socket."""
+    socket_name = os.environ.get("AUTOMIL_TMUX_SOCKET")
+    prefix = ["tmux", "-L", socket_name] if socket_name else ["tmux"]
+    return _capture([*prefix, *args])
 
 
 def _require_tmux() -> None:
@@ -451,7 +520,9 @@ def _exporter_twin_conflicts(cell_root: Path, port: int) -> list[Path]:
     return twins
 
 
-def _nvidia_smi_report(gpu: int) -> None:
+def _nvidia_smi_report(gpus: list[int]) -> None:
+    """Free-VRAM report; refuses if ANY requested index is absent from this
+    host's nvidia-smi listing (a cell's partition may span several GPUs)."""
     completed = _capture([
         "nvidia-smi",
         "--query-gpu=index,memory.total,memory.free,utilization.gpu",
@@ -462,23 +533,25 @@ def _nvidia_smi_report(gpu: int) -> None:
               f"({(completed.stderr or completed.stdout).strip()}) — "
               "the orchestrator will refuse if no schedulable GPU exists")
         return
+    requested = set(gpus)
     indexes: set[int] = set()
     print("preflight: GPU free-VRAM report")
     for line in completed.stdout.strip().splitlines():
         parts = [part.strip() for part in line.split(",")]
         if len(parts) >= 3 and parts[0].isdecimal():
             indexes.add(int(parts[0]))
-            marker = "  <- requested" if int(parts[0]) == gpu else ""
+            marker = "  <- requested" if int(parts[0]) in requested else ""
             print(
                 f"  GPU {parts[0]}: {parts[2]} MiB free of {parts[1]} MiB"
                 f"{marker}"
             )
-    if indexes and gpu not in indexes:
-        _fail(f"--gpu {gpu} is not present on this host "
-              f"(nvidia-smi reports {sorted(indexes)})")
+    missing = sorted(requested - indexes)
+    if indexes and missing:
+        _fail(f"--gpu {','.join(str(index) for index in missing)} not "
+              f"present on this host (nvidia-smi reports {sorted(indexes)})")
 
 
-def _preflight(cell_root: Path, gpu: int) -> None:
+def _preflight(cell_root: Path, gpus: list[int]) -> None:
     if not (REPO_ROOT / "pyproject.toml").is_file() or not (
         REPO_ROOT / "benchmarks"
     ).is_dir():
@@ -529,15 +602,16 @@ def _preflight(cell_root: Path, gpu: int) -> None:
     else:
         print(f"preflight: exporter port {port} has no twin conflict")
 
-    conflicts = _gpu_claim_conflicts(cell_root, gpu)
+    conflicts = _gpu_claim_conflicts(cell_root, gpus)
     if conflicts:
         _fail(
-            f"GPU {gpu} is claimed by another cell's live orchestrator "
-            "daemon; give each concurrent cell a disjoint partition "
-            "(runbook §3c):\n  " + "\n  ".join(conflicts)
+            f"GPU {_gpu_list_env_value(gpus)} is claimed by another cell's "
+            "live orchestrator daemon; give each concurrent cell a disjoint "
+            "partition (runbook §3c):\n  " + "\n  ".join(conflicts)
         )
-    print(f"preflight: no other cell's live daemon claims GPU {gpu}")
-    _nvidia_smi_report(gpu)
+    print(f"preflight: no other cell's live daemon claims GPU "
+          f"{_gpu_list_env_value(gpus)}")
+    _nvidia_smi_report(gpus)
 
 
 def cmd_up(args: argparse.Namespace) -> None:
@@ -962,7 +1036,7 @@ def _supervisor_log_tail(log_path: Path) -> str:
 
 
 def _drive_promotion(
-    cell_root: Path, gpu: int | None, accept_missing: bool,
+    cell_root: Path, gpus: list[int] | None, accept_missing: bool,
 ) -> None:
     promotion_root = cell_root / "promotion"
     promotion_adir = promotion_root / "automil"
@@ -987,7 +1061,7 @@ def _drive_promotion(
         print(f"finish: adopting the live promotion orchestrator "
               f"(pid {adopted_pid}) — polling only, not starting another")
     else:
-        if gpu is None:
+        if gpus is None:
             _fail(
                 "finish must start a promotion orchestrator but --gpu was "
                 "not given. An unset AUTOMIL_VISIBLE_GPUS schedules on EVERY "
@@ -996,15 +1070,16 @@ def _drive_promotion(
             )
         orch_dir.mkdir(parents=True, exist_ok=True)
         log_handle = log_path.open("ab")
-        env = {**os.environ, "AUTOMIL_VISIBLE_GPUS": str(gpu)}
+        gpu_value = _gpu_list_env_value(gpus)
+        env = {**os.environ, "AUTOMIL_VISIBLE_GPUS": gpu_value}
         child = _popen(
             automil_argv(promotion_root, "orchestrator", "start"),
             env=env, stdout=log_handle, stderr=subprocess.STDOUT,
         )
         print(
             f"finish: started the promotion orchestrator as a supervised "
-            f"foreground child (pid {child.pid}, AUTOMIL_VISIBLE_GPUS={gpu}, "
-            f"log {log_path})"
+            f"foreground child (pid {child.pid}, "
+            f"AUTOMIL_VISIBLE_GPUS={gpu_value}, log {log_path})"
         )
         deadline = _now() + 120
         while _daemon_alive(orch_dir) is None:
@@ -1211,8 +1286,9 @@ def build_parser() -> argparse.ArgumentParser:
     up = sub.add_parser(
         "up", help="preflight + tmux + baseline + discovery orchestrator")
     up.add_argument("cell_root")
-    up.add_argument("--gpu", type=int, required=True,
-                    help="physical GPU index for this cell's partition")
+    up.add_argument("--gpu", type=_parse_gpu_list, required=True,
+                    help="physical GPU index or comma list (e.g. '0' or "
+                         "'0,1,2,3') for this cell's partition")
     up.set_defaults(func=cmd_up)
 
     launch = sub.add_parser(
@@ -1243,9 +1319,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finish.add_argument("cell_root")
     finish.add_argument(
-        "--gpu", type=int, default=None,
-        help="physical GPU index; required whenever finish must START a "
-             "promotion orchestrator",
+        "--gpu", type=_parse_gpu_list, default=None,
+        help="physical GPU index or comma list (e.g. '0' or '0,1,2,3'); "
+             "required whenever finish must START a promotion orchestrator",
     )
     finish.add_argument(
         "--usage-json", default=None,
