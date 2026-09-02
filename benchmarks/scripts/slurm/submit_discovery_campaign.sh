@@ -1,312 +1,240 @@
 #!/bin/bash
-# SLURM: preprint campaign DISCOVERY — ONE full node, 4 agentic cells in parallel.
+# SLURM: preprint campaign DISCOVERY — ONE cell per job, on the GPUs this job
+# was shaped for (1, 2 or 4 x H100; 12 h or 24 h wall). Submit through
+# submit_discovery_cell.sh, which fits the shape to the cell and claims the
+# cell with this job's id; a bare `sbatch` of this file (defaults below:
+# 1 GPU, 12 h) is also valid and then picks a cell that fits its own wall.
 #
-# Each GPU hosts one cell at a time, driven end-to-end by campaign_operate.py
-# inside that cell's tmux session: reproduction gate -> up (daemon) ->
-# launch (pinned claude, interactive in tmux) -> bind -> completion watch ->
-# automated /exit -> finish (freeze -> promotion on the same GPU -> winner).
+# The whole cell runs on this node: reproduction gate -> up (orchestrator
+# daemon on this job's GPUs) -> launch (pinned claude, interactive in a
+# job-private tmux server) -> bind -> release line -> watch (with the
+# active-time nudge) -> usage capture -> /exit -> finish (freeze ->
+# promotion on the same GPUs -> winner -> finalize) -> chain the next cell.
 #
 # THE ONE RULE THAT MATTERS: a wall-kill mid-session strands the cell
 # PERMANENTLY (one session per cell, no relaunch; freeze demands exactly 30
-# charged attempts). So a worker only STARTS a cell while
-# remaining-wall > CELL_WALL_BUDGET_H, and the job never resubmits from the
-# USR1 signal — it exits cleanly once no worker can safely start another
-# cell, then chains the next job itself. USR1 firing at all means the
-# budget was mis-sized; it logs the cells at risk and nothing else.
+# charged attempts). So the job never starts a cell whose predicted duration
+# exceeds its remaining wall, and USR1 only reports. Claims are once-only
+# tombstones (see discovery_lib.sh); this job refuses to run a cell whose
+# claim it does not hold.
 #
-# Cells are claimed via an atomic ONCE-ONLY marker carrying this job id:
-# taken at cell start, never released for the life of this job (success and
-# failure alike), so several chains can run concurrently without ever
-# double-driving a cell — a dead generation's claims are stolen by
-# take_claim's compare-and-swap in later jobs, whose fresh scan classifies
-# each cell by its evidence. Cells whose reproduction gate fails, or that
-# carry session evidence without a finished ladder (stranded), are reported
-# and skipped — never retried silently.
-#
-# Usage (from the repo root):
-#   sbatch benchmarks/scripts/slurm/submit_discovery_campaign.sh
+# Runs as the submitting member inside the shared project-space tree: umask
+# 007, uv never syncs, git trusts the shared checkout, tmux is job-private,
+# and every file the cell leaves behind is normalized group read/write.
 
-#SBATCH --job-name=disc_campaign
+#SBATCH --job-name=disc_cell
 #SBATCH --account=def-jma-ab
-#SBATCH --time=7-00:00:00
+#SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=48
-#SBATCH --gpus-per-node=h100:4
-#SBATCH --mem=0
+#SBATCH --cpus-per-task=12
+#SBATCH --gpus-per-node=h100:1
+#SBATCH --mem=128G
 #SBATCH --signal=B:USR1@300
-#SBATCH --output=logs/disc_campaign_%j.out
-#SBATCH --error=logs/disc_campaign_%j.err
+#SBATCH --output=logs/disc_cell_%j.out
+#SBATCH --error=logs/disc_cell_%j.err
 #SBATCH --mail-type=FAIL
 
 set -uo pipefail
-PROJECT_DIR="${SLURM_SUBMIT_DIR:-/home/yinshuol/scratch/autoMIL/autoMIL}"
-RUNTIME="$PROJECT_DIR/benchmarks/campaigns/preprint_130/runtime"
-ROSTER="$PROJECT_DIR/benchmarks/campaigns/preprint_130/active_roster.json"
-SELF="$PROJECT_DIR/benchmarks/scripts/slurm/submit_discovery_campaign.sh"
-N_GPUS=4
-# Conservative worst case for one cell start-to-finish: reproduction ~2h +
-# 30 discovery attempts (3-fold, nominal ~1.2h, 10h attempt timeout tail) +
-# promotion (10 candidates x 2 folds) ~10h + slack.
-CELL_WALL_BUDGET_H=66
-WATCH_INTERVAL_S=120
-
-cd "$PROJECT_DIR" || { echo "ERROR: project dir not found: $PROJECT_DIR"; exit 1; }
-[ -d "$RUNTIME" ] || { echo "ERROR: runtime not materialized: $RUNTIME"; exit 1; }
-[ -f benchmarks/.env ] || { echo "ERROR: benchmarks/.env missing"; exit 1; }
-[ -f "$ROSTER" ] || { echo "ERROR: active roster missing: $ROSTER"; exit 1; }
-mkdir -p logs/discovery_cells
-command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is required"; exit 1; }
-command -v tmux >/dev/null 2>&1 || { echo "ERROR: tmux is required"; exit 1; }
+# A spooled batch script no longer knows where it came from: the tree is
+# named explicitly by the wrapper, or by the submit directory. Never a
+# user-path fallback.
+export DISC_PROJECT_DIR="${DISC_PROJECT_DIR:-${SLURM_SUBMIT_DIR:-}}"
+[ -n "$DISC_PROJECT_DIR" ] || { echo "ERROR: DISC_PROJECT_DIR is unset (submit through submit_discovery_cell.sh)"; exit 1; }
+[ -f "$DISC_PROJECT_DIR/benchmarks/scripts/slurm/discovery_lib.sh" ] \
+    || { echo "ERROR: $DISC_PROJECT_DIR is not the campaign checkout"; exit 1; }
+# shellcheck source=discovery_lib.sh
+source "$DISC_PROJECT_DIR/benchmarks/scripts/slurm/discovery_lib.sh"
+disc_paths || exit 1
+disc_env
 module load cuda/12.2 2>/dev/null || true
-set -a; source benchmarks/.env; set +a
-export DISABLE_AUTOUPDATER=1
-# The frozen toolset forbids these; a stray module could have set them.
-unset ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL ANTHROPIC_BASE_URL \
-      CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_EFFORT_LEVEL \
-      2>/dev/null || true
+disc_static_preflight || exit 1
+export AUTOMIL_TMUX_SOCKET="disc_${SLURM_JOB_ID:-manual}"
+FAILED_TSV="$PROJECT_DIR/logs/discovery_cells/FAILED.tsv"
 
-# The pinned runtime must resolve on this node before any cell is touched.
-PROTOCOL_VERSION_PIN=$(uv run --frozen --no-sync --package autobench python -c \
-    "import json;print(json.load(open('$RUNTIME/agent_protocol.json'))['runtime_version'])") \
-    || { echo "ERROR: cannot read protocol runtime_version"; exit 1; }
-OBSERVED_CLAUDE=$(claude --version 2>/dev/null | awk '{print $1}')
-if [ "$OBSERVED_CLAUDE" != "$PROTOCOL_VERSION_PIN" ]; then
-    echo "ERROR: claude on PATH is ${OBSERVED_CLAUDE:-absent}, protocol pins $PROTOCOL_VERSION_PIN"
-    exit 1
-fi
-# The launch preflight refuses a non-empty ~/.claude/plugins.
-rm -rf "$HOME/.claude/plugins" 2>/dev/null || true
+N_GPUS="${SLURM_GPUS_ON_NODE:-1}"
+GPU_LIST=$(seq -s, 0 $((N_GPUS - 1)))
+SEEN_GPUS=$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')
+[ "$SEEN_GPUS" = "$N_GPUS" ] || { echo "ERROR: SLURM granted $N_GPUS GPUs but nvidia-smi shows $SEEN_GPUS"; exit 1; }
 
-# Scan: classify every roster cell. Only clean, unclaimed, gate-eligible
-# cells become pending; everything else is reported by class. Claims from
-# jobs no longer in squeue are reaped here.
-scan_cells() {
-    uv run --frozen --no-sync --package autobench python - \
-        "$RUNTIME" "$ROSTER" "${SLURM_JOB_ID:-manual}" <<'PYEOF'
-import json, shutil, subprocess, sys
-from pathlib import Path
-runtime, roster_path, job_id = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-roster = json.loads(roster_path.read_text())
-cells = sorted(
-    entry.name for entry in runtime.iterdir()
-    if entry.is_dir() and entry.name.split("__")[0] in set(roster["cohorts"])
-)
-if len(cells) != int(roster["cells"]):
-    sys.exit(f"runtime holds {len(cells)} roster cells, roster declares {roster['cells']}")
-try:
-    alive = set(subprocess.run(
-        ["squeue", "-h", "-o", "%i"], capture_output=True, text=True, timeout=30,
-    ).stdout.split())
-except Exception:
-    alive = None  # cannot verify: treat every claim as live (fail safe)
-pending, done, stranded, blocked, claimed, finishable = [], [], [], [], [], []
-for cell in cells:
-    root = runtime / cell
-    state = json.loads((root / "campaign_state.json").read_text())
-    phase = state.get("phase")
-    session = root / "agent_session.json"
-    session_status = None
-    if session.is_file():
-        try:
-            session_status = json.loads(session.read_text()).get("status")
-        except (OSError, ValueError):
-            session_status = "unreadable"
-    if phase == "certified" or (
-        phase == "winner-frozen" and session_status == "finalized"
-    ):
-        done.append(cell)
-        continue
-    claim = root / ".discovery_claim"
-    if claim.is_file():
-        holder = claim.read_text().strip()
-        if alive is not None and holder not in alive and holder != job_id:
-            # Stale claim from a dead job: classify as pending and leave the
-            # file alone — take_claim() is the ONE place that may replace a
-            # claim (compare-and-swap under flock). Unlinking here could
-            # delete a claim another chain just legitimately stole.
-            pass
-        else:
-            claimed.append(cell)
-            continue
-    journal = root / "automil" / ".activity.jsonl"
-    journal_text = journal.read_text() if journal.is_file() else ""
-    has_evidence = session.is_file() or bool(journal_text.strip())
-    if has_evidence:
-        # Session evidence with an unfinished ladder. If the session ENDED
-        # cleanly after a full 30-attempt budget, the finish ladder is
-        # idempotent and safely resumable — queue a finish-only pass.
-        # Anything else needs a human (live elsewhere, or stranded).
-        session_ended = any(
-            json.loads(line).get("event") == "session_end"
-            for line in journal_text.splitlines()
-            if line.strip().startswith("{")
-        )
-        charged = (state.get("discovery") or {}).get("attempts_charged")
-        if session_ended and charged == 30:
-            finishable.append(cell)
-        else:
-            stranded.append(cell)
-        continue
-    reproduction = state.get("baseline_reproduction") or {}
-    if reproduction.get("mode") == "gate" and reproduction.get("verdict") == "fail":
-        blocked.append(cell)
-        continue
-    if state.get("baseline") is None:
-        sys.exit(f"{cell}: no registered baseline — discovery cannot start")
-    pending.append(cell)
-print(json.dumps({
-    "pending": pending, "done": done, "stranded": stranded,
-    "blocked": blocked, "claimed": claimed, "finishable": finishable,
-}))
-PYEOF
+record_failure() {  # cell reason
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "${SLURM_JOB_ID:-manual}" "$USER" "$1" "$2" >> "$FAILED_TSV"
+    echo "FAIL $1: $2"
 }
 
-SCAN=$(scan_cells) || { echo "ERROR: cell scan failed"; exit 1; }
-# Queue entries are "<mode>:<cell>" — finish-only recoveries first (cheap,
-# frees complete cells), then full discovery runs.
-PENDING=$(echo "$SCAN" | uv run --frozen --no-sync python -c "
-import json, sys
-scan = json.load(sys.stdin)
-rows = [f'finish:{c}' for c in scan['finishable']]
-rows += [f'full:{c}' for c in scan['pending']]
-print('\n'.join(rows))")
-echo "scan: $(echo "$SCAN" | uv run --frozen --no-sync python -c \
-    "import json,sys;d=json.load(sys.stdin);print(', '.join(f'{k}={len(v)}' for k,v in d.items()))")"
-for class in stranded blocked; do
-    echo "$SCAN" | uv run --frozen --no-sync python -c \
-        "import json,sys;[print('  $class:', c) for c in json.load(sys.stdin)['$class']]"
-done
-
-QUEUE_FILE=$(mktemp)
-FAIL_FILE=$(mktemp)
-echo "$PENDING" > "$QUEUE_FILE"
-trap 'rm -f "$QUEUE_FILE" "$FAIL_FILE"' EXIT
-
-# USR1 here means CELL_WALL_BUDGET_H was mis-sized: sessions may be live and
-# will be killed by the wall — record which, for the operator. NO resubmit
-# from the signal path: chaining happens only at a clean end.
 _usr1_report() {
-    echo "[signal] CRITICAL: wall reached with cells possibly mid-session:"
-    grep -l "^${SLURM_JOB_ID:-manual}\$" "$RUNTIME"/*/.discovery_claim 2>/dev/null | sed 's/^/  /'
-    echo "  these cells may be PERMANENTLY stranded (no session relaunch exists)"
+    echo "[signal] CRITICAL: wall reached while $CELL may be mid-session — no relaunch exists; OPERATOR NEEDED"
 }
 trap _usr1_report USR1
 
-remaining_hours() {
-    local end
-    end=$(squeue -h -j "${SLURM_JOB_ID:-0}" -o %e 2>/dev/null | head -1)
-    if [ -z "$end" ] || [ "$end" = "N/A" ]; then echo 0; return; fi
-    echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 3600 ))
-}
+# ---------------------------------------------------------------- cell pick
+CELL="${DISC_CELL:-}"; MODE="${DISC_MODE:-full}"
+if [ -n "$CELL" ]; then
+    holder=$(claim_holder "$CELL")
+    if [ "$holder" != "${SLURM_JOB_ID:-manual}" ]; then
+        echo "ERROR: claim for $CELL is held by '${holder:-nobody}', not this job — refusing"; exit 4
+    fi
+else
+    # Direct sbatch: take the first cell that fits THIS job's wall and GPUs.
+    SCAN=$(disc_scan) || { echo "ERROR: cell scan failed"; exit 1; }
+    HOURS=$(remaining_hours)
+    PICK=$(echo "$SCAN" | pyrun - "$RUNTIME" "$N_GPUS" "$HOURS" <<'PYEOF'
+import importlib.util, json, sys
+from pathlib import Path
+d = json.load(sys.stdin); runtime, gpus, hours = Path(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
+spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
+shape = importlib.util.module_from_spec(spec); spec.loader.exec_module(shape)
+for cell in d["finishable"]:
+    print(f"finish:{cell}"); sys.exit(0)
+for cell in d["pending"]:
+    try:
+        e5 = json.loads((runtime / cell / "campaign_state.json").read_text())["baseline"]["resources"]["elapsed_seconds"]["total"]
+    except (OSError, ValueError, KeyError, TypeError):
+        continue
+    if shape.predict_hours(float(e5), gpus) <= shape.FIT_FRACTION * hours:
+        print(f"full:{cell}"); sys.exit(0)
+PYEOF
+    )
+    [ -n "$PICK" ] || { echo "No cell fits this job (${N_GPUS} GPU, ${HOURS}h left)."; exit 0; }
+    MODE="${PICK%%:*}"; CELL="${PICK#*:}"
+    take_claim "$CELL" || { echo "$CELL was claimed first — exiting"; exit 0; }
+fi
+LOG="$PROJECT_DIR/logs/discovery_cells/${CELL}.log"
+OPDIR="$RUNTIME/$CELL/operator"; mkdir -p "$OPDIR"
+trap 'normalize_cell_modes "$CELL"' EXIT
+echo "================================================"
+echo "preprint DISCOVERY cell $CELL (mode=$MODE) | job ${SLURM_JOB_ID:-manual} | $(hostname) | $USER | $(date)"
+echo "GPUs $GPU_LIST | wall left $(remaining_hours)h | tmux socket $AUTOMIL_TMUX_SOCKET"
+echo "================================================"
 
-pop_cell() {
-    (
-        flock 9
-        head -n 1 "$QUEUE_FILE"
-        sed -i '1d' "$QUEUE_FILE"
-    ) 9>>"$QUEUE_FILE.lock"
-}
-
-# Atomically take a cell for this job, or refuse. O_EXCL (noclobber) is the
-# single enforcement point that makes concurrent chains safe: every queue is
-# built from a scan-time snapshot, so two chains WILL both queue the same
-# cell — only one may ever drive it. Claims are ONCE-ONLY tombstones, never
-# released within a job's lifetime (success and failure alike): releasing on
-# failure would let a concurrent chain's queued entry re-drive the cell with
-# scan-stale knowledge (mutual exclusion is not once-only). A cell becomes
-# drivable again only in a LATER generation — its dead holder's tmux (and
-# any pre-bind runtime in it) died with the job, the fresh scan classifies
-# the cell by its evidence, and take_claim steals the dead holder's claim
-# under a compare-and-swap. A live holder's cell is skipped silently.
-take_claim() {
-    local cell="$1" claim="$RUNTIME/$1/.discovery_claim" me holder
-    me="${SLURM_JOB_ID:-manual}"
-    if ( set -C; echo "$me" > "$claim" ) 2>/dev/null; then
+# ------------------------------------------------------ usage-window probe
+# A throwaway runtime in $HOME reads /status (the plan's remaining
+# allocation) BEFORE the one-shot session is opened. Killed afterwards;
+# unparsable output only warns.
+usage_probe() {
+    local out="$OPDIR/usage_probe.txt" pct
+    tmux -L "$AUTOMIL_TMUX_SOCKET" new-session -d -s usage_probe -c "$HOME" \
+        "claude --setting-sources project --strict-mcp-config" 2>/dev/null || return 0
+    sleep 15
+    tmux -L "$AUTOMIL_TMUX_SOCKET" send-keys -t "=usage_probe" -l "/status"
+    tmux -L "$AUTOMIL_TMUX_SOCKET" send-keys -t "=usage_probe" Enter
+    sleep 10
+    tmux -L "$AUTOMIL_TMUX_SOCKET" capture-pane -p -t "=usage_probe" -S -80 > "$out" 2>/dev/null
+    tmux -L "$AUTOMIL_TMUX_SOCKET" kill-session -t "=usage_probe" 2>/dev/null || true
+    pct=$(grep -iE 'week' "$out" | grep -oE '[0-9]{1,3}%' | head -1 | tr -d '%')
+    if [ -z "$pct" ]; then
+        echo "WARNING: could not parse the weekly usage window from /status (see $out) — proceeding"
         return 0
     fi
-    holder=$(cat "$claim" 2>/dev/null)
-    [ "$holder" = "$me" ] && return 0
-    # Steal only when a SUCCESSFUL full queue listing omits the holder — a
-    # scheduler hiccup must never read as "holder dead" (a fail-open steal
-    # from a live chain is exactly the race this function exists to close),
-    # and probing the job id directly exits nonzero for purged jobs, which
-    # would make genuinely-dead holders unreapable. The replacement itself
-    # is a compare-and-swap under flock: re-read the holder under the lock
-    # and replace only the exact dead holder we verified — a bare
-    # rm-then-create lets several stealers each clobber the previous
-    # winner's fresh claim in sequence.
-    local alive_list
-    if [ -n "$holder" ] && alive_list=$(squeue -h -o %i 2>/dev/null) \
-        && ! echo "$alive_list" | grep -qx "$holder"; then
-        (
-            flock -n 9 || exit 1
-            [ "$(cat "$claim" 2>/dev/null)" = "$holder" ] || exit 1
-            rm -f "$claim"
-            ( set -C; echo "$me" > "$claim" ) 2>/dev/null
-        ) 9>>"$claim.lock" && return 0
+    echo "usage window: weekly ${pct}% used"
+    if [ "$pct" -ge "$DISC_WEEKLY_USAGE_MAX_PCT" ]; then
+        record_failure "$CELL" "weekly-usage-${pct}pct (claim left for a later job)"
+        return 1
     fi
-    return 1
 }
 
-stage() {
-    uv run --frozen --no-sync --package autobench \
-        python benchmarks/scripts/campaign_stage.py "$@"
+capture_status() {  # name outfile
+    tmux send-keys -t "=$1:agent" -l "/status"; tmux send-keys -t "=$1:agent" Enter
+    sleep 8
+    tmux capture-pane -p -t "=$1:agent" -S -80 > "$2" 2>/dev/null
+    tmux send-keys -t "=$1:agent" Escape 2>/dev/null || true
 }
 
-operate() {
-    uv run --frozen --no-sync --package autobench \
-        python benchmarks/scripts/campaign_operate.py "$@"
+# Token/cost counters straight from the session's own exporter, in the exact
+# field set finalize-agent-session validates. Status is "estimated": the
+# scrape precedes the final turn.
+scrape_usage() {  # cell outfile
+    local port
+    port=$(pyrun -c "import yaml;print((yaml.safe_load(open('$RUNTIME/$1/automil/config.yaml')).get('activity') or {}).get('exporter_port', 9464))")
+    curl -s "http://127.0.0.1:$port/metrics" | pyrun - "$2" <<'PYEOF'
+import json, re, sys, datetime as dt
+out = sys.argv[1]; tokens = {}; cost = 0.0
+for line in sys.stdin:
+    m = re.match(r'claude_code_token_usage_total\{([^}]*)\}\s+([0-9.eE+-]+)', line)
+    if m:
+        kind = re.search(r'type="([^"]+)"', m.group(1)).group(1)
+        tokens[kind] = tokens.get(kind, 0.0) + float(m.group(2)); continue
+    m = re.match(r'claude_code_cost_usage_total\{[^}]*\}\s+([0-9.eE+-]+)', line)
+    if m:
+        cost += float(m.group(1))
+if "input" not in tokens or "output" not in tokens:
+    sys.exit("exporter scrape carried no token counters")
+payload = {
+    "status": "estimated",
+    "input_tokens": int(tokens["input"]), "output_tokens": int(tokens["output"]),
+    "cached_input_tokens": int(tokens.get("cacheRead", 0) + tokens.get("cacheCreation", 0)),
+    "cost_usd": round(cost, 6),
+    "basis": "launcher scrape of the session's OTEL prometheus exporter before /exit at "
+             + dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+             + " (cached = cacheRead + cacheCreation; cost = runtime list-price estimate)",
+}
+with open(out, "w") as fh:
+    json.dump(payload, fh, indent=2); fh.write("\n")
+PYEOF
 }
 
-cell_status_json() {
-    stage status --cell-root "$RUNTIME/$1" 2>/dev/null
-}
-
-# Poll until discovery is complete (30/30 charged, no queued or running
-# specs, twice in a row), the agent window dies, or the per-cell deadline
-# passes. Echoes the outcome.
+# Poll until discovery is complete (30/30 charged, queue and running empty,
+# twice in a row), the agent window dies, or the deadline passes. The nudge
+# fires only when the runtime's active time has been FLAT for
+# DISC_NUDGE_IDLE_S while the queue is drained and attempts remain — an
+# empty queue alone is normal while the agent diagnoses and plans.
 watch_discovery() {
     local cell="$1" name="$2" deadline="$3" stable=0 verdict=""
     while :; do
-        if [ "$(date +%s)" -ge "$deadline" ]; then
-            echo "deadline"
-            return 1
-        fi
-        verdict=$(uv run --frozen --no-sync --package autobench python - \
-            "$RUNTIME/$cell" <<'PYEOF'
-import json, subprocess, sys
+        if [ "$(date +%s)" -ge "$deadline" ]; then echo "deadline"; return 1; fi
+        verdict=$(pyrun - "$RUNTIME/$cell" "$OPDIR/watch_state.json" \
+            "$DISC_NUDGE_IDLE_S" "$DISC_NUDGE_MIN_GAP_S" "$DISC_NUDGE_MAX" <<'PYEOF'
+import json, subprocess, sys, time
 from pathlib import Path
-root = Path(sys.argv[1])
+root, state_path = Path(sys.argv[1]), Path(sys.argv[2])
+idle_s, gap_s, max_nudges = (int(x) for x in sys.argv[3:6])
 status = json.loads(subprocess.run(
-    [sys.executable, "benchmarks/scripts/campaign_stage.py",
-     "status", "--cell-root", str(root)],
-    capture_output=True, text=True, check=True,
-).stdout)
+    [sys.executable, "benchmarks/scripts/campaign_stage.py", "status", "--cell-root", str(root)],
+    capture_output=True, text=True, check=True).stdout)
 adir = root / "automil"
 queued = list(adir.glob("orchestrator/queue/*.json"))
 running = list(adir.glob("orchestrator/running/**/*.json"))
-charged = (status.get("discovery") or {}).get("attempts_charged")
-complete = charged == 30 and not queued and not running
-print("complete" if complete else f"working charged={charged} q={len(queued)} r={len(running)}")
+charged = (status.get("discovery") or {}).get("attempts_charged") or 0
+if charged == 30 and not queued and not running:
+    print("complete"); sys.exit(0)
+try:
+    samples = json.loads((adir / ".activity.samples.json").read_text())["sessions"]
+    active = sum(float(s.get("active_seconds") or 0) for s in samples.values())
+except (OSError, ValueError, KeyError):
+    active = None
+now = time.time()
+try:
+    st = json.loads(state_path.read_text())
+except (OSError, ValueError):
+    st = {"active": None, "changed_at": now, "nudges": 0, "last_nudge": 0}
+if active is not None and active != st.get("active"):
+    st.update(active=active, changed_at=now)
+flat = active is not None and now - st["changed_at"] >= idle_s
+action = "working"
+if flat and not queued and not running and st["nudges"] < max_nudges and now - st["last_nudge"] >= gap_s:
+    st.update(nudges=st["nudges"] + 1, last_nudge=now)
+    action = "nudge"
+state_path.write_text(json.dumps(st))
+print(f"{action} charged={charged} q={len(queued)} r={len(running)} active={active} flat_s={int(now - st['changed_at'])}")
 PYEOF
         ) || verdict="status-error"
         if ! tmux list-windows -t "=$name" 2>/dev/null | grep -q "agent"; then
-            echo "agent-window-dead"
-            return 1
+            echo "agent-window-dead"; return 1
         fi
-        if [ "$verdict" = "complete" ]; then
-            stable=$((stable + 1))
-            [ "$stable" -ge 2 ] && { echo "complete"; return 0; }
-        else
-            stable=0
-        fi
-        sleep "$WATCH_INTERVAL_S"
+        case "$verdict" in
+            complete) stable=$((stable + 1)); [ "$stable" -ge 2 ] && { echo "complete"; return 0; } ;;
+            nudge*)
+                stable=0
+                tmux send-keys -t "=$name:agent" -l "$DISC_NUDGE_LINE"; tmux send-keys -t "=$name:agent" Enter
+                printf '{"event":"operator_nudge","at":"%s","detail":"%s"}\n' "$(date -Is)" "$verdict" >> "$RUNTIME/$cell/operator_events.jsonl"
+                echo "[$cell] nudge sent ($verdict)" >> "$LOG" ;;
+            *) stable=0 ;;
+        esac
+        sleep "$DISC_WATCH_INTERVAL_S"
     done
 }
 
-# End the session the way the runbook's operator does: /exit into the agent
-# window, then wait for SessionEnd evidence (exporter port free + journal
+# /exit into the agent window, then wait for SessionEnd evidence (journal
 # session_end). One resend, then give up loudly.
 end_session() {
     local cell="$1" name="$2" attempt evidence
@@ -315,12 +243,10 @@ end_session() {
         tmux send-keys -t "=$name:agent" Enter 2>/dev/null
         for _ in $(seq 1 30); do
             sleep 30
-            evidence=$(uv run --frozen --no-sync --package autobench python - \
-                "$RUNTIME/$cell" <<'PYEOF'
+            evidence=$(pyrun - "$RUNTIME/$cell" <<'PYEOF'
 import json, sys
 from pathlib import Path
-root = Path(sys.argv[1])
-journal = root / "automil" / ".activity.jsonl"
+journal = Path(sys.argv[1]) / "automil" / ".activity.jsonl"
 if journal.is_file():
     for line in journal.read_text().splitlines():
         try:
@@ -338,47 +264,35 @@ PYEOF
 }
 
 run_cell() {
-    local gpu="$1" mode="$2" cell="$3" name log rc force_flag=""
-    log="logs/discovery_cells/${cell}.log"
-    if ! take_claim "$cell"; then
-        echo "[gpu$gpu] $cell is claimed by another live chain — skipping"
-        return 0
-    fi
-    echo "[gpu$gpu] $(date +%m-%d\ %H:%M) start $cell (mode=$mode)"
-
+    local cell="$1" mode="$2" name release_line force_flag="" outcome deadline
     if [ "$mode" = "finish" ]; then
-        # Recovery lane: the session already ended after a full budget; the
-        # finish ladder is idempotent and just needs a GPU for promotion.
-        if operate finish "$RUNTIME/$cell" --gpu "$gpu" >> "$log" 2>&1; then
-            echo "[gpu$gpu] $(date +%m-%d\ %H:%M) DONE $cell (finish-only)"
-            return 0
+        if operate finish "$RUNTIME/$cell" --gpu "$GPU_LIST" >> "$LOG" 2>&1; then
+            echo "$(date +%m-%d\ %H:%M) DONE $cell (finish-only)"; return 0
         fi
-        echo "$cell finish-failed (see $log)" >> "$FAIL_FILE"
-        return 1
+        record_failure "$cell" "finish-failed (see $LOG)"; return 1
     fi
+    usage_probe || return 1
 
-    # 1. Reproduction gate (gate mode). Measurement-mode blocks from the
-    #    epsilon derivation are superseded exactly once, auditable.
-    if uv run --frozen --no-sync --package autobench python -c "
+    # 1. Reproduction gate (gate mode) on the first GPU. Measurement-mode
+    #    blocks from the epsilon derivation are superseded exactly once.
+    if pyrun -c "
 import json,sys
 b=(json.load(open('$RUNTIME/$cell/campaign_state.json')).get('baseline_reproduction') or {})
 sys.exit(0 if b.get('mode')=='measurement' else 1)" 2>/dev/null; then
         force_flag="--force"
     fi
-    if ! stage run-baseline-reproduction --cell-root "$RUNTIME/$cell" \
-            --gpu "$gpu" $force_flag >> "$log" 2>&1; then
-        if grep -q "reproduction FAILED" "$log"; then
-            echo "$cell gate-FAILED (drift recorded; discovery blocked)" >> "$FAIL_FILE"
+    if ! stage run-baseline-reproduction --cell-root "$RUNTIME/$cell" --gpu 0 $force_flag >> "$LOG" 2>&1; then
+        if grep -q "reproduction FAILED" "$LOG"; then
+            record_failure "$cell" "gate-FAILED (drift recorded; discovery blocked until --force after review)"
         else
-            echo "$cell reproduction-error (see $log)" >> "$FAIL_FILE"
+            record_failure "$cell" "reproduction-error (see $LOG)"
         fi
         return 1
     fi
 
-    # 2-4. Daemon + session + bind, via the canonical operator.
-    rm -rf "$HOME/.claude/plugins" 2>/dev/null || true
+    # 2-4. Daemon on this job's GPUs + session + bind, via the canonical operator.
     local name_and_release
-    name_and_release=$(uv run --frozen --no-sync --package autobench python -c "
+    name_and_release=$(pyrun -c "
 import importlib.util
 spec=importlib.util.spec_from_file_location('op','benchmarks/scripts/campaign_operate.py')
 m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -386,109 +300,63 @@ from pathlib import Path
 print(m._session_name(Path('$RUNTIME/$cell')))
 print(m.RELEASE_LINE)")
     name=$(echo "$name_and_release" | sed -n 1p)
-    local release_line
     release_line=$(echo "$name_and_release" | sed -n 2p)
-    for step in "up $RUNTIME/$cell --gpu $gpu" "launch $RUNTIME/$cell" \
+    for step in "up $RUNTIME/$cell --gpu $GPU_LIST" "launch $RUNTIME/$cell" \
                 "bind $RUNTIME/$cell --timeout-s 900"; do
-        if ! operate $step >> "$log" 2>&1; then
-            echo "$cell operate-${step%% *}-failed (see $log)" >> "$FAIL_FILE"
+        if ! operate $step >> "$LOG" 2>&1; then
+            record_failure "$cell" "operate-${step%% *}-failed (see $LOG)"
             if [ "${step%% *}" != "up" ]; then
-                # A runtime may already be booting: kill its tmux session so
-                # it can never journal a late session_open after this job
-                # concluded the step failed.
+                # A runtime may already be booting: kill it so it can never
+                # journal a late session_open after this job gave up.
                 tmux kill-session -t "=$name" 2>/dev/null || true
             fi
             return 1
         fi
     done
-    # The agent idles until the operator's release line arrives as its
-    # first message (runbook: paste exactly that line). This launcher IS
-    # the operator.
+    capture_status "$name" "$OPDIR/usage_before.txt"
     sleep 5
-    tmux send-keys -t "=$name:agent" -l "$release_line"
-    tmux send-keys -t "=$name:agent" Enter
-    echo "[gpu$gpu] $(date +%m-%d\ %H:%M) session bound + released for $cell (tmux $name)"
+    tmux send-keys -t "=$name:agent" -l "$release_line"; tmux send-keys -t "=$name:agent" Enter
+    echo "$(date +%m-%d\ %H:%M) session bound + released for $cell (tmux $name on $AUTOMIL_TMUX_SOCKET)"
 
-    # 5. Watch until the agent has spent its 30 attempts and gone idle. The
-    #    deadline leaves room for /exit + finish inside the cell budget.
-    local outcome deadline
-    deadline=$(( $(date +%s) + (CELL_WALL_BUDGET_H - 14) * 3600 ))
+    # 5. Watch until 30/30 and drained; the deadline keeps the finish
+    #    reserve inside this job's wall.
+    deadline=$(( $(date +%s) + ($(remaining_hours) - DISC_FINISH_RESERVE_H) * 3600 ))
     outcome=$(watch_discovery "$cell" "$name" "$deadline")
     if [ "$outcome" = "deadline" ]; then
-        # Graceful strand: end the session so its final active-time sample
-        # is captured; under-budget cells cannot freeze, so a human owns it.
+        scrape_usage "$cell" "$OPDIR/usage.json" 2>/dev/null || true
         end_session "$cell" "$name" || true
-        echo "$cell budget-deadline-STRANDED (session ended for the ledger; <30 attempts) — OPERATOR NEEDED" >> "$FAIL_FILE"
+        record_failure "$cell" "wall-deadline-STRANDED (session ended for the ledger; <30 attempts) — OPERATOR NEEDED"
         return 1
     fi
     if [ "$outcome" != "complete" ]; then
-        echo "$cell session-died-mid-discovery ($outcome) — OPERATOR NEEDED, cell may be stranded" >> "$FAIL_FILE"
-        # Claim stays: nothing may touch this cell without a human.
+        record_failure "$cell" "session-died-mid-discovery ($outcome) — OPERATOR NEEDED, cell may be stranded"
         return 1
     fi
 
-    # 6. Operator-equivalent session end, then the finish ladder (freeze ->
-    #    promotion on this GPU -> winner -> finalize).
+    # 6. Usage capture, session end, then the finish ladder on the same GPUs.
+    scrape_usage "$cell" "$OPDIR/usage.json" || echo "[$cell] exporter scrape failed; finish will record usage as unavailable" >> "$LOG"
+    capture_status "$name" "$OPDIR/usage_after.txt"
     if ! end_session "$cell" "$name"; then
-        echo "$cell no-session-end-after-exit — OPERATOR NEEDED" >> "$FAIL_FILE"
-        return 1
+        record_failure "$cell" "no-session-end-after-exit — OPERATOR NEEDED"; return 1
     fi
-    if ! operate finish "$RUNTIME/$cell" --gpu "$gpu" >> "$log" 2>&1; then
-        echo "$cell finish-failed (see $log)" >> "$FAIL_FILE"
-        return 1
+    local usage_flag=()
+    [ -s "$OPDIR/usage.json" ] && usage_flag=(--usage-json "$OPDIR/usage.json")
+    if ! operate finish "$RUNTIME/$cell" --gpu "$GPU_LIST" "${usage_flag[@]}" >> "$LOG" 2>&1; then
+        record_failure "$cell" "finish-failed (see $LOG)"; return 1
     fi
     tmux kill-session -t "=$name" 2>/dev/null || true
-    echo "[gpu$gpu] $(date +%m-%d\ %H:%M) DONE $cell (winner finalized)"
+    echo "$(date +%m-%d\ %H:%M) DONE $cell (winner finalized)"
     return 0
 }
 
-worker() {
-    local gpu="$1" entry mode cell hours
-    while :; do
-        hours=$(remaining_hours)
-        if [ "$hours" -le "$CELL_WALL_BUDGET_H" ]; then
-            echo "[gpu$gpu] ${hours}h wall left < ${CELL_WALL_BUDGET_H}h budget — no new cells"
-            break
-        fi
-        entry=$(pop_cell)
-        [ -n "$entry" ] || break
-        mode="${entry%%:*}"
-        cell="${entry#*:}"
-        run_cell "$gpu" "$mode" "$cell" || true
-    done
-}
-
-echo "================================================"
-echo "preprint campaign DISCOVERY — roster: $ROSTER"
-echo "Job ${SLURM_JOB_ID:-N/A} | $(hostname) | $(date)"
-echo "claude $OBSERVED_CLAUDE == protocol $PROTOCOL_VERSION_PIN | cell budget ${CELL_WALL_BUDGET_H}h"
-echo "================================================"
-nvidia-smi --query-gpu=index,name,memory.total --format=csv 2>/dev/null || true
-
-if [ ! -s "$QUEUE_FILE" ]; then
-    echo "No pending discovery cells."
-    [ -s "$FAIL_FILE" ] && { sed 's/^/  /' "$FAIL_FILE"; exit 1; }
-    exit 0
-fi
-
-for gpu in $(seq 0 $((N_GPUS - 1))); do
-    worker "$gpu" &
-done
-while [ -n "$(jobs -pr)" ]; do
-    wait -n || true
-done
-
+run_cell "$CELL" "$MODE"; RC=$?
+normalize_cell_modes "$CELL"
+tmux -L "$AUTOMIL_TMUX_SOCKET" kill-server 2>/dev/null || true
 echo "---"
-LEFT=$(grep -c . "$QUEUE_FILE" 2>/dev/null || echo 0)
-if [ -s "$FAIL_FILE" ]; then
-    echo "Cells needing attention:"; sed 's/^/  /' "$FAIL_FILE"
+if [ "${DISC_NO_CHAIN:-0}" != 1 ]; then
+    echo "chaining: submitting the next cell as $USER"
+    "$PROJECT_DIR/benchmarks/scripts/slurm/submit_discovery_cell.sh" --chain --account "${DISC_ACCOUNT:-$DISC_ACCOUNT_DEFAULT}" \
+        || echo "  chain: nothing submitted (see above)"
 fi
-if [ "$LEFT" -gt 0 ]; then
-    echo "$LEFT pending cells remain — chaining the next job."
-    for attempt in 1 2 3; do
-        sbatch --parsable "$SELF" && break
-        echo "  sbatch failed (attempt $attempt)"; sleep 20
-    done
-fi
-[ -s "$FAIL_FILE" ] && exit 1
-echo "All attempted cells finished cleanly. $(date)"
+[ "$RC" = 0 ] && echo "Cell finished cleanly. $(date)"
+exit "$RC"

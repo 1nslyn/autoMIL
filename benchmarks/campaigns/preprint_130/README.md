@@ -267,6 +267,77 @@ wall-clock controller. Preserve the runtime's end timestamp and usage in a
 filled `agent_session_end.template.json`; it will be attested after the winner
 freezes.
 
+## 4b. Run discovery cells as SLURM jobs (the HPC option)
+
+Section 4 is the framework's default: an operator on a workstation drives
+one cell in an interactive session. On fir the campaign runs the same
+sequence unattended, one cell per SLURM job, from a shared tree in project
+space, with every team member submitting from their own account. Nothing
+here changes the protocol: the launcher is the operator of Section 4,
+scripted.
+
+**Shared tree.** `/project/6114359/shared/Pathology/autoMIL/work/autoMIL`
+(group `rrg-jma`, directories setgid `2770`, files `0660`), created once by
+`benchmarks/scripts/migrate_campaign_tree.sh`. Dataset stand-ins live beside
+it in `work/guard_roots/`. Rules while any discovery job is queued or
+running: no `git pull`, no edits under `src/`, `benchmarks/src/`,
+`benchmarks/scripts/`; the repository `CLAUDE.md` stays byte-identical to
+the protocol's pinned hash (every launch checks it; a test pins it); no
+`CLAUDE.md`, `CLAUDE.local.md` or `.claude/` may appear anywhere on the path
+from the runtime root up to `/` (the runtime reads memory from every
+ancestor). Exports to `version3` stay Leo-only (`sealed/` is owner-only by
+design).
+
+**Per-member setup, once.** `uv` and `claude 2.1.228` on `PATH`
+(`DISABLE_AUTOUPDATER=1`); `claude login` on a login node with your Team
+seat; no `~/.claude/CLAUDE.md`; an empty `~/.claude/plugins`; membership of
+`rrg-jma`. The submit script checks all of it before touching a cell.
+
+**Submit.** From any login node:
+
+```bash
+/project/6114359/shared/Pathology/autoMIL/work/autoMIL/benchmarks/scripts/slurm/submit_discovery_cell.sh
+```
+
+It classifies every roster cell (`campaign_scan.py`: pending / claimed /
+finishable / stranded / blocked / done), takes the first drivable one
+(finish-only recoveries first), fits the job to the cell
+(`campaign_shape.py`: predicted wall from the cell's baseline elapsed time,
+30 attempts packed 4 per GPU as the frozen cell config allows, 1, 2 or 4 GPUs,
+12 h or 24 h wall, 12 cores and 128 GB per GPU; the cheapest fitting shape
+by default, `--prefer fast` for the shortest wall), submits it, and only
+then claims the cell with the new job id. Against the registered 78 cells
+(2026-09-03) every cell fits: cheap gives 35 cells 1 GPU/12 h, 22 cells
+1 GPU/24 h, 18 cells 2 GPU/24 h, 3 cells 4 GPU/24 h (about 1,200 GPU-hours
+predicted for the campaign); fast puts 72 cells in the 12 h tier for about
+1,450 GPU-hours. Claims are once-only tombstones:
+a queued job holds its claim; a dead job's claim is replaced only after a
+successful cluster-wide `squeue` shows it gone. `--dry-run` prints the
+classification and every cell's shape without submitting; `--cell` picks a
+cell; `--max-gpus` caps the shape.
+
+**The job** (`submit_discovery_campaign.sh`) refuses to run a cell whose
+claim does not carry its own id, reads the plan's remaining allocation from
+a throwaway `/status` before opening the one-shot session (refuses above
+85 % of the weekly window; the claim then waits for a later job), runs the
+reproduction gate on its first GPU, brings the daemon up on all its GPUs,
+launches and binds the session in a job-private tmux server, sends the
+release line, watches until 30 charged attempts and drained queues, then
+scrapes the session's own exporter for token and cost counters
+(`operator/usage.json`, passed to `finish --usage-json`), captures `/status`
+before and after (`operator/usage_before.txt`, `usage_after.txt`), ends the
+session with `/exit`, runs the finish ladder on the same GPUs, normalizes
+the cell's files to group read/write, and submits the next cell as the same
+user. Failures land in `logs/discovery_cells/FAILED.tsv`; a stranded cell is
+reported, never relaunched.
+
+**The nudge.** If the runtime's active time has been flat for 30 minutes
+while the queue is drained and attempts remain, the job sends one fixed
+line (`DISC_NUDGE_LINE` in `discovery_lib.sh`), at most once an hour and
+three times per cell, and records it in the cell's
+`operator_events.jsonl`. An empty queue alone never triggers it: the agent
+diagnoses and plans between batches with nothing queued.
+
 ## 5. Run exact promotion
 
 Materialize exact copies of the frozen candidate overlays. No agent proposes or
@@ -395,6 +466,11 @@ Sealed held-out evidence mirrors to the owner-only `sealed/` tree, opened
 by nobody until `automil certify`. During SLURM generation overlap, a
 FAIL-file entry reading "native baseline is already running" is benign
 flock contention — the next generation re-runs that cell cleanly.
+
+When the campaign runs from the shared project-space tree, the checkout,
+the repository `CLAUDE.md`, and the memory path above the runtime root are
+frozen for every member for as long as any discovery job is queued or
+running; the rules and the per-member checklist are in Section 4b.
 
 The frozen input trees are protected by deep guard-root shims
 (`benchmarks/scripts/build_guard_root_shims.py`): each cohort's
