@@ -20,11 +20,14 @@
 #      via `uv sync --frozen --all-packages` into --scratch/venv, worktree
 #      directory --scratch/worktrees symlinked as .automil_worktrees,
 #      benchmarks/.env rewritten so every AUTOBENCH_*_ROOT points at
-#      dest/guard_roots/<cohort> and UV_PROJECT_ENVIRONMENT at the venv;
+#      --scratch/guard_roots/<cohort> and UV_PROJECT_ENVIRONMENT at the venv;
 #   2. the 78 cell roots + runtime/agent_protocol.json + logs/ rsync'd
 #      (additive, never --delete) and verified by sha256 of every
 #      campaign_state.json;
-#   3. dest/guard_roots rebuilt by build_guard_root_shims.py --i-know-idle;
+#   3. --scratch/guard_roots: the existing stand-in trees copied from
+#      source/guard_roots (symlinks into version2 preserved) and re-verified
+#      by build_guard_root_shims.py --i-know-idle (file-heavy, rebuildable:
+#      scratch, not project space);
 #   4. group + modes: chgrp -R, dirs 2770 (setgid so new files inherit the
 #      group), files g+rw; `git worktree prune`;
 #   5. verification: restart-safe materialize reports every root bound to
@@ -48,7 +51,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 [ -n "$SOURCE" ] && [ -n "$DEST" ] && [ -n "$SCRATCH" ] || { echo "usage: --source <scratch/autoMIL> --dest <work> --scratch <group-traversable scratch dir> [--group G] --commit <sha>"; exit 2; }
-VENV="$SCRATCH/venv"; WORKTREES="$SCRATCH/worktrees"
+VENV="$SCRATCH/venv"; WORKTREES="$SCRATCH/worktrees"; GUARD_ROOTS="$SCRATCH/guard_roots"
 export UV_PROJECT_ENVIRONMENT="$VENV"
 SRC_REPO="$SOURCE/autoMIL"
 DST_REPO="$DEST/autoMIL"
@@ -84,7 +87,7 @@ if [ "$VERIFY_ONLY" = 0 ]; then
     rm -rf "$DST_REPO/.venv"   # never in project space (inodes)
     (cd "$DST_REPO" && uv sync --frozen --all-packages)
     chgrp -R "$GROUP" "$VENV"; chmod -R g+rX "$VENV"
-    python3 - "$SRC_REPO/benchmarks/.env" "$DST_REPO/benchmarks/.env" "$DEST/guard_roots" "$VENV" <<'PYEOF'
+    python3 - "$SRC_REPO/benchmarks/.env" "$DST_REPO/benchmarks/.env" "$GUARD_ROOTS" "$VENV" <<'PYEOF'
 import re, sys
 from pathlib import Path
 src, dst, roots, venv = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
@@ -111,9 +114,12 @@ PYEOF
     diff "$SRC_SHA" "$DST_SHA" && echo "state files identical: $(wc -l < "$DST_SHA")"
     rm -f "$SRC_SHA" "$DST_SHA"
 
-    step "3. guard roots"
+    step "3. guard roots (scratch)"
+    [ -d "$SOURCE/guard_roots" ] || { echo "ERROR: no guard roots under $SOURCE"; exit 1; }
+    mkdir -p "$GUARD_ROOTS"; rsync -a "$SOURCE/guard_roots/" "$GUARD_ROOTS/"
     (cd "$DST_REPO" && uv run --frozen --no-sync --package autobench python \
-        benchmarks/scripts/build_guard_root_shims.py --guard-roots "$DEST/guard_roots" --i-know-idle)
+        benchmarks/scripts/build_guard_root_shims.py --guard-roots "$GUARD_ROOTS" --i-know-idle)
+    chgrp -R "$GROUP" "$GUARD_ROOTS"; chmod -R g+rX "$GUARD_ROOTS"
 
     step "4. group + modes"
     chgrp -R "$GROUP" "$DEST"
