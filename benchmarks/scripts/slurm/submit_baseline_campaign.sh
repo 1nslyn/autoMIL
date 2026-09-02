@@ -26,7 +26,9 @@
 #SBATCH --mail-type=FAIL
 
 set -uo pipefail
-PROJECT_DIR="${SLURM_SUBMIT_DIR:-/home/yinshuol/scratch/autoMIL/autoMIL}"
+# A spooled batch script no longer knows where it came from; the submit
+# directory names the tree. Never a user-path fallback.
+PROJECT_DIR="${SLURM_SUBMIT_DIR:?submit from the campaign checkout root (SLURM_SUBMIT_DIR is unset)}"
 RUNTIME="$PROJECT_DIR/benchmarks/campaigns/preprint_130/runtime"
 MANIFEST="$PROJECT_DIR/benchmarks/campaigns/preprint_130/manifest.json"
 SELF="$PROJECT_DIR/benchmarks/scripts/slurm/submit_baseline_campaign.sh"
