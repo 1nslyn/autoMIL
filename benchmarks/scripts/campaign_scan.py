@@ -145,11 +145,16 @@ def scan(runtime: Path, roster_path: Path, job_id: str) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--runtime", required=True, type=Path)
-    parser.add_argument("--roster", required=True, type=Path)
+    parser.add_argument("--roster", default=Path("/dev/null"), type=Path)
     parser.add_argument("--job-id", default="manual")
     parser.add_argument("--class", dest="only", choices=CLASSES,
                         help="print just this class, one cell per line")
+    parser.add_argument("--session-ended", metavar="CELL",
+                        help="exit 0 if CELL's activity journal records session_end, else 1")
     args = parser.parse_args(argv)
+    if args.session_ended:
+        journal = args.runtime / args.session_ended / "automil" / ".activity.jsonl"
+        return 0 if _session_ended(journal) else 1
     if not args.runtime.is_dir() or not args.roster.is_file():
         print("campaign_scan: runtime or roster missing", file=sys.stderr)
         return 2

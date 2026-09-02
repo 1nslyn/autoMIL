@@ -50,16 +50,22 @@ while [ $# -gt 0 ]; do
         --max-gpus) MAX_GPUS="$2"; shift ;;
         --prefer) export DISC_PREFER="$2"; shift ;;
         --chain) CHAIN=1 ;;
-        -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) echo "unknown option: $1"; exit 2 ;;
     esac
     shift
 done
 
+case "$MAX_GPUS" in 1|2|4) ;; *) echo "--max-gpus must be 1, 2 or 4"; exit 2 ;; esac
 disc_paths || exit 1
 disc_env
+export AUTOMIL_TMUX_SOCKET="disc_submit_$$"
 if ! disc_static_preflight; then
     [ "$DRY_RUN" = 1 ] && echo "(dry run: preflight would refuse a real submission)" || exit 1
+fi
+if [ "$DRY_RUN" = 0 ]; then
+    mkdir -p "$PROJECT_DIR/logs/discovery_cells"
+    disc_usage_probe refuse "$PROJECT_DIR/logs/discovery_cells/usage_probe_${USER}_$(date +%Y%m%d%H%M%S).txt" || exit 1
 fi
 
 SCAN=$(disc_scan) || { echo "ERROR: cell scan failed"; exit 1; }
@@ -69,43 +75,49 @@ summary=$(echo "$SCAN" | pyrun -c \
 echo "$SCAN" | pyrun -c "import json,sys;d=json.load(sys.stdin);[print('  note:',c,'-',n) for c,n in sorted(d['notes'].items())]"
 
 candidates() {
-    echo "$SCAN" | pyrun -c "
-import json,sys
-d=json.load(sys.stdin)
-rows=[('finish',c) for c in d['finishable']]+[('full',c) for c in d['pending']]
-only='$ONLY_CELL'
+    echo "$SCAN" | pyrun - "$ONLY_CELL" <<'PYEOF'
+import json, sys
+d = json.load(sys.stdin); only = sys.argv[1]
+rows = [("finish", c) for c in d["finishable"]] + [("full", c) for c in d["pending"]]
 if only:
-    rows=[r for r in rows if r[1]==only] or sys.exit(f'{only} is not finishable or pending')
-print('\n'.join(f'{m}:{c}' for m,c in rows))"
+    rows = [r for r in rows if r[1] == only] or sys.exit(f"{only} is not finishable or pending")
+print("\n".join(f"{m}:{c}" for m, c in rows))
+PYEOF
 }
 
-# Shape for a full run comes from the predictor; a finish-only recovery just
-# needs promotion on one GPU (worst roster cell ~9 h) inside a 12 h wall.
+# One predictor call per cell: "gpus wall cpus mem whole_node predicted e5".
+# A finish-only recovery takes the predictor's finish lane (one GPU, short
+# wall: promotion of ten candidates fits it for every roster cell).
 shape_for() {
-    local mode="$1" cell="$2"
-    if [ "$mode" = "finish" ]; then echo "1 12 12 128 0"; return 0; fi
-    local gpus wall cpus mem pred
-    gpus=$(shape_field "$cell" gpus) || return 1
-    wall=$(shape_field "$cell" wall_hours) || return 1
-    cpus=$(shape_field "$cell" cpus) || return 1
-    mem=$(shape_field "$cell" mem_gb) || return 1
-    pred=$(shape_field "$cell" predicted_hours) || return 1
-    echo "$gpus $wall $cpus $mem $pred"
+    local mode="$1" cell="$2" args
+    if [ "$mode" = "finish" ]; then args="--finish"; else args="--runtime $RUNTIME --prefer $DISC_PREFER --cells $cell --json"; fi
+    pyrun benchmarks/scripts/campaign_shape.py $args | pyrun - "$cell" "$mode" <<'PYEOF'
+import json, sys
+payload = json.load(sys.stdin); cell, mode = sys.argv[1:3]
+shape = payload if mode == "finish" else payload[cell]
+if "unshaped" in shape:
+    sys.exit(f"{cell}: {shape['unshaped']}")
+print(shape["gpus"], shape["wall_hours"], shape["cpus"], shape["mem_gb"],
+      int(bool(shape["whole_node"])), shape["predicted_hours"], shape.get("baseline_elapsed_seconds", 0))
+PYEOF
 }
 
 submit_one() {
-    local mode="$1" cell="$2" shape gpus wall cpus mem pred jobid
+    local mode="$1" cell="$2" shape gpus wall cpus mem whole pred e5 jobid mem_flag name
     shape=$(shape_for "$mode" "$cell") || { echo "  $cell: no shape fits (see campaign_shape.py) — skipped"; return 1; }
-    read -r gpus wall cpus mem pred <<< "$shape"
+    read -r gpus wall cpus mem whole pred e5 <<< "$shape"
     if [ "$gpus" -gt "$MAX_GPUS" ]; then
         echo "  $cell: needs $gpus GPUs > --max-gpus $MAX_GPUS — skipped"; return 1
     fi
-    printf '  %-58s mode=%-6s gpus=%s wall=%sh cpus=%s mem=%sG predicted=%sh\n' \
-        "$cell" "$mode" "$gpus" "$wall" "$cpus" "$mem" "$pred"
+    # A whole-node shape takes the node's memory like the baseline launcher did.
+    if [ "$whole" = 1 ]; then mem_flag="--mem=0"; else mem_flag="--mem=${mem}G"; fi
+    name="disc_$(echo "$cell" | awk -F__ '{print $1"__"$2"__"$3"__"$4}')"
+    printf '  %-58s mode=%-6s gpus=%s wall=%sh cpus=%s mem=%s predicted=%sh\n' \
+        "$cell" "$mode" "$gpus" "$wall" "$cpus" "${mem_flag#--mem=}" "$pred"
     [ "$DRY_RUN" = 1 ] && return 1
     jobid=$(sbatch --parsable --account="$ACCOUNT" --time="${wall}:00:00" \
-        --nodes=1 --ntasks-per-node=1 --cpus-per-task="$cpus" --mem="${mem}G" \
-        --gpus-per-node="h100:$gpus" --job-name="disc_${cell%%__s42*}" \
+        --nodes=1 --ntasks-per-node=1 --cpus-per-task="$cpus" "$mem_flag" \
+        --gpus-per-node="h100:$gpus" --job-name="$name" \
         --output="logs/disc_cell_%j.out" --error="logs/disc_cell_%j.err" \
         --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_PREFER=$DISC_PREFER" \
         "$JOB_SCRIPT") || { echo "  sbatch failed for $cell"; return 1; }
@@ -116,16 +128,22 @@ submit_one() {
         return 1
     fi
     mkdir -p "$RUNTIME/$cell/operator"
-    pyrun - "$RUNTIME/$cell/operator/plan.json" "$cell" "$mode" "$jobid" "$gpus" "$wall" "$cpus" "$mem" "$pred" "$ACCOUNT" <<'PYEOF'
-import json, os, sys, datetime as dt
-path, cell, mode, jobid, gpus, wall, cpus, mem, pred, account = sys.argv[1:]
+    pyrun - "$RUNTIME/$cell/operator/plan.json" "$cell" "$mode" "$jobid" "$gpus" "$wall" "$cpus" "$mem" "$whole" "$pred" "$e5" "$ACCOUNT" <<'PYEOF'
+import importlib.util, json, os, sys, datetime as dt
+path, cell, mode, jobid, gpus, wall, cpus, mem, whole, pred, e5, account = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
+shape = importlib.util.module_from_spec(spec); spec.loader.exec_module(shape)
 payload = {
     "cell_id": cell, "mode": mode, "job_id": jobid, "account": account,
     "submitted_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     "submitted_by": os.environ.get("USER"),
-    "shape": {"gpus": int(gpus), "wall_hours": int(wall), "cpus": int(cpus), "mem_gb": int(mem)},
+    "shape": {"gpus": int(gpus), "wall_hours": int(wall), "cpus": int(cpus), "mem_gb": int(mem),
+              "whole_node": whole == "1"},
     "predicted_hours": float(pred),
-    "predictor": "campaign_shape.py (cap 4/GPU, efficiency 0.8, fit 0.85, prefer=" + os.environ.get("DISC_PREFER", "cheap") + ")",
+    "baseline_elapsed_seconds": float(e5),
+    "predictor": {"cap_per_gpu": shape.CAP_PER_GPU, "efficiency": shape.EFFICIENCY,
+                  "fit_fraction": shape.FIT_FRACTION, "overhead_h": shape.OVERHEAD_H,
+                  "prefer": os.environ.get("DISC_PREFER", "cheap")},
 }
 with open(path, "w") as fh:
     json.dump(payload, fh, indent=2, sort_keys=True); fh.write("\n")

@@ -70,11 +70,16 @@ class Shape:
 
 @dataclass(frozen=True)
 class ShapeReport:
-    """One cell's shaping outcome: a fitting ``Shape``, or a reason there isn't one."""
+    """One cell's shaping outcome: a fitting ``Shape``, or a reason there isn't one.
+
+    ``baseline_elapsed_seconds`` is the prediction input (the cell's 5-fold
+    baseline elapsed time), carried so a submitter can record it.
+    """
 
     cell_id: str
     shape: Shape | None
     reason: str | None
+    baseline_elapsed_seconds: float | None = None
 
 
 def predict_hours(e5_seconds: float, gpus: int) -> float:
@@ -115,6 +120,16 @@ def candidate_shapes(prefer: str = "cheap") -> tuple[tuple[int, int], ...]:
     if prefer == "cheap":
         return tuple((g, w) for g in GPU_OPTIONS for w in WALL_OPTIONS_H)
     return tuple((g, w) for w in WALL_OPTIONS_H for g in GPU_OPTIONS)
+
+
+def finish_shape() -> Shape:
+    """The finish-only recovery lane: promotion of at most ten candidates on
+    one GPU fits the shorter wall for every roster cell (worst ~9 h)."""
+    gpus, wall_hours = GPU_OPTIONS[0], WALL_OPTIONS_H[0]
+    return Shape(
+        gpus=gpus, wall_hours=wall_hours, cpus=CORES_PER_GPU * gpus,
+        mem_gb=MEM_GB_PER_GPU * gpus, whole_node=False, predicted_hours=0.0,
+    )
 
 
 def choose_shape(e5_seconds: float, prefer: str = "cheap") -> Shape | None:
@@ -184,8 +199,11 @@ def _shape_one_cell(runtime: Path, cell_id: str, prefer: str = "cheap") -> Shape
         return ShapeReport(
             cell_id=cell_id, shape=None,
             reason="predicted discovery wall time exceeds every candidate shape",
+            baseline_elapsed_seconds=e5_seconds,
         )
-    return ShapeReport(cell_id=cell_id, shape=shape, reason=None)
+    return ShapeReport(
+        cell_id=cell_id, shape=shape, reason=None, baseline_elapsed_seconds=e5_seconds,
+    )
 
 
 def shape_cells(
@@ -222,7 +240,7 @@ def _first_unknown_cell(runtime: Path, cell_ids: Sequence[str]) -> str | None:
 def _report_to_json(report: ShapeReport) -> dict:
     if report.shape is None:
         return {"unshaped": report.reason}
-    return asdict(report.shape)
+    return {**asdict(report.shape), "baseline_elapsed_seconds": report.baseline_elapsed_seconds}
 
 
 def _table_row(runtime: Path, cell_id: str, report: ShapeReport) -> str:
@@ -246,12 +264,16 @@ def _format_table(runtime: Path, reports: Mapping[str, ShapeReport]) -> str:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--runtime", required=True, help="campaign runtime directory")
+    parser.add_argument("--runtime", default=None, help="campaign runtime directory")
     parser.add_argument(
         "--cells", default=None,
         help="comma-separated cell ids (default: auto-discover under --runtime)",
     )
     parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
+    parser.add_argument(
+        "--finish", action="store_true",
+        help="print the finish-only recovery lane shape as JSON and exit",
+    )
     parser.add_argument(
         "--prefer", default="cheap", choices=PREFERENCES,
         help="cheap = fewest GPU-hours (default); fast = shortest wall first",
@@ -301,6 +323,12 @@ def _run_sweep(runtime: Path, cells_arg: str | None, as_json: bool, prefer: str)
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if args.finish:
+        print(json.dumps(asdict(finish_shape()), sort_keys=True))
+        return 0
+    if args.runtime is None:
+        print("campaign_shape: --runtime is required", file=sys.stderr)
+        return 2
     runtime = Path(args.runtime)
     if not runtime.is_dir():
         print(f"campaign_shape: invalid --runtime: {runtime}", file=sys.stderr)

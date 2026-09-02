@@ -234,3 +234,20 @@ def test_cli_default_table_lists_all_cells(fabricated_runtime, capsys):
     assert "cell_a" in out
     assert "cell_b" in out
     assert "cell_c" in out
+
+
+def test_finish_lane_shape_is_one_gpu_short_wall():
+    shape = cs.finish_shape()
+    assert (shape.gpus, shape.wall_hours, shape.cpus, shape.mem_gb) == (1, 12, 12, 128)
+
+
+def test_cli_finish_prints_the_finish_shape(capsys):
+    assert cs.main(["--finish"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["gpus"] == 1 and payload["wall_hours"] == 12
+
+
+def test_json_report_carries_the_prediction_input(fabricated_runtime, capsys):
+    assert cs.main(["--runtime", str(fabricated_runtime), "--cells", "cell_a", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["cell_a"]["baseline_elapsed_seconds"] == pytest.approx(0.05 * 3600)

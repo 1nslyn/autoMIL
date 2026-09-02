@@ -7,7 +7,7 @@
 #
 # The whole cell runs on this node: reproduction gate -> up (orchestrator
 # daemon on this job's GPUs) -> launch (pinned claude, interactive in a
-# job-private tmux server) -> bind -> release line -> watch (with the
+# job-private tmx server) -> bind -> release line -> watch (with the
 # active-time nudge) -> usage capture -> /exit -> finish (freeze ->
 # promotion on the same GPUs -> winner -> finalize) -> chain the next cell.
 #
@@ -19,7 +19,7 @@
 # claim it does not hold.
 #
 # Runs as the submitting member inside the shared project-space tree: umask
-# 007, uv never syncs, git trusts the shared checkout, tmux is job-private,
+# 007, uv never syncs, git trusts the shared checkout, tmx is job-private,
 # and every file the cell leaves behind is normalized group read/write.
 
 #SBATCH --job-name=disc_cell
@@ -36,6 +36,7 @@
 #SBATCH --mail-type=FAIL
 
 set -uo pipefail
+[ -n "${SLURM_JOB_ID:-}" ] || { echo "ERROR: this script runs only as a SLURM job (submit through submit_discovery_cell.sh)"; exit 1; }
 # A spooled batch script no longer knows where it came from: the tree is
 # named explicitly by the wrapper, or by the submit directory. Never a
 # user-path fallback.
@@ -70,7 +71,15 @@ trap _usr1_report USR1
 # ---------------------------------------------------------------- cell pick
 CELL="${DISC_CELL:-}"; MODE="${DISC_MODE:-full}"
 if [ -n "$CELL" ]; then
-    holder=$(claim_holder "$CELL")
+    # The wrapper claims the cell with this job's id right AFTER sbatch
+    # returns; a job that lands on a free node can start inside that window,
+    # so give the claim up to two minutes to appear before refusing.
+    for _ in $(seq 1 24); do
+        holder=$(claim_holder "$CELL")
+        [ "$holder" = "${SLURM_JOB_ID:-manual}" ] && break
+        sleep 5
+    done
+    holder=$(claim_holder "$CELL")   # a claim written during the last sleep is still valid
     if [ "$holder" != "${SLURM_JOB_ID:-manual}" ]; then
         echo "ERROR: claim for $CELL is held by '${holder:-nobody}', not this job — refusing"; exit 4
     fi
@@ -87,11 +96,11 @@ shape = importlib.util.module_from_spec(spec); spec.loader.exec_module(shape)
 for cell in d["finishable"]:
     print(f"finish:{cell}"); sys.exit(0)
 for cell in d["pending"]:
-    try:
-        e5 = json.loads((runtime / cell / "campaign_state.json").read_text())["baseline"]["resources"]["elapsed_seconds"]["total"]
-    except (OSError, ValueError, KeyError, TypeError):
+    state, reason = shape._read_campaign_state(runtime, cell)
+    e5, reason = shape._baseline_elapsed_seconds(state) if reason is None else (None, reason)
+    if e5 is None:
         continue
-    if shape.predict_hours(float(e5), gpus) <= shape.FIT_FRACTION * hours:
+    if shape.predict_hours(e5, gpus) <= shape.FIT_FRACTION * hours:
         print(f"full:{cell}"); sys.exit(0)
 PYEOF
     )
@@ -108,36 +117,15 @@ echo "GPUs $GPU_LIST | wall left $(remaining_hours)h | tmux socket $AUTOMIL_TMUX
 echo "================================================"
 
 # ------------------------------------------------------ usage-window probe
-# A throwaway runtime in $HOME reads /status (the plan's remaining
-# allocation) BEFORE the one-shot session is opened. Killed afterwards;
-# unparsable output only warns.
-usage_probe() {
-    local out="$OPDIR/usage_probe.txt" pct
-    tmux -L "$AUTOMIL_TMUX_SOCKET" new-session -d -s usage_probe -c "$HOME" \
-        "claude --setting-sources project --strict-mcp-config" 2>/dev/null || return 0
-    sleep 15
-    tmux -L "$AUTOMIL_TMUX_SOCKET" send-keys -t "=usage_probe" -l "/status"
-    tmux -L "$AUTOMIL_TMUX_SOCKET" send-keys -t "=usage_probe" Enter
-    sleep 10
-    tmux -L "$AUTOMIL_TMUX_SOCKET" capture-pane -p -t "=usage_probe" -S -80 > "$out" 2>/dev/null
-    tmux -L "$AUTOMIL_TMUX_SOCKET" kill-session -t "=usage_probe" 2>/dev/null || true
-    pct=$(grep -iE 'week' "$out" | grep -oE '[0-9]{1,3}%' | head -1 | tr -d '%')
-    if [ -z "$pct" ]; then
-        echo "WARNING: could not parse the weekly usage window from /status (see $out) — proceeding"
-        return 0
-    fi
-    echo "usage window: weekly ${pct}% used"
-    if [ "$pct" -ge "$DISC_WEEKLY_USAGE_MAX_PCT" ]; then
-        record_failure "$CELL" "weekly-usage-${pct}pct (claim left for a later job)"
-        return 1
-    fi
-}
+# The wrapper already refused above the weekly threshold before claiming;
+# here the value is only recorded (the queue wait may have moved it).
+usage_probe() { disc_usage_probe log "$OPDIR/usage_probe.txt"; }
 
 capture_status() {  # name outfile
-    tmux send-keys -t "=$1:agent" -l "/status"; tmux send-keys -t "=$1:agent" Enter
+    tmx send-keys -t "=$1:agent" -l "/status"; tmx send-keys -t "=$1:agent" Enter
     sleep 8
-    tmux capture-pane -p -t "=$1:agent" -S -80 > "$2" 2>/dev/null
-    tmux send-keys -t "=$1:agent" Escape 2>/dev/null || true
+    tmx capture-pane -p -t "=$1:agent" -S -80 > "$2" 2>/dev/null
+    tmx send-keys -t "=$1:agent" Escape 2>/dev/null || true
 }
 
 # Token/cost counters straight from the session's own exporter, in the exact
@@ -145,7 +133,12 @@ capture_status() {  # name outfile
 # scrape precedes the final turn.
 scrape_usage() {  # cell outfile
     local port
-    port=$(pyrun -c "import yaml;print((yaml.safe_load(open('$RUNTIME/$1/automil/config.yaml')).get('activity') or {}).get('exporter_port', 9464))")
+    port=$(pyrun - "$RUNTIME/$1/automil/config.yaml" <<'PYEOF'
+import sys, yaml
+port = (yaml.safe_load(open(sys.argv[1])).get("activity") or {}).get("exporter_port")
+sys.exit("cell config declares no activity.exporter_port") if port is None else print(port)
+PYEOF
+    ) || return 1
     curl -s "http://127.0.0.1:$port/metrics" | pyrun - "$2" <<'PYEOF'
 import json, re, sys, datetime as dt
 out = sys.argv[1]; tokens = {}; cost = 0.0
@@ -186,6 +179,7 @@ watch_discovery() {
             "$DISC_NUDGE_IDLE_S" "$DISC_NUDGE_MIN_GAP_S" "$DISC_NUDGE_MAX" <<'PYEOF'
 import json, subprocess, sys, time
 from pathlib import Path
+from autobench.campaign import DISCOVERY_ATTEMPTS
 root, state_path = Path(sys.argv[1]), Path(sys.argv[2])
 idle_s, gap_s, max_nudges = (int(x) for x in sys.argv[3:6])
 status = json.loads(subprocess.run(
@@ -195,7 +189,7 @@ adir = root / "automil"
 queued = list(adir.glob("orchestrator/queue/*.json"))
 running = list(adir.glob("orchestrator/running/**/*.json"))
 charged = (status.get("discovery") or {}).get("attempts_charged") or 0
-if charged == 30 and not queued and not running:
+if charged == DISCOVERY_ATTEMPTS and not queued and not running:
     print("complete"); sys.exit(0)
 try:
     samples = json.loads((adir / ".activity.samples.json").read_text())["sessions"]
@@ -204,28 +198,28 @@ except (OSError, ValueError, KeyError):
     active = None
 now = time.time()
 try:
-    st = json.loads(state_path.read_text())
+    prior = json.loads(state_path.read_text())
 except (OSError, ValueError):
-    st = {"active": None, "changed_at": now, "nudges": 0, "last_nudge": 0}
-if active is not None and active != st.get("active"):
-    st.update(active=active, changed_at=now)
+    prior = {"active": None, "changed_at": now, "nudges": 0, "last_nudge": 0}
+moved = active is not None and active != prior.get("active")
+st = {**prior, "active": active, "changed_at": now} if moved else prior
 flat = active is not None and now - st["changed_at"] >= idle_s
 action = "working"
 if flat and not queued and not running and st["nudges"] < max_nudges and now - st["last_nudge"] >= gap_s:
-    st.update(nudges=st["nudges"] + 1, last_nudge=now)
+    st = {**st, "nudges": st["nudges"] + 1, "last_nudge": now}
     action = "nudge"
 state_path.write_text(json.dumps(st))
 print(f"{action} charged={charged} q={len(queued)} r={len(running)} active={active} flat_s={int(now - st['changed_at'])}")
 PYEOF
         ) || verdict="status-error"
-        if ! tmux list-windows -t "=$name" 2>/dev/null | grep -q "agent"; then
+        if ! tmx list-windows -t "=$name" 2>/dev/null | grep -q "agent"; then
             echo "agent-window-dead"; return 1
         fi
         case "$verdict" in
             complete) stable=$((stable + 1)); [ "$stable" -ge 2 ] && { echo "complete"; return 0; } ;;
             nudge*)
                 stable=0
-                tmux send-keys -t "=$name:agent" -l "$DISC_NUDGE_LINE"; tmux send-keys -t "=$name:agent" Enter
+                tmx send-keys -t "=$name:agent" -l "$DISC_NUDGE_LINE"; tmx send-keys -t "=$name:agent" Enter
                 printf '{"event":"operator_nudge","at":"%s","detail":"%s"}\n' "$(date -Is)" "$verdict" >> "$RUNTIME/$cell/operator_events.jsonl"
                 echo "[$cell] nudge sent ($verdict)" >> "$LOG" ;;
             *) stable=0 ;;
@@ -235,28 +229,15 @@ PYEOF
 }
 
 # /exit into the agent window, then wait for SessionEnd evidence (journal
-# session_end). One resend, then give up loudly.
+# session_end, read by campaign_scan.py). One resend, then give up loudly.
 end_session() {
-    local cell="$1" name="$2" attempt evidence
+    local cell="$1" name="$2" attempt
     for attempt in 1 2; do
-        tmux send-keys -t "=$name:agent" -l "/exit" 2>/dev/null
-        tmux send-keys -t "=$name:agent" Enter 2>/dev/null
+        tmx send-keys -t "=$name:agent" -l "/exit" 2>/dev/null
+        tmx send-keys -t "=$name:agent" Enter 2>/dev/null
         for _ in $(seq 1 30); do
             sleep 30
-            evidence=$(pyrun - "$RUNTIME/$cell" <<'PYEOF'
-import json, sys
-from pathlib import Path
-journal = Path(sys.argv[1]) / "automil" / ".activity.jsonl"
-if journal.is_file():
-    for line in journal.read_text().splitlines():
-        try:
-            if json.loads(line).get("event") == "session_end":
-                print("ended"); break
-        except ValueError:
-            continue
-PYEOF
-            )
-            [ "$evidence" = "ended" ] && return 0
+            pyrun benchmarks/scripts/campaign_scan.py --runtime "$RUNTIME" --session-ended "$cell" && return 0
         done
         echo "[$cell] /exit attempt $attempt produced no session_end in 15m"
     done
@@ -308,14 +289,14 @@ print(m.RELEASE_LINE)")
             if [ "${step%% *}" != "up" ]; then
                 # A runtime may already be booting: kill it so it can never
                 # journal a late session_open after this job gave up.
-                tmux kill-session -t "=$name" 2>/dev/null || true
+                tmx kill-session -t "=$name" 2>/dev/null || true
             fi
             return 1
         fi
     done
     capture_status "$name" "$OPDIR/usage_before.txt"
     sleep 5
-    tmux send-keys -t "=$name:agent" -l "$release_line"; tmux send-keys -t "=$name:agent" Enter
+    tmx send-keys -t "=$name:agent" -l "$release_line"; tmx send-keys -t "=$name:agent" Enter
     echo "$(date +%m-%d\ %H:%M) session bound + released for $cell (tmux $name on $AUTOMIL_TMUX_SOCKET)"
 
     # 5. Watch until 30/30 and drained; the deadline keeps the finish
@@ -324,6 +305,7 @@ print(m.RELEASE_LINE)")
     outcome=$(watch_discovery "$cell" "$name" "$deadline")
     if [ "$outcome" = "deadline" ]; then
         scrape_usage "$cell" "$OPDIR/usage.json" 2>/dev/null || true
+        capture_status "$name" "$OPDIR/usage_after.txt"
         end_session "$cell" "$name" || true
         record_failure "$cell" "wall-deadline-STRANDED (session ended for the ledger; <30 attempts) — OPERATOR NEEDED"
         return 1
@@ -341,17 +323,17 @@ print(m.RELEASE_LINE)")
     fi
     local usage_flag=()
     [ -s "$OPDIR/usage.json" ] && usage_flag=(--usage-json "$OPDIR/usage.json")
-    if ! operate finish "$RUNTIME/$cell" --gpu "$GPU_LIST" "${usage_flag[@]}" >> "$LOG" 2>&1; then
+    if ! operate finish "$RUNTIME/$cell" --gpu "$GPU_LIST" ${usage_flag[@]+"${usage_flag[@]}"} >> "$LOG" 2>&1; then
         record_failure "$cell" "finish-failed (see $LOG)"; return 1
     fi
-    tmux kill-session -t "=$name" 2>/dev/null || true
+    tmx kill-session -t "=$name" 2>/dev/null || true
     echo "$(date +%m-%d\ %H:%M) DONE $cell (winner finalized)"
     return 0
 }
 
 run_cell "$CELL" "$MODE"; RC=$?
 normalize_cell_modes "$CELL"
-tmux -L "$AUTOMIL_TMUX_SOCKET" kill-server 2>/dev/null || true
+tmx kill-server 2>/dev/null || true
 echo "---"
 if [ "${DISC_NO_CHAIN:-0}" != 1 ]; then
     echo "chaining: submitting the next cell as $USER"
