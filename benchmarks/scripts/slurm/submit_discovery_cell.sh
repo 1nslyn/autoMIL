@@ -74,10 +74,11 @@ summary=$(echo "$SCAN" | pyrun -c \
 [ "$CHAIN" = 1 ] || echo "scan: $summary"
 echo "$SCAN" | pyrun -c "import json,sys;d=json.load(sys.stdin);[print('  note:',c,'-',n) for c,n in sorted(d['notes'].items())]"
 
+# A heredoc replaces stdin, so JSON produced upstream travels in a variable.
 candidates() {
-    echo "$SCAN" | pyrun - "$ONLY_CELL" <<'PYEOF'
-import json, sys
-d = json.load(sys.stdin); only = sys.argv[1]
+    SCAN_JSON="$SCAN" pyrun - "$ONLY_CELL" <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["SCAN_JSON"]); only = sys.argv[1]
 rows = [("finish", c) for c in d["finishable"]] + [("full", c) for c in d["pending"]]
 if only:
     rows = [r for r in rows if r[1] == only] or sys.exit(f"{only} is not finishable or pending")
@@ -89,11 +90,12 @@ PYEOF
 # A finish-only recovery takes the predictor's finish lane (one GPU, short
 # wall: promotion of ten candidates fits it for every roster cell).
 shape_for() {
-    local mode="$1" cell="$2" args
+    local mode="$1" cell="$2" args shape_json
     if [ "$mode" = "finish" ]; then args="--finish"; else args="--runtime $RUNTIME --prefer $DISC_PREFER --cells $cell --json"; fi
-    pyrun benchmarks/scripts/campaign_shape.py $args | pyrun - "$cell" "$mode" <<'PYEOF'
-import json, sys
-payload = json.load(sys.stdin); cell, mode = sys.argv[1:3]
+    shape_json=$(pyrun benchmarks/scripts/campaign_shape.py $args) || return 1
+    SHAPE_JSON="$shape_json" pyrun - "$cell" "$mode" <<'PYEOF'
+import json, os, sys
+payload = json.loads(os.environ["SHAPE_JSON"]); cell, mode = sys.argv[1:3]
 shape = payload if mode == "finish" else payload[cell]
 if "unshaped" in shape:
     sys.exit(f"{cell}: {shape['unshaped']}")

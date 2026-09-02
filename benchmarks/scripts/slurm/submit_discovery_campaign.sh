@@ -87,10 +87,10 @@ else
     # Direct sbatch: take the first cell that fits THIS job's wall and GPUs.
     SCAN=$(disc_scan) || { echo "ERROR: cell scan failed"; exit 1; }
     HOURS=$(remaining_hours)
-    PICK=$(echo "$SCAN" | pyrun - "$RUNTIME" "$N_GPUS" "$HOURS" <<'PYEOF'
-import importlib.util, json, sys
+    PICK=$(SCAN_JSON="$SCAN" pyrun - "$RUNTIME" "$N_GPUS" "$HOURS" <<'PYEOF'
+import importlib.util, json, os, sys
 from pathlib import Path
-d = json.load(sys.stdin); runtime, gpus, hours = Path(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
+d = json.loads(os.environ["SCAN_JSON"]); runtime, gpus, hours = Path(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
 spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
 shape = importlib.util.module_from_spec(spec); spec.loader.exec_module(shape)
 for cell in d["finishable"]:
