@@ -289,3 +289,31 @@ def test_protected_dirty_includes_suggestion(tmp_path, cli_runner, monkeypatch):
     assert "registry.protected paths dirty" in result.output
     assert "src/bar.py" in result.output
     assert "revert-baseline" in result.output
+
+
+def test_protected_git_failure_fails_closed_not_clean(tmp_path, cli_runner, monkeypatch):
+    """A git failure while checking protected files must be reported as a
+    blocking issue, not silently read as 'nothing dirty' (which previously
+    happened because the return code was never checked)."""
+    adir = _setup(tmp_path, protected=["src/foo.py"])
+    monkeypatch.chdir(tmp_path)
+
+    import automil.cli.check as check_mod
+    real_run = subprocess.run
+
+    def _fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(
+                cmd, 128,
+                stdout="",
+                stderr="fatal: detected dubious ownership in repository at ...\n",
+            )
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(check_mod.subprocess, "run", _fake_run)
+
+    from automil.cli import main
+    result = cli_runner.invoke(main, ["check"])
+    assert "registry.protected paths dirty" not in result.output
+    assert "dubious ownership" in result.output
+    assert result.exit_code != 0

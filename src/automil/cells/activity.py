@@ -14,13 +14,14 @@ import json
 import math
 import os
 import re
-import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator, Mapping
+
+from automil.runtime_helpers import atomic_write_text
 
 ACTIVITY_JOURNAL_FILENAME = ".activity.jsonl"
 ACTIVITY_SAMPLES_FILENAME = ".activity.samples.json"
@@ -985,21 +986,8 @@ def _write_samples_atomic(
         "schema_version": _SAMPLES_SCHEMA_VERSION,
         "sessions": samples,
     }
-    fd, temporary = tempfile.mkstemp(
-        prefix=".activity.samples.", suffix=".tmp", dir=automil_dir
-    )
-    temporary_path = Path(temporary)
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
-            json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, destination)
+        atomic_write_text(destination, text)
     except OSError as exc:
         raise ActivityError(f"cannot write activity samples {destination}: {exc}") from exc
-    finally:
-        try:
-            temporary_path.unlink()
-        except FileNotFoundError:
-            pass

@@ -644,6 +644,73 @@ class TestSubmitPathValidation:
             f".claude/ files leaked into manifest: {manifest_keys}"
         )
 
+    def test_submit_auto_detect_fails_closed_on_git_diff_error(self, cli_runner, tmp_path, monkeypatch):
+        """A ``git diff`` failure during auto-detect must refuse the submit,
+        not silently read stderr as 'no changed files' -- that would archive
+        an empty overlay and burn a charged attempt for nothing."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
+        (tmp_path / "model.py").write_text("print('model changed')\n")
+
+        import automil.cli.submit as submit_mod
+        real_run = subprocess.run
+
+        def _fake_run(cmd, *args, **kwargs):
+            if cmd[:2] == ["git", "diff"]:
+                return subprocess.CompletedProcess(
+                    cmd, 128,
+                    stdout="",
+                    stderr="fatal: detected dubious ownership in repository at ...\n",
+                )
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(submit_mod.subprocess, "run", _fake_run)
+
+        result = cli_runner.invoke(
+            main,
+            ["submit", "--node", "node_gitdiff_fail", "--desc", "git diff failure",
+             "--mil-model", "test_model"],
+        )
+        assert result.exit_code != 0
+        assert "git" in result.output.lower()
+        assert "dubious ownership" in result.output
+        # No overlay must have been queued for this failed attempt.
+        queue_files = list((tmp_path / "automil" / "orchestrator" / "queue").glob("*.json"))
+        assert queue_files == []
+
+    def test_submit_auto_detect_fails_closed_on_git_ls_files_error(self, cli_runner, tmp_path, monkeypatch):
+        """Same fail-closed contract for the second git call (untracked files)."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+        _use_wall_clock(tmp_path)
+        (tmp_path / "model.py").write_text("print('model changed')\n")
+
+        import automil.cli.submit as submit_mod
+        real_run = subprocess.run
+
+        def _fake_run(cmd, *args, **kwargs):
+            if cmd[:2] == ["git", "ls-files"]:
+                return subprocess.CompletedProcess(
+                    cmd, 128,
+                    stdout="",
+                    stderr="fatal: detected dubious ownership in repository at ...\n",
+                )
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(submit_mod.subprocess, "run", _fake_run)
+
+        result = cli_runner.invoke(
+            main,
+            ["submit", "--node", "node_lsfiles_fail", "--desc", "git ls-files failure",
+             "--mil-model", "test_model"],
+        )
+        assert result.exit_code != 0
+        assert "git" in result.output.lower()
+        assert "dubious ownership" in result.output
+
 
 class TestCliHelp:
     """CLN-06: automil --help must list all 11 subcommands (regression sentinel for CLI split)."""

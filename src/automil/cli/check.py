@@ -561,19 +561,28 @@ def check():
                 ["git", "status", "--porcelain", "--"] + list(reg_cfg.protected),
                 cwd=git_root, capture_output=True, text=True, timeout=10,
             )
-            dirty_lines = [ln for ln in git_status.stdout.splitlines() if ln.strip()]
-            if dirty_lines:
+            if git_status.returncode != 0:
+                # Fail closed: an ignored non-zero exit here previously read
+                # stdout ("") as "nothing dirty" and reported protected files
+                # clean even though git never actually checked them.
                 issues.append(
-                    "registry.protected paths dirty in working tree:\n      "
-                    + "\n      ".join(dirty_lines[:20])
-                    + (
-                        f"\n      ... ({len(dirty_lines) - 20} more)"
-                        if len(dirty_lines) > 20 else ""
-                    )
-                    + "\n      Run `automil revert-baseline` to reset, or "
-                    "commit the changes to a variant module via "
-                    "`automil port-variant <node_id>`."
+                    "git status failed while checking registry.protected paths "
+                    f"(exit {git_status.returncode}): {git_status.stderr.strip()}"
                 )
+            else:
+                dirty_lines = [ln for ln in git_status.stdout.splitlines() if ln.strip()]
+                if dirty_lines:
+                    issues.append(
+                        "registry.protected paths dirty in working tree:\n      "
+                        + "\n      ".join(dirty_lines[:20])
+                        + (
+                            f"\n      ... ({len(dirty_lines) - 20} more)"
+                            if len(dirty_lines) > 20 else ""
+                        )
+                        + "\n      Run `automil revert-baseline` to reset, or "
+                        "commit the changes to a variant module via "
+                        "`automil port-variant <node_id>`."
+                    )
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
             warnings.append(
                 "Could not run `git status` for protected files — "
