@@ -212,15 +212,30 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         else:
             editable = set()
 
-        # Get all changed files from git (paths relative to git root)
-        tracked = subprocess.run(
+        # Get all changed files from git (paths relative to git root).
+        # Fail closed on a git error instead of treating stderr as "no
+        # output" -- a silent empty changed-file list here would archive an
+        # empty overlay and burn a charged attempt for nothing.
+        tracked_result = subprocess.run(
             ["git", "diff", "--name-only"],
             cwd=git_root, capture_output=True, text=True,
-        ).stdout.strip().splitlines()
-        untracked = subprocess.run(
+        )
+        if tracked_result.returncode != 0:
+            raise click.ClickException(
+                f"git diff --name-only failed (exit {tracked_result.returncode}): "
+                f"{tracked_result.stderr.strip()}"
+            )
+        tracked = tracked_result.stdout.strip().splitlines()
+        untracked_result = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard"],
             cwd=git_root, capture_output=True, text=True,
-        ).stdout.strip().splitlines()
+        )
+        if untracked_result.returncode != 0:
+            raise click.ClickException(
+                f"git ls-files --others --exclude-standard failed "
+                f"(exit {untracked_result.returncode}): {untracked_result.stderr.strip()}"
+            )
+        untracked = untracked_result.stdout.strip().splitlines()
         # Exclude automil, runtime-config dirs, and AGENTS.md from auto-detect.
         # AGENTS.md is framework-managed (rendered by `automil init`), not user code.
         # .claude/, .opencode/, .codex/ are runtime overlay dirs installed by init.

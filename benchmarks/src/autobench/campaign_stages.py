@@ -18,7 +18,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -45,6 +44,7 @@ from automil.cells import (
 )
 from automil.cells.state import Cell, CellStatus, read_cell, write_cell
 from automil.launch_binding import LaunchBindingError, validate_launch_binding
+from automil.runtime_helpers import atomic_write_text, group_mkdtemp
 
 from autobench.campaign import (
     ACTIVE_CELL_COUNT,
@@ -112,18 +112,7 @@ def _state_digest(state: Mapping[str, Any]) -> str:
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as stream:
-            stream.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _commit_state(cell_root: Path, state: dict[str, Any]) -> dict[str, Any]:
@@ -293,7 +282,7 @@ def _import_baseline_archive(
             )
         return target
 
-    temporary = Path(tempfile.mkdtemp(prefix=".baseline-", dir=str(cell_root)))
+    temporary = Path(group_mkdtemp(dir=str(cell_root), prefix=".baseline-"))
     temporary_archive = temporary / "archive"
     try:
         for relative, source_file in required.items():
@@ -976,9 +965,7 @@ def _execute_frozen_command(
     if len(tokens) < 2 or tokens[1] != "benchmarks/scripts/run_experiment.py":
         raise CampaignStageError("manifest command has an invalid entrypoint")
     commit = _head_commit(repo_root)
-    worktree_parent = Path(tempfile.mkdtemp(
-        prefix=worktree_prefix, dir=str(cell_root),
-    ))
+    worktree_parent = Path(group_mkdtemp(dir=str(cell_root), prefix=worktree_prefix))
     worktree = worktree_parent / "repo"
     worktree_added = False
     returncode: int | None = None
@@ -1318,9 +1305,7 @@ def _run_baseline_reproduction_locked(
     # short-circuit returns cached artifacts whenever predictions/metrics
     # files already exist, which would make a reused directory a guaranteed
     # false pass.
-    attempt_dir = Path(tempfile.mkdtemp(
-        prefix="attempt-", dir=str(reproduction_root),
-    ))
+    attempt_dir = Path(group_mkdtemp(dir=str(reproduction_root), prefix="attempt-"))
     archive_dir = attempt_dir / "archive"
     sealed_dir = archive_dir / "certify"
     sealed_dir.mkdir(parents=True)
@@ -2061,7 +2046,7 @@ def _materialize_promotion_unlocked(
         )
         return _finalize_promotion_state(cell_root, state, jobs)
 
-    temporary = Path(tempfile.mkdtemp(prefix=".promotion-", dir=str(cell_root)))
+    temporary = Path(group_mkdtemp(dir=str(cell_root), prefix=".promotion-"))
     temporary_adir = temporary / "automil"
     try:
         source_config = yaml.safe_load((source_adir / "config.yaml").read_text()) or {}
@@ -5583,7 +5568,7 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     validate_certification_timestamp_order(
         selection_freeze["frozen_at"], bundle,
     )
-    temporary = Path(tempfile.mkdtemp(prefix=".certification-", dir=str(cell_root)))
+    temporary = Path(group_mkdtemp(dir=str(cell_root), prefix=".certification-"))
     try:
         (temporary / "certify.json").write_text(
             json.dumps(bundle, indent=2, sort_keys=True) + "\n"

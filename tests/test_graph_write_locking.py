@@ -107,3 +107,19 @@ def test_nominate_holds_lock(cli_runner, tmp_path, monkeypatch):
     assert calls["n"] == 1
     graph = json.loads((adir / "graph.json").read_text())
     assert graph["nodes"][nid]["status"] == "candidate"
+
+
+def test_locked_update_preserves_preexisting_lock_file_content(tmp_path):
+    """The lock sidecar must be opened "a+", never "w" -- "w" truncates on
+    open, so a lock file that already carries content would lose it before
+    the flock is even acquired.
+    """
+    graph_path = tmp_path / "automil" / "graph.json"
+    graph_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = graph_path.with_suffix(graph_path.suffix + ".lock")
+    lock_path.write_text("pre-existing lock marker\n")
+
+    with graph_mod.locked_update(graph_path) as g:
+        g.add_proposed(parent_id=None, description="x", techniques=[], kind="hp")
+
+    assert lock_path.read_text().startswith("pre-existing lock marker")

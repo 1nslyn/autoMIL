@@ -5,12 +5,12 @@ import dataclasses
 import hashlib
 import json
 import logging
-import os
-import tempfile
 import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+from automil.runtime_helpers import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -191,26 +191,18 @@ def consumed_seconds(
 def write_cell(cell: Cell, cells_dir: Path) -> None:
     """Atomically write cell state to ``cells_dir/<cell_id>.json`` (D-112).
 
-    Uses ``tempfile.mkstemp(dir=str(cells_dir))`` to keep the temp file on the
-    same filesystem as the destination so ``os.replace`` is an atomic POSIX rename
-    (Pitfall 2 defence — cross-filesystem renames are NOT atomic).
+    Delegates the mkstemp/fchmod/fsync/replace mechanics to
+    ``runtime_helpers.atomic_write_text``, which keeps the temp file on the
+    same filesystem as the destination so ``os.replace`` is an atomic POSIX
+    rename (Pitfall 2 defence — cross-filesystem renames are NOT atomic) and
+    honors the caller's umask rather than mkstemp's private-by-default 0600.
 
     On failure the temp file is cleaned up and the exception re-raised.
     """
     cells_dir.mkdir(parents=True, exist_ok=True)
     path = cells_dir / f"{cell.cell_id}.json"
     payload = json.dumps(dataclasses.asdict(cell), indent=2)
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(cells_dir), suffix=".tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as fh:
-            fh.write(payload)
-        os.replace(tmp_path, str(path))
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, payload)
 
 
 def read_cell(path: Path) -> Cell:

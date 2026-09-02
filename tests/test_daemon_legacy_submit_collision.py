@@ -111,3 +111,21 @@ def test_cmd_submit_allocates_the_id_under_the_graph_lock_file(tmp_path):
     orch.cmd_submit(str(spec_path))
 
     assert expected_lock.exists(), "cmd_submit must acquire graph.json's sidecar lock"
+
+
+def test_cmd_submit_preserves_preexisting_lock_file_content(tmp_path):
+    """The lock sidecar must be opened "a+", never "w" -- "w" truncates on
+    open, silently discarding whatever was already in the lock file before
+    the flock below is even acquired.
+    """
+    orch = _make_orch(tmp_path)
+    lock_path = orch.graph.path.with_suffix(orch.graph.path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("pre-existing lock marker\n")
+
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps({"description": "lock content check"}))
+
+    orch.cmd_submit(str(spec_path))
+
+    assert lock_path.read_text().startswith("pre-existing lock marker")

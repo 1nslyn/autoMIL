@@ -38,6 +38,7 @@ from dotenv import dotenv_values
 # move it to automil.utils or automil.editable to resolve the layering concern.
 from automil.cli.check import _collect_editable_source_roots
 from automil.runner import Runner
+from automil.runtime_helpers import atomic_write_text
 
 # ---------------------------------------------------------------------------
 # Defaults (overridden by config.yaml orchestrator section)
@@ -2974,21 +2975,11 @@ class ExperimentOrchestrator:
 
         The schema-widening rewrite is the only path that touches bytes already
         on disk, and the viz dashboard reads this file unlocked (L-8), so a
-        partial write would be observable as a truncated table.
+        partial write would be observable as a truncated table. Delegates to
+        ``runtime_helpers.atomic_write_text`` so the rewritten file honors the
+        caller's umask instead of mkstemp's private-by-default 0600.
         """
-        import tempfile
-
-        directory = self.results_tsv.parent
-        directory.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".results-", suffix=".tsv")
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(text)
-            os.replace(tmp, self.results_tsv)
-        except BaseException:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
+        atomic_write_text(self.results_tsv, text)
 
     # --- Main loop ---
 
@@ -3324,7 +3315,10 @@ class ExperimentOrchestrator:
 
         lock_path = self.graph.path.with_suffix(self.graph.path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_f = open(lock_path, "w")
+        # "a+" (never "w"): "w" truncates the sidecar on open, discarding
+        # whatever bytes another writer or an earlier session left there
+        # before the flock below is even acquired.
+        lock_f = open(lock_path, "a+")
         try:
             fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
 

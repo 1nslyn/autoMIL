@@ -39,11 +39,11 @@ import json
 import logging
 import math
 import os
-import tempfile
 import tokenize
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from automil.runtime_helpers import atomic_write_text
 from automil.scoring import DEFAULT_FORMULA as _DEFAULT_SCORING_FORMULA
 
 logger = logging.getLogger(__name__)
@@ -636,7 +636,11 @@ def locked_update(graph_path: str | Path, *, technique_map: dict[str, str] | Non
     path = Path(graph_path)
     lock_path = path.with_suffix(path.suffix + ".lock")
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock_f = open(lock_path, "w")
+    # "a+" (never "w"): "w" truncates the sidecar on open, so a lock file
+    # that also carries operator-inspectable content (or is opened by a
+    # second racing writer) would lose its bytes before the flock is even
+    # acquired. Opening for append preserves whatever is already there.
+    lock_f = open(lock_path, "a+")
     try:
         fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
         graph = ExperimentGraph(path=path, technique_map=technique_map)
@@ -1920,27 +1924,16 @@ class ExperimentGraph:
 
     # --- Persistence ---
     def save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            dir=str(self.path.parent), suffix=".tmp"
-        )
-        try:
-            with os.fdopen(tmp_fd, "w") as f:
-                # CR-1a / M-3 (audit 2026-07-23): allow_nan=False guarantees
-                # graph.json is standards-valid JSON. A NaN/Infinity would
-                # otherwise serialize as a bare token that breaks every non-Python
-                # reader (viz SSE JSON.parse, jq, serde). Non-finite values are
-                # rejected upstream at result ingestion (validate_result), so this
-                # raises only on a genuine internal invariant violation — loudly,
-                # instead of persisting silent corruption.
-                json.dump(self._data, f, indent=2, allow_nan=False)
-                f.write("\n")
-            os.rename(tmp_path, str(self.path))
-            os.utime(str(self.path))
-        except Exception:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+        # CR-1a / M-3 (audit 2026-07-23): allow_nan=False guarantees
+        # graph.json is standards-valid JSON. A NaN/Infinity would
+        # otherwise serialize as a bare token that breaks every non-Python
+        # reader (viz SSE JSON.parse, jq, serde). Non-finite values are
+        # rejected upstream at result ingestion (validate_result), so this
+        # raises only on a genuine internal invariant violation — loudly,
+        # instead of persisting silent corruption.
+        text = json.dumps(self._data, indent=2, allow_nan=False) + "\n"
+        atomic_write_text(self.path, text)
+        os.utime(str(self.path))
 
     def to_dict(self) -> dict:
         return self._data

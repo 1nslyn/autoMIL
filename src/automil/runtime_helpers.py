@@ -92,8 +92,98 @@ def json_safe(value: object) -> object:
     return value
 
 
+def _current_umask() -> int:
+    """Return the process umask without permanently changing it.
+
+    POSIX has no "peek" syscall for the umask — the only way to read it is
+    ``os.umask()``, which also SETS it. This does a set-then-restore
+    round-trip so the net effect is a no-op.
+
+    Race note: ``os.umask()`` is process-global state, not thread-local, so
+    a concurrent thread calling ``os.umask()`` between our two calls could
+    observe (or clobber) the wrong value. Every caller of this module's
+    writers today is single-threaded per process (the orchestrator daemon's
+    main loop is asyncio, CLI commands are single-shot), so the round-trip
+    is safe in practice; a multi-threaded caller would need to serialize
+    umask reads with a lock instead.
+    """
+    old = os.umask(0)
+    os.umask(old)
+    return old
+
+
+def atomic_write_text(path: Path | str, text: str) -> None:
+    """Write ``text`` atomically, honoring the caller's umask (D-2xx).
+
+    mkstemp always creates its temp file 0600 regardless of umask — correct
+    for private data, wrong for the group-shared preprint campaign tree
+    (five Unix users, one tree, umask 0o007, setgid dirs), where a file
+    written by one user must stay readable by the other four. This chmods
+    the temp file to ``0o666 & ~umask`` (via :func:`_current_umask`) BEFORE
+    writing, so the permissions ``os.replace`` lands on disk are the ones
+    the caller's umask actually allows — not mkstemp's private default.
+
+    Contract: mkstemp in the target's own directory (so the final
+    ``os.replace`` is an atomic same-filesystem rename), fchmod, write,
+    fsync (crash-safety: a SIGKILL between open() and close() on a plain
+    write can leave a torn/zero-byte file), then ``os.replace``.
+
+    This is the ONE atomic-write primitive the framework's mkstemp-based
+    writers should route through — ``campaign_stages._atomic_write_json``,
+    ``cells.state.write_cell``, ``graph.py``'s ``ExperimentGraph.save``,
+    ``cells.activity._write_samples_atomic``, and
+    ``_orchestrator_daemon._write_tsv_atomic`` — rather than each hand-rolling
+    its own mkstemp/fdopen/replace dance. Callers keep doing their own
+    content serialization (JSON with whatever ``json.dumps`` options they
+    need, or plain text); this function owns only the write mechanics.
+
+    On failure the temp file is cleaned up and the exception re-raised.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path_str = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    try:
+        os.fchmod(tmp_fd, 0o666 & ~_current_umask())
+        with os.fdopen(tmp_fd, "w") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path_str, str(target))
+    except BaseException:
+        try:
+            os.unlink(tmp_path_str)
+        except OSError:
+            pass
+        raise
+
+
+def group_mkdtemp(dir: str | Path, prefix: str) -> str:
+    """``tempfile.mkdtemp`` that honors the caller's umask (D-2xx).
+
+    ``tempfile.mkdtemp`` always creates its directory 0700 regardless of
+    umask, which locks the other four users out of the group-shared
+    preprint campaign tree. This chmods the result to ``0o777 & ~umask``
+    afterward.
+
+    Any setuid/setgid/sticky bits already present on the freshly created
+    directory (e.g. the setgid bit a setgid parent directory propagates to
+    every new child automatically) are preserved rather than clobbered —
+    the fix only widens the base rwx bits to what the umask allows; it does
+    not add setgid explicitly, since that would duplicate what the parent
+    directory's own setgid bit already does.
+
+    Returns the path as ``str``, mirroring ``tempfile.mkdtemp``'s own
+    return type, so existing call sites that wrap the result in ``Path(...)``
+    need no other change.
+    """
+    path = tempfile.mkdtemp(dir=str(dir), prefix=prefix)
+    inherited_special_bits = os.stat(path).st_mode & 0o7000
+    os.chmod(path, inherited_special_bits | (0o777 & ~_current_umask()))
+    return path
+
+
 def _atomic_write_json(path: Path, payload: dict) -> None:
-    """Write JSON atomically via tempfile + os.replace (CR-04 pattern).
+    """Write JSON atomically via :func:`atomic_write_text` (CR-04 pattern).
 
     A SIGKILL (e.g. the daemon's grace-timer expiry) can arrive between a
     plain write_text's open() and close() syscalls, leaving a torn/zero-byte
@@ -106,18 +196,8 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     gone, ``allow_nan=False`` can never fire and stands as an assertion that no
     invalid JSON token reaches disk.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_fd, tmp_path_str = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as fh:
-            fh.write(json.dumps(json_safe(payload), indent=2, allow_nan=False) + "\n")
-        os.replace(tmp_path_str, str(path))
-    except Exception:
-        try:
-            os.unlink(tmp_path_str)
-        except OSError:
-            pass
-        raise
+    text = json.dumps(json_safe(payload), indent=2, allow_nan=False) + "\n"
+    atomic_write_text(path, text)
 
 
 def _resolve_sealed_results_dir() -> Path | None:

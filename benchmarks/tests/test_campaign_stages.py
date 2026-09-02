@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import shutil
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -2522,3 +2523,27 @@ def test_existing_certification_rejects_rehashed_winner_identity(staged_cell):
 
     with pytest.raises(CampaignStageError, match="frozen validation winner"):
         certify_winner(cell_root)
+
+
+# --- group-shared tree permissions (umask-honoring atomic writes) ---
+
+def test_campaign_state_write_is_group_readable_under_umask_007(tmp_path):
+    """The preprint campaign runs as five Unix users sharing one tree
+    (umask 0o007, setgid dirs). campaign_state.json is written via
+    ``_atomic_write_json`` -> ``runtime_helpers.atomic_write_text``, which
+    must honor the caller's umask instead of mkstemp's private-by-default
+    0600 -- otherwise a state file written by one user is unreadable to
+    the other four.
+    """
+    cell_root = tmp_path / "cell"
+    cell_root.mkdir()
+    original_umask = os.umask(0o007)
+    try:
+        _commit_state(cell_root, {"phase": "fixture"})
+    finally:
+        os.umask(original_umask)
+
+    state_path = cell_root / campaign_stages.STATE_FILE
+    assert state_path.exists()
+    mode = state_path.stat().st_mode & 0o777
+    assert mode == 0o660

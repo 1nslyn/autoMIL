@@ -93,3 +93,62 @@ def test_load_pid_file_handles_missing_keys(tmp_path):
     pid_file = tmp_path / "orchestrator.pid"
     pid_file.write_text(json.dumps({"pid": 123}))  # missing starttime_ticks
     assert _load_pid_file(pid_file) is None
+
+
+def test_write_pid_file_carries_hostname_and_slurm_job_id(tmp_path, monkeypatch):
+    """Provenance fields: which host, and (if any) which SLURM job wrote this."""
+    import socket
+    from automil.backends.pidfile import write_pid_file
+
+    monkeypatch.setenv("SLURM_JOB_ID", "778899")
+    pid_file = tmp_path / "orchestrator.pid"
+    write_pid_file(pid_file)
+
+    data = json.loads(pid_file.read_text())
+    assert data["hostname"] == socket.gethostname()
+    assert data["slurm_job_id"] == "778899"
+
+
+def test_write_pid_file_slurm_job_id_is_none_outside_slurm(tmp_path, monkeypatch):
+    from automil.backends.pidfile import write_pid_file
+
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    pid_file = tmp_path / "orchestrator.pid"
+    write_pid_file(pid_file)
+
+    data = json.loads(pid_file.read_text())
+    assert data["slurm_job_id"] is None
+
+
+def test_load_pid_file_reader_returns_hostname_and_slurm_job_id(tmp_path, monkeypatch):
+    import socket
+    from automil.backends.pidfile import write_pid_file, load_pid_file
+
+    monkeypatch.setenv("SLURM_JOB_ID", "1234")
+    pid_file = tmp_path / "orchestrator.pid"
+    write_pid_file(pid_file)
+
+    loaded = load_pid_file(pid_file)
+    assert loaded is not None
+    assert loaded["hostname"] == socket.gethostname()
+    assert loaded["slurm_job_id"] == "1234"
+
+
+def test_load_pid_file_tolerates_old_format_without_provenance_fields(tmp_path):
+    """A pid file written before this change (no hostname/slurm_job_id) must
+    still load -- load_pid_file's required-key check is a subset check, so
+    it never depended on these new fields being present."""
+    from automil.backends.pidfile import load_pid_file
+
+    pid_file = tmp_path / "orchestrator.pid"
+    pid_file.write_text(json.dumps({
+        "pid": 4242,
+        "starttime_ticks": 987654,
+        "starttime_iso": "2026-01-01T00:00:00",
+    }))
+
+    loaded = load_pid_file(pid_file)
+    assert loaded is not None
+    assert loaded["pid"] == 4242
+    assert loaded.get("hostname") is None
+    assert loaded.get("slurm_job_id") is None

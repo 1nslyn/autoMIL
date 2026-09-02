@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 from datetime import datetime
 from pathlib import Path
 
@@ -65,7 +66,13 @@ def is_pid_alive_with_starttime(pid: int, expected_starttime_ticks: int) -> bool
 
 
 def write_pid_file(pid_file: Path) -> None:
-    """Write PID file as JSON with pid + starttime_ticks + starttime_iso (D-17 shape)."""
+    """Write PID file as JSON with pid + starttime_ticks + starttime_iso + hostname + slurm_job_id.
+
+    ``hostname`` and ``slurm_job_id`` are provenance: in the group-shared
+    preprint campaign (five Unix users, potentially several hosts), a stale
+    or misbehaving daemon's PID file should say which machine (and which
+    SLURM job, if any) it came from. ``slurm_job_id`` is None outside SLURM.
+    """
     my_pid = os.getpid()
     starttime = read_proc_starttime(my_pid)
     if starttime is None:
@@ -75,6 +82,8 @@ def write_pid_file(pid_file: Path) -> None:
         "pid": my_pid,
         "starttime_ticks": starttime,
         "starttime_iso": datetime.now().isoformat(),
+        "hostname": socket.gethostname(),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     }
     # Atomic (tmp + rename), never truncate-in-place: a reader inside a
     # write_text window sees "", load_pid_file returns None ("treat as
