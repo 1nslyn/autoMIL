@@ -134,7 +134,7 @@ submit_one() {
 import importlib.util, json, os, sys, datetime as dt
 path, cell, mode, jobid, gpus, wall, cpus, mem, whole, pred, e5, account = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
-shape = importlib.util.module_from_spec(spec); spec.loader.exec_module(shape)
+shape = importlib.util.module_from_spec(spec); sys.modules["shape"] = shape; spec.loader.exec_module(shape)
 payload = {
     "cell_id": cell, "mode": mode, "job_id": jobid, "account": account,
     "submitted_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),

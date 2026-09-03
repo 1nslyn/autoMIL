@@ -92,7 +92,7 @@ import importlib.util, json, os, sys
 from pathlib import Path
 d = json.loads(os.environ["SCAN_JSON"]); runtime, gpus, hours = Path(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
 spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
-shape = importlib.util.module_from_spec(spec); spec.loader.exec_module(shape)
+shape = importlib.util.module_from_spec(spec); sys.modules["shape"] = shape; spec.loader.exec_module(shape)
 for cell in d["finishable"]:
     print(f"finish:{cell}"); sys.exit(0)
 for cell in d["pending"]:
@@ -278,7 +278,7 @@ sys.exit(0 if b.get('mode')=='measurement' else 1)" 2>/dev/null; then
     name_and_release=$(pyrun -c "
 import importlib.util
 spec=importlib.util.spec_from_file_location('op','benchmarks/scripts/campaign_operate.py')
-m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+import sys; m=importlib.util.module_from_spec(spec); sys.modules['op']=m; spec.loader.exec_module(m)
 from pathlib import Path
 print(m._session_name(Path('$RUNTIME/$cell')))
 print(m.RELEASE_LINE)")
