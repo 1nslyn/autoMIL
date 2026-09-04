@@ -111,6 +111,28 @@ def test_finished_loop_is_finishable_before_the_freeze_writes_the_ledger(scan_mo
     assert result["stranded"] == [names[1]]
 
 
+def test_undrained_work_after_a_full_census_is_stranded_not_finishable(scan_mod, tmp_path, monkeypatch):
+    """consumed_evals counts accepted submissions, so a wall-killed job can
+    leave 30 charged with attempts still queued or running; the freeze refuses
+    such a cell, so offering it as finishable would fail every submitter."""
+    names = ["tcga_luad__t0__enc__arm__s42__v", "tcga_luad__t1__enc__arm__s42__v"]
+    runtime, roster = _runtime(tmp_path, names)
+    for name in names:
+        (runtime / name / "automil" / ".activity.jsonl").write_text(
+            '{"event":"session_open"}\n{"event":"session_end"}\n')
+        _live_counter(runtime / name, 30)
+    (runtime / names[0] / "automil" / "orchestrator" / "running" / "local").mkdir(parents=True)
+    (runtime / names[0] / "automil" / "orchestrator" / "running" / "local" / "node_0030.json").write_text("{}")
+    (runtime / names[1] / "automil" / "orchestrator" / "queue").mkdir(parents=True)
+    (runtime / names[1] / "automil" / "orchestrator" / "queue" / "node_0030.json").write_text("{}")
+    monkeypatch.setattr(scan_mod, "live_job_ids", lambda: set())
+    result = scan_mod.scan(runtime, roster, "999")
+    assert result["finishable"] == []
+    assert result["stranded"] == names
+    assert scan_mod.pending_work(runtime / names[0]) == (0, 1)
+    assert scan_mod.pending_work(runtime / names[1]) == (1, 0)
+
+
 def test_stale_claim_from_dead_job_is_pending_and_never_unlinked(scan_mod, tmp_path, monkeypatch):
     names = ["tcga_luad__a__e__m__s42__v"]
     runtime, roster = _runtime(tmp_path, names)

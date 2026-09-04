@@ -14,8 +14,8 @@ Classes (mutually exclusive, in evaluation order):
                   the safe answer
 - ``finishable``  session ended cleanly after the full 30-attempt budget (the
                   orchestrator's live budget-cell census until freeze-discovery
-                  writes the ledger); the finish ladder is idempotent and may be
-                  resumed by anyone
+                  writes the ledger) with nothing queued or running; the finish
+                  ladder is idempotent and may be resumed by anyone
 - ``stranded``    any other session evidence (live elsewhere, or dead mid-run)
 - ``blocked``     reproduction gate recorded ``verdict: fail``
 - ``pending``     clean, unclaimed, gate-eligible
@@ -106,6 +106,20 @@ def attempts_charged(root: Path) -> int | None:
     return cell.get("consumed_evals") if cell else None
 
 
+def pending_work(root: Path) -> tuple[int, int]:
+    """``(queued, running)`` discovery attempts the orchestrator still owns.
+
+    ``consumed_evals`` counts accepted submissions, so a full census can
+    coexist with in-flight work (a wall-killed job); freeze-discovery refuses
+    exactly that, and so must every reader that calls a cell complete.
+    """
+    adir = root / "automil" / "orchestrator"
+    return (
+        len(list(adir.glob("queue/*.json"))),
+        len(list(adir.glob("running/**/*.json"))),
+    )
+
+
 def _has_session_evidence(root: Path) -> bool:
     session = root / "agent_session.json"
     journal = root / "automil" / ".activity.jsonl"
@@ -139,10 +153,12 @@ def classify_cell(
         if not stale:
             return "claimed", f"held by {holder or '?'}"
     if _has_session_evidence(root):
-        charged = attempts_charged(root)
-        if _session_ended(root / "automil" / ".activity.jsonl") and charged == DISCOVERY_ATTEMPTS:
+        drained = pending_work(root) == (0, 0)
+        if (_session_ended(root / "automil" / ".activity.jsonl")
+                and attempts_charged(root) == DISCOVERY_ATTEMPTS and drained):
             return "finishable", ""
-        return "stranded", "session evidence without a finished ladder"
+        return "stranded", ("session ended with undrained work" if not drained
+                            else "session evidence without a finished ladder")
     reproduction = state.get("baseline_reproduction") or {}
     if reproduction.get("mode") == "gate" and reproduction.get("verdict") == "fail":
         return "blocked", "reproduction gate failed"

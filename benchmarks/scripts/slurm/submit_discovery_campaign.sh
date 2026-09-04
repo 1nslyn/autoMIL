@@ -191,16 +191,15 @@ spec = importlib.util.spec_from_file_location("campaign_scan", "benchmarks/scrip
 scan = importlib.util.module_from_spec(spec); sys.modules["campaign_scan"] = scan; spec.loader.exec_module(scan)
 root, state_path = Path(sys.argv[1]), Path(sys.argv[2])
 idle_s, gap_s, max_nudges = (int(x) for x in sys.argv[3:6])
-adir = root / "automil"
-queued = list(adir.glob("orchestrator/queue/*.json"))
-running = list(adir.glob("orchestrator/running/**/*.json"))
 # The ledger's attempts_charged is written by freeze-discovery only; the
-# orchestrator's budget-cell census is the live count (campaign_scan).
+# orchestrator's budget-cell census and its queue/running dirs are the live
+# view, read the way the cell scan reads them (campaign_scan).
 charged = scan.attempts_charged(root)
+queued, running = scan.pending_work(root)
 if charged == DISCOVERY_ATTEMPTS and not queued and not running:
     print("complete"); sys.exit(0)
 try:
-    samples = json.loads((adir / ".activity.samples.json").read_text())["sessions"]
+    samples = json.loads((root / "automil" / ".activity.samples.json").read_text())["sessions"]
     active = sum(float(s.get("active_seconds") or 0) for s in samples.values())
 except (OSError, ValueError, KeyError):
     active = None
@@ -217,7 +216,7 @@ if flat and not queued and not running and st["nudges"] < max_nudges and now - s
     st = {**st, "nudges": st["nudges"] + 1, "last_nudge": now}
     action = "nudge"
 state_path.write_text(json.dumps(st))
-print(f"{action} charged={charged} q={len(queued)} r={len(running)} active={active} flat_s={int(now - st['changed_at'])}")
+print(f"{action} charged={charged} q={queued} r={running} active={active} flat_s={int(now - st['changed_at'])}")
 PYEOF
         ) || verdict="status-error"
         if ! tmx list-windows -t "=$name" 2>/dev/null | grep -q "agent"; then
