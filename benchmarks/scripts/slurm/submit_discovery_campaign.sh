@@ -258,10 +258,17 @@ run_cell() {
 
     # 1. Reproduction gate (gate mode) on the first GPU. Measurement-mode
     #    blocks from the epsilon derivation are superseded exactly once.
-    if pyrun -c "
-import json,sys
-b=(json.load(open('$RUNTIME/$cell/campaign_state.json')).get('baseline_reproduction') or {})
-sys.exit(0 if b.get('mode')=='measurement' else 1)" 2>/dev/null; then
+    # --force supersedes, auditably, a measurement-mode block or a verdict
+    # recorded at a commit other than this tree's HEAD (the tree moved; the
+    # launch preflight anchors on the verdict commit, so a stale pass would
+    # refuse the launch and a plain re-run is refused without --force).
+    if pyrun - "$RUNTIME/$cell/campaign_state.json" "$(git rev-parse HEAD)" <<'PYEOF' 2>/dev/null
+import json, sys
+b = (json.load(open(sys.argv[1])).get("baseline_reproduction") or {})
+stale = b.get("verdict") is not None and b.get("commit") != sys.argv[2]
+sys.exit(0 if b.get("mode") == "measurement" or stale else 1)
+PYEOF
+    then
         force_flag="--force"
     fi
     if ! stage run-baseline-reproduction --cell-root "$RUNTIME/$cell" --gpu 0 $force_flag >> "$LOG" 2>&1; then
@@ -341,7 +348,10 @@ run_cell "$CELL" "$MODE"; RC=$?
 normalize_cell_modes "$CELL"
 tmx kill-server 2>/dev/null || true
 echo "---"
-if [ "${DISC_NO_CHAIN:-0}" != 1 ]; then
+# Chain ONLY after a clean cell. A failed cell must stop the chain: a
+# systematic failure would otherwise burn one queue slot after another
+# (overnight 2026-09-03: ~70 short jobs alternating between two cells).
+if [ "$RC" = 0 ] && [ "${DISC_NO_CHAIN:-0}" != 1 ]; then
     echo "chaining: submitting the next cell as $USER"
     "$PROJECT_DIR/benchmarks/scripts/slurm/submit_discovery_cell.sh" --chain --account "${DISC_ACCOUNT:-$DISC_ACCOUNT_DEFAULT}" \
         || echo "  chain: nothing submitted (see above)"
