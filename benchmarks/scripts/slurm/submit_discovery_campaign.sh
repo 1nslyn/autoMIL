@@ -125,7 +125,8 @@ usage_probe() { disc_usage_probe log "$OPDIR/usage_probe.txt"; }
 # local UI command: no model turn, no journal event. Captured after bind
 # and before /exit for the seat-portion measurement.
 capture_status() {  # name outfile
-    tmx send-keys -t "=$1:agent" -l "/usage"; tmx send-keys -t "=$1:agent" Enter
+    wait_idle "$1" >> "$LOG" 2>&1 || echo "[$1] capturing /usage from a busy runtime" >> "$LOG"
+    type_line "$1" "/usage"
     sleep 10
     tmx capture-pane -p -t "=$1:agent" -S -80 > "$2" 2>/dev/null
     tmx send-keys -t "=$1:agent" Escape 2>/dev/null || true
@@ -143,8 +144,12 @@ port = (yaml.safe_load(open(sys.argv[1])).get("activity") or {}).get("exporter_p
 sys.exit("cell config declares no activity.exporter_port") if port is None else print(port)
 PYEOF
     ) || return 1
-    local metrics
-    metrics=$(curl -s "http://127.0.0.1:$port/metrics") || return 1
+    local metrics attempt
+    for attempt in 1 2 3; do   # the exporter answers slowly at times (daemon logs "timed out")
+        metrics=$(curl -s -m 20 "http://127.0.0.1:$port/metrics") && [ -n "$metrics" ] && break
+        echo "exporter scrape attempt $attempt on port $port failed" >&2; metrics=""; sleep 10
+    done
+    [ -n "$metrics" ] || return 1
     METRICS="$metrics" pyrun - "$2" <<'PYEOF'
 import json, os, re, sys, datetime as dt
 out = sys.argv[1]; tokens = {}; cost = 0.0
@@ -226,7 +231,7 @@ PYEOF
             complete) stable=$((stable + 1)); [ "$stable" -ge 2 ] && { echo "complete"; return 0; } ;;
             nudge*)
                 stable=0
-                tmx send-keys -t "=$name:agent" -l "$DISC_NUDGE_LINE"; tmx send-keys -t "=$name:agent" Enter
+                type_line "$name" "$DISC_NUDGE_LINE"
                 printf '{"event":"operator_nudge","at":"%s","detail":"%s"}\n' "$(date -Is)" "$verdict" >> "$RUNTIME/$cell/operator_events.jsonl"
                 echo "[$cell] nudge sent ($verdict)" >> "$LOG" ;;
             *) stable=0 ;;
@@ -240,8 +245,8 @@ PYEOF
 end_session() {
     local cell="$1" name="$2" attempt
     for attempt in 1 2; do
-        tmx send-keys -t "=$name:agent" -l "/exit" 2>/dev/null
-        tmx send-keys -t "=$name:agent" Enter 2>/dev/null
+        wait_idle "$name" >> "$LOG" 2>&1 || echo "[$cell] sending /exit to a busy runtime" >> "$LOG"
+        type_line "$name" "/exit" 2>/dev/null
         for _ in $(seq 1 30); do
             sleep 30
             pyrun benchmarks/scripts/campaign_scan.py --runtime "$RUNTIME" --session-ended "$cell" && return 0
@@ -341,7 +346,7 @@ print(m.RELEASE_LINE)")
     done
     capture_status "$name" "$OPDIR/usage_before.txt"
     sleep 5
-    tmx send-keys -t "=$name:agent" -l "$release_line"; tmx send-keys -t "=$name:agent" Enter
+    type_line "$name" "$release_line"
     echo "$(date +%m-%d\ %H:%M) session bound + released for $cell (tmux $name on $AUTOMIL_TMUX_SOCKET)"
 
     # 5. Watch until 30/30 and drained; the deadline keeps the finish
@@ -349,10 +354,10 @@ print(m.RELEASE_LINE)")
     deadline=$(( $(date +%s) + ($(remaining_hours) - DISC_FINISH_RESERVE_H) * 3600 ))
     outcome=$(watch_discovery "$cell" "$name" "$deadline")
     if [ "$outcome" = "deadline" ]; then
-        scrape_usage "$cell" "$OPDIR/usage.json" 2>/dev/null || true
+        scrape_usage "$cell" "$OPDIR/usage.json" 2>> "$LOG" || echo "[$cell] exporter scrape failed at the deadline" >> "$LOG"
         capture_status "$name" "$OPDIR/usage_after.txt"
         end_session "$cell" "$name" || true
-        record_failure "$cell" "wall-deadline-STRANDED (session ended for the ledger; <30 attempts) — OPERATOR NEEDED"
+        record_failure "$cell" "wall-deadline (session ended for the ledger; the scan says finishable or stranded) — OPERATOR NEEDED"
         return 1
     fi
     if [ "$outcome" != "complete" ]; then
@@ -361,7 +366,7 @@ print(m.RELEASE_LINE)")
     fi
 
     # 6. Usage capture, session end, then the finish ladder on the same GPUs.
-    scrape_usage "$cell" "$OPDIR/usage.json" || echo "[$cell] exporter scrape failed; finish will record usage as unavailable" >> "$LOG"
+    scrape_usage "$cell" "$OPDIR/usage.json" 2>> "$LOG" || echo "[$cell] exporter scrape failed; finish will record usage as unavailable" >> "$LOG"
     capture_status "$name" "$OPDIR/usage_after.txt"
     if ! end_session "$cell" "$name"; then
         record_failure "$cell" "no-session-end-after-exit — OPERATOR NEEDED"; return 1

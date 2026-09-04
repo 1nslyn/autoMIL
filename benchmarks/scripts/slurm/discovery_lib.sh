@@ -82,6 +82,31 @@ wake_runtime() {  # tmux-session-name
     tmx send-keys -t "=$1:agent" -l "x"; sleep 1; tmx send-keys -t "=$1:agent" BSpace
 }
 
+# A line for the runtime's input box. The text and the Enter go in separate
+# keystroke bursts: a long line followed immediately by Enter is taken for a
+# paste and the Enter becomes a newline (observed with the 121-character
+# nudge on 2.1.228: three notes stacked unsent in the box until a later
+# Enter submitted them as one message).
+type_line() {  # tmux-session-name text
+    tmx send-keys -t "=$1:agent" -l "$2"; sleep 1; tmx send-keys -t "=$1:agent" Enter
+}
+
+# The runtime shows a spinner line ("✻ Deciphering…") while a turn runs;
+# after it, the same glyph reads "✻ Cooked for 2m 0s". Text typed during a
+# turn is queued into that turn and a /usage or /exit typed then is never
+# executed as a command, so callers wait for an idle box first.
+agent_busy() {  # pane-text
+    grep -qE '^[^[:alnum:][:space:]]{1,6} [A-Za-z]+…' <<< "$1"
+}
+wait_idle() {  # tmux-session-name [limit_s]
+    local waited=0 limit="${2:-600}"
+    while [ "$waited" -lt "$limit" ]; do
+        agent_busy "$(tmx capture-pane -p -t "=$1:agent" 2>/dev/null)" || return 0
+        sleep 15; waited=$((waited + 15))
+    done
+    echo "runtime still mid-turn after ${limit}s"; return 1
+}
+
 # Poll the cell's own exporter until it serves (the runtime starts it a few
 # seconds after launch); bind scrapes it through the daemon.
 wait_exporter() {  # cell_root [timeout_s]
