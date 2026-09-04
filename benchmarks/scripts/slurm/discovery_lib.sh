@@ -71,6 +71,27 @@ tmx() { tmux ${AUTOMIL_TMUX_SOCKET:+-L "$AUTOMIL_TMUX_SOCKET"} "$@"; }
 pyrun() { uv run --frozen --no-sync --package autobench python "$@"; }
 stage() { pyrun benchmarks/scripts/campaign_stage.py "$@"; }
 operate() { pyrun benchmarks/scripts/campaign_operate.py "$@"; }
+
+# `up` only sends the orchestrator start command into a tmux window; the
+# daemon needs seconds to import, prune worktrees, recover orphans and write
+# its pid file, and `launch` refuses until it is alive. Wait for it here.
+wait_daemon() {  # cell_root [timeout_s]
+    local root="$1" limit="${2:-300}" waited=0 pid=""
+    while [ "$waited" -lt "$limit" ]; do
+        pid=$(pyrun - "$root" <<'PYEOF'
+import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("op", "benchmarks/scripts/campaign_operate.py")
+m = importlib.util.module_from_spec(spec); sys.modules["op"] = m; spec.loader.exec_module(m)
+pid = m._daemon_alive(Path(sys.argv[1]) / "automil" / "orchestrator")
+print(pid if pid else "")
+PYEOF
+        )
+        [ -n "$pid" ] && { echo "orchestrator daemon alive (pid $pid) after ${waited}s"; return 0; }
+        sleep 5; waited=$((waited + 5))
+    done
+    echo "orchestrator daemon did not come up within ${limit}s"; return 1
+}
 # Shape preference: "cheap" = fewest GPU-hours (smallest GPU count that fits
 # either wall), "fast" = shortest wall first. Fair-share bills GPU-minutes,
 # so cheap is the default; DISC_PREFER=fast trades GPU-hours for queue time.

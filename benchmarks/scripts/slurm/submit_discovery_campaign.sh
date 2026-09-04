@@ -286,7 +286,10 @@ print(m.RELEASE_LINE)")
     release_line=$(echo "$name_and_release" | sed -n 2p)
     for step in "up $RUNTIME/$cell --gpu $GPU_LIST" "launch $RUNTIME/$cell" \
                 "bind $RUNTIME/$cell --timeout-s 900"; do
-        [ "${step%% *}" = "launch" ] && clear_plugins
+        if [ "${step%% *}" = "launch" ]; then
+            wait_daemon "$RUNTIME/$cell" >> "$LOG" 2>&1 || { record_failure "$cell" "orchestrator-not-up (see $LOG)"; return 1; }
+            clear_plugins
+        fi
         if ! operate $step >> "$LOG" 2>&1; then
             record_failure "$cell" "operate-${step%% *}-failed (see $LOG)"
             if [ "${step%% *}" != "up" ]; then
