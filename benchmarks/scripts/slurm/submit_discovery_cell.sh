@@ -61,6 +61,9 @@ while [ $# -gt 0 ]; do
 done
 
 case "$MAX_GPUS" in 1|2|4) ;; *) echo "--max-gpus must be 1, 2 or 4"; exit 2 ;; esac
+# The decision replaces whatever the caller's shell carried, so the job sees
+# one value however sbatch merges --export=ALL with explicit assignments.
+export DISC_NO_CHAIN="$NO_CHAIN"
 disc_paths || exit 1
 disc_env
 export AUTOMIL_TMUX_SOCKET="disc_submit_$$"
