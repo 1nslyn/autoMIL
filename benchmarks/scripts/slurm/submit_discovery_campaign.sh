@@ -311,7 +311,7 @@ print(m.RELEASE_LINE)")
                 pane=$(tmx capture-pane -p -t "=$name:agent" 2>/dev/null)
                 if echo "$pane" | grep -q "trust this folder"; then
                     echo "[$cell] answering the folder-trust prompt" >> "$LOG"; tmx send-keys -t "=$name:agent" Enter; sleep 5
-                elif echo "$pane" | grep -qi "bypass permissions\|Yes, I accept"; then
+                elif echo "$pane" | grep -q "Yes, I accept"; then   # the dialog, not the status bar's "bypass permissions on"
                     echo "[$cell] bypass-permissions prompt still shown after pre-seeding; pane follows" >> "$LOG"; echo "$pane" >> "$LOG"; break
                 else
                     break
