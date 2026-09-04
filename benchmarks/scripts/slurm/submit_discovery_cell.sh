@@ -61,9 +61,6 @@ while [ $# -gt 0 ]; do
 done
 
 case "$MAX_GPUS" in 1|2|4) ;; *) echo "--max-gpus must be 1, 2 or 4"; exit 2 ;; esac
-# The decision replaces whatever the caller's shell carried, so the job sees
-# one value however sbatch merges --export=ALL with explicit assignments.
-export DISC_NO_CHAIN="$NO_CHAIN"
 disc_paths || exit 1
 disc_env
 export AUTOMIL_TMUX_SOCKET="disc_submit_$$"
@@ -124,7 +121,10 @@ submit_one() {
     printf '  %-58s mode=%-6s gpus=%s wall=%sh cpus=%s mem=%s predicted=%sh\n' \
         "$cell" "$mode" "$gpus" "$wall" "$cpus" "${mem_flag#--mem=}" "$pred"
     [ "$DRY_RUN" = 1 ] && return 1
-    jobid=$(sbatch --parsable --account="$ACCOUNT" --time="${wall}:00:00" \
+    # The decision is bound to this one sbatch call, after every sourced file
+    # (benchmarks/.env via disc_env) has had its say, so the job sees one
+    # value however sbatch merges --export=ALL with explicit assignments.
+    jobid=$(DISC_NO_CHAIN="$NO_CHAIN" sbatch --parsable --account="$ACCOUNT" --time="${wall}:00:00" \
         --nodes=1 --ntasks-per-node=1 --cpus-per-task="$cpus" "$mem_flag" \
         --gpus-per-node="h100:$gpus" --job-name="$name" \
         --output="logs/disc_cell_%j.out" --error="logs/disc_cell_%j.err" \
