@@ -30,6 +30,9 @@
 #   --account NAME  SLURM account (default: def-jma-ab)
 #   --max-gpus N    never request more than N GPUs for this submission
 #   --prefer MODE   cheap (default: fewest GPU-hours) | fast (shortest wall)
+#   --no-chain      the job stops after its own cell instead of submitting the
+#                   next one (rehearsals, member tests); a job submitted from
+#                   a --no-chain job inherits it
 #   --chain         quiet mode used by a finishing job; exit 0 when nothing
 #                   is left to submit
 
@@ -49,6 +52,7 @@ while [ $# -gt 0 ]; do
         --account) ACCOUNT="$2"; shift ;;
         --max-gpus) MAX_GPUS="$2"; shift ;;
         --prefer) export DISC_PREFER="$2"; shift ;;
+        --no-chain) export DISC_NO_CHAIN=1 ;;
         --chain) CHAIN=1 ;;
         -h|--help) sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) echo "unknown option: $1"; exit 2 ;;
@@ -121,7 +125,7 @@ submit_one() {
         --nodes=1 --ntasks-per-node=1 --cpus-per-task="$cpus" "$mem_flag" \
         --gpus-per-node="h100:$gpus" --job-name="$name" \
         --output="logs/disc_cell_%j.out" --error="logs/disc_cell_%j.err" \
-        --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_PREFER=$DISC_PREFER" \
+        --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_PREFER=$DISC_PREFER,DISC_NO_CHAIN=${DISC_NO_CHAIN:-0}" \
         "$JOB_SCRIPT") || { echo "  sbatch failed for $cell"; return 1; }
     jobid="${jobid%%;*}"
     if ! take_claim "$cell" "$jobid"; then

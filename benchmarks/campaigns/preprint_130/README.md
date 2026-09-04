@@ -337,8 +337,9 @@ for token and cost counters (`operator/usage.json`, passed to
 (`operator/usage_before.txt`, `usage_after.txt`), ends the
 session with `/exit`, runs the finish ladder on the same GPUs, normalizes
 the cell's files to group read/write, and submits the next cell as the same
-user. Failures land in `logs/discovery_cells/FAILED.tsv`; a stranded cell is
-reported, never relaunched.
+user (`--no-chain` at submission stops after the one cell: rehearsals and
+member tests). Failures land in `logs/discovery_cells/FAILED.tsv`; a stranded
+cell is reported, never relaunched.
 
 **The nudge.** If the runtime's active time has been flat for 30 minutes
 while the queue is drained and attempts remain, the job sends one fixed
