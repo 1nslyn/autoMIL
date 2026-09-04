@@ -223,7 +223,13 @@ os.replace(tmp, path)
 PYEOF
 }
 
-# A throwaway runtime in a private probe directory reads /status (the plan's
+# The /usage panel prints "Current week (all models)" and, on the next line,
+# "<N>% used" (verified on 2.1.228).
+usage_weekly_pct() {  # capture-file
+    awk '/Current week/ {flag=1; next} flag && /% used/ {match($0, /[0-9]+%/); print substr($0, RSTART, RLENGTH-1); exit}' "$1"
+}
+
+# A throwaway runtime in a private probe directory reads /usage (the plan's
 # remaining allocation). Pane targets use window.pane indexes: fir's tmux
 # 3.3a rejects the bare "=session" form for pane commands.
 disc_usage_probe() {
@@ -237,11 +243,11 @@ disc_usage_probe() {
     tmx send-keys -t "usage_probe:0.0" -l "claude --setting-sources project --strict-mcp-config"
     tmx send-keys -t "usage_probe:0.0" Enter
     sleep 20
-    tmx send-keys -t "usage_probe:0.0" -l "/status"; tmx send-keys -t "usage_probe:0.0" Enter
-    sleep 10
+    tmx send-keys -t "usage_probe:0.0" -l "/usage"; tmx send-keys -t "usage_probe:0.0" Enter
+    sleep 12
     tmx capture-pane -p -t "usage_probe:0.0" -S -80 > "$out" 2>/dev/null
     tmx kill-session -t "usage_probe" 2>/dev/null || true
-    pct=$(grep -iE 'week' "$out" | grep -oE '[0-9]{1,3}%' | head -1 | tr -d '%')
+    pct=$(usage_weekly_pct "$out")
     if [ -z "$pct" ]; then
         echo "WARNING: could not parse the weekly usage window from /status (see $out)"
         return 0

@@ -121,11 +121,15 @@ echo "================================================"
 # here the value is only recorded (the queue wait may have moved it).
 usage_probe() { disc_usage_probe log "$OPDIR/usage_probe.txt"; }
 
+# The /usage panel (seat windows + this session's tokens and cost) is a
+# local UI command: no model turn, no journal event. Captured after bind
+# and before /exit for the seat-portion measurement.
 capture_status() {  # name outfile
-    tmx send-keys -t "=$1:agent" -l "/status"; tmx send-keys -t "=$1:agent" Enter
-    sleep 8
+    tmx send-keys -t "=$1:agent" -l "/usage"; tmx send-keys -t "=$1:agent" Enter
+    sleep 10
     tmx capture-pane -p -t "=$1:agent" -S -80 > "$2" 2>/dev/null
     tmx send-keys -t "=$1:agent" Escape 2>/dev/null || true
+    sleep 2
 }
 
 # Token/cost counters straight from the session's own exporter, in the exact
