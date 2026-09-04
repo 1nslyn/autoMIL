@@ -45,6 +45,9 @@ export DISC_PROJECT_DIR="${DISC_PROJECT_DIR:-${SLURM_SUBMIT_DIR:-}}"
 [ -f "$DISC_PROJECT_DIR/benchmarks/scripts/slurm/discovery_lib.sh" ] \
     || { echo "ERROR: $DISC_PROJECT_DIR is not the campaign checkout"; exit 1; }
 # shellcheck source=discovery_lib.sh
+# The chain decision travels in from the submit wrapper; it is read here,
+# before any sourced file (benchmarks/.env via disc_env) can redefine it.
+NO_CHAIN="${DISC_NO_CHAIN:-0}"
 source "$DISC_PROJECT_DIR/benchmarks/scripts/slurm/discovery_lib.sh"
 disc_paths || exit 1
 disc_env
@@ -113,7 +116,7 @@ OPDIR="$RUNTIME/$CELL/operator"; mkdir -p "$OPDIR"
 trap 'normalize_cell_modes "$CELL"' EXIT
 echo "================================================"
 echo "preprint DISCOVERY cell $CELL (mode=$MODE) | job ${SLURM_JOB_ID:-manual} | $(hostname) | $USER | $(date)"
-echo "GPUs $GPU_LIST | wall left $(remaining_hours)h | tmux socket $AUTOMIL_TMUX_SOCKET"
+echo "GPUs $GPU_LIST | wall left $(remaining_hours)h | tmux socket $AUTOMIL_TMUX_SOCKET | chain $([ "$NO_CHAIN" = 1 ] && echo off || echo on)"
 echo "================================================"
 
 # ------------------------------------------------------ usage-window probe
@@ -386,7 +389,7 @@ echo "---"
 # Chain ONLY after a clean cell. A failed cell must stop the chain: a
 # systematic failure would otherwise burn one queue slot after another
 # (overnight 2026-09-03: ~70 short jobs alternating between two cells).
-if [ "$RC" = 0 ] && [ "${DISC_NO_CHAIN:-0}" != 1 ]; then
+if [ "$RC" = 0 ] && [ "$NO_CHAIN" != 1 ]; then
     echo "chaining: submitting the next cell as $USER"
     "$PROJECT_DIR/benchmarks/scripts/slurm/submit_discovery_cell.sh" --chain --account "${DISC_ACCOUNT:-$DISC_ACCOUNT_DEFAULT}" \
         || echo "  chain: nothing submitted (see above)"
