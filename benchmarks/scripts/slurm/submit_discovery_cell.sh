@@ -31,8 +31,8 @@
 #   --max-gpus N    never request more than N GPUs for this submission
 #   --prefer MODE   cheap (default: fewest GPU-hours) | fast (shortest wall)
 #   --no-chain      the job stops after its own cell instead of submitting the
-#                   next one (rehearsals, member tests); a job submitted from
-#                   a --no-chain job inherits it
+#                   next one (rehearsals, member tests); decided per submission
+#                   from this option only, never from the caller's environment
 #   --chain         quiet mode used by a finishing job; exit 0 when nothing
 #                   is left to submit
 
@@ -44,7 +44,7 @@ DISC_PROJECT_DIR=$(cd "$SELF_DIR/../../.." && pwd)
 source "$SELF_DIR/discovery_lib.sh"
 JOB_SCRIPT="$SELF_DIR/submit_discovery_campaign.sh"
 
-DRY_RUN=0; ONLY_CELL=""; ACCOUNT="$DISC_ACCOUNT_DEFAULT"; MAX_GPUS=4; CHAIN=0
+DRY_RUN=0; ONLY_CELL=""; ACCOUNT="$DISC_ACCOUNT_DEFAULT"; MAX_GPUS=4; CHAIN=0; NO_CHAIN=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
@@ -52,7 +52,7 @@ while [ $# -gt 0 ]; do
         --account) ACCOUNT="$2"; shift ;;
         --max-gpus) MAX_GPUS="$2"; shift ;;
         --prefer) export DISC_PREFER="$2"; shift ;;
-        --no-chain) export DISC_NO_CHAIN=1 ;;
+        --no-chain) NO_CHAIN=1 ;;
         --chain) CHAIN=1 ;;
         -h|--help) sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) echo "unknown option: $1"; exit 2 ;;
@@ -125,7 +125,7 @@ submit_one() {
         --nodes=1 --ntasks-per-node=1 --cpus-per-task="$cpus" "$mem_flag" \
         --gpus-per-node="h100:$gpus" --job-name="$name" \
         --output="logs/disc_cell_%j.out" --error="logs/disc_cell_%j.err" \
-        --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_PREFER=$DISC_PREFER,DISC_NO_CHAIN=${DISC_NO_CHAIN:-0}" \
+        --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_PREFER=$DISC_PREFER,DISC_NO_CHAIN=$NO_CHAIN" \
         "$JOB_SCRIPT") || { echo "  sbatch failed for $cell"; return 1; }
     jobid="${jobid%%;*}"
     if ! take_claim "$cell" "$jobid"; then
@@ -154,7 +154,7 @@ payload = {
 with open(path, "w") as fh:
     json.dump(payload, fh, indent=2, sort_keys=True); fh.write("\n")
 PYEOF
-    echo "  submitted job $jobid for $cell ($mode, ${gpus}xH100, ${wall}h) — claim taken"
+    echo "  submitted job $jobid for $cell ($mode, ${gpus}xH100, ${wall}h, chain $([ "$NO_CHAIN" = 1 ] && echo off || echo on)) — claim taken"
     return 0
 }
 
