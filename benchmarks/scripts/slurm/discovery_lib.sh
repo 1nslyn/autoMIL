@@ -72,6 +72,28 @@ pyrun() { uv run --frozen --no-sync --package autobench python "$@"; }
 stage() { pyrun benchmarks/scripts/campaign_stage.py "$@"; }
 operate() { pyrun benchmarks/scripts/campaign_operate.py "$@"; }
 
+# The pinned runtime reports NO active-time metric while the agent is idle,
+# and bind requires one recorded sample before it can complete. A typed and
+# deleted character in the input line makes the runtime report activity
+# (about one second) without submitting anything: no message reaches the
+# model and nothing enters the transcript. Verified on 2.1.228 (fir login
+# node): idle for minutes = no metric; "x" + Backspace = metric within 20 s.
+wake_runtime() {  # tmux-session-name
+    tmx send-keys -t "=$1:agent" -l "x"; sleep 1; tmx send-keys -t "=$1:agent" BSpace
+}
+
+# Poll the cell's own exporter until it serves (the runtime starts it a few
+# seconds after launch); bind scrapes it through the daemon.
+wait_exporter() {  # cell_root [timeout_s]
+    local port waited=0 limit="${2:-180}"
+    port=$(pyrun -c "import yaml,sys;print((yaml.safe_load(open('$1/automil/config.yaml')).get('activity') or {}).get('exporter_port', 9464))") || return 1
+    while [ "$waited" -lt "$limit" ]; do
+        curl -s -m 2 "http://127.0.0.1:$port/metrics" >/dev/null 2>&1 && { echo "exporter serving on $port after ${waited}s"; return 0; }
+        sleep 5; waited=$((waited + 5))
+    done
+    echo "exporter on $port not serving within ${limit}s"; return 1
+}
+
 # `up` only sends the orchestrator start command into a tmux window; the
 # daemon needs seconds to import, prune worktrees, recover orphans and write
 # its pid file, and `launch` refuses until it is alive. Wait for it here.

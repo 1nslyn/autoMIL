@@ -303,6 +303,7 @@ print(m.RELEASE_LINE)")
             trust_paths "$RUNTIME/$cell" >> "$LOG" 2>&1
         fi
         if [ "${step%% *}" = "bind" ]; then
+            wait_exporter "$RUNTIME/$cell" >> "$LOG" 2>&1 || { record_failure "$cell" "exporter-not-serving (see $LOG)"; tmx kill-session -t "=$name" 2>/dev/null; return 1; }
             # If a first-run prompt still shows, record the pane; the folder
             # trust prompt defaults to "Yes" and is answered with Enter.
             local waited=0 pane
@@ -317,6 +318,7 @@ print(m.RELEASE_LINE)")
                 fi
                 waited=$((waited + 5))
             done
+            wake_runtime "$name"; sleep 20   # first active-time sample lands within ~20 s
         fi
         if ! operate $step >> "$LOG" 2>&1; then
             record_failure "$cell" "operate-${step%% *}-failed (see $LOG)"
