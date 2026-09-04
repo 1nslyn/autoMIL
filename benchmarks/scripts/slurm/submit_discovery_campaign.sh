@@ -296,6 +296,23 @@ print(m.RELEASE_LINE)")
         if [ "${step%% *}" = "launch" ]; then
             wait_daemon "$RUNTIME/$cell" >> "$LOG" 2>&1 || { record_failure "$cell" "orchestrator-not-up (see $LOG)"; return 1; }
             clear_plugins
+            trust_paths "$RUNTIME/$cell" >> "$LOG" 2>&1
+        fi
+        if [ "${step%% *}" = "bind" ]; then
+            # If a first-run prompt still shows, record the pane; the folder
+            # trust prompt defaults to "Yes" and is answered with Enter.
+            local waited=0 pane
+            while [ "$waited" -lt 60 ]; do
+                pane=$(tmx capture-pane -p -t "=$name:agent" 2>/dev/null)
+                if echo "$pane" | grep -q "trust this folder"; then
+                    echo "[$cell] answering the folder-trust prompt" >> "$LOG"; tmx send-keys -t "=$name:agent" Enter; sleep 5
+                elif echo "$pane" | grep -qi "bypass permissions\|Yes, I accept"; then
+                    echo "[$cell] bypass-permissions prompt still shown after pre-seeding; pane follows" >> "$LOG"; echo "$pane" >> "$LOG"; break
+                else
+                    break
+                fi
+                waited=$((waited + 5))
+            done
         fi
         if ! operate $step >> "$LOG" 2>&1; then
             record_failure "$cell" "operate-${step%% *}-failed (see $LOG)"

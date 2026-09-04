@@ -197,18 +197,50 @@ remaining_hours() {
 # wrapper refuses a submission above DISC_WEEKLY_USAGE_MAX_PCT before any
 # claim exists; the job only records the value it saw. Unparsable output
 # warns. $2 = output file.
+# Claude's first start in a directory asks "Is this a project you trust?" and
+# the first --dangerously-skip-permissions run asks for an acknowledgement;
+# both are per-user config flags in ~/.claude.json. The operator answers them
+# here, before launch, exactly as the runbook operator does by hand — the
+# frozen instruction surface is untouched (user settings are not loaded:
+# --setting-sources project).
+trust_paths() {  # path...
+    pyrun - "$HOME/.claude.json" "$@" <<'PYEOF'
+import json, os, sys
+path, roots = sys.argv[1], sys.argv[2:]
+try:
+    cfg = json.load(open(path))
+except (OSError, ValueError):
+    cfg = {}
+cfg["bypassPermissionsModeAccepted"] = True
+projects = cfg.setdefault("projects", {})
+for root in roots:
+    entry = projects.setdefault(os.path.realpath(root), {})
+    entry["hasTrustDialogAccepted"] = True
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+os.replace(tmp, path)
+PYEOF
+}
+
+# A throwaway runtime in a private probe directory reads /status (the plan's
+# remaining allocation). Pane targets use window.pane indexes: fir's tmux
+# 3.3a rejects the bare "=session" form for pane commands.
 disc_usage_probe() {
-    local mode="$1" out="$2" pct
-    if ! tmx new-session -d -s usage_probe -c "$HOME" \
-            "claude --setting-sources project --strict-mcp-config" 2>/dev/null; then
-        echo "WARNING: could not start the usage probe (tmux/claude); weekly window unchecked"
+    local mode="$1" out="$2" pct probe_dir="$HOME/.automil_probe"
+    mkdir -p "$probe_dir" && trust_paths "$probe_dir"
+    tmx kill-session -t "usage_probe" 2>/dev/null || true
+    if ! tmx new-session -d -s usage_probe -c "$probe_dir" -x 200 -y 50 2>/dev/null; then
+        echo "WARNING: could not start the usage probe (tmux); weekly window unchecked"
         return 0
     fi
-    sleep 15
-    tmx send-keys -t "=usage_probe" -l "/status"; tmx send-keys -t "=usage_probe" Enter
+    tmx send-keys -t "usage_probe:0.0" -l "claude --setting-sources project --strict-mcp-config"
+    tmx send-keys -t "usage_probe:0.0" Enter
+    sleep 20
+    tmx send-keys -t "usage_probe:0.0" -l "/status"; tmx send-keys -t "usage_probe:0.0" Enter
     sleep 10
-    tmx capture-pane -p -t "=usage_probe" -S -80 > "$out" 2>/dev/null
-    tmx kill-session -t "=usage_probe" 2>/dev/null || true
+    tmx capture-pane -p -t "usage_probe:0.0" -S -80 > "$out" 2>/dev/null
+    tmx kill-session -t "usage_probe" 2>/dev/null || true
     pct=$(grep -iE 'week' "$out" | grep -oE '[0-9]{1,3}%' | head -1 | tr -d '%')
     if [ -z "$pct" ]; then
         echo "WARNING: could not parse the weekly usage window from /status (see $out)"
