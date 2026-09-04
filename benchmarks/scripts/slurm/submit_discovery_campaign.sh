@@ -172,8 +172,9 @@ with open(out, "w") as fh:
 PYEOF
 }
 
-# Poll until discovery is complete (30/30 charged, queue and running empty,
-# twice in a row), the agent window dies, or the deadline passes. The nudge
+# Poll until discovery is complete (30/30 charged by the orchestrator's own
+# count, queue and running empty, twice in a row), the agent window dies, or
+# the deadline passes. The nudge
 # fires only when the runtime's active time has been FLAT for
 # DISC_NUDGE_IDLE_S while the queue is drained and attempts remain — an
 # empty queue alone is normal while the agent diagnoses and plans.
@@ -183,18 +184,19 @@ watch_discovery() {
         if [ "$(date +%s)" -ge "$deadline" ]; then echo "deadline"; return 1; fi
         verdict=$(pyrun - "$RUNTIME/$cell" "$OPDIR/watch_state.json" \
             "$DISC_NUDGE_IDLE_S" "$DISC_NUDGE_MIN_GAP_S" "$DISC_NUDGE_MAX" <<'PYEOF'
-import json, subprocess, sys, time
+import importlib.util, json, sys, time
 from pathlib import Path
 from autobench.campaign import DISCOVERY_ATTEMPTS
+spec = importlib.util.spec_from_file_location("campaign_scan", "benchmarks/scripts/campaign_scan.py")
+scan = importlib.util.module_from_spec(spec); sys.modules["campaign_scan"] = scan; spec.loader.exec_module(scan)
 root, state_path = Path(sys.argv[1]), Path(sys.argv[2])
 idle_s, gap_s, max_nudges = (int(x) for x in sys.argv[3:6])
-status = json.loads(subprocess.run(
-    [sys.executable, "benchmarks/scripts/campaign_stage.py", "status", "--cell-root", str(root)],
-    capture_output=True, text=True, check=True).stdout)
 adir = root / "automil"
 queued = list(adir.glob("orchestrator/queue/*.json"))
 running = list(adir.glob("orchestrator/running/**/*.json"))
-charged = (status.get("discovery") or {}).get("attempts_charged") or 0
+# The ledger's attempts_charged is written by freeze-discovery only; the
+# orchestrator's budget-cell census is the live count (campaign_scan).
+charged = scan.attempts_charged(root)
 if charged == DISCOVERY_ATTEMPTS and not queued and not running:
     print("complete"); sys.exit(0)
 try:
@@ -250,10 +252,18 @@ end_session() {
     return 1
 }
 
+# The finish ladder on this job's GPUs, with the session's scraped usage
+# when a run (this one or the one that ended the session) left it behind.
+finish_cell() {  # cell
+    local usage_flag=()
+    [ -s "$OPDIR/usage.json" ] && usage_flag=(--usage-json "$OPDIR/usage.json")
+    operate finish "$RUNTIME/$1" --gpu "$GPU_LIST" ${usage_flag[@]+"${usage_flag[@]}"} >> "$LOG" 2>&1
+}
+
 run_cell() {
     local cell="$1" mode="$2" name release_line force_flag="" outcome deadline
     if [ "$mode" = "finish" ]; then
-        if operate finish "$RUNTIME/$cell" --gpu "$GPU_LIST" >> "$LOG" 2>&1; then
+        if finish_cell "$cell"; then
             echo "$(date +%m-%d\ %H:%M) DONE $cell (finish-only)"; return 0
         fi
         record_failure "$cell" "finish-failed (see $LOG)"; return 1
@@ -357,9 +367,7 @@ print(m.RELEASE_LINE)")
     if ! end_session "$cell" "$name"; then
         record_failure "$cell" "no-session-end-after-exit — OPERATOR NEEDED"; return 1
     fi
-    local usage_flag=()
-    [ -s "$OPDIR/usage.json" ] && usage_flag=(--usage-json "$OPDIR/usage.json")
-    if ! operate finish "$RUNTIME/$cell" --gpu "$GPU_LIST" ${usage_flag[@]+"${usage_flag[@]}"} >> "$LOG" 2>&1; then
+    if ! finish_cell "$cell"; then
         record_failure "$cell" "finish-failed (see $LOG)"; return 1
     fi
     tmx kill-session -t "=$name" 2>/dev/null || true

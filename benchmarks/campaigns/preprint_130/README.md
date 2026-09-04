@@ -329,10 +329,12 @@ the weekly window before claiming, so no claim is ever burned on a spent
 seat), runs the
 reproduction gate on its first GPU, brings the daemon up on all its GPUs,
 launches and binds the session in a job-private tmux server, sends the
-release line, watches until 30 charged attempts and drained queues, then
-scrapes the session's own exporter for token and cost counters
-(`operator/usage.json`, passed to `finish --usage-json`), captures `/status`
-before and after (`operator/usage_before.txt`, `usage_after.txt`), ends the
+release line, watches until the orchestrator's own budget-cell census reads
+30 charged attempts with drained queues (the ledger's `attempts_charged` is
+written by freeze-discovery only), then scrapes the session's own exporter
+for token and cost counters (`operator/usage.json`, passed to
+`finish --usage-json`), captures `/usage` before and after
+(`operator/usage_before.txt`, `usage_after.txt`), ends the
 session with `/exit`, runs the finish ladder on the same GPUs, normalizes
 the cell's files to group read/write, and submits the next cell as the same
 user. Failures land in `logs/discovery_cells/FAILED.tsv`; a stranded cell is

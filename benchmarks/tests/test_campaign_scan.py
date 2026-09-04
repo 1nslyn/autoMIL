@@ -52,9 +52,9 @@ def test_classes_are_mutually_exclusive_and_ordered(scan_mod, tmp_path, monkeypa
     (runtime / names[0] / "campaign_state.json").write_text(json.dumps({"phase": "certified", "baseline": {}}))
     # claimed by a live job
     (runtime / names[1] / ".discovery_claim").write_text("111\n")
-    # finishable: ended session + 30 charged
+    # finishable: ended session + 30 charged (frozen ledger)
     (runtime / names[2] / "campaign_state.json").write_text(json.dumps(
-        {"phase": "discovery", "baseline": {}, "discovery": {"attempts_charged": 30}}))
+        {"phase": "discovery", "baseline": {}, "discovery": {"frozen": True, "attempts_charged": 30}}))
     (runtime / names[2] / "automil" / ".activity.jsonl").write_text(
         '{"event":"session_open"}\n{"event":"session_end"}\n')
     # stranded: evidence, no end
@@ -71,6 +71,44 @@ def test_classes_are_mutually_exclusive_and_ordered(scan_mod, tmp_path, monkeypa
     assert result["blocked"] == [names[4]]
     assert result["pending"] == [names[5]]
     assert result["squeue_ok"] is True
+
+
+def _live_counter(root: Path, consumed: int, budget_id: str = "f90a61fd281e9f73") -> None:
+    """The orchestrator's budget-cell census, the only live 'charged' source."""
+    (root / "automil" / "campaign_cell.json").write_text(json.dumps(
+        {"budget_identity": {"cell_id": budget_id}}))
+    (root / "automil" / "cells").mkdir()
+    (root / "automil" / "cells" / f"{budget_id}.json").write_text(json.dumps(
+        {"cell_id": budget_id, "status": "finalized", "eval_budget": 30, "consumed_evals": consumed}))
+
+
+def test_charged_attempts_come_from_the_live_budget_cell_until_frozen(scan_mod, tmp_path):
+    """campaign_state.json's attempts_charged is written by freeze-discovery
+    only, so before the freeze the orchestrator's counter is the truth."""
+    root = _cell(tmp_path / "runtime", "tcga_luad__t0__enc__arm__s42__v",
+                 discovery={"frozen": False, "attempts_charged": 0})
+    assert scan_mod.attempts_charged(root) is None      # cell never opened
+    _live_counter(root, 30)
+    assert scan_mod.attempts_charged(root) == 30
+    (root / "campaign_state.json").write_text(json.dumps(
+        {"phase": "promotion-ready", "baseline": {}, "discovery": {"frozen": True, "attempts_charged": 30}}))
+    (root / "automil" / "cells" / "f90a61fd281e9f73.json").write_text('{"consumed_evals": 7}')
+    assert scan_mod.attempts_charged(root) == 30        # frozen ledger wins
+
+
+def test_finished_loop_is_finishable_before_the_freeze_writes_the_ledger(scan_mod, tmp_path, monkeypatch):
+    names = ["tcga_luad__t0__enc__arm__s42__v", "tcga_luad__t1__enc__arm__s42__v"]
+    runtime, roster = _runtime(tmp_path, names)
+    for name, consumed in zip(names, (30, 29)):
+        (runtime / name / "campaign_state.json").write_text(json.dumps(
+            {"phase": "discovery", "baseline": {}, "discovery": {"frozen": False, "attempts_charged": 0}}))
+        (runtime / name / "automil" / ".activity.jsonl").write_text(
+            '{"event":"session_open"}\n{"event":"session_end"}\n')
+        _live_counter(runtime / name, consumed)
+    monkeypatch.setattr(scan_mod, "live_job_ids", lambda: set())
+    result = scan_mod.scan(runtime, roster, "999")
+    assert result["finishable"] == [names[0]]
+    assert result["stranded"] == [names[1]]
 
 
 def test_stale_claim_from_dead_job_is_pending_and_never_unlinked(scan_mod, tmp_path, monkeypatch):

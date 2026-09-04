@@ -12,8 +12,10 @@ Classes (mutually exclusive, in evaluation order):
                   cell that another member is driving right now is the one case
                   where a read can fail mid-write, and refusing to touch it is
                   the safe answer
-- ``finishable``  session ended cleanly after the full 30-attempt budget; the
-                  finish ladder is idempotent and may be resumed by anyone
+- ``finishable``  session ended cleanly after the full 30-attempt budget (the
+                  orchestrator's live budget-cell census until freeze-discovery
+                  writes the ledger); the finish ladder is idempotent and may be
+                  resumed by anyone
 - ``stranded``    any other session evidence (live elsewhere, or dead mid-run)
 - ``blocked``     reproduction gate recorded ``verdict: fail``
 - ``pending``     clean, unclaimed, gate-eligible
@@ -84,6 +86,26 @@ def _session_ended(journal: Path) -> bool:
     return False
 
 
+def attempts_charged(root: Path) -> int | None:
+    """Charged discovery attempts for one cell root.
+
+    ``campaign_state.json`` carries ``discovery.attempts_charged`` only once
+    freeze-discovery has written it; until then the orchestrator's budget cell
+    (``automil/cells/<budget id>.json``, ``consumed_evals``) is the same census
+    the freeze itself requires. None when neither source is readable.
+    """
+    state = _read_json(root / "campaign_state.json") or {}
+    discovery = state.get("discovery") or {}
+    if discovery.get("frozen"):
+        return discovery.get("attempts_charged")
+    config = _read_json(root / "automil" / "campaign_cell.json") or {}
+    budget_id = (config.get("budget_identity") or {}).get("cell_id")
+    if not budget_id:
+        return None
+    cell = _read_json(root / "automil" / "cells" / f"{budget_id}.json")
+    return cell.get("consumed_evals") if cell else None
+
+
 def _has_session_evidence(root: Path) -> bool:
     session = root / "agent_session.json"
     journal = root / "automil" / ".activity.jsonl"
@@ -117,7 +139,7 @@ def classify_cell(
         if not stale:
             return "claimed", f"held by {holder or '?'}"
     if _has_session_evidence(root):
-        charged = (state.get("discovery") or {}).get("attempts_charged")
+        charged = attempts_charged(root)
         if _session_ended(root / "automil" / ".activity.jsonl") and charged == DISCOVERY_ATTEMPTS:
             return "finishable", ""
         return "stranded", "session evidence without a finished ladder"
