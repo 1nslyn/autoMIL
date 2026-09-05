@@ -45,16 +45,18 @@ export DISC_PROJECT_DIR="${DISC_PROJECT_DIR:-${SLURM_SUBMIT_DIR:-}}"
 [ -f "$DISC_PROJECT_DIR/benchmarks/scripts/slurm/discovery_lib.sh" ] \
     || { echo "ERROR: $DISC_PROJECT_DIR is not the campaign checkout"; exit 1; }
 # shellcheck source=discovery_lib.sh
-# The chain decision travels in from the submit wrapper; it is read here,
-# before any sourced file (benchmarks/.env via disc_env) can redefine it.
+# The chain decision and the cell-root set travel in from the submit
+# wrapper; both are read here, before any sourced file (benchmarks/.env via
+# disc_env) can redefine them.
 NO_CHAIN="${DISC_NO_CHAIN:-0}"
+RUNTIME_NAME="${DISC_RUNTIME:-runtime}"
 source "$DISC_PROJECT_DIR/benchmarks/scripts/slurm/discovery_lib.sh"
 disc_paths || exit 1
 disc_env
 module load cuda/12.2 2>/dev/null || true
 disc_static_preflight || exit 1
 export AUTOMIL_TMUX_SOCKET="disc_${SLURM_JOB_ID:-manual}"
-FAILED_TSV="$PROJECT_DIR/logs/discovery_cells/FAILED.tsv"
+FAILED_TSV="$LOG_DIR/FAILED.tsv"; mkdir -p "$LOG_DIR"
 
 N_GPUS="${SLURM_GPUS_ON_NODE:-1}"
 GPU_LIST=$(seq -s, 0 $((N_GPUS - 1)))
@@ -111,11 +113,11 @@ PYEOF
     MODE="${PICK%%:*}"; CELL="${PICK#*:}"
     take_claim "$CELL" || { echo "$CELL was claimed first — exiting"; exit 0; }
 fi
-LOG="$PROJECT_DIR/logs/discovery_cells/${CELL}.log"
+LOG="$LOG_DIR/${CELL}.log"
 OPDIR="$RUNTIME/$CELL/operator"; mkdir -p "$OPDIR"
 trap 'normalize_cell_modes "$CELL"' EXIT
 echo "================================================"
-echo "preprint DISCOVERY cell $CELL (mode=$MODE) | job ${SLURM_JOB_ID:-manual} | $(hostname) | $USER | $(date)"
+echo "preprint DISCOVERY cell $CELL (mode=$MODE, set $RUNTIME_NAME) | job ${SLURM_JOB_ID:-manual} | $(hostname) | $USER | $(date)"
 echo "GPUs $GPU_LIST | wall left $(remaining_hours)h | tmux socket $AUTOMIL_TMUX_SOCKET | chain $([ "$NO_CHAIN" = 1 ] && echo off || echo on)"
 echo "================================================"
 
@@ -391,7 +393,7 @@ echo "---"
 # (overnight 2026-09-03: ~70 short jobs alternating between two cells).
 if [ "$RC" = 0 ] && [ "$NO_CHAIN" != 1 ]; then
     echo "chaining: submitting the next cell as $USER"
-    "$PROJECT_DIR/benchmarks/scripts/slurm/submit_discovery_cell.sh" --chain --account "${DISC_ACCOUNT:-$DISC_ACCOUNT_DEFAULT}" \
+    "$PROJECT_DIR/benchmarks/scripts/slurm/submit_discovery_cell.sh" --chain --runtime "$RUNTIME_NAME" --account "${DISC_ACCOUNT:-$DISC_ACCOUNT_DEFAULT}" \
         || echo "  chain: nothing submitted (see above)"
 fi
 [ "$RC" = 0 ] && echo "Cell finished cleanly. $(date)"

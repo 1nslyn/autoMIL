@@ -12,6 +12,7 @@ import yaml
 
 from automil.cells.state import make_cell_id, normalize_mil_model
 from autobench.campaign import (
+    ACTIVITY_METRICS_PORT,
     ACTIVE_CELL_COUNT,
     ACTIVE_ROSTER,
     ANALYSIS_PLAN_PATH,
@@ -351,6 +352,40 @@ def test_materializer_creates_roster_count_independent_discovery_states(tmp_path
         )
     ]
     assert ports == expected_ports
+
+
+def test_materializer_only_cells_builds_exactly_those_roots_with_pinned_rows(tmp_path):
+    """A rehearsal set materializes a named subset of the active roster; row
+    indices (and so exporter ports) stay those of the full manifest."""
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    manifest = build_preprint_manifest(fake_repo)
+    write_manifest(manifest, manifest_path)
+    luad = [c for c in manifest["cells"] if c["dataset"] == "tcga_luad"]
+    chosen = {luad[3]["cell_id"], luad[7]["cell_id"]}
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime-rehearsal"
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo,
+        agent_protocol=AGENT_PROTOCOL, only_cells=chosen,
+    )
+    assert {r.parent.name for r in roots} == chosen          # roots are the automil dirs
+    assert {p.name for p in output_root.iterdir() if p.is_dir()} == chosen
+    rows = {c["cell_id"]: i for i, c in enumerate(manifest["cells"])}
+    for root in roots:
+        config = yaml.safe_load((root / "config.yaml").read_text())
+        assert config["activity"]["exporter_port"] == ACTIVITY_METRICS_PORT + rows[root.parent.name]
+    off_roster = next(c["cell_id"] for c in manifest["cells"] if c["dataset"] not in ACTIVE_ROSTER["cohorts"])
+    with pytest.raises(CampaignManifestError, match="not on the active roster"):
+        materialize_discovery_cells(
+            manifest_path, output_root, fake_repo,
+            agent_protocol=AGENT_PROTOCOL, only_cells={off_roster},
+        )
+    with pytest.raises(CampaignManifestError, match="unknown cell"):
+        materialize_discovery_cells(
+            manifest_path, output_root, fake_repo,
+            agent_protocol=AGENT_PROTOCOL, only_cells={"tcga_luad__nope"},
+        )
 
 
 def test_materializer_rejects_unresolvable_agent_policy_hashes(tmp_path):

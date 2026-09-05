@@ -341,6 +341,27 @@ user (`--no-chain` at submission stops after the one cell: rehearsals and
 member tests). Failures land in `logs/discovery_cells/FAILED.tsv`; a stranded
 cell is reported, never relaunched.
 
+**Rehearsal sets.** A run set that must stay out of the final grid lives in
+its own cell-root directory beside `runtime/`, built from the same manifest
+and protocol (row indices and exporter ports unchanged) with its own committed
+roster, `<name>.roster.json` (cohorts, cells census, `cell_ids`). The
+committed set is `runtime-rehearsal` (two cells per MIL model on TCGA-LUAD with
+the H-optimus-1 encoder). Each materialized root is about 1,000 files, so only
+the set's cells are built:
+
+```bash
+uv run python benchmarks/scripts/campaign_manifest.py materialize \
+    --output-root benchmarks/campaigns/preprint_130/runtime-rehearsal \
+    --agent-protocol benchmarks/campaigns/preprint_130/agent_protocol.json \
+    --cells @benchmarks/campaigns/preprint_130/runtime-rehearsal.roster.json
+sbatch --account=def-jma-ab benchmarks/scripts/slurm/submit_rehearsal_baselines.sh runtime-rehearsal
+benchmarks/scripts/slurm/submit_discovery_cell.sh --runtime runtime-rehearsal --no-chain
+```
+
+The launchers take `--runtime <name>`; logs go to
+`logs/discovery_cells/<name>/`. Nothing from a rehearsal set is mirrored,
+frozen into the campaign selections, or certified.
+
 **The nudge.** If the runtime's active time has been flat for 30 minutes
 while the queue is drained and attempts remain, the job sends one fixed
 line (`DISC_NUDGE_LINE` in `discovery_lib.sh`), at most once an hour and

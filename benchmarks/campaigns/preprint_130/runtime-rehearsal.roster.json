@@ -1,0 +1,18 @@
+{
+  "purpose": "rehearsal",
+  "note": "Two cells per MIL model on TCGA-LUAD with the H-optimus-1 encoder (one overall-survival, one KRAS cell each). Materialized beside the final grid in runtime-rehearsal/ from the same manifest and protocol; its results never enter the final experiment.",
+  "cohorts": [
+    "tcga_luad"
+  ],
+  "cells": 8,
+  "cell_ids": [
+    "tcga_luad__os__hoptimus1__clam__s42__preprint-v3",
+    "tcga_luad__kras__hoptimus1__clam__s42__preprint-v3",
+    "tcga_luad__os__hoptimus1__dtfd__s42__preprint-v3",
+    "tcga_luad__kras__hoptimus1__dtfd__s42__preprint-v3",
+    "tcga_luad__os__hoptimus1__abmil__s42__preprint-v3",
+    "tcga_luad__kras__hoptimus1__abmil__s42__preprint-v3",
+    "tcga_luad__os__hoptimus1__nnmil__s42__preprint-v3",
+    "tcga_luad__kras__hoptimus1__nnmil__s42__preprint-v3"
+  ]
+}

@@ -30,6 +30,9 @@
 #   --account NAME  SLURM account (default: def-jma-ab)
 #   --max-gpus N    never request more than N GPUs for this submission
 #   --prefer MODE   cheap (default: fewest GPU-hours) | fast (shortest wall)
+#   --runtime NAME  cell-root directory under the campaign dir (default:
+#                   runtime, the final grid); a rehearsal set such as
+#                   runtime-rehearsal has its own roster NAME.roster.json
 #   --no-chain      the job stops after its own cell instead of submitting the
 #                   next one (rehearsals, member tests); decided per submission
 #                   from this option only, never from the caller's environment
@@ -44,7 +47,7 @@ DISC_PROJECT_DIR=$(cd "$SELF_DIR/../../.." && pwd)
 source "$SELF_DIR/discovery_lib.sh"
 JOB_SCRIPT="$SELF_DIR/submit_discovery_campaign.sh"
 
-DRY_RUN=0; ONLY_CELL=""; ACCOUNT="$DISC_ACCOUNT_DEFAULT"; MAX_GPUS=4; CHAIN=0; NO_CHAIN=0
+DRY_RUN=0; ONLY_CELL=""; ACCOUNT="$DISC_ACCOUNT_DEFAULT"; MAX_GPUS=4; CHAIN=0; NO_CHAIN=0; RUNTIME_NAME="runtime"
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
@@ -53,6 +56,7 @@ while [ $# -gt 0 ]; do
         --max-gpus) MAX_GPUS="$2"; shift ;;
         --prefer) export DISC_PREFER="$2"; shift ;;
         --no-chain) NO_CHAIN=1 ;;
+        --runtime) RUNTIME_NAME="$2"; shift ;;
         --chain) CHAIN=1 ;;
         -h|--help) sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) echo "unknown option: $1"; exit 2 ;;
@@ -68,14 +72,14 @@ if ! disc_static_preflight; then
     [ "$DRY_RUN" = 1 ] && echo "(dry run: preflight would refuse a real submission)" || exit 1
 fi
 if [ "$DRY_RUN" = 0 ]; then
-    mkdir -p "$PROJECT_DIR/logs/discovery_cells"
-    disc_usage_probe refuse "$PROJECT_DIR/logs/discovery_cells/usage_probe_${USER}_$(date +%Y%m%d%H%M%S).txt" || exit 1
+    mkdir -p "$LOG_DIR"
+    disc_usage_probe refuse "$LOG_DIR/usage_probe_${USER}_$(date +%Y%m%d%H%M%S).txt" || exit 1
 fi
 
 SCAN=$(disc_scan) || { echo "ERROR: cell scan failed"; exit 1; }
 summary=$(echo "$SCAN" | pyrun -c \
     "import json,sys;d=json.load(sys.stdin);print(', '.join(f'{k}={len(d[k])}' for k in ('pending','finishable','claimed','done','stranded','blocked')), '| squeue_ok=%s'%d['squeue_ok'])")
-[ "$CHAIN" = 1 ] || echo "scan: $summary"
+[ "$CHAIN" = 1 ] || echo "scan ($RUNTIME_NAME, roster $(basename "$ROSTER")): $summary"
 echo "$SCAN" | pyrun -c "import json,sys;d=json.load(sys.stdin);[print('  note:',c,'-',n) for c,n in sorted(d['notes'].items())]"
 
 # A heredoc replaces stdin, so JSON produced upstream travels in a variable.
@@ -124,11 +128,11 @@ submit_one() {
     # The decision is bound to this one sbatch call, after every sourced file
     # (benchmarks/.env via disc_env) has had its say, so the job sees one
     # value however sbatch merges --export=ALL with explicit assignments.
-    jobid=$(DISC_NO_CHAIN="$NO_CHAIN" sbatch --parsable --account="$ACCOUNT" --time="${wall}:00:00" \
+    jobid=$(DISC_NO_CHAIN="$NO_CHAIN" DISC_RUNTIME="$RUNTIME_NAME" sbatch --parsable --account="$ACCOUNT" --time="${wall}:00:00" \
         --nodes=1 --ntasks-per-node=1 --cpus-per-task="$cpus" "$mem_flag" \
         --gpus-per-node="h100:$gpus" --job-name="$name" \
         --output="logs/disc_cell_%j.out" --error="logs/disc_cell_%j.err" \
-        --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_PREFER=$DISC_PREFER,DISC_NO_CHAIN=$NO_CHAIN" \
+        --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_PREFER=$DISC_PREFER,DISC_NO_CHAIN=$NO_CHAIN,DISC_RUNTIME=$RUNTIME_NAME" \
         "$JOB_SCRIPT") || { echo "  sbatch failed for $cell"; return 1; }
     jobid="${jobid%%;*}"
     if ! take_claim "$cell" "$jobid"; then
@@ -137,13 +141,13 @@ submit_one() {
         return 1
     fi
     mkdir -p "$RUNTIME/$cell/operator"
-    pyrun - "$RUNTIME/$cell/operator/plan.json" "$cell" "$mode" "$jobid" "$gpus" "$wall" "$cpus" "$mem" "$whole" "$pred" "$e5" "$ACCOUNT" <<'PYEOF'
+    pyrun - "$RUNTIME/$cell/operator/plan.json" "$cell" "$mode" "$jobid" "$gpus" "$wall" "$cpus" "$mem" "$whole" "$pred" "$e5" "$ACCOUNT" "$RUNTIME_NAME" <<'PYEOF'
 import importlib.util, json, os, sys, datetime as dt
-path, cell, mode, jobid, gpus, wall, cpus, mem, whole, pred, e5, account = sys.argv[1:]
+path, cell, mode, jobid, gpus, wall, cpus, mem, whole, pred, e5, account, runtime_name = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
 shape = importlib.util.module_from_spec(spec); sys.modules["shape"] = shape; spec.loader.exec_module(shape)
 payload = {
-    "cell_id": cell, "mode": mode, "job_id": jobid, "account": account,
+    "cell_id": cell, "mode": mode, "job_id": jobid, "account": account, "runtime": runtime_name,
     "submitted_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     "submitted_by": os.environ.get("USER"),
     "shape": {"gpus": int(gpus), "wall_hours": int(wall), "cpus": int(cpus), "mem_gb": int(mem),
@@ -157,7 +161,7 @@ payload = {
 with open(path, "w") as fh:
     json.dump(payload, fh, indent=2, sort_keys=True); fh.write("\n")
 PYEOF
-    echo "  submitted job $jobid for $cell ($mode, ${gpus}xH100, ${wall}h, chain $([ "$NO_CHAIN" = 1 ] && echo off || echo on)) — claim taken"
+    echo "  submitted job $jobid for $cell ($mode, ${gpus}xH100, ${wall}h, set $RUNTIME_NAME, chain $([ "$NO_CHAIN" = 1 ] && echo off || echo on)) — claim taken"
     return 0
 }
 

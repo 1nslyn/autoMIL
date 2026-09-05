@@ -972,8 +972,14 @@ def materialize_discovery_cells(
     *,
     agent_protocol: Mapping[str, Any],
     allow_canary_protocol: bool = False,
+    only_cells: set[str] | None = None,
 ) -> list[Path]:
     """Create one isolated discovery root per active-roster manifest cell.
+
+    ``only_cells`` restricts the build to those active-roster cell ids (a
+    rehearsal set materialized beside the campaign runtime); every other row
+    is skipped exactly like an off-roster row, so row indices and exporter
+    ports are unchanged.
 
     Each root has its own graph/plan/learnings/orchestrator namespace.  The
     generated config's run command, budget identity, fold subset, and source
@@ -987,6 +993,17 @@ def materialize_discovery_cells(
     """
     manifest = load_manifest(manifest_path)
     manifest_hash = file_sha256(manifest_path)
+    if only_cells is not None:
+        by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
+        unknown = sorted(set(only_cells) - set(by_id))
+        if unknown:
+            raise CampaignManifestError(f"unknown cell id(s): {unknown}")
+        off_roster = sorted(
+            cell_id for cell_id in only_cells
+            if by_id[cell_id]["dataset"] not in ACTIVE_ROSTER["cohorts"]
+        )
+        if off_roster:
+            raise CampaignManifestError(f"not on the active roster: {off_roster}")
     locked_agent_protocol = validate_agent_protocol(
         agent_protocol, allow_canary=allow_canary_protocol,
     )
@@ -1033,6 +1050,8 @@ def materialize_discovery_cells(
         # exercising the operating roster. cell_index is never renumbered
         # around the skip — enumerate() still walks the full manifest.
         if not _is_canary_dry_run and cell["dataset"] not in ACTIVE_ROSTER["cohorts"]:
+            continue
+        if only_cells is not None and cell["cell_id"] not in only_cells:
             continue
         # One deterministic exporter port per manifest row, so any number of
         # cells can meter concurrently on one host without contending for a

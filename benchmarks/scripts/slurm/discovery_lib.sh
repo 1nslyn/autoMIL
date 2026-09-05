@@ -31,13 +31,23 @@ DISC_WATCH_INTERVAL_S=120
 # (freeze -> promotion on this job's GPUs -> winner -> finalize).
 DISC_FINISH_RESERVE_H=4
 
+# RUNTIME_NAME selects the cell-root directory under the campaign dir:
+# "runtime" is the final grid; a rehearsal set lives beside it (for example
+# "runtime-rehearsal") with its own committed roster "<name>.roster.json"
+# (cohorts, cells census, cell_ids). A set without that file uses the
+# campaign's active roster. Logs follow the set so a cell id that exists in
+# two sets never shares a log file.
 disc_paths() {
     PROJECT_DIR="${DISC_PROJECT_DIR:?DISC_PROJECT_DIR must point at the campaign checkout}"
     CAMPAIGN_DIR="$PROJECT_DIR/$DISC_CAMPAIGN_REL"
-    RUNTIME="$CAMPAIGN_DIR/runtime"
-    ROSTER="$CAMPAIGN_DIR/active_roster.json"
+    RUNTIME_NAME="${RUNTIME_NAME:-runtime}"
+    case "$RUNTIME_NAME" in */*|.*|"") echo "ERROR: runtime name must be a plain directory name: '$RUNTIME_NAME'"; return 1 ;; esac
+    RUNTIME="$CAMPAIGN_DIR/$RUNTIME_NAME"
+    ROSTER="$CAMPAIGN_DIR/$RUNTIME_NAME.roster.json"
+    [ -f "$ROSTER" ] || ROSTER="$CAMPAIGN_DIR/active_roster.json"
+    LOG_DIR="$PROJECT_DIR/logs/discovery_cells/$RUNTIME_NAME"
     [ -d "$RUNTIME" ] || { echo "ERROR: runtime not materialized: $RUNTIME"; return 1; }
-    [ -f "$ROSTER" ] || { echo "ERROR: active roster missing: $ROSTER"; return 1; }
+    [ -f "$ROSTER" ] || { echo "ERROR: roster missing: $ROSTER"; return 1; }
     [ -f "$PROJECT_DIR/benchmarks/.env" ] || { echo "ERROR: $PROJECT_DIR/benchmarks/.env missing"; return 1; }
     cd "$PROJECT_DIR" || return 1
 }
@@ -60,7 +70,7 @@ disc_env() {
     unset ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL ANTHROPIC_BASE_URL \
           CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_EFFORT_LEVEL \
           2>/dev/null || true
-    mkdir -p "$PROJECT_DIR/logs/discovery_cells"
+    mkdir -p "$LOG_DIR"
 }
 
 # Every tmux call in the launchers goes through tmx so the job-private

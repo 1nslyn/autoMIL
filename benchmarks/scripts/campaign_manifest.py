@@ -36,6 +36,12 @@ def main(argv: list[str] | None = None) -> None:
         "--agent-protocol",
         help="Publication-ready agent protocol JSON; required by materialize.",
     )
+    parser.add_argument(
+        "--cells",
+        help="materialize only these active-roster cell ids (comma-separated, "
+             "or @<roster.json> carrying a cell_ids list) — a rehearsal set "
+             "built beside the campaign runtime; row indices and ports are unchanged",
+    )
     args = parser.parse_args(argv)
     repo_root = Path(__file__).resolve().parents[2]
     manifest_path = (repo_root / args.manifest).resolve()
@@ -97,9 +103,20 @@ def main(argv: list[str] | None = None) -> None:
             agent_protocol = json.loads(agent_protocol_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
             parser.error(f"cannot read --agent-protocol: {exc}")
+        only_cells = None
+        if args.cells:
+            if args.cells.startswith("@"):
+                try:
+                    only_cells = set(json.loads(Path(args.cells[1:]).read_text())["cell_ids"])
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    parser.error(f"cannot read cell_ids from {args.cells[1:]}: {exc}")
+            else:
+                only_cells = {c.strip() for c in args.cells.split(",") if c.strip()}
+            if not only_cells:
+                parser.error("--cells names no cell")
         roots = materialize_discovery_cells(
             manifest_path, output_root, repo_root,
-            agent_protocol=agent_protocol,
+            agent_protocol=agent_protocol, only_cells=only_cells,
         )
         print(f"materialized {len(roots)} isolated discovery roots")
     elif args.action == "canary":
