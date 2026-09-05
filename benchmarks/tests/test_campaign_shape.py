@@ -157,7 +157,12 @@ def test_shape_cells_reports_two_shapes_and_one_unshaped(fabricated_runtime):
 def _write_baseline_log(runtime, cell_id, cached_folds):
     log = runtime / cell_id / "baseline-execution" / "archive" / "run.log"
     log.parent.mkdir(parents=True)
-    lines = ["[automil] cwd = x"] + [f"    [fold {k}] Already completed, loading from disk" for k in range(cached_folds)]
+    # Two frameworks' wordings: CLAM-style and DTFD-style (lower case, prefixed).
+    lines = ["[automil] cwd = x"] + [
+        (f"    [fold {k}] Already completed, loading from disk" if k % 2 == 0
+         else f"    [DTFD fold {k}] already completed, loading from disk")
+        for k in range(cached_folds)
+    ]
     log.write_text("\n".join(lines) + "\nExperiment complete in 2634s\n")
 
 

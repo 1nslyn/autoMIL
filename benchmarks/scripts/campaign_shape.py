@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -193,8 +194,11 @@ def _baseline_elapsed_seconds(
     return float(total), None
 
 
-#: Line the training script prints per fold it reuses instead of training.
-CACHED_FOLD_MARKER = "Already completed, loading from disk"
+#: Line the training code prints per fold it reuses instead of training. The
+#: wording differs by framework only in case and prefix ("[fold 0] Already
+#: completed, loading from disk" vs "[DTFD fold 0] already completed, loading
+#: from disk"), so the match is case-insensitive on the shared tail.
+CACHED_FOLD_MARKER = re.compile(r"already completed, loading from disk", re.IGNORECASE)
 BASELINE_RUN_LOG = Path("baseline-execution") / "archive" / "run.log"
 
 
@@ -203,7 +207,7 @@ def _cached_fold_count(cell_root: Path) -> int:
         text = (cell_root / BASELINE_RUN_LOG).read_text(errors="replace")
     except OSError:
         return 0
-    return text.count(CACHED_FOLD_MARKER)
+    return len(CACHED_FOLD_MARKER.findall(text))
 
 
 def _prediction_input(
