@@ -190,6 +190,29 @@ def test_baseline_with_no_fresh_fold_is_unshaped(tmp_path):
     assert "cached" in report.reason
 
 
+def test_operator_supplied_time_shapes_a_baseline_with_no_fresh_fold(tmp_path, capsys):
+    """A retry that loaded every fold from cache registers a valid baseline
+    with no timing; the operator supplies the five-fold time and the shape
+    follows it, recorded as such."""
+    runtime = tmp_path / "runtime"; runtime.mkdir()
+    state = _baseline_state(10.0)
+    state["baseline"]["validation_folds"] = [{"fold_index": k} for k in range(5)]
+    _write_state(runtime, "cell_all", state)
+    _write_baseline_log(runtime, "cell_all", cached_folds=5)
+    report = cs.shape_cells(runtime, ["cell_all"], e5_override=3.5 * 3600)["cell_all"]
+    assert report.shape is not None
+    assert report.baseline_elapsed_seconds == pytest.approx(3.5 * 3600)
+    assert report.baseline_elapsed_source == "operator"
+    assert report.cached_folds == 5
+    assert cs.main(["--runtime", str(runtime), "--cells", "cell_all", "--json", "--e5-seconds", str(3.5 * 3600)]) == 0
+    payload = json.loads(capsys.readouterr().out)["cell_all"]
+    assert payload["baseline_elapsed_source"] == "operator" and payload["cached_folds"] == 5
+    ledger = cs.shape_cells(tmp_path / "runtime", ["cell_all"])["cell_all"]
+    assert ledger.shape is None                     # without the override: refused
+    plain = cs.shape_cells(runtime, ["cell_all"], e5_override=None)["cell_all"]
+    assert plain.baseline_elapsed_source is None or plain.shape is None
+
+
 def test_missing_baseline_log_means_no_correction(fabricated_runtime):
     report = cs.shape_cells(fabricated_runtime, ["cell_b"])["cell_b"]
     assert report.cached_folds == 0

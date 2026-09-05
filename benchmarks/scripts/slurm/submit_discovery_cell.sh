@@ -33,6 +33,9 @@
 #   --runtime NAME  cell-root directory under the campaign dir (default:
 #                   runtime, the final grid); a rehearsal set such as
 #                   runtime-rehearsal has its own roster NAME.roster.json
+#   --e5-hours H    with --cell: the five-fold baseline time to shape from, for
+#                   a cell whose baseline retry loaded every fold from cache
+#                   (the predictor refuses it when the ledger carries a time)
 #   --no-chain      the job stops after its own cell instead of submitting the
 #                   next one (rehearsals, member tests); decided per submission
 #                   from this option only, never from the caller's environment
@@ -47,7 +50,7 @@ DISC_PROJECT_DIR=$(cd "$SELF_DIR/../../.." && pwd)
 source "$SELF_DIR/discovery_lib.sh"
 JOB_SCRIPT="$SELF_DIR/submit_discovery_campaign.sh"
 
-DRY_RUN=0; ONLY_CELL=""; ACCOUNT="$DISC_ACCOUNT_DEFAULT"; MAX_GPUS=4; CHAIN=0; NO_CHAIN=0; RUNTIME_NAME="runtime"
+DRY_RUN=0; ONLY_CELL=""; ACCOUNT="$DISC_ACCOUNT_DEFAULT"; MAX_GPUS=4; CHAIN=0; NO_CHAIN=0; RUNTIME_NAME="runtime"; E5_HOURS=""; E5_SECONDS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
@@ -57,6 +60,7 @@ while [ $# -gt 0 ]; do
         --prefer) export DISC_PREFER="$2"; shift ;;
         --no-chain) NO_CHAIN=1 ;;
         --runtime) RUNTIME_NAME="$2"; shift ;;
+        --e5-hours) E5_HOURS="$2"; shift ;;
         --chain) CHAIN=1 ;;
         -h|--help) sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) echo "unknown option: $1"; exit 2 ;;
@@ -67,6 +71,10 @@ done
 case "$MAX_GPUS" in 1|2|4) ;; *) echo "--max-gpus must be 1, 2 or 4"; exit 2 ;; esac
 disc_paths || exit 1
 disc_env
+if [ -n "$E5_HOURS" ]; then
+    [ -n "$ONLY_CELL" ] || { echo "--e5-hours applies to one cell: give --cell too"; exit 2; }
+    E5_SECONDS=$(pyrun -c "h=float('$E5_HOURS'); assert h > 0; print(h * 3600)" 2>/dev/null) || { echo "--e5-hours must be a positive number"; exit 2; }
+fi
 export AUTOMIL_TMUX_SOCKET="disc_submit_$$"
 if ! disc_static_preflight; then
     [ "$DRY_RUN" = 1 ] && echo "(dry run: preflight would refuse a real submission)" || exit 1
@@ -99,7 +107,7 @@ PYEOF
 # wall: promotion of ten candidates fits it for every roster cell).
 shape_for() {
     local mode="$1" cell="$2" args shape_json
-    if [ "$mode" = "finish" ]; then args="--finish"; else args="--runtime $RUNTIME --prefer $DISC_PREFER --cells $cell --json"; fi
+    if [ "$mode" = "finish" ]; then args="--finish"; else args="--runtime $RUNTIME --prefer $DISC_PREFER --cells $cell --json${E5_SECONDS:+ --e5-seconds $E5_SECONDS}"; fi
     shape_json=$(pyrun benchmarks/scripts/campaign_shape.py $args) || return 1
     SHAPE_JSON="$shape_json" pyrun - "$cell" "$mode" <<'PYEOF'
 import json, os, sys
@@ -108,14 +116,15 @@ shape = payload if mode == "finish" else payload[cell]
 if "unshaped" in shape:
     sys.exit(f"{cell}: {shape['unshaped']}")
 print(shape["gpus"], shape["wall_hours"], shape["cpus"], shape["mem_gb"],
-      int(bool(shape["whole_node"])), shape["predicted_hours"], shape.get("baseline_elapsed_seconds", 0))
+      int(bool(shape["whole_node"])), shape["predicted_hours"], shape.get("baseline_elapsed_seconds", 0),
+      shape.get("baseline_elapsed_source") or "finish-lane")
 PYEOF
 }
 
 submit_one() {
-    local mode="$1" cell="$2" shape gpus wall cpus mem whole pred e5 jobid mem_flag name
+    local mode="$1" cell="$2" shape gpus wall cpus mem whole pred e5 e5_source jobid mem_flag name
     shape=$(shape_for "$mode" "$cell") || { echo "  $cell: no shape fits (see campaign_shape.py) — skipped"; return 1; }
-    read -r gpus wall cpus mem whole pred e5 <<< "$shape"
+    read -r gpus wall cpus mem whole pred e5 e5_source <<< "$shape"
     if [ "$gpus" -gt "$MAX_GPUS" ]; then
         echo "  $cell: needs $gpus GPUs > --max-gpus $MAX_GPUS — skipped"; return 1
     fi
@@ -141,9 +150,9 @@ submit_one() {
         return 1
     fi
     mkdir -p "$RUNTIME/$cell/operator"
-    pyrun - "$RUNTIME/$cell/operator/plan.json" "$cell" "$mode" "$jobid" "$gpus" "$wall" "$cpus" "$mem" "$whole" "$pred" "$e5" "$ACCOUNT" "$RUNTIME_NAME" <<'PYEOF'
+    pyrun - "$RUNTIME/$cell/operator/plan.json" "$cell" "$mode" "$jobid" "$gpus" "$wall" "$cpus" "$mem" "$whole" "$pred" "$e5" "$ACCOUNT" "$RUNTIME_NAME" "$e5_source" <<'PYEOF'
 import importlib.util, json, os, sys, datetime as dt
-path, cell, mode, jobid, gpus, wall, cpus, mem, whole, pred, e5, account, runtime_name = sys.argv[1:]
+path, cell, mode, jobid, gpus, wall, cpus, mem, whole, pred, e5, account, runtime_name, e5_source = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
 shape = importlib.util.module_from_spec(spec); sys.modules["shape"] = shape; spec.loader.exec_module(shape)
 payload = {
@@ -153,7 +162,7 @@ payload = {
     "shape": {"gpus": int(gpus), "wall_hours": int(wall), "cpus": int(cpus), "mem_gb": int(mem),
               "whole_node": whole == "1"},
     "predicted_hours": float(pred),
-    "baseline_elapsed_seconds": float(e5),
+    "baseline_elapsed_seconds": float(e5), "baseline_elapsed_source": e5_source,
     "predictor": {"cap_per_gpu": shape.CAP_PER_GPU, "efficiency": shape.EFFICIENCY,
                   "fit_fraction": shape.FIT_FRACTION, "overhead_h": shape.OVERHEAD_H,
                   "prefer": os.environ.get("DISC_PREFER", "cheap")},

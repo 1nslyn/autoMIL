@@ -84,6 +84,10 @@ class ShapeReport:
     """Folds the registered baseline loaded from its cache instead of
     training; the ledger's elapsed total excludes them, so the prediction
     input is scaled back to the full fold count (see _prediction_input)."""
+    baseline_elapsed_source: str | None = None
+    """Where the prediction input came from: ``ledger`` (registered total),
+    ``ledger-scaled`` (cached folds scaled back), or ``operator`` (a time
+    supplied at submission for a baseline whose retry cached every fold)."""
 
 
 def predict_hours(e5_seconds: float, gpus: int) -> float:
@@ -230,12 +234,24 @@ def _prediction_input(
     return e5_seconds * n_folds / (n_folds - cached), cached, None
 
 
-def _shape_one_cell(runtime: Path, cell_id: str, prefer: str = "cheap") -> ShapeReport:
+def _shape_one_cell(
+    runtime: Path, cell_id: str, prefer: str = "cheap", e5_override: float | None = None,
+) -> ShapeReport:
     state, reason = _read_campaign_state(runtime, cell_id)
     if reason is not None:
         return ShapeReport(cell_id=cell_id, shape=None, reason=reason)
 
     e5_seconds, cached, reason = _prediction_input(runtime, cell_id, state)
+    source = "ledger-scaled" if cached else "ledger"
+    if e5_override is not None:
+        # The operator's time stands in only for a baseline that cannot time
+        # itself; a baseline that carries a timing is never overridden.
+        if reason is None:
+            return ShapeReport(
+                cell_id=cell_id, shape=None, cached_folds=cached,
+                reason="the baseline carries its own timing; drop the operator-supplied time",
+            )
+        e5_seconds, reason, source = e5_override, None, "operator"
     if reason is not None:
         return ShapeReport(cell_id=cell_id, shape=None, reason=reason, cached_folds=cached)
 
@@ -245,22 +261,30 @@ def _shape_one_cell(runtime: Path, cell_id: str, prefer: str = "cheap") -> Shape
             cell_id=cell_id, shape=None,
             reason="predicted discovery wall time exceeds every candidate shape",
             baseline_elapsed_seconds=e5_seconds, cached_folds=cached,
+            baseline_elapsed_source=source,
         )
     return ShapeReport(
         cell_id=cell_id, shape=shape, reason=None,
         baseline_elapsed_seconds=e5_seconds, cached_folds=cached,
+        baseline_elapsed_source=source,
     )
 
 
 def shape_cells(
     runtime: Path, cell_ids: Sequence[str], prefer: str = "cheap",
+    e5_override: float | None = None,
 ) -> Mapping[str, ShapeReport]:
     """Predict a SLURM shape for each cell root under ``runtime``.
 
     Never raises for one cell's bad or missing data; that cell's report
-    carries a ``reason`` instead of a ``shape``.
+    carries a ``reason`` instead of a ``shape``. ``e5_override`` (seconds)
+    is the operator-supplied five-fold time for a baseline whose retry
+    loaded every fold from cache; it is refused for a baseline that carries
+    its own timing.
     """
-    return {cell_id: _shape_one_cell(runtime, cell_id, prefer) for cell_id in cell_ids}
+    return {
+        cell_id: _shape_one_cell(runtime, cell_id, prefer, e5_override) for cell_id in cell_ids
+    }
 
 
 def _discover_cell_ids(runtime: Path) -> list[str]:
@@ -287,7 +311,8 @@ def _report_to_json(report: ShapeReport) -> dict:
     if report.shape is None:
         return {"unshaped": report.reason}
     return {**asdict(report.shape), "baseline_elapsed_seconds": report.baseline_elapsed_seconds,
-            "cached_folds": report.cached_folds}
+            "cached_folds": report.cached_folds,
+            "baseline_elapsed_source": report.baseline_elapsed_source}
 
 
 def _table_row(runtime: Path, cell_id: str, report: ShapeReport) -> str:
@@ -324,6 +349,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--prefer", default="cheap", choices=PREFERENCES,
         help="cheap = fewest GPU-hours (default); fast = shortest wall first",
     )
+    parser.add_argument(
+        "--e5-seconds", type=float, default=None,
+        help="operator-supplied five-fold baseline time for a baseline whose retry "
+             "loaded every fold from cache (refused when the ledger carries a timing)",
+    )
     parser.add_argument("--cell", default=None, help="one cell id, used together with --field")
     parser.add_argument(
         "--field", default=None,
@@ -333,14 +363,16 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run_cell_field(runtime: Path, cell_id: str, field: str | None, prefer: str) -> int:
+def _run_cell_field(
+    runtime: Path, cell_id: str, field: str | None, prefer: str, e5_override: float | None,
+) -> int:
     if not field:
         print("campaign_shape: --field is required with --cell", file=sys.stderr)
         return 2
     if not (runtime / cell_id).is_dir():
         print(f"campaign_shape: unknown cell id: {cell_id}", file=sys.stderr)
         return 2
-    report = _shape_one_cell(runtime, cell_id, prefer)
+    report = _shape_one_cell(runtime, cell_id, prefer, e5_override)
     if report.shape is None:
         print(
             f"campaign_shape: cell {cell_id} is unshaped: {report.reason}",
@@ -351,14 +383,16 @@ def _run_cell_field(runtime: Path, cell_id: str, field: str | None, prefer: str)
     return 0
 
 
-def _run_sweep(runtime: Path, cells_arg: str | None, as_json: bool, prefer: str) -> int:
+def _run_sweep(
+    runtime: Path, cells_arg: str | None, as_json: bool, prefer: str, e5_override: float | None,
+) -> int:
     cell_ids = _resolve_cell_ids(runtime, cells_arg)
     unknown = _first_unknown_cell(runtime, cell_ids)
     if unknown is not None:
         print(f"campaign_shape: unknown cell id: {unknown}", file=sys.stderr)
         return 2
 
-    reports = shape_cells(runtime, cell_ids, prefer)
+    reports = shape_cells(runtime, cell_ids, prefer, e5_override)
     if as_json:
         payload = {cell_id: _report_to_json(reports[cell_id]) for cell_id in reports}
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -380,9 +414,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"campaign_shape: invalid --runtime: {runtime}", file=sys.stderr)
         return 2
 
+    if args.e5_seconds is not None and args.e5_seconds <= 0:
+        print("campaign_shape: --e5-seconds must be positive", file=sys.stderr)
+        return 2
+    if args.e5_seconds is not None and args.cell is None and not args.cells:
+        print("campaign_shape: --e5-seconds needs --cell or --cells", file=sys.stderr)
+        return 2
     if args.cell is not None:
-        return _run_cell_field(runtime, args.cell, args.field, args.prefer)
-    return _run_sweep(runtime, args.cells, args.json, args.prefer)
+        return _run_cell_field(runtime, args.cell, args.field, args.prefer, args.e5_seconds)
+    return _run_sweep(runtime, args.cells, args.json, args.prefer, args.e5_seconds)
 
 
 if __name__ == "__main__":

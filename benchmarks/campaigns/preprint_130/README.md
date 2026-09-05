@@ -359,7 +359,10 @@ benchmarks/scripts/slurm/submit_discovery_cell.sh --runtime runtime-rehearsal --
 ```
 
 The launchers take `--runtime <name>`; logs go to
-`logs/discovery_cells/<name>/`. Nothing from a rehearsal set is mirrored,
+`logs/discovery_cells/<name>/`. The shape predictor scales a baseline's time
+back when its retry loaded folds from cache (the ledger total then covers
+only the fresh folds); a baseline whose retry cached every fold has no timing
+and is submitted with `--cell <id> --e5-hours <five-fold hours>`. Nothing from a rehearsal set is mirrored,
 frozen into the campaign selections, or certified.
 
 **The nudge.** If the runtime's active time has been flat for 30 minutes
