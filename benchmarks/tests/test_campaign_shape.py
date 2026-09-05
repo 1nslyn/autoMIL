@@ -154,6 +154,48 @@ def test_shape_cells_reports_two_shapes_and_one_unshaped(fabricated_runtime):
     assert reports["cell_b"].shape.gpus == 4
 
 
+def _write_baseline_log(runtime, cell_id, cached_folds):
+    log = runtime / cell_id / "baseline-execution" / "archive" / "run.log"
+    log.parent.mkdir(parents=True)
+    lines = ["[automil] cwd = x"] + [f"    [fold {k}] Already completed, loading from disk" for k in range(cached_folds)]
+    log.write_text("\n".join(lines) + "\nExperiment complete in 2634s\n")
+
+
+def test_cached_folds_scale_the_baseline_elapsed_time(tmp_path):
+    """A re-run baseline loads finished folds from the cache, so the ledger's
+    elapsed total covers only the fresh folds: scale it back to five folds
+    (seen on tcga_luad kras hoptimus1 clam: 0.73 h ledger, 3.52 h true)."""
+    runtime = tmp_path / "runtime"; runtime.mkdir()
+    state = _baseline_state(2634.0)
+    state["baseline"]["validation_folds"] = [{"fold_index": k} for k in range(5)]
+    _write_state(runtime, "cell_k", state)
+    _write_baseline_log(runtime, "cell_k", cached_folds=4)
+    report = cs.shape_cells(runtime, ["cell_k"])["cell_k"]
+    assert report.cached_folds == 4
+    assert report.baseline_elapsed_seconds == pytest.approx(2634.0 * 5)
+    assert report.shape is not None
+    assert report.shape.predicted_hours == pytest.approx(cs.predict_hours(2634.0 * 5, report.shape.gpus))
+    # the --cell --field path shapes from the same corrected input
+    assert cs.main(["--runtime", str(runtime), "--cell", "cell_k", "--field", "predicted_hours"]) == 0
+
+
+def test_baseline_with_no_fresh_fold_is_unshaped(tmp_path):
+    runtime = tmp_path / "runtime"; runtime.mkdir()
+    state = _baseline_state(10.0)
+    state["baseline"]["validation_folds"] = [{"fold_index": k} for k in range(5)]
+    _write_state(runtime, "cell_all", state)
+    _write_baseline_log(runtime, "cell_all", cached_folds=5)
+    report = cs.shape_cells(runtime, ["cell_all"])["cell_all"]
+    assert report.shape is None
+    assert "cached" in report.reason
+
+
+def test_missing_baseline_log_means_no_correction(fabricated_runtime):
+    report = cs.shape_cells(fabricated_runtime, ["cell_b"])["cell_b"]
+    assert report.cached_folds == 0
+    assert report.baseline_elapsed_seconds == pytest.approx(6.2 * 3600)
+
+
 def test_shape_cells_missing_campaign_state_is_unshaped_not_a_crash(tmp_path):
     runtime = tmp_path / "runtime"
     runtime.mkdir()

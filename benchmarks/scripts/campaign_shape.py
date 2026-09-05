@@ -80,6 +80,10 @@ class ShapeReport:
     shape: Shape | None
     reason: str | None
     baseline_elapsed_seconds: float | None = None
+    cached_folds: int = 0
+    """Folds the registered baseline loaded from its cache instead of
+    training; the ledger's elapsed total excludes them, so the prediction
+    input is scaled back to the full fold count (see _prediction_input)."""
 
 
 def predict_hours(e5_seconds: float, gpus: int) -> float:
@@ -185,24 +189,66 @@ def _baseline_elapsed_seconds(
     return float(total), None
 
 
+#: Line the training script prints per fold it reuses instead of training.
+CACHED_FOLD_MARKER = "Already completed, loading from disk"
+BASELINE_RUN_LOG = Path("baseline-execution") / "archive" / "run.log"
+
+
+def _cached_fold_count(cell_root: Path) -> int:
+    try:
+        text = (cell_root / BASELINE_RUN_LOG).read_text(errors="replace")
+    except OSError:
+        return 0
+    return text.count(CACHED_FOLD_MARKER)
+
+
+def _prediction_input(
+    runtime: Path, cell_id: str, state: Mapping[str, object],
+) -> tuple[float | None, int, str | None]:
+    """The cell's five-fold baseline time in seconds, plus the cached-fold count.
+
+    A baseline job that was interrupted and re-run loads its finished folds
+    from the cache, and the ledger's ``elapsed_seconds.total`` then covers
+    only the fresh folds (seen on tcga_luad kras hoptimus1 clam: 0.73 h
+    recorded, 3.52 h when trained fresh). With ``k`` cached folds of ``n``
+    the total is scaled by ``n / (n - k)``; a baseline with no fresh fold
+    carries no timing at all and is refused.
+    """
+    e5_seconds, reason = _baseline_elapsed_seconds(state)
+    if reason is not None:
+        return None, 0, reason
+    cached = _cached_fold_count(runtime / cell_id)
+    if cached == 0:
+        return e5_seconds, 0, None
+    folds = (state.get("baseline") or {}).get("validation_folds") or []
+    n_folds = len(folds) if isinstance(folds, list) and folds else 5
+    if cached >= n_folds:
+        return None, cached, (
+            f"baseline elapsed covers no fresh fold ({cached} of {n_folds} cached); "
+            "re-run the baseline to time it"
+        )
+    return e5_seconds * n_folds / (n_folds - cached), cached, None
+
+
 def _shape_one_cell(runtime: Path, cell_id: str, prefer: str = "cheap") -> ShapeReport:
     state, reason = _read_campaign_state(runtime, cell_id)
     if reason is not None:
         return ShapeReport(cell_id=cell_id, shape=None, reason=reason)
 
-    e5_seconds, reason = _baseline_elapsed_seconds(state)
+    e5_seconds, cached, reason = _prediction_input(runtime, cell_id, state)
     if reason is not None:
-        return ShapeReport(cell_id=cell_id, shape=None, reason=reason)
+        return ShapeReport(cell_id=cell_id, shape=None, reason=reason, cached_folds=cached)
 
     shape = choose_shape(e5_seconds, prefer)
     if shape is None:
         return ShapeReport(
             cell_id=cell_id, shape=None,
             reason="predicted discovery wall time exceeds every candidate shape",
-            baseline_elapsed_seconds=e5_seconds,
+            baseline_elapsed_seconds=e5_seconds, cached_folds=cached,
         )
     return ShapeReport(
-        cell_id=cell_id, shape=shape, reason=None, baseline_elapsed_seconds=e5_seconds,
+        cell_id=cell_id, shape=shape, reason=None,
+        baseline_elapsed_seconds=e5_seconds, cached_folds=cached,
     )
 
 
@@ -240,19 +286,19 @@ def _first_unknown_cell(runtime: Path, cell_ids: Sequence[str]) -> str | None:
 def _report_to_json(report: ShapeReport) -> dict:
     if report.shape is None:
         return {"unshaped": report.reason}
-    return {**asdict(report.shape), "baseline_elapsed_seconds": report.baseline_elapsed_seconds}
+    return {**asdict(report.shape), "baseline_elapsed_seconds": report.baseline_elapsed_seconds,
+            "cached_folds": report.cached_folds}
 
 
 def _table_row(runtime: Path, cell_id: str, report: ShapeReport) -> str:
     if report.shape is None:
         return f"{cell_id:<48} unshaped: {report.reason}"
-    state, _ = _read_campaign_state(runtime, cell_id)
-    e5_seconds, _ = _baseline_elapsed_seconds(state)
-    e5_hours = (e5_seconds or 0.0) / SECONDS_PER_HOUR
+    e5_hours = (report.baseline_elapsed_seconds or 0.0) / SECONDS_PER_HOUR
     shape = report.shape
+    note = f"  (+{report.cached_folds} cached folds scaled)" if report.cached_folds else ""
     return (
         f"{cell_id:<48} {e5_hours:>8.3f} {shape.gpus:>3} {shape.wall_hours:>5} "
-        f"{shape.predicted_hours:>12.3f}"
+        f"{shape.predicted_hours:>12.3f}{note}"
     )
 
 
