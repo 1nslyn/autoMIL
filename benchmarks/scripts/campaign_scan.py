@@ -17,7 +17,8 @@ Classes (mutually exclusive, in evaluation order):
                   writes the ledger) with nothing queued or running; the finish
                   ladder is idempotent and may be resumed by anyone
 - ``stranded``    any other session evidence (live elsewhere, or dead mid-run)
-- ``blocked``     reproduction gate recorded ``verdict: fail``
+- ``blocked``     reproduction gate recorded ``verdict: fail``, or no baseline
+                  is registered yet (a set whose baseline job is still queued)
 - ``pending``     clean, unclaimed, gate-eligible
 
 Claims are never unlinked here: ``take_claim`` in the launcher library is the
@@ -163,7 +164,7 @@ def classify_cell(
     if reproduction.get("mode") == "gate" and reproduction.get("verdict") == "fail":
         return "blocked", "reproduction gate failed"
     if state.get("baseline") is None:
-        raise SystemExit(f"{root.name}: no registered baseline — discovery cannot start")
+        return "blocked", "no registered baseline"
     return "pending", ""
 
 

@@ -170,13 +170,17 @@ def test_unreadable_state_is_reported_as_claimed_not_a_crash(scan_mod, tmp_path,
     assert result["pending"] == [names[1]]
 
 
-def test_missing_baseline_fails_loudly(scan_mod, tmp_path, monkeypatch):
-    names = ["tcga_luad__a__e__m__s42__v"]
+def test_missing_baseline_is_blocked_not_fatal(scan_mod, tmp_path, monkeypatch):
+    # A rehearsal set re-materializes a cell while its baseline job is still
+    # queued; the other cells must stay drivable.
+    names = ["tcga_luad__a__e__m__s42__v", "tcga_luad__b__e__m__s42__v"]
     runtime, roster = _runtime(tmp_path, names)
     (runtime / names[0] / "campaign_state.json").write_text(json.dumps({"phase": "discovery", "baseline": None}))
     monkeypatch.setattr(scan_mod, "live_job_ids", lambda: set())
-    with pytest.raises(SystemExit, match="no registered baseline"):
-        scan_mod.scan(runtime, roster, "999")
+    result = scan_mod.scan(runtime, roster, "999")
+    assert result["blocked"] == [names[0]]
+    assert result["notes"][names[0]] == "no registered baseline"
+    assert result["pending"] == [names[1]]
 
 
 def test_roster_census_mismatch_fails_loudly(scan_mod, tmp_path):
