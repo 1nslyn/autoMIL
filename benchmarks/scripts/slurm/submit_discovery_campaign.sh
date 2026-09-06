@@ -270,7 +270,7 @@ finish_cell() {  # cell
 }
 
 run_cell() {
-    local cell="$1" mode="$2" name release_line force_flag="" outcome deadline
+    local cell="$1" mode="$2" name release_line force_flag="" outcome wall_end deadline
     if [ "$mode" = "finish" ]; then
         if finish_cell "$cell"; then
             echo "$(date +%m-%d\ %H:%M) DONE $cell (finish-only)"; return 0
@@ -278,6 +278,12 @@ run_cell() {
         record_failure "$cell" "finish-failed (see $LOG)"; return 1
     fi
     usage_probe || return 1
+    # The deadline (step 5) is anchored on the wall end; without it no
+    # session may start, since the session would then be ended at once.
+    wall_end=$(wall_end_epoch)
+    if [ "$wall_end" -le 0 ]; then
+        record_failure "$cell" "wall end unknown (squeue gave no end time) — nothing started"; return 1
+    fi
 
     # 1. Reproduction gate (gate mode) on the first GPU. Measurement-mode
     #    blocks from the epsilon derivation are superseded exactly once.
@@ -356,7 +362,7 @@ print(m.RELEASE_LINE)")
 
     # 5. Watch until 30/30 and drained; the deadline keeps the finish
     #    reserve inside this job's wall.
-    deadline=$(( $(date +%s) + ($(remaining_hours) - DISC_FINISH_RESERVE_H) * 3600 ))
+    deadline=$(( wall_end - DISC_FINISH_RESERVE_H * 3600 ))
     outcome=$(watch_discovery "$cell" "$name" "$deadline")
     if [ "$outcome" = "deadline" ]; then
         scrape_usage "$cell" "$OPDIR/usage.json" 2>> "$LOG" || echo "[$cell] exporter scrape failed at the deadline" >> "$LOG"

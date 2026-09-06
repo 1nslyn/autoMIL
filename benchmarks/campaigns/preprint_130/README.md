@@ -308,15 +308,21 @@ It classifies every roster cell (`campaign_scan.py`: pending / claimed /
 finishable / stranded / blocked / done), takes the first drivable one
 (finish-only recoveries first), fits the job to the cell
 (`campaign_shape.py`: predicted wall from the cell's baseline elapsed time,
-30 attempts packed 4 per GPU as the frozen cell config allows, 1, 2 or 4 GPUs,
+each packed attempt costing twice the baseline's per-fold time and never
+under 15 minutes, as measured on the rehearsal cells: the CLAM survival
+cell's candidates averaged 52 min against a 25 min per-fold time on
+2026-09-06, the TITAN cell's 16 min against 2 min on 2026-09-04; 30
+attempts packed 4 per GPU as the frozen cell config allows, 1, 2 or 4 GPUs,
 12 h or 24 h wall, 12 cores and 128 GB per GPU, a 4-GPU shape takes the
 whole node's memory; the cheapest fitting shape by default, `--prefer fast`
 for the shortest wall), submits it, and only then claims the cell with the
-new job id. Against the registered 78 cells
-(2026-09-03) every cell fits: cheap gives 35 cells 1 GPU/12 h, 22 cells
-1 GPU/24 h, 18 cells 2 GPU/24 h, 3 cells 4 GPU/24 h (about 1,200 GPU-hours
-predicted for the campaign); fast puts 72 cells in the 12 h tier for about
-1,450 GPU-hours. Claims are once-only tombstones:
+new job id. Against the registered 78 cells (2026-09-06) cheap gives 29
+cells 1 GPU/12 h, 5 cells 1 GPU/24 h, 20 cells 2 GPU/24 h, 20 cells
+4 GPU/24 h (about 2,100 GPU-hours predicted, 3,350 allocated); fast puts 45
+cells in the 12 h tier for about 2,150 predicted. Four cells exceed every
+shape (HNSC grade Virchow2 CLAM; LUAD KRAS H-optimus-1 nnMIL, Virchow2 CLAM
+and Virchow2 nnMIL, each with a scaled five-fold time above 4.5 h) and are
+skipped until a longer wall is added to the shape table. Claims are once-only tombstones:
 a queued job holds its claim; a dead job's claim is replaced only after a
 successful cluster-wide `squeue` shows it gone. `--dry-run` prints the
 classification and every cell's shape without submitting; `--cell` picks a
@@ -339,7 +345,12 @@ session with `/exit`, runs the finish ladder on the same GPUs, normalizes
 the cell's files to group read/write, and submits the next cell as the same
 user (`--no-chain` at submission stops after the one cell: rehearsals and
 member tests). Failures land in `logs/discovery_cells/FAILED.tsv`; a stranded
-cell is reported, never relaunched.
+cell is reported, never relaunched. (The CLAM survival rehearsal cell stranded
+this way on 2026-09-06 at 29 of 30 attempts: its 12 h lane had been shaped
+from the undilated per-fold time, and the job ended the session at the
+finish-reserve deadline with four candidates still running. Its root is kept
+under `logs/discovery_cells/runtime-rehearsal/stranded/`; the cell was
+re-materialized and re-run from a fresh baseline.)
 
 **Rehearsal sets.** A run set that must stay out of the final grid lives in
 its own cell-root directory beside `runtime/`, built from the same manifest

@@ -242,11 +242,21 @@ take_claim() {
 
 claim_holder() { cat "$RUNTIME/$1/.discovery_claim" 2>/dev/null; }
 
-remaining_hours() {
+# Epoch second at which this job's wall ends; 0 when squeue cannot say.
+wall_end_epoch() {
     local end
     end=$(squeue -h -j "${SLURM_JOB_ID:-0}" -o %e 2>/dev/null | head -1)
     if [ -z "$end" ] || [ "$end" = "N/A" ]; then echo 0; return; fi
-    echo $(( ($(date -d "$end" +%s) - $(date +%s)) / 3600 ))
+    date -d "$end" +%s
+}
+
+# Hours left on the wall, to two decimals. (A whole-hour floor here cost
+# the 2026-09-06 CLAM rehearsal cell 28 minutes of its search window.)
+remaining_hours() {
+    local end
+    end=$(wall_end_epoch)
+    [ "$end" -gt 0 ] || { echo 0; return; }
+    awk -v end="$end" -v now="$(date +%s)" 'BEGIN { printf "%.2f", (end - now) / 3600 }'
 }
 
 # Read the plan's remaining allocation from a throwaway runtime in $HOME

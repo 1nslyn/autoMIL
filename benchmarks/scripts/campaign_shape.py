@@ -6,7 +6,8 @@ registered baseline's five-fold elapsed time from ``campaign_state.json`` and
 predicts how long the discovery stage will take under a candidate SLURM
 allocation (see ``predict_hours`` for the formula: one serial gate attempt,
 30 packed discovery attempts, 10 packed promotion candidates, plus a fixed
-setup/teardown overhead). It then picks the first candidate shape — tried
+setup/teardown overhead; a packed attempt costs ``ATTEMPT_DILATION`` times
+the baseline's per-fold time and never less than ``ATTEMPT_FLOOR_H``). It then picks the first candidate shape — tried
 wall-clock first, then GPU count — whose predicted time fits inside
 ``FIT_FRACTION`` of that wall clock.
 
@@ -41,6 +42,17 @@ FIT_FRACTION = 0.85
 CAP_PER_GPU = 4
 EFFICIENCY = 0.8
 OVERHEAD_H = 2.0
+
+# A packed attempt costs more than the baseline's per-fold time: the agent's
+# candidates train longer than the baseline (later early stopping) and share
+# the GPU with three others. Measured on the LUAD rehearsal cells: CLAM
+# survival with H-optimus-1 (2026-09-06), 25 completed candidates averaged
+# 52 min against the 25 min per-fold prediction (2.1x); TITAN (2026-09-04),
+# 16 min against 2 min, a per-attempt floor of process start-up and feature
+# loading that no baseline time predicts. The serial gate attempt re-runs
+# the baseline's own configuration alone, so only the floor applies to it.
+ATTEMPT_DILATION = 2.0
+ATTEMPT_FLOOR_H = 0.25
 CORES_PER_GPU = 12
 MEM_GB_PER_GPU = 128
 GPU_OPTIONS = (1, 2, 4)
@@ -91,21 +103,36 @@ class ShapeReport:
     supplied at submission for a baseline whose retry cached every fold)."""
 
 
+def fold_hours(e5_seconds: float, folds: int) -> float:
+    """The baseline's own time for ``folds`` of its five folds, never
+    below ``ATTEMPT_FLOOR_H``: the serial gate attempt's cost."""
+    e5_hours = e5_seconds / SECONDS_PER_HOUR
+    return max(ATTEMPT_FLOOR_H, e5_hours * (folds / TOTAL_FOLDS))
+
+
+def attempt_hours(e5_seconds: float, folds: int) -> float:
+    """One packed agent attempt over ``folds`` folds: the baseline's
+    per-fold time dilated by ``ATTEMPT_DILATION``, never below the floor."""
+    e5_hours = e5_seconds / SECONDS_PER_HOUR
+    return max(ATTEMPT_FLOOR_H, ATTEMPT_DILATION * e5_hours * (folds / TOTAL_FOLDS))
+
+
 def predict_hours(e5_seconds: float, gpus: int) -> float:
     """Predict discovery-stage wall time (hours) for a ``gpus``-wide job.
 
     ``e5_seconds`` is the 5-fold baseline's total elapsed time, as recorded
     in ``baseline.resources.elapsed_seconds.total``. One serial gate attempt
-    (``attempt``) is followed by 30 discovery attempts and 10 promotion
-    candidates, each packed ``CAP_PER_GPU * gpus`` wide at ``EFFICIENCY``
-    derating, plus a fixed overhead for setup/teardown.
+    (``fold_hours`` over the discovery folds) is followed by 30 discovery
+    attempts and 10 promotion candidates (``attempt_hours``), each packed
+    ``CAP_PER_GPU * gpus`` wide at ``EFFICIENCY`` derating, plus a fixed
+    overhead for setup/teardown.
     """
-    e5_hours = e5_seconds / SECONDS_PER_HOUR
-    attempt = e5_hours * (DISCOVERY_FOLDS / TOTAL_FOLDS)
-    promotion = e5_hours * (PROMOTION_FOLDS / TOTAL_FOLDS)
+    gate = fold_hours(e5_seconds, DISCOVERY_FOLDS)
+    attempt = attempt_hours(e5_seconds, DISCOVERY_FOLDS)
+    promotion = attempt_hours(e5_seconds, PROMOTION_FOLDS)
     capacity = CAP_PER_GPU * gpus * EFFICIENCY
     return (
-        attempt
+        gate
         + DISCOVERY_ATTEMPTS * attempt / capacity
         + PROMOTION_CANDIDATES * promotion / capacity
         + OVERHEAD_H

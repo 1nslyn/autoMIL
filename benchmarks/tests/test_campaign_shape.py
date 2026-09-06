@@ -36,10 +36,26 @@ cs = _load_module()
 
 
 def test_predict_hours_known_value_one_gpu():
-    # e5 = 3600s = 1h -> attempt=0.6, promo=0.4, capacity=4*1*0.8=3.2
-    # predicted = 0.6 + 30*0.6/3.2 + 10*0.4/3.2 + 2.0 = 9.475
+    # e5 = 3600s = 1h -> gate=0.6 (undilated), attempt=2*0.6=1.2,
+    # promo=2*0.4=0.8, capacity=4*1*0.8=3.2
+    # predicted = 0.6 + 30*1.2/3.2 + 10*0.8/3.2 + 2.0 = 16.35
     predicted = cs.predict_hours(3600.0, 1)
-    assert predicted == pytest.approx(9.475, abs=1e-9)
+    assert predicted == pytest.approx(16.35, abs=1e-9)
+
+
+def test_packed_attempts_cost_the_dilated_per_fold_time():
+    # The 2026-09-06 CLAM rehearsal cell: e5 = 0.71 h, candidates averaged
+    # 52 min, not the 25 min per-fold time.
+    assert cs.attempt_hours(0.71 * 3600, cs.DISCOVERY_FOLDS) == pytest.approx(2 * 0.71 * 0.6)
+    assert cs.fold_hours(0.71 * 3600, cs.DISCOVERY_FOLDS) == pytest.approx(0.71 * 0.6)
+
+
+def test_tiny_baselines_pay_the_per_attempt_floor():
+    # The TITAN rehearsal cell: e5 = 194 s, attempts still took ~16 min.
+    assert cs.attempt_hours(194.0, cs.DISCOVERY_FOLDS) == cs.ATTEMPT_FLOOR_H
+    assert cs.fold_hours(194.0, cs.DISCOVERY_FOLDS) == cs.ATTEMPT_FLOOR_H
+    # e5 = 180 s: every term sits on the floor -> 0.25 + 30*0.25/3.2 + 10*0.25/3.2 + 2
+    assert cs.predict_hours(180.0, 1) == pytest.approx(5.375, abs=1e-9)
 
 
 def test_predict_hours_more_gpus_predicts_less_time():
@@ -65,7 +81,7 @@ def test_choose_shape_small_baseline_gets_smallest_shape():
 
 
 def test_choose_shape_medium_baseline_needs_four_gpus_and_24h():
-    e5_seconds = 6.2 * 3600
+    e5_seconds = 3.0 * 3600  # the LUAD DTFD / nnMIL class on fir
 
     # 1 GPU cannot fit even the 24h wall.
     assert cs.predict_hours(e5_seconds, 1) > cs.FIT_FRACTION * 24
@@ -101,12 +117,12 @@ def test_unknown_preference_is_refused():
         cs.candidate_shapes("greedy")
 
 
-def test_preference_changes_the_shape_for_a_typical_abmil_cell():
-    e5_seconds = 2.17 * 3600  # median abmil 5-fold baseline on fir
+def test_preference_changes_the_shape_for_a_one_hour_cell():
+    e5_seconds = 1.0 * 3600  # the LUAD nnMIL survival class on fir
     cheap = cs.choose_shape(e5_seconds)              # default
     fast = cs.choose_shape(e5_seconds, prefer="fast")
     assert (cheap.gpus, cheap.wall_hours) == (1, 24)
-    assert (fast.gpus, fast.wall_hours) == (4, 12)
+    assert (fast.gpus, fast.wall_hours) == (2, 12)
     assert cheap.gpus * cheap.predicted_hours < fast.gpus * fast.predicted_hours  # fewer GPU-hours
 
 
@@ -135,7 +151,7 @@ def fabricated_runtime(tmp_path):
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     _write_state(runtime, "cell_a", _baseline_state(0.05 * 3600))
-    _write_state(runtime, "cell_b", _baseline_state(6.2 * 3600))
+    _write_state(runtime, "cell_b", _baseline_state(3.0 * 3600))
     _write_state(runtime, "cell_c", {"baseline": None})
     return runtime
 
@@ -221,7 +237,7 @@ def test_operator_supplied_time_shapes_a_baseline_with_no_fresh_fold(tmp_path, c
 def test_missing_baseline_log_means_no_correction(fabricated_runtime):
     report = cs.shape_cells(fabricated_runtime, ["cell_b"])["cell_b"]
     assert report.cached_folds == 0
-    assert report.baseline_elapsed_seconds == pytest.approx(6.2 * 3600)
+    assert report.baseline_elapsed_seconds == pytest.approx(3.0 * 3600)
 
 
 def test_shape_cells_missing_campaign_state_is_unshaped_not_a_crash(tmp_path):
