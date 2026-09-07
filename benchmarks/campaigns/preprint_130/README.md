@@ -376,6 +376,19 @@ only the fresh folds); a baseline whose retry cached every fold has no timing
 and is submitted with `--cell <id> --e5-hours <five-fold hours>`. Nothing from a rehearsal set is mirrored,
 frozen into the campaign selections, or certified.
 
+**Session record.** Whatever the outcome, the job's exit copies the
+runtime's own transcript of the cell's session,
+`~/.claude/projects/<cwd>/<session-id>.jsonl` (every user, assistant and
+tool message) with its sidecar directory (subagent transcripts, fetched
+tool results), from the submitter's home into `<cell root>/operator/session/`
+(`store_session_record.sh <cell-root>`; idempotent; run it by hand for a
+cell whose job predates it). The home copy is pruned by the runtime after
+its cleanup period, so the cell root is the record, beside
+`automil/.activity.jsonl` (session open, bind and end), `automil/graph.json`,
+`automil/results.tsv`, `automil/learnings.md`, `automil/plan.md`,
+`automil/orchestrator/orchestrator.log`, `operator/usage_before.txt`,
+`operator/usage_after.txt` and `operator/usage.json`.
+
 **The nudge.** If the runtime's active time has been flat for 30 minutes
 while the queue is drained and attempts remain, the job sends one fixed
 line (`DISC_NUDGE_LINE` in `discovery_lib.sh`), at most once an hour and
