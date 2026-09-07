@@ -31,6 +31,9 @@ for sid in $(grep '"event":"session_bind"' "$JOURNAL" | grep -oE '"session_id":"
     if [ -d "${src%.jsonl}" ]; then
         cp -rp "${src%.jsonl}" "$DEST/" || { echo "store_session_record: copy of the $sid sidecar failed"; rc=1; }
     fi
+    # The home copy carries the user's private group; the record takes the
+    # cell root's group so the team can read it and it bills the project.
+    chgrp -R "$(ls -ld "$ROOT" | awk '{print $4}')" "$DEST" 2>/dev/null || true
     chmod -R g+rX "$DEST"
     echo "store_session_record: $sid -> $DEST ($(wc -l < "$src") transcript lines, $(find "${src%.jsonl}" -type f 2>/dev/null | wc -l) sidecar files)"
 done
