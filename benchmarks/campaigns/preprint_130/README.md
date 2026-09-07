@@ -381,8 +381,9 @@ runtime's own transcript of the cell's session,
 `~/.claude/projects/<cwd>/<session-id>.jsonl` (every user, assistant and
 tool message) with its sidecar directory (subagent transcripts, fetched
 tool results), from the submitter's home into `<cell root>/operator/session/`
-(`store_session_record.sh <cell-root>`; idempotent; run it by hand for a
-cell whose job predates it). The home copy is pruned by the runtime after
+(`store_session_record.sh <cell-root>`; every session the activity journal
+saw, including one that failed before binding; idempotent; run it by hand
+for a cell whose job predates it). The home copy is pruned by the runtime after
 its cleanup period, so the cell root is the record, beside
 `automil/.activity.jsonl` (session open, bind and end), `automil/graph.json`,
 `automil/results.tsv`, `automil/learnings.md`, `automil/plan.md`,

@@ -7,7 +7,8 @@
 # tool results, in the HOME of the user who ran it, and prunes them after
 # its cleanup period (30 days by default). The cell root is the campaign's
 # record, so this copies both into <cell-root>/operator/session/ for every
-# session the cell's activity journal bound. Idempotent; group-readable.
+# session the cell's activity journal saw (opened, bound or ended: a session
+# that failed before binding is still a session). Idempotent; group-readable.
 #
 # Usage: store_session_record.sh <cell-root>
 # The discovery job runs it on exit (any outcome); run it by hand for a
@@ -19,8 +20,8 @@ JOURNAL="$ROOT/automil/.activity.jsonl"
 DEST="$ROOT/operator/session"
 rc=0
 found=0
-# The journal is written with sorted keys by campaign_operate, one event per line.
-for sid in $(grep '"event":"session_bind"' "$JOURNAL" | grep -oE '"session_id":"[0-9a-f-]+"' | cut -d'"' -f4 | awk '!seen[$0]++'); do
+# The journal is written by campaign_operate, one JSON event per line.
+for sid in $(grep -oE '"session_id":"[0-9a-f-]+"' "$JOURNAL" | cut -d'"' -f4 | awk '!seen[$0]++'); do
     found=1
     src=$(find "$HOME/.claude/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)
     if [ -z "$src" ]; then
@@ -37,5 +38,5 @@ for sid in $(grep '"event":"session_bind"' "$JOURNAL" | grep -oE '"session_id":"
     chmod -R g+rX "$DEST"
     echo "store_session_record: $sid -> $DEST ($(wc -l < "$src") transcript lines, $(find "${src%.jsonl}" -type f 2>/dev/null | wc -l) sidecar files)"
 done
-[ "$found" = 1 ] || { echo "store_session_record: no bound session in $JOURNAL"; exit 1; }
+[ "$found" = 1 ] || { echo "store_session_record: no session in $JOURNAL"; exit 1; }
 exit $rc
