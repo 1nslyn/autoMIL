@@ -48,7 +48,8 @@ SAFETY_MARGIN_GB = 2.0
 DEFAULT_TIMEOUT_MIN = 150
 # Saturate GPUs by default: the orchestrator's job is to pack experiments
 # until VRAM runs out, not to run them serially. Projects whose workloads
-# are heavier should override via config.yaml → orchestrator.max_concurrent_per_gpu.
+# are heavier should override via config.yaml → orchestrator.max_concurrent_per_gpu;
+# the host running the daemon overrides both via AUTOMIL_MAX_CONCURRENT_PER_GPU.
 MAX_CONCURRENT_PER_GPU = 8
 DEFAULT_VRAM_ESTIMATE_GB = 1.0
 SCHEDULING_POLICY = "best_fit"
@@ -229,6 +230,39 @@ def visible_gpu_ids() -> frozenset[int] | None:
             )
         ids.add(int(token))
     return frozenset(ids)
+
+
+def max_concurrent_per_gpu_override() -> int | None:
+    """The host's per-GPU attempt cap, or None to keep the project config's.
+
+    ``AUTOMIL_MAX_CONCURRENT_PER_GPU`` sets how many attempts this daemon
+    packs on each GPU. Like ``AUTOMIL_VISIBLE_GPUS`` it is runtime host
+    configuration: the frozen project config was written for one host, and
+    the launcher that sized the allocation knows how wide it can pack. A
+    malformed value raises rather than silently keeping the config's cap.
+    """
+    raw = os.environ.get("AUTOMIL_MAX_CONCURRENT_PER_GPU", "").strip()
+    if not raw:
+        return None
+    if not raw.isdecimal() or int(raw) < 1:
+        raise ValueError(
+            f"AUTOMIL_MAX_CONCURRENT_PER_GPU must be a positive integer; "
+            f"got {raw!r}"
+        )
+    return int(raw)
+
+
+def _effective_max_per_gpu(
+    host_cap: int | None, orch_cfg: dict, default: int,
+) -> int:
+    """The host's cap when the launcher set one, else the config's.
+
+    Construction and every hot-reload go through here, so a host cap keeps
+    winning over the frozen config on each tick.
+    """
+    if host_cap is not None:
+        return host_cap
+    return orch_cfg.get("max_concurrent_per_gpu", default)
 
 
 def _apply_partition(
@@ -550,7 +584,10 @@ class ExperimentOrchestrator:
         # key is absent, so the cap skips symmetrically with submit's gate
         # instead of refusing (post-billing) against the framework fallback.
         self.timeout_cap = orch_cfg.get("default_timeout_min")
-        self.max_per_gpu = orch_cfg.get("max_concurrent_per_gpu", MAX_CONCURRENT_PER_GPU)
+        self._host_max_per_gpu = max_concurrent_per_gpu_override()
+        self.max_per_gpu = _effective_max_per_gpu(
+            self._host_max_per_gpu, orch_cfg, MAX_CONCURRENT_PER_GPU,
+        )
         self.default_vram = orch_cfg.get("default_vram_estimate_gb", DEFAULT_VRAM_ESTIMATE_GB)
         self.scheduling_policy: str = orch_cfg.get("scheduling_policy", SCHEDULING_POLICY)
         self._rr_cursor: int = 0
@@ -2989,7 +3026,9 @@ class ExperimentOrchestrator:
         Lets an operator raise/lower concurrency and VRAM estimates live
         without restarting the daemon (which would orphan running jobs).
         Only the orchestrator.* section is reloaded; other sections are
-        not used after construction.
+        not used after construction. A host cap set at start
+        (AUTOMIL_MAX_CONCURRENT_PER_GPU) is not reloadable: it belongs to
+        the allocation, not the project.
         """
         config_path = self.automil_dir / "config.yaml"
         if not config_path.exists():
@@ -3005,7 +3044,9 @@ class ExperimentOrchestrator:
             )
             return
         orch_cfg = (cfg.get("orchestrator") or {}) if isinstance(cfg, dict) else {}
-        new_max = orch_cfg.get("max_concurrent_per_gpu", self.max_per_gpu)
+        new_max = _effective_max_per_gpu(
+            self._host_max_per_gpu, orch_cfg, self.max_per_gpu,
+        )
         new_vram = orch_cfg.get("default_vram_estimate_gb", self.default_vram)
         new_safety = orch_cfg.get("safety_margin_gb", self.safety_margin_gb)
         if new_max != self.max_per_gpu:

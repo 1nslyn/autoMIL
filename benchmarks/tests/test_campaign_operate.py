@@ -12,6 +12,7 @@ import importlib.util
 import json
 import socket
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -283,6 +284,33 @@ def test_orchestrator_window_command_sets_gpu_partition_inline(operate, tmp_path
     assert command.startswith("AUTOMIL_VISIBLE_GPUS=3 ")
     assert command.endswith("orchestrator start")
     assert str(cell) in command
+
+
+def test_operate_script_imports_in_a_fresh_interpreter():
+    # The shape predictor is loaded by path at import time; a fresh process
+    # has nothing else registered in sys.modules to mask a loading mistake
+    # (the shape tests register the module during their own collection).
+    code = (
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('campaign_operate', {str(SCRIPT)!r})\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "sys.modules[spec.name] = module\n"
+        "spec.loader.exec_module(module)\n"
+        "print(module.MAX_CONCURRENT_PER_GPU)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "8"
+
+
+def test_orchestrator_window_command_sets_the_shape_predictor_cap(operate, tmp_path):
+    # The daemon packs as many attempts per GPU as the shape predictor
+    # assumed when it sized the job, whatever the frozen cell config says.
+    command = operate.orchestrator_window_command(tmp_path / "cell", [0])
+    assert f" AUTOMIL_MAX_CONCURRENT_PER_GPU={operate.MAX_CONCURRENT_PER_GPU} " in command
+    assert operate.MAX_CONCURRENT_PER_GPU == 8
 
 
 def test_orchestrator_window_command_joins_a_multi_gpu_list(operate, tmp_path):
@@ -1053,6 +1081,7 @@ def test_finish_starts_supervised_promotion_child_with_gpu_partition(
     assert classify(argv) == ("automil", ("orchestrator", "start"))
     assert str(cell / "promotion") in argv
     assert env["AUTOMIL_VISIBLE_GPUS"] == "3"
+    assert env["AUTOMIL_MAX_CONCURRENT_PER_GPU"] == str(operate.MAX_CONCURRENT_PER_GPU)
     assert Path(stdout.name) == padir / "orchestrator" / "operate_supervisor.log"
     assert ("stage", "freeze-promotion") in actions(boundary.run_or_die)
 

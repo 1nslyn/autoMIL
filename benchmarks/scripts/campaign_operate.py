@@ -25,6 +25,7 @@ Daemon liveness is decided with the daemon's OWN pid-file semantics
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shlex
@@ -53,6 +54,24 @@ from autobench.campaign_launch import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STAGE_SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_stage.py"
 LAUNCH_SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_launch.py"
+SHAPE_SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_shape.py"
+
+
+def _shape_module():
+    """``campaign_shape.py`` is a standalone script (no package); load it by path."""
+    spec = importlib.util.spec_from_file_location("campaign_shape", SHAPE_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses looks up sys.modules[cls.__module__] while processing the
+    # class body, so the module must be registered before exec_module runs.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+#: Attempts packed per GPU by every daemon this script starts: the number
+#: the shape predictor assumed when it sized the SLURM job, handed to the
+#: daemon as AUTOMIL_MAX_CONCURRENT_PER_GPU over the frozen cell config.
+MAX_CONCURRENT_PER_GPU: int = _shape_module().CAP_PER_GPU
 ACTIVITY_JOURNAL = ".activity.jsonl"
 AGENT_SESSION_FILE = "agent_session.json"
 AGENT_PROTOCOL_FILE = "agent_protocol.json"
@@ -159,10 +178,12 @@ def orchestrator_window_command(cell_root: Path, gpus: list[int]) -> str:
     """Foreground discovery-orchestrator command line for the orch window.
 
     ``gpus`` may be a single-index or multi-index partition (a job may use
-    1, 2 or 4 GPUs); AUTOMIL_VISIBLE_GPUS takes the normalized comma list.
+    1, 2 or 4 GPUs); AUTOMIL_VISIBLE_GPUS takes the normalized comma list
+    and AUTOMIL_MAX_CONCURRENT_PER_GPU the packing the job was sized for.
     """
     return (
         f"AUTOMIL_VISIBLE_GPUS={_gpu_list_env_value(gpus)} "
+        f"AUTOMIL_MAX_CONCURRENT_PER_GPU={MAX_CONCURRENT_PER_GPU} "
         + shlex.join(automil_argv(cell_root, "orchestrator", "start"))
     )
 
@@ -1071,7 +1092,11 @@ def _drive_promotion(
         orch_dir.mkdir(parents=True, exist_ok=True)
         log_handle = log_path.open("ab")
         gpu_value = _gpu_list_env_value(gpus)
-        env = {**os.environ, "AUTOMIL_VISIBLE_GPUS": gpu_value}
+        env = {
+            **os.environ,
+            "AUTOMIL_VISIBLE_GPUS": gpu_value,
+            "AUTOMIL_MAX_CONCURRENT_PER_GPU": str(MAX_CONCURRENT_PER_GPU),
+        }
         child = _popen(
             automil_argv(promotion_root, "orchestrator", "start"),
             env=env, stdout=log_handle, stderr=subprocess.STDOUT,

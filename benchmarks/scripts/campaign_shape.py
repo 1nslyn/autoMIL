@@ -34,12 +34,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-# Per-GPU concurrent-job cap, frozen in the cell config as
-# orchestrator.max_concurrent_per_gpu: 4; efficiency is the derated packing
-# factor observed in the aihub canary logs (GPU-attached job hours vs actual
-# wall-clock hours for a packed batch of attempts).
+# Per-GPU concurrent-attempt cap. The launcher hands it to the daemon as
+# AUTOMIL_MAX_CONCURRENT_PER_GPU, so the packing the prediction assumes is
+# the packing the job runs (the frozen cell config's own cap was written
+# for another host). Sized from the four LUAD KRAS rehearsal cells
+# (2026-09-13/14): packed 4 per GPU they used 18-21% of their cores (nnMIL
+# 54%), 4-5 GB of RAM and 1-1.5 GB of VRAM per attempt against 12 cores,
+# 128 GB and 80 GB per GPU, and each attempt ran only 1.1-1.2x its serial
+# time; 8 per GPU stays inside every one of those budgets. Efficiency is the
+# derated packing factor observed in the aihub canary logs (GPU-attached
+# job hours vs actual wall-clock hours for a packed batch of attempts).
 FIT_FRACTION = 0.85
-CAP_PER_GPU = 4
+CAP_PER_GPU = 8
 EFFICIENCY = 0.8
 OVERHEAD_H = 2.0
 

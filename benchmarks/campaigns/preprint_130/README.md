@@ -312,17 +312,20 @@ each packed attempt costing twice the baseline's per-fold time and never
 under 15 minutes, as measured on the rehearsal cells: the CLAM survival
 cell's candidates averaged 52 min against a 25 min per-fold time on
 2026-09-06, the TITAN cell's 16 min against 2 min on 2026-09-04; 30
-attempts packed 4 per GPU as the frozen cell config allows, 1, 2 or 4 GPUs,
-12 h or 24 h wall, 12 cores and 128 GB per GPU, a 4-GPU shape takes the
-whole node's memory; the cheapest fitting shape by default, `--prefer fast`
-for the shortest wall), submits it, and only then claims the cell with the
-new job id. Against the registered 78 cells (2026-09-06) cheap gives 29
-cells 1 GPU/12 h, 5 cells 1 GPU/24 h, 20 cells 2 GPU/24 h, 20 cells
-4 GPU/24 h (about 2,100 GPU-hours predicted, 3,350 allocated); fast puts 45
-cells in the 12 h tier for about 2,150 predicted. Four cells exceed every
-shape (HNSC grade Virchow2 CLAM; LUAD KRAS H-optimus-1 nnMIL, Virchow2 CLAM
-and Virchow2 nnMIL, each with a scaled five-fold time above 4.5 h) and are
-skipped until a longer wall is added to the shape table. Claims are once-only tombstones:
+attempts packed 8 per GPU, 1, 2 or 4 GPUs, 12 h or 24 h wall, 12 cores and
+128 GB per GPU, a 4-GPU shape takes the whole node's memory; the cheapest
+fitting shape by default, `--prefer fast` for the shortest wall), submits
+it, and only then claims the cell with the new job id. The packing width is
+the launcher's, not the frozen cell config's: `campaign_operate.py` starts
+every daemon with `AUTOMIL_MAX_CONCURRENT_PER_GPU` set to the predictor's
+cap, so the job runs as wide as it was sized. The cap was raised from 4 to
+8 on 2026-09-15 from the four LUAD KRAS rehearsal cells: packed 4 per GPU
+they used 18-21 % of their cores (nnMIL 54 %), 4-5 GB of RAM and 1-1.5 GB
+of VRAM per attempt, and each attempt ran only 1.1-1.2x its serial time.
+Against the registered 78 cells (2026-09-15) cheap gives 33 cells
+1 GPU/12 h, 21 cells 1 GPU/24 h, 20 cells 2 GPU/24 h, 4 cells 4 GPU/24 h
+(about 1,300 GPU-hours predicted, 2,250 allocated), and every cell fits a
+shape. Claims are once-only tombstones:
 a queued job holds its claim; a dead job's claim is replaced only after a
 successful cluster-wide `squeue` shows it gone. `--dry-run` prints the
 classification and every cell's shape without submitting; `--cell` picks a

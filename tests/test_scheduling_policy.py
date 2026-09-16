@@ -48,6 +48,7 @@ def _fake_daemon(
         scheduling_policy=scheduling_policy,
         _rr_cursor=rr_cursor,
         # Attrs needed by _reload_orchestrator_config (hot-reload tests)
+        _host_max_per_gpu=None,
         default_vram=1.0,
         default_timeout=150,
         poll_interval=5,
