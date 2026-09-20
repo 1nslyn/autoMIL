@@ -58,12 +58,18 @@ def _init_git_repo(path: Path) -> None:
 
 
 def _roster_registry_block() -> dict:
-    """Read the real list off a shipped roster overlay — never a copy of it."""
+    """Read the real list off a shipped roster overlay — never a copy of it.
+
+    The overlay's ``policy_smoke`` hook stays out: it runs an autobench module
+    in autobench's environment, which the framework suite does not install.
+    The smoke validator has its own tests (``test_submit_policy_smoke.py``);
+    this fixture carries the lists the freeze is made of.
+    """
     repo = Path(__file__).resolve().parents[1]
     cfg = yaml.safe_load(
         (repo / "benchmarks/experiments/tcga_luad/automil/config.yaml").read_text()
     )
-    return cfg["registry"]
+    return {key: value for key, value in cfg["registry"].items() if key != "policy_smoke"}
 
 
 def _roster_editable() -> list[str]:
