@@ -473,6 +473,64 @@ def test_companion_guard_reaches_classification_cells_only(tmp_path):
     }
 
 
+def _materialized(tmp_path):
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    manifest_path = fake_repo / "benchmarks/campaigns/preprint_130/manifest.json"
+    write_manifest(build_preprint_manifest(fake_repo), manifest_path)
+    output_root = fake_repo / "benchmarks/campaigns/preprint_130/runtime"
+    roots = materialize_discovery_cells(
+        manifest_path, output_root, fake_repo, agent_protocol=AGENT_PROTOCOL,
+    )
+    return fake_repo, manifest_path, roots
+
+
+def test_audit_rejects_edited_phasing_and_policy_smoke(tmp_path):
+    """The batches, the phasing rule and the smoke command are protocol: a
+    cell that widened its batches to one, retargeted its smoke to the other
+    task family, or dropped the smoke would run under a protocol the
+    manifest does not record."""
+    fake_repo, manifest_path, roots = _materialized(tmp_path)
+    audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)
+
+    def _edit(root, mutate):
+        config_path = root / "config.yaml"
+        original = config_path.read_text()
+        config = yaml.safe_load(original)
+        mutate(config)
+        config_path.write_text(yaml.safe_dump(config))
+        return lambda: config_path.write_text(original)
+
+    survival = next(
+        root for root in roots
+        if json.loads((root / "campaign_cell.json").read_text())["task_family"] == "survival"
+    )
+    smoke = yaml.safe_load((survival / "config.yaml").read_text())["registry"]["policy_smoke"]
+    assert smoke["command"][-2:] == ["--task-family", "survival"]
+
+    def widen(config):
+        config["cap"]["phasing"]["batches"] = [30]
+    restore = _edit(roots[0], widen)
+    with pytest.raises(CampaignManifestError, match="discovery phasing drift"):
+        audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)
+    restore()
+
+    def retarget(config):
+        config["registry"]["policy_smoke"]["command"][-1] = "classification"
+    restore = _edit(survival, retarget)
+    with pytest.raises(CampaignManifestError, match="policy smoke drift"):
+        audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)
+    restore()
+
+    def drop(config):
+        del config["registry"]["policy_smoke"]
+    restore = _edit(survival, drop)
+    with pytest.raises(CampaignManifestError, match="policy smoke drift"):
+        audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)
+    restore()
+    audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)
+
+
 def test_audit_rejects_a_widened_companion_guard(tmp_path):
     """A cell that loosened its own margin gates on a number the frozen
     validation counts do not justify."""

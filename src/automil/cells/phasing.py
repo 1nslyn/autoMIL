@@ -119,11 +119,22 @@ class Attempt:
 
 
 def _read_spec(path: Path) -> dict | None:
+    """The spec at ``path``; ``None`` when the file vanished (the daemon
+    unlinked a queue file between the listing and the read, which the
+    archive read then covers). A file that exists but does not parse is an
+    error: skipping it would drop an attempt from the census and mint its
+    sequence number a second time."""
     try:
-        spec = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        text = path.read_text()
+    except OSError:
         return None
-    return spec if isinstance(spec, dict) else None
+    try:
+        spec = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not a readable spec: {exc}") from exc
+    if not isinstance(spec, dict):
+        raise ValueError(f"{path} is not a readable spec: not a JSON object")
+    return spec
 
 
 def _queued_specs(orchestrator: Path) -> list[tuple[str, dict]]:

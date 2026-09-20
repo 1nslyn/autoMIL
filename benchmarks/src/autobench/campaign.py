@@ -982,6 +982,17 @@ def _task_block(cell: Mapping[str, Any], dataset_raw: Mapping[str, Any]) -> dict
     }
 
 
+def _policy_smoke_for_cell(registry: Mapping[str, Any] | None, task_family: str) -> dict | None:
+    """The cohort template's ``registry.policy_smoke`` with the cell's task
+    family appended, so the harness judges the stopping seam by the metrics
+    the cell's trainers pass; ``None`` when the template declares none."""
+    smoke = (registry or {}).get("policy_smoke")
+    if not isinstance(smoke, dict) or not isinstance(smoke.get("command"), list):
+        return None
+    family = "survival" if task_family == "survival" else "classification"
+    return {**smoke, "command": [*smoke["command"], "--task-family", family]}
+
+
 def materialize_discovery_cells(
     manifest_path: Path,
     output_root: Path,
@@ -1174,12 +1185,9 @@ def materialize_discovery_cells(
         # The policy smoke judges the stopping seam by the metrics the cell's
         # trainers pass, so the harness learns the task family here (the
         # template is per cohort; a cohort carries both families).
-        smoke = (config.get("registry") or {}).get("policy_smoke")
-        if isinstance(smoke, dict) and isinstance(smoke.get("command"), list):
-            family = "survival" if cell["task_family"] == "survival" else "classification"
-            config["registry"]["policy_smoke"] = {
-                **smoke, "command": [*smoke["command"], "--task-family", family],
-            }
+        smoke = _policy_smoke_for_cell(config.get("registry"), cell["task_family"])
+        if smoke is not None:
+            config["registry"]["policy_smoke"] = smoke
         config["activity"] = {"exporter_port": exporter_port}
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
         config.setdefault("orchestrator", {})["default_timeout_min"] = (
@@ -1366,6 +1374,20 @@ def audit_materialized_campaign(
             raise CampaignManifestError(f"{cell_id}: activity exporter port drift")
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
+        if (config.get("cap") or {}).get("phasing") != PROTOCOL["discovery_phasing"]:
+            raise CampaignManifestError(f"{cell_id}: discovery phasing drift")
+        try:
+            _template = yaml.safe_load(
+                (repo_root / cell["policy_template"]).read_text()
+            ) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise CampaignManifestError(
+                f"{cell_id}: cannot read policy template: {exc}"
+            ) from exc
+        if (config.get("registry") or {}).get("policy_smoke") != _policy_smoke_for_cell(
+            _template.get("registry"), cell["task_family"],
+        ):
+            raise CampaignManifestError(f"{cell_id}: policy smoke drift")
         if (config.get("cap") or {}).get(
             "budget"
         ) != DISCOVERY_AGENT_ACTIVE_BUDGET:

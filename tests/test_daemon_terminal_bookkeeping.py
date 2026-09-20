@@ -174,6 +174,37 @@ class TestLaunchIntentRecord:
         assert "no pid" in joined.lower() or "unrecorded" in joined.lower()
         assert nid in joined
 
+    def test_recovery_finalizes_a_billed_launch_that_never_reached_its_intent(self, orch):
+        """_launch archives the spec and unlinks the queue file before the
+        worktree, the overlay and the running intent; a daemon that dies in
+        that window leaves an attempt nothing else can finish."""
+        nid = _proposed(orch)
+        (orch.archive_dir / nid).mkdir(parents=True)
+        (orch.archive_dir / nid / "spec.json").write_text(json.dumps({"id": nid, "description": "idea"}))
+        orch._recover_orphans()
+        assert json.loads((orch.archive_dir / nid / "result.json").read_text())["status"] == "crash"
+        assert (orch.completed_dir / f"{nid}.json").exists()
+        assert _reload(orch).get_node(nid)["status"] == "crash"
+
+    def test_recovery_leaves_queued_refused_cancelled_and_finished_specs_alone(self, orch):
+        cases = {}
+        for kind in ("queued", "refused", "cancelled", "finished"):
+            nid = _proposed(orch, kind)
+            (orch.archive_dir / nid).mkdir(parents=True)
+            meta = {"cap_refused": True} if kind == "refused" else {}
+            (orch.archive_dir / nid / "spec.json").write_text(json.dumps({"id": nid, "metadata": meta}))
+            if kind == "queued":
+                (orch.queue_dir / f"{nid}.json").write_text("{}")
+            if kind == "cancelled":
+                (orch.archive_dir / nid / f"{nid}_running_spec.json").write_text("{}")
+            if kind == "finished":
+                (orch.archive_dir / nid / "result.json").write_text('{"status": "completed"}')
+            cases[kind] = nid
+        orch._recover_orphans()
+        for kind, nid in cases.items():
+            assert (orch.archive_dir / nid / "result.json").exists() == (kind == "finished"), kind
+            assert _reload(orch).get_node(nid)["status"] != "crash", kind
+
     def test_a_normal_running_record_is_not_reported_as_a_leak(self, orch, caplog):
         nid = _proposed(orch)
         (orch.running_dir / f"{nid}.json").write_text(json.dumps(

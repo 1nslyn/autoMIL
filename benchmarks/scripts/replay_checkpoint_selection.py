@@ -337,9 +337,22 @@ FOLDS_REQUIRED = {
 }
 
 
+def _latest_complete_reproduction(rows: Sequence[dict]) -> list[dict]:
+    """The fold rows of the latest reproduction attempt that ran every
+    discovery fold: attempts are separate runs under
+    ``baseline-reproduction/attempt-N/`` and must never be pooled."""
+    complete = [
+        group for group in _grouped(rows, lambda row: row["log"]).values()
+        if len(group) == FOLDS_REQUIRED["baseline-reproduction"]
+    ]
+    if not complete:
+        return []
+    return max(complete, key=lambda group: int(re.search(r"attempt-(\d+)", group[0]["log"]).group(1)))
+
+
 def cell_summary(cell_id: str, rows: Sequence[dict]) -> tuple[object, ...]:
     baseline = [row for row in rows if row["kind"] == "baseline"]
-    repro = [row for row in rows if row["kind"] == "baseline-reproduction"]
+    repro = _latest_complete_reproduction([row for row in rows if row["kind"] == "baseline-reproduction"])
     nodes = _grouped([row for row in rows if kind_group(row["kind"]) == "node"], lambda row: row["kind"])
     n_folds = FOLDS_REQUIRED["node"]
     means = {node: (fold_mean(r, "primary@old", n_folds), fold_mean(r, "primary@new", n_folds)) for node, r in nodes.items()}

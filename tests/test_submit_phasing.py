@@ -233,6 +233,16 @@ class TestCellAttempts:
         (attempt,) = cell_attempts(adir, nodes, "c")
         assert attempt.finished is True
 
+    def test_a_corrupt_spec_is_an_error_not_a_missing_attempt(self, tmp_path):
+        """Skipping an unreadable archived spec would drop the attempt from the
+        census and mint its sequence number again."""
+        adir = tmp_path / "automil"
+        archive = adir / "orchestrator" / "archive"
+        (archive / "node_0002").mkdir(parents=True)
+        (archive / "node_0002" / "spec.json").write_text('{"id": "node_0002", "metadata": {"cell_id"')
+        with pytest.raises(ValueError, match="not a readable spec"):
+            cell_attempts(adir, {}, "c")
+
     def test_a_launch_between_the_two_scans_is_not_missed(self, tmp_path, monkeypatch):
         """The daemon writes archive/<node>/spec.json first and unlinks the
         queue file second. Reading the archive before the queue would miss a
@@ -514,6 +524,24 @@ class TestSubmitEnforcesThePhasing:
         refused = _submit(runner, extra, "node_0001")
         assert refused.exit_code != 0 and "all 5 attempts" in refused.output
         assert not (adir / "orchestrator" / "queue" / f"{extra}.json").exists()
+
+    def test_a_neighbour_is_judged_by_its_proposal_parent_not_the_submit_flag(self, tmp_path, monkeypatch):
+        """``submit --parent`` cannot re-parent a proposal: the graph judges
+        the result against the proposal's parent, so a neighbour proposed
+        under an earlier best node stays a child of that node."""
+        runner, adir = _phased_project(tmp_path, monkeypatch)
+        neighbour = _node_id(_propose(runner, "node_0001", "lr", role="neighbour"))
+        # a second root becomes the best node
+        from automil.graph import ExperimentGraph
+        graph = ExperimentGraph(path=str(adir / "graph.json"))
+        other = graph.add_executed(parent_id=None, description="other root", techniques=[],
+                                   metrics={"primary_value": 0.7, "val_auc": 0.7}, status="keep")
+        graph.get_node(other)["primary_value"] = 0.7
+        graph.meta["best_node_id"] = other
+        graph.save()
+        refused = _submit(runner, neighbour, other)
+        assert refused.exit_code != 0 and "disagrees with the proposal's parent" in refused.output
+        assert not (adir / "orchestrator" / "queue" / f"{neighbour}.json").exists()
 
     def test_a_node_submitted_without_a_proposal_is_refused(self, tmp_path, monkeypatch):
         runner, adir = _phased_project(tmp_path, monkeypatch)

@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import shutil
+import tempfile
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,6 +117,16 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                     f"Submitting would overwrite its archive and destroy prior "
                     f"results. Use 'automil propose' to create a new proposal, "
                     f"then submit against that new node id."
+                )
+            # A proposal's parent is fixed at propose time: the graph judges
+            # the result against it, and the phasing judges a robustness
+            # neighbour by it. A --parent that disagrees would be recorded
+            # in the spec and honoured by nothing else.
+            if parent and existing.get("parent_id") and existing["parent_id"] != parent:
+                raise click.ClickException(
+                    f"Refusing to submit: --parent {parent} disagrees with the "
+                    f"proposal's parent {existing['parent_id']}; propose a new "
+                    f"node under {parent} instead."
                 )
     # Also refuse if a spec for this node is already in queue/ or running/.
     # WR-03 fix: since D-169 (Phase 6) running specs are namespaced under
@@ -354,10 +365,12 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # (launch-time revalidation would reject it as unmanifested, after the
     # attempt was charged).
     archive = adir / "orchestrator" / "archive" / node
-    staging = adir / "orchestrator" / "staging" / node
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True)
+    staging_root = adir / "orchestrator" / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    # One staging directory per submit process: two submits of one node
+    # must never share (and truncate) each other's overlay before the lock
+    # decides between them.
+    staging = Path(tempfile.mkdtemp(prefix=f"{node}.", dir=str(staging_root)))
 
     overlay_manifest = {}
     deletions = []
@@ -811,7 +824,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         _refusal = phasing_refusal(
             _phasing, _attempts,
             axis=_candidate_meta.get("axis"), role=_candidate_meta.get("role"),
-            parent_id=parent or _candidate.get("parent_id"),
+            parent_id=_candidate.get("parent_id") or parent,
             best_node_id=(_fresh.get("meta") or {}).get("best_node_id"),
         )
         if _refusal is not None:

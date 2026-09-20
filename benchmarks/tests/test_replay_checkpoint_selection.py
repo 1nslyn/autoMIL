@@ -143,6 +143,28 @@ def test_a_killed_candidate_with_fewer_folds_than_the_stage_never_ranks_as_winne
     assert summary[5] == "" and summary[8] == ""
 
 
+def test_reproduction_attempts_are_never_pooled(mod, tmp_path):
+    """Two complete reproduction attempts are two runs: the summary reports
+    the latest complete one, and an interrupted attempt cannot complete an
+    earlier one's fold count."""
+    fold = "[epoch 0] val_loss=0.5 val_auc={v}\n[selected] epoch=0 source=best\n"
+    root = _cell(tmp_path / "r", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
+    n = mod.FOLDS_REQUIRED["baseline-reproduction"]
+    for attempt, (v, folds) in enumerate(((0.70, n), (0.80, n), (0.99, n - 1)), start=1):
+        archive = root / "baseline-reproduction" / f"attempt-{attempt}" / "archive"
+        archive.mkdir(parents=True)
+        (archive / "run.log").write_text(fold.format(v=v) * folds)
+    cell = mod.load_cell(root)
+    rows = [row for kind, log in mod.cell_logs(root)
+            for row in mod.replay_log(cell, kind, log, mod.StopRule(patience=10))]
+    summary = mod.cell_summary(cell.cell_id, rows)
+    assert summary[3] == pytest.approx(0.80)      # attempt-2: the latest complete one
+    (root / "baseline-reproduction" / "attempt-2").rename(root / "baseline-reproduction" / "attempt-10")
+    rows = [row for kind, log in mod.cell_logs(root)
+            for row in mod.replay_log(cell, kind, log, mod.StopRule(patience=10))]
+    assert mod.cell_summary(cell.cell_id, rows)[3] == pytest.approx(0.80)   # numeric, not lexical
+
+
 def test_the_clam_floor_belongs_to_the_classification_arm_only(mod):
     """CLAM classification refuses to stop before epoch 50 (its vendored
     stopper's floor); CLAM survival runs the adapter's plain patience rule."""

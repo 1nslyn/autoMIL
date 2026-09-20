@@ -6,11 +6,13 @@ an attempt is charged. The policy is instantiated through the same
 call order that exists in the trainers: TITAN, nnMIL and the non-DTFD survival
 adapters zero the gradients before the forward pass; ABMIL classification and
 both DTFD tiers zero them between the forward and the backward pass; CLAM zeros
-them after the step. Then the stopping seam with the metrics dict the cell's
+them after the step; nnMIL's order is also driven through a ``GradScaler`` as
+on CUDA. Then the stopping seam with the metrics dict the cell's
 task family passes (``--task-family classification``: ``val_auc`` and
 ``val_loss``; ``survival``: ``val_c_index`` and ``val_loss``), and the DTFD
-seam, the only trainer that passes a scheduler: one optimizer per tier role,
-a ``MultiStepLR`` on the target the trainer resolves, wrapped per role.
+seam, the only trainer that passes a scheduler: both tier optimizers wrapped,
+then both ``MultiStepLR`` schedulers built on the targets the trainer resolves
+and wrapped, before either tier trains.
 
 Exit codes: 0 the policy passed; 1 it failed a seam (the diagnostics name the
 call order or the role); 2 usage (missing file, unknown task family, no
@@ -77,7 +79,11 @@ def _model_and_batch():
     return model, features, labels
 
 
-def _run_order(order: str, policy_cls: type) -> None:
+def _run_order(order: str, policy_cls: type, *, scaled: bool = False) -> None:
+    """One call order for a few steps; ``scaled`` drives the step through a
+    ``GradScaler`` as nnMIL does on CUDA (the scaler unscales the gradients it
+    finds through the wrapper's ``param_groups``, so a wrapper that hands it
+    copies fails here as it fails there)."""
     import torch
     from torch import nn
 
@@ -87,6 +93,7 @@ def _run_order(order: str, policy_cls: type) -> None:
     runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
     raw = torch.optim.Adam(model.parameters(), lr=1e-2)
     optimizer = runtime.wrap_optimizer(raw)
+    scaler = torch.amp.GradScaler("cpu", enabled=True) if scaled else None
     criterion = nn.CrossEntropyLoss()
     for _ in range(STEPS_PER_ORDER):
         # nnMIL reads the learning rate off the wrapper every epoch; every
@@ -97,8 +104,13 @@ def _run_order(order: str, policy_cls: type) -> None:
         loss = criterion(model(features), labels)
         if order.startswith("forward -> zero_grad"):
             optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
         if order.endswith("zero_grad"):
             optimizer.zero_grad()
         if not torch.isfinite(loss):
@@ -146,14 +158,16 @@ def _run_dtfd_tiers(policy_cls: type) -> None:
     tier2 = nn.Linear(4, 3)
     runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
     criterion = nn.CrossEntropyLoss()
-    tiers = []
-    for role, module in zip(ROLES, (tier1, tier2)):
-        raw = torch.optim.Adam(module.parameters(), lr=1e-2)
-        optimizer = runtime.wrap_optimizer(raw, role=role)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+    raws = [torch.optim.Adam(module.parameters(), lr=1e-2) for module in (tier1, tier2)]
+    optimizers = [runtime.wrap_optimizer(raw, role=role) for role, raw in zip(ROLES, raws)]
+    schedulers = [
+        torch.optim.lr_scheduler.MultiStepLR(
             runtime.scheduler_target(optimizer, raw, role=role), milestones=[1, 2], gamma=0.2,
         )
-        tiers.append((module, optimizer, runtime.wrap_scheduler(scheduler, role=role)))
+        for role, optimizer, raw in zip(ROLES, optimizers, raws)
+    ]
+    schedulers = [runtime.wrap_scheduler(sched, role=role) for role, sched in zip(ROLES, schedulers)]
+    tiers = list(zip((tier1, tier2), optimizers, schedulers))
     for _ in range(STEPS_PER_ORDER):
         for module, optimizer, scheduler in tiers:
             loss = criterion(module(features), labels)
@@ -166,6 +180,8 @@ def _run_dtfd_tiers(policy_cls: type) -> None:
 def _checks(policy_cls: type, family: str) -> Sequence[tuple[str, Callable[[], None]]]:
     return (
         *[(order, lambda order=order: _run_order(order, policy_cls)) for order in CALL_ORDERS],
+        (f"{CALL_ORDERS[0]} through a GradScaler (nnMIL on CUDA)",
+         lambda: _run_order(CALL_ORDERS[0], policy_cls, scaled=True)),
         (f"stopping seam ({family} metrics)", lambda: _run_stopping(policy_cls, family)),
         ("DTFD tiers tier1/tier2 with MultiStepLR schedulers", lambda: _run_dtfd_tiers(policy_cls)),
     )

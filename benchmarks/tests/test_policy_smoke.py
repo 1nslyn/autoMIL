@@ -190,6 +190,58 @@ SHARED_SLOW = HEADER.format(name="shared_slow") + '''class SharedSlow(PolicyVari
         return _Wrapped(opt)
 '''
 
+COPIES_PARAM_GROUPS = HEADER.format(name="copies_param_groups") + '''class CopiesParamGroups(PolicyVariant):
+    """Delegates zero_grad and step but hands out COPIES of param_groups: the
+    plain path never notices; nnMIL's GradScaler unscales the copies, finds
+    no gradients on them and refuses the step."""
+
+    def wrap_optimizer(self, opt):
+        import copy
+
+        class _Wrapped:
+            def __init__(self, inner):
+                self.inner = inner
+
+            @property
+            def param_groups(self):
+                return copy.deepcopy(self.inner.param_groups)
+
+            def zero_grad(self, *a, **kw):
+                self.inner.zero_grad(*a, **kw)
+
+            def step(self, *a, **kw):
+                self.inner.step(*a, **kw)
+
+        return _Wrapped(opt)
+'''
+
+CAPTURES_IN_SCHEDULER = HEADER.format(name="captures_in_scheduler") + '''class CapturesInScheduler(PolicyVariant):
+    """Buffers made per optimizer wrap, captured per scheduler wrap: DTFD
+    wraps BOTH optimizers before EITHER scheduler, so tier 1's scheduler
+    captures tier 2's buffers and its first step mismatches shapes."""
+
+    def wrap_optimizer(self, opt):
+        self.buffers = [p.detach().clone() for g in opt.param_groups for p in g["params"]]
+        return opt
+
+    def wrap_scheduler(self, sched):
+        import torch
+        captured = self.buffers
+
+        class _Wrapped:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def step(self, *a, **kw):
+                self.inner.step(*a, **kw)
+                params = [p for g in self.inner.optimizer.param_groups for p in g["params"]]
+                with torch.no_grad():
+                    for buffer, p in zip(captured, params, strict=True):
+                        buffer.add_(p - buffer)
+
+        return _Wrapped(sched)
+'''
+
 FORGETS_TIER2 = HEADER.format(name="forgets_tier2") + '''class ForgetsTier2(PolicyVariant):
     def wrap_optimizer(self, opt):
         return opt
@@ -285,10 +337,21 @@ class TestTheOptimizerSeamIsTheTrainers:
     def test_per_wrapper_state_passes(self, tmp_path):
         assert policy_smoke.main([str(_write(tmp_path, "lookahead", LOOKAHEAD))]) == 0
 
+    def test_a_wrapper_handing_the_scaler_copies_is_refused(self, tmp_path, capsys):
+        assert policy_smoke.main([str(_write(tmp_path, "copies_param_groups", COPIES_PARAM_GROUPS))]) == 1
+        err = capsys.readouterr().err
+        assert "GradScaler" in err and "inf checks" in err
+
 
 class TestTheSchedulerSeamIsDTFDs:
     def test_a_multistep_milestone_tweak_passes(self, tmp_path):
         assert policy_smoke.main([str(_write(tmp_path, "milestones", READS_MILESTONES))]) == 0
+
+    def test_buffers_captured_per_scheduler_wrap_are_refused(self, tmp_path, capsys):
+        """Passes when each tier's optimizer and scheduler are wrapped
+        together; refused under DTFD's real order."""
+        assert policy_smoke.main([str(_write(tmp_path, "captures", CAPTURES_IN_SCHEDULER))]) == 1
+        assert "tier" in capsys.readouterr().err
 
     def test_a_wrapper_that_forgets_tier2_is_refused_by_name(self, tmp_path, capsys):
         assert policy_smoke.main([str(_write(tmp_path, "forgets_tier2", FORGETS_TIER2))]) == 1
@@ -327,14 +390,14 @@ class TestHarnessCoverage:
         path = str(_write(tmp_path, "recorder", source))
         assert policy_smoke.main(["--task-family", family, path]) == 0
         lines = recorder.read_text().splitlines()
-        # one wrap per call order, plus the stopping run
-        assert lines.count("optimizer:main") == len(policy_smoke.CALL_ORDERS) + 1
+        # one wrap per call order, one for the scaled order, plus the stopping run
+        assert lines.count("optimizer:main") == len(policy_smoke.CALL_ORDERS) + 2
         assert "optimizer:tier1" in lines and "optimizer:tier2" in lines
         assert "scheduler:tier1:MultiStepLR" in lines and "scheduler:tier2:MultiStepLR" in lines
         assert not any(line.startswith("scheduler:main") for line in lines)
         # DTFD wraps both tiers, then builds both schedulers, before any step
         dtfd = [line for line in lines if line.endswith(":tier1") or line.endswith(":tier2")
                 or ":tier1:" in line or ":tier2:" in line]
-        assert dtfd == ["optimizer:tier1", "scheduler:tier1:MultiStepLR",
-                        "optimizer:tier2", "scheduler:tier2:MultiStepLR"]
+        assert dtfd == ["optimizer:tier1", "optimizer:tier2",
+                        "scheduler:tier1:MultiStepLR", "scheduler:tier2:MultiStepLR"]
         assert lines.count(f"stop:{stop_keys}") == policy_smoke.STEPS_PER_ORDER

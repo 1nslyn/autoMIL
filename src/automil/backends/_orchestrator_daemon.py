@@ -981,8 +981,6 @@ class ExperimentOrchestrator:
             for name in ("local", "slurm", "ray")
             if (self.running_root / name).exists()
         ]
-        if not _backend_subdirs:
-            return
         import itertools
         for f in itertools.chain.from_iterable(d.glob("*.json") for d in _backend_subdirs):
             try:
@@ -1031,6 +1029,44 @@ class ExperimentOrchestrator:
                     self.runner.cleanup_worktree(wt)
             except Exception:
                 continue
+        self._finalize_launches_without_intent()
+
+    def _finalize_launches_without_intent(self) -> None:
+        """Mark crashed every billed launch the previous daemon never carried
+        to a running intent: ``_launch`` archives (and bills) the spec and
+        unlinks the queue file before it creates the worktree, applies the
+        overlay and writes the intent, so a daemon that died in that window
+        leaves an archived spec with no running record and no terminal
+        record. Nothing else ever finalizes it: recovery only reads running
+        specs, ``cancel`` needs one, a resubmit of the id is refused, and a
+        phased cell counts it in flight forever.
+        """
+        for spec_path in sorted(self.archive_dir.glob("*/spec.json")):
+            node_dir = spec_path.parent
+            node_id = node_dir.name
+            if (node_dir / "result.json").exists() or \
+                    (node_dir / f"{node_id}_running_spec.json").exists():
+                continue
+            try:
+                spec = json.loads(spec_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                logger.exception("Unreadable archived spec for %s; not finalized", node_id)
+                continue
+            if (spec.get("metadata") or {}).get("cap_refused"):
+                continue
+            if (self.queue_dir / f"{node_id}.json").exists() or any(
+                (self.running_root / name / f"{node_id}.json").exists()
+                for name in ("local", "slurm", "ray")
+            ):
+                continue
+            logger.warning(
+                "Billed launch %s has neither a running nor a terminal record: the "
+                "previous daemon died before its running intent; marking it crashed",
+                node_id,
+            )
+            self._mark_crashed(
+                node_id, spec, "Orchestrator restarted during launch, before the running intent",
+            )
 
     def _sigkill_orphan_pg(self, node_id: str, spec: dict) -> None:
         """SIGKILL an orphaned process group recorded in the running spec.
@@ -1642,7 +1678,7 @@ class ExperimentOrchestrator:
                 "cancel_reason": "cap",
                 "cap_refused": True,
             }
-            (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2))
+            _atomic_write_lines(archive / "spec.json", [json.dumps(spec_clean, indent=2)])
         except OSError:
             logger.exception("Could not archive refused spec for %s", node_id)
 
@@ -1854,9 +1890,11 @@ class ExperimentOrchestrator:
         archive = self.archive_dir / node_id
         archive.mkdir(parents=True, exist_ok=True)
 
-        # Save spec (without internal keys)
+        # Save spec (without internal keys). Atomic: `automil submit` reads
+        # archived specs for the phasing census while the daemon runs, and a
+        # half-written file would read as a missing attempt.
         spec_clean = {k: v for k, v in spec.items() if k not in ("_file",)}
-        (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2))
+        _atomic_write_lines(archive / "spec.json", [json.dumps(spec_clean, indent=2)])
 
         # A9 (claims-alignment): bill at archive time, not after Popen. The
         # freeze census counts archived non-cap-refused specs and requires it
@@ -2893,7 +2931,7 @@ class ExperimentOrchestrator:
 
         (archive / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         spec_clean = {k: v for k, v in spec.items() if k not in ("_file",)}
-        (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2) + "\n")
+        _atomic_write_lines(archive / "spec.json", [json.dumps(spec_clean, indent=2) + "\n"])
         (self.completed_dir / f"{node_id}.json").write_text(
             json.dumps(result, indent=2) + "\n"
         )
