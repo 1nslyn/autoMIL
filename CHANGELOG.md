@@ -26,7 +26,23 @@ autoMIL: F2-readiness framework refactor.
   stopping policies; it no longer votes. nnMIL defaults a missing `auroc` or
   C-index to NaN (a finite 0.0 would have become the epoch-0 checkpoint),
   and the survival adapters drop the vendored callback's on-disk
-  `best_<model>.pth` round trip for an in-memory deep copy.
+  `best_<model>.pth` round trip for an in-memory deep copy. Replayed offline
+  over the 160 finished v3 rehearsal runs, the v4 rule moves the selected
+  epoch by a median of 7 to 12 epochs and raises every baseline's reported
+  validation metric by 0.04 to 0.10 (`benchmarks/scripts/replay_checkpoint_selection.py`).
+  Three further protocol changes ride the same version bump: the companion
+  balanced-accuracy guard is judged against `max(one-slide quantum,
+  se_multiplier x paired SE)` at the discovery gate and at the freeze (one
+  rule with the primary keep-bar; KRAS ABMIL had lost its rank-1 recipe by
+  0.002 against the bare quantum); the 30 attempts are spent in fixed
+  batches of 8/8/8/6 that `automil submit` enforces from `cap.phasing`
+  (opening batch on five axes, at most three consecutive attempts per axis
+  without a keep, two robustness neighbours in the final batch; `automil
+  propose` records `--axis`, `--predicted-delta` and `--role`); and every
+  policy file is smoke-run through the trainers' three call orders, the
+  scheduler and stopping seams and the DTFD roles at submit
+  (`registry.policy_smoke`, `autobench.pipeline.policy_smoke`), so a policy
+  that would crash the trainer is refused for free.
 
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over

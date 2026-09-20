@@ -21,7 +21,7 @@ def _load_module():
 
 ce = _load_module()
 
-CELL_ID = "tcga_luad__kras__uni_v2__clam__s42__preprint-v3"
+CELL_ID = "tcga_luad__kras__uni_v2__clam__s42__preprint-v4"
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -193,7 +193,7 @@ def test_state_cell_identity_mismatch_is_refused(fabricated_cell):
     runtime, export_root = fabricated_cell
     state_path = runtime / CELL_ID / "campaign_state.json"
     state = json.loads(state_path.read_text())
-    state["cell_id"] = "tcga_luad__os__uni_v2__clam__s42__preprint-v3"
+    state["cell_id"] = "tcga_luad__os__uni_v2__clam__s42__preprint-v4"
     state_path.write_text(json.dumps(state))
     with pytest.raises(ce.ExportError, match="carries cell_id"):
         ce.export_cell(runtime, export_root, CELL_ID)
@@ -256,7 +256,7 @@ def test_oserror_on_one_cell_does_not_truncate_the_sweep(
     repo = tmp_path / "repo"
     campaign = repo / "benchmarks/campaigns/preprint_130"
     campaign.mkdir(parents=True)
-    other = "tcga_luad__os__uni_v2__clam__s42__preprint-v3"
+    other = "tcga_luad__os__uni_v2__clam__s42__preprint-v4"
     (campaign / "manifest.json").write_text(json.dumps({
         "cells": [
             {"cell_id": CELL_ID, "dataset": "tcga_luad"},

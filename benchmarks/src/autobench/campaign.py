@@ -32,7 +32,7 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 #: value is being frozen before certification.
 SCHEMA_VERSION = 7
 CAMPAIGN_ID = "automil-preprint-130-v6"
-PROTOCOL_VERSION = "preprint-v3"
+PROTOCOL_VERSION = "preprint-v4"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 #: Per-dataset+task companion-guard margins, derived from the frozen validation
 #: splits by derive_guard_margins.py and checked in so the number in the paper
@@ -243,11 +243,28 @@ EXPECTED_IDENTITY_LOCKED_HPARAMS = (
     "mDim", "numLayer_Res",           # dtfd width + residual depth
     "hidden_dim",                     # nnmil model width
 )
+# The discovery budget is spent in fixed, non-overlapping batches; the
+# framework enforces the structure at submit (src/automil/cells/phasing.py).
+DISCOVERY_PHASING = {
+    "batches": [8, 8, 8, 6],
+    "opening_axes_min": 5,
+    "max_consecutive_per_axis": 3,
+    "reserve_neighbours_min": 2,
+}
+assert sum(DISCOVERY_PHASING["batches"]) == DISCOVERY_ATTEMPTS
+
 PROTOCOL = {
     "protocol_version": PROTOCOL_VERSION,
     "seed": 42,
     "split_folds": 5,
     "discovery_attempts": DISCOVERY_ATTEMPTS,
+    "discovery_phasing": DISCOVERY_PHASING,
+    # v4: every arm restores the epoch with the highest primary validation
+    # metric (ties keep the earlier epoch); the validation loss no longer votes.
+    "checkpoint_selection": {
+        "rule": "argmax-primary-validation-metric",
+        "ties": "earliest-epoch",
+    },
     "discovery_agent_active_budget": DISCOVERY_AGENT_ACTIVE_BUDGET,
     "agent_time_accounting": AGENT_TIME_ACCOUNTING,
     "promotion_candidates": PROMOTION_CANDIDATES,
@@ -1153,6 +1170,7 @@ def materialize_discovery_cells(
         ]
         config["cap"]["mode"] = "agent_active"
         config["cap"]["eval_budget"] = PROTOCOL["discovery_attempts"]
+        config["cap"]["phasing"] = copy.deepcopy(PROTOCOL["discovery_phasing"])
         config["activity"] = {"exporter_port": exporter_port}
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
         config.setdefault("orchestrator", {})["default_timeout_min"] = (
