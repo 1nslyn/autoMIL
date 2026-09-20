@@ -106,7 +106,8 @@
     const done = nodes.filter((n) => parse(n.completed_at) && n.primary_value != null && !['crash', 'cancelled', 'partial'].includes(n.status))
       .sort((a, b) => parse(a.completed_at) - parse(b.completed_at));
     const values = done.map((n) => n.primary_value);
-    const baseline = nodes.find((n) => !n.parent_id);
+    /* the baseline is the root of the graph; it usually carries no run timing, so it is not a lane row */
+    const baseline = Object.values(graph.nodes || {}).find((n) => !n.parent_id && n.type === 'executed') || nodes.find((n) => !n.parent_id);
     if (baseline && baseline.primary_value != null) values.push(baseline.primary_value);
     if (values.length) {
       let [lo, hi] = d3.extent(values);
@@ -123,9 +124,18 @@
       if (steps.length) steps.push([domain[1], steps[steps.length - 1][1]]);
       body.append('path').attr('class', 'best').attr('fill', 'none').attr('stroke', AM.cssVar('--accent')).attr('stroke-width', 2)
         .attr('d', d3.line().x((d) => x(d[0])).y((d) => y(d[1])).curve(d3.curveStepAfter)(steps));
+      if (baseline && baseline.primary_value != null) {
+        g.append('text').attr('x', innerW - 4).attr('y', y(baseline.primary_value) - 5).attr('text-anchor', 'end').text('baseline');
+        body.append('line').attr('x1', 0).attr('x2', innerW).attr('y1', y(baseline.primary_value)).attr('y2', y(baseline.primary_value))
+          .attr('stroke', AM.cssVar('--ink')).attr('stroke-dasharray', '3 3').attr('opacity', 0.6);
+      }
       body.selectAll('circle.pt').data(done).enter().append('circle').attr('class', 'point')
-        .attr('cx', (n) => x(parse(n.completed_at))).attr('cy', (n) => y(n.primary_value)).attr('r', 3.5)
-        .attr('fill', (n) => AM.statusColor(n.status)).attr('stroke', AM.cssVar('--paper'))
+        .attr('cx', (n) => x(parse(n.completed_at))).attr('cy', (n) => y(n.primary_value)).attr('r', 4)
+        .attr('fill', (n) => AM.statusColor(n.status))
+        .attr('stroke', (n) => (KEEP_CLASS.has(n.status) ? AM.cssVar('--ink') : AM.cssVar('--status-discard-stroke')))
+        .attr('stroke-width', 1.2)
+        .on('mousemove', (event, n) => AM.tooltip.show(`<span class="mono">${esc(n.node_id)}</span> ${esc(AM.statusLabel(n.status))}<br>${esc(fmt.num(n.primary_value))} at ${esc(fmt.when(n.completed_at))}`, event.clientX, event.clientY))
+        .on('mouseleave', () => AM.tooltip.hide())
         .on('click', (event, n) => AM.nodeDrawer.open(run, n.node_id)).style('cursor', 'pointer');
     }
     return { x, fullDomain, height };
