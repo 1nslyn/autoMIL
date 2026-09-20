@@ -34,15 +34,23 @@ autoMIL: F2-readiness framework refactor.
   balanced-accuracy guard is judged against `max(one-slide quantum,
   se_multiplier x paired SE)` at the discovery gate and at the freeze (one
   rule with the primary keep-bar; KRAS ABMIL had lost its rank-1 recipe by
-  0.002 against the bare quantum); the 30 attempts are spent in fixed
+  0.002 against the bare quantum; a result's own `metadata.validation_folds`
+  is never merged onto the node, so both stages pair only on the fold
+  evidence the framework recomputed); the 30 attempts are spent in fixed
   batches of 8/8/8/6 that `automil submit` enforces from `cap.phasing`
   (opening batch on five axes, at most three consecutive attempts per axis
   without a keep, two robustness neighbours in the final batch; `automil
-  propose` records `--axis`, `--predicted-delta` and `--role`); and every
-  policy file is smoke-run through the trainers' three call orders, the
-  scheduler and stopping seams and the DTFD roles at submit
-  (`registry.policy_smoke`, `autobench.pipeline.policy_smoke`), so a policy
-  that would crash the trainer is refused for free.
+  propose` records `--axis`, `--predicted-delta` and `--role`; the census is
+  the specs on disk in the admission order submit mints under its lock, an
+  attempt is in flight until the daemon's terminal record exists, and a
+  fully submitted cell takes no more); and every policy file is smoke-run
+  through the trainers' three call orders, the stopping seam with the
+  cell's task-family metrics and the DTFD tiers with their `MultiStepLR`
+  schedulers at submit (`registry.policy_smoke`,
+  `autobench.pipeline.policy_smoke --task-family`), so a policy that would
+  crash the trainer is refused for free; every submit starts from an empty
+  `archive/<node>/`, so a file copied before a refusal never lingers into
+  the next overlay.
 
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over

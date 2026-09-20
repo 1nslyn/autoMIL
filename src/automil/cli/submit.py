@@ -142,6 +142,15 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                         f"orchestrator/running/{backend_dir.name}/. Wait for it "
                         f"to finish or remove the stale spec file before resubmitting."
                     )
+    # The daemon writes archive/<node>/spec.json when it launches (and bills)
+    # a node; a submit against that id would erase the charged attempt's
+    # record, whatever the graph says about the node.
+    if (adir / "orchestrator" / "archive" / node / "spec.json").exists():
+        raise click.ClickException(
+            f"Refusing to submit: {node} was already launched "
+            f"(orchestrator/archive/{node}/spec.json exists). A node id is "
+            f"charged once; propose a new node instead."
+        )
 
     # Guard against submitting a child before its parent has completed.
     # If the parent is still a pending/running proposal, the Pareto-dominance
@@ -333,9 +342,15 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         cwd=git_root, capture_output=True, text=True, check=True,
     ).stdout.strip()
 
-    # Create archive directory and copy files
+    # Create the archive directory and copy files. Submit owns this directory
+    # until the daemon launches the node (checked above), so start it empty:
+    # a file copied before a later file was refused must not survive into
+    # this submission's overlay, where launch-time revalidation would reject
+    # it as unmanifested after the attempt was charged.
     archive = adir / "orchestrator" / "archive" / node
-    archive.mkdir(parents=True, exist_ok=True)
+    if archive.exists():
+        shutil.rmtree(archive)
+    archive.mkdir(parents=True)
 
     overlay_manifest = {}
     deletions = []
@@ -758,7 +773,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # cap.phasing: fixed batches and the phasing rule, refused before the
     # queue write so a refusal is free (the budget charges at launch).
     from automil.cells.phasing import (  # noqa: E402
-        PhasingPolicy, cell_attempts, in_flight_node_ids, phasing_refusal,
+        PhasingPolicy, cell_attempts, next_attempt_seq, phasing_refusal,
         submission_lock,
     )
     try:
@@ -766,12 +781,13 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    def _phasing_gate() -> None:
+    def _phasing_gate() -> int | None:
         """Refuse a submission that breaks the declared phasing; runs under the
         submission lock, right before the queue write, on a fresh read of the
-        graph and the specs on disk."""
+        graph and the specs on disk. Returns the admission sequence number the
+        spec carries (``None`` without a phasing declaration)."""
         if _phasing is None:
-            return
+            return None
         _fresh = graph_json
         if (adir / "graph.json").exists():
             try:
@@ -781,15 +797,19 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         _nodes = _fresh.get("nodes", {})
         _candidate = _nodes.get(node) or {}
         _candidate_meta = _candidate.get("metadata") or {}
+        try:
+            _attempts = cell_attempts(adir, _nodes, _cell.cell_id)
+        except ValueError as exc:
+            raise click.ClickException(f"Refusing to submit {node}: {exc}") from exc
         _refusal = phasing_refusal(
-            _phasing, cell_attempts(adir, _nodes, _cell.cell_id),
+            _phasing, _attempts,
             axis=_candidate_meta.get("axis"), role=_candidate_meta.get("role"),
             parent_id=parent or _candidate.get("parent_id"),
             best_node_id=(_fresh.get("meta") or {}).get("best_node_id"),
-            in_flight=in_flight_node_ids(adir, _cell.cell_id),
         )
         if _refusal is not None:
             raise click.ClickException(f"Refusing to submit {node}: {_refusal}")
+        return next_attempt_seq(_attempts)
 
     # Write spec to queue
     spec = {
@@ -842,7 +862,9 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
 
     queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
     with submission_lock(adir):
-        _phasing_gate()
+        _seq = _phasing_gate()
+        if _seq is not None:
+            spec["metadata"]["attempt_seq"] = _seq
         queue_file.write_text(json.dumps(spec, indent=2))
 
     # Register the node in the graph so next_id is bumped and proposals

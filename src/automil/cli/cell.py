@@ -178,9 +178,7 @@ def _echo_phasing(cells) -> None:
 
     import yaml
 
-    from automil.cells.phasing import (
-        PhasingPolicy, batch_position, cell_attempts, in_flight_node_ids,
-    )
+    from automil.cells.phasing import PhasingPolicy, batch_position, cell_attempts
     from automil.cli._helpers import _find_automil_dir
 
     adir = _find_automil_dir()
@@ -201,10 +199,10 @@ def _echo_phasing(cells) -> None:
         click.echo(f"DEGRADED  cannot read graph.json for the phasing line: {exc}")
         return
     for cell in cells:
-        click.echo(batch_position(
-            policy, cell_attempts(adir, nodes, cell.cell_id),
-            in_flight_node_ids(adir, cell.cell_id),
-        ))
+        try:
+            click.echo(batch_position(policy, cell_attempts(adir, nodes, cell.cell_id)))
+        except ValueError as exc:
+            click.echo(f"DEGRADED  {exc}")
 
 
 @cell_group.command("list")

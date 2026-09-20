@@ -1171,6 +1171,15 @@ def materialize_discovery_cells(
         config["cap"]["mode"] = "agent_active"
         config["cap"]["eval_budget"] = PROTOCOL["discovery_attempts"]
         config["cap"]["phasing"] = copy.deepcopy(PROTOCOL["discovery_phasing"])
+        # The policy smoke judges the stopping seam by the metrics the cell's
+        # trainers pass, so the harness learns the task family here (the
+        # template is per cohort; a cohort carries both families).
+        smoke = (config.get("registry") or {}).get("policy_smoke")
+        if isinstance(smoke, dict) and isinstance(smoke.get("command"), list):
+            family = "survival" if cell["task_family"] == "survival" else "classification"
+            config["registry"]["policy_smoke"] = {
+                **smoke, "command": [*smoke["command"], "--task-family", family],
+            }
         config["activity"] = {"exporter_port": exporter_port}
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
         config.setdefault("orchestrator", {})["default_timeout_min"] = (

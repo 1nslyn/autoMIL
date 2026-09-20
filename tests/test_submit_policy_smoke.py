@@ -9,6 +9,7 @@ non-zero exit or a timeout with the command's own diagnostics.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -184,3 +185,52 @@ class TestSubmitRunsTheSmoke:
         runner, adir = _project(tmp_path, monkeypatch, None)
         result = _submit(runner)
         assert "smoke" not in result.output
+
+
+class TestARefusedSubmitLeavesNoOverlayBehind:
+    """Files copied into ``archive/<node>/`` before a later file is refused
+    must not survive into the next submission of the node: launch-time
+    revalidation rejects an archived file the manifest does not claim, and by
+    then the attempt is charged."""
+
+    def test_the_next_submission_archives_exactly_its_manifest(self, tmp_path, monkeypatch):
+        fail = tmp_path / "fail.py"
+        fail.write_text(FAIL_SCRIPT)
+        ok = tmp_path / "ok.py"
+        ok.write_text(OK_SCRIPT)
+        marker = tmp_path / "marker.txt"
+        runner, adir = _project(tmp_path, monkeypatch,
+                                {"command": ["{python}", str(fail)], "timeout_s": 10})
+        config_path = adir / "config.yaml"
+        cfg = yaml.safe_load(config_path.read_text())
+        cfg["cap"] = {**(cfg.get("cap") or {}), "mode": "wall_clock"}   # two submits, no session
+        config_path.write_text(yaml.safe_dump(cfg))
+        (tmp_path / "train.py").write_text("print('train')\n")
+        refused = runner.invoke(main, ["submit", "--node", "node_0001", "--desc", "t",
+                                       "--files", "train.py",
+                                       "--files", "automil/variants/clam_mb/v0001.py"])
+        assert refused.exit_code != 0 and "smoke" in refused.output
+        # the policy is fixed (the smoke now passes) and resubmitted without train.py
+        cfg = yaml.safe_load(config_path.read_text())
+        cfg["registry"]["policy_smoke"] = {"command": ["{python}", str(ok), "{module}", str(marker)],
+                                           "timeout_s": 10}
+        config_path.write_text(yaml.safe_dump(cfg))
+        accepted = runner.invoke(main, ["submit", "--node", "node_0001", "--desc", "t",
+                                        "--files", "automil/variants/clam_mb/v0001.py"])
+        assert accepted.exit_code == 0, accepted.output
+        spec = json.loads((adir / "orchestrator" / "queue" / "node_0001.json").read_text())
+        archive = adir / "orchestrator" / "archive" / "node_0001"
+        archived = sorted(str(p.relative_to(archive)) for p in archive.rglob("*") if p.is_file())
+        assert archived == sorted(spec["overlay_manifest"])
+        assert "train.py" not in archived
+
+    def test_a_launched_record_refuses_the_node_id(self, tmp_path, monkeypatch):
+        """``archive/<node>/spec.json`` is the daemon's record of a charged
+        launch; a submit against that id would erase it."""
+        runner, adir = _project(tmp_path, monkeypatch, None)
+        launched = adir / "orchestrator" / "archive" / "node_0001"
+        launched.mkdir(parents=True)
+        (launched / "spec.json").write_text("{}")
+        refused = _submit(runner)
+        assert refused.exit_code != 0 and "launched" in refused.output
+        assert (launched / "spec.json").exists()

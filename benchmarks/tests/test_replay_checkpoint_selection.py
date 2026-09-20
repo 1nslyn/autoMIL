@@ -113,6 +113,17 @@ def test_replay_stops_where_the_v4_trainer_would_and_flags_a_later_maximum(mod, 
     assert (fold_0["would_stop_epoch"], fold_0["new_epoch"], fold_0["later_max_ignored"]) == (3, 1, False)
 
 
+def test_the_clam_floor_belongs_to_the_classification_arm_only(mod):
+    """CLAM classification refuses to stop before epoch 50 (its vendored
+    stopper's floor); CLAM survival runs the adapter's plain patience rule."""
+    assert mod.stop_rule("clam", "binary", None) == mod.StopRule(20, floor=50)
+    assert mod.stop_rule("clam", "ordinal", None) == mod.StopRule(20, floor=50)
+    assert mod.stop_rule("clam", "survival", None) == mod.StopRule(20)
+    assert mod.stop_rule("clam", "survival", 7) == mod.StopRule(7)
+    assert mod.stop_rule("clam", "binary", 7) == mod.StopRule(7, floor=50)
+    assert mod.stop_rule("titan", "survival", None) == mod.StopRule(10)
+
+
 def test_clam_floor_delays_the_stop_past_epoch_50(mod, tmp_path):
     (_, fold_1) = _rows(mod, _cell(tmp_path / "c", arm="clam"), mod.StopRule(patience=2, floor=50))
     assert fold_1["would_stop_epoch"] is None

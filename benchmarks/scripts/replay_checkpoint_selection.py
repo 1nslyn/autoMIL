@@ -39,10 +39,10 @@ class StopRule:
     floor: int = -1  # early_stop may end training only at epochs > floor
 
 
-ARM_STOP_RULES: Mapping[str, StopRule] = {
-    "clam": StopRule(20, floor=50), "abmil": StopRule(20), "dtfd": StopRule(20),
-    "titan": StopRule(10), "nnmil": StopRule(10),
-}
+ARM_PATIENCE: Mapping[str, int] = {"clam": 20, "abmil": 20, "dtfd": 20, "titan": 10, "nnmil": 10}
+#: CLAM classification's vendored stopper refuses to stop before epoch 50; the
+#: CLAM survival adapter runs the plain patience rule like every other arm.
+CLAM_CLASSIFICATION_FLOOR = 50
 LOG_KINDS = (  # (glob under the cell root, fixed kind or None for the node directory name)
     ("baseline-execution/archive/run.log", "baseline"),
     ("baseline-reproduction/attempt-*/archive/run.log", "baseline-reproduction"),
@@ -163,13 +163,13 @@ def cell_logs(root: Path) -> tuple[tuple[str, Path], ...]:
     )
 
 
-def stop_rule(arm: str, patience_override: int | None) -> StopRule:
-    default = ARM_STOP_RULES.get(arm)
+def stop_rule(arm: str, task_family: str, patience_override: int | None) -> StopRule:
+    floor = CLAM_CLASSIFICATION_FLOOR if arm == "clam" and task_family != "survival" else -1
     if patience_override is not None:
-        return StopRule(patience_override, default.floor if default else -1)
-    if default is None:
+        return StopRule(patience_override, floor)
+    if arm not in ARM_PATIENCE:
         raise InputError(f"no default patience for arm {arm!r}; pass --patience-override")
-    return default
+    return StopRule(ARM_PATIENCE[arm], floor)
 
 
 def observe_epoch(index: int, metrics: Mapping[str, float], key: str, arm: str) -> Observation:
@@ -238,7 +238,7 @@ def replay_cells(roots: Sequence[Path], patience_override: int | None) -> tuple[
     for root in roots:
         try:
             cell = load_cell(root)
-            rule = stop_rule(cell.arm, patience_override)
+            rule = stop_rule(cell.arm, cell.task_family, patience_override)
         except InputError as exc:
             skipped.append(Skipped(root, str(exc)))
             continue
@@ -352,9 +352,8 @@ def self_check_lines(rows: Sequence[dict]) -> list[str]:
 
 
 def build_report(rows: Sequence[dict], skipped: Sequence[Skipped], patience_override: int | None) -> str:
-    defaults = ", ".join(
-        f"{arm} {rule.patience}" + (f" (stop only after epoch {rule.floor})" if rule.floor >= 0 else "")
-        for arm, rule in ARM_STOP_RULES.items()
+    defaults = ", ".join(f"{arm} {patience}" for arm, patience in ARM_PATIENCE.items()) + (
+        f"; clam classification stops only after epoch {CLAM_CLASSIFICATION_FLOOR}"
     )
     patience = f"override {patience_override}" if patience_override is not None else f"arm defaults: {defaults}"
     lines = [

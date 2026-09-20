@@ -12,8 +12,13 @@ spec, so a refusal costs nothing and two submits cannot both take one slot.
 An attempt is a spec on disk: queued (``orchestrator/queue/<node>.json``) or
 launched (``orchestrator/archive/<node>/spec.json``, the record the campaign's
 freeze census walks), minus the specs the cap refused at launch. Attempts are
-ordered by the moment they were submitted, so the rules judge the sequence the
-agent actually produced, whatever node ids the proposals carry.
+ordered by the admission sequence ``automil submit`` mints under the lock
+(``metadata.attempt_seq``), so the position a submission was judged at is the
+position it keeps, whatever node ids the proposals carry and whatever the
+submitting host's clock says. An attempt is in flight until the daemon has
+written its terminal record (``orchestrator/archive/<node>/result.json``):
+the queue file and the running intent both have gaps (the daemon deletes the
+queue file before it publishes the intent), the terminal record has none.
 """
 from __future__ import annotations
 
@@ -101,13 +106,14 @@ class PhasingPolicy:
 
 @dataclass(frozen=True)
 class Attempt:
-    """One submitted attempt of the cell, in submission order."""
+    """One submitted attempt of the cell, in admission order."""
 
     node_id: str
     axis: str | None
     role: str | None
     status: str | None
-    submitted_at: str
+    seq: int
+    finished: bool
 
 
 def _read_spec(path: Path) -> dict | None:
@@ -136,32 +142,39 @@ def _cell_specs(adir: Path, cell_id: str) -> dict[str, dict]:
     return specs
 
 
+def _attempt_seq(node_id: str, spec: Mapping) -> int:
+    meta = spec.get("metadata") if isinstance(spec.get("metadata"), Mapping) else {}
+    seq = meta.get("attempt_seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+        raise ValueError(
+            f"spec {node_id} carries no metadata.attempt_seq: it was not admitted "
+            f"through a phased submit, so its place in the sequence is unknown"
+        )
+    return seq
+
+
 def cell_attempts(adir: Path, nodes: Mapping[str, Mapping], cell_id: str) -> tuple[Attempt, ...]:
-    """The cell's attempts in submission order (queued or launched specs on
+    """The cell's attempts in admission order (queued or launched specs on
     disk, the census the freeze walks), with each node's axis, role and
-    status read from ``nodes`` (a ``graph.json`` node mapping)."""
+    status read from ``nodes`` (a ``graph.json`` node mapping) and
+    ``finished`` from the daemon's terminal record."""
+    archive = adir / "orchestrator" / "archive"
     attempts = []
     for node_id, spec in _cell_specs(adir, cell_id).items():
         node = nodes.get(node_id) if isinstance(nodes.get(node_id), Mapping) else {}
         meta = node.get("metadata") if isinstance(node.get("metadata"), Mapping) else {}
         attempts.append(Attempt(
             node_id=node_id, axis=meta.get("axis"), role=meta.get("role"),
-            status=node.get("status"), submitted_at=str(spec.get("submitted_at") or ""),
+            status=node.get("status"), seq=_attempt_seq(node_id, spec),
+            finished=(archive / node_id / "result.json").is_file(),
         ))
-    return tuple(sorted(attempts, key=lambda a: (a.submitted_at, a.node_id)))
+    return tuple(sorted(attempts, key=lambda a: (a.seq, a.node_id)))
 
 
-def in_flight_node_ids(adir: Path, cell_id: str) -> frozenset[str]:
-    """Node ids of the cell's specs still in ``orchestrator/queue`` or
-    ``orchestrator/running/<backend>/``."""
-    orchestrator = adir / "orchestrator"
-    ids = set()
-    for path in list((orchestrator / "queue").glob("*.json")) + \
-            list((orchestrator / "running").glob("*/*.json")):
-        spec = _read_spec(path)
-        if spec is not None and (spec.get("metadata") or {}).get("cell_id") == cell_id:
-            ids.add(path.stem)
-    return frozenset(ids)
+def next_attempt_seq(attempts: tuple[Attempt, ...]) -> int:
+    """The sequence number the next admitted submission carries: strictly
+    after every attempt on record, so it always sorts last."""
+    return max((a.seq for a in attempts), default=0) + 1
 
 
 @contextmanager
@@ -196,15 +209,16 @@ def phasing_refusal(
     role: str | None,
     parent_id: str | None,
     best_node_id: str | None,
-    in_flight: frozenset[str],
 ) -> str | None:
     """Why the next submission would break the declared phasing, or ``None``.
 
     The candidate is attempt ``len(attempts) + 1``. Quotas are checked for
     feasibility at every attempt of their batch, so a prefix that could no
     longer meet them is refused at the first attempt that makes it so, never
-    at the last. Past the budget the phasing says nothing: the budget gate
-    refuses that.
+    at the last. A cell whose every attempt is on record (queued or
+    launched) takes no more: a queued attempt is an attempt, and a later
+    submission with a higher priority would be launched ahead of it, spend
+    the budget, and leave the queued one to the cap.
     """
     if not axis:
         return ("propose with --axis (and --predicted-delta): cap.phasing "
@@ -214,12 +228,12 @@ def phasing_refusal(
                 f"({best_node_id}), not of {parent_id}")
     k = len(attempts) + 1
     if k > policy.total:
-        return None
+        return (f"all {policy.total} attempts of the cell are already submitted "
+                f"(queued or launched); the budget has no slot for another")
     batch = policy.batch_of(k)
     first, last = policy.batch_bounds(batch)
     if batch > 1:
-        earlier = {a.node_id for a in attempts[: first - 1]}
-        still_running = sorted(earlier & in_flight)
+        still_running = sorted(a.node_id for a in attempts[: first - 1] if not a.finished)
         if still_running:
             return (f"attempt {k} opens batch {batch}; it can start only after every "
                     f"attempt of batches 1-{batch - 1} has finished (in flight: "
@@ -249,12 +263,10 @@ def phasing_refusal(
     return None
 
 
-def batch_position(
-    policy: PhasingPolicy, attempts: tuple[Attempt, ...], in_flight: frozenset[str],
-) -> str:
+def batch_position(policy: PhasingPolicy, attempts: tuple[Attempt, ...]) -> str:
     """One status line: where the cell stands in its declared batches."""
     submitted = len(attempts)
-    running = len({a.node_id for a in attempts} & in_flight)
+    running = sum(1 for a in attempts if not a.finished)
     if submitted >= policy.total:
         return f"phasing: all {policy.total} attempts submitted"
     k = submitted + 1

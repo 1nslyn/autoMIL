@@ -109,6 +109,47 @@ NO_POLICY = '''"""Not a policy module at all."""
 X = 1
 '''
 
+READS_C_INDEX = HEADER.format(name="c_index_stop") + '''class CIndexStop(PolicyVariant):
+    """A survival stopping rule: legal on a survival cell, whose trainers pass
+    val_c_index and val_loss to should_stop."""
+
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def should_stop(self, *, default, epoch, metrics):
+        return bool(default) or metrics["val_c_index"] > 0.99
+'''
+
+READS_AUC = HEADER.format(name="auc_stop") + '''class AucStop(PolicyVariant):
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def should_stop(self, *, default, epoch, metrics):
+        return bool(default) or metrics["val_auc"] > 0.99
+'''
+
+READS_MILESTONES = HEADER.format(name="milestones") + '''class Milestones(PolicyVariant):
+    """A scheduler tweak written against the scheduler DTFD really passes
+    (MultiStepLR, one per tier)."""
+
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def wrap_scheduler(self, sched):
+        sched.milestones = type(sched.milestones)({m + 1: 1 for m in sched.milestones})
+        return sched
+'''
+
+FORGETS_TIER2 = HEADER.format(name="forgets_tier2") + '''class ForgetsTier2(PolicyVariant):
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def wrap_scheduler_for(self, sched, *, role):
+        if role == "tier1":
+            return sched
+        return None      # tier2 falls through: DTFD would crash before training
+'''
+
 
 @pytest.fixture(autouse=True)
 def _isolated_registry():
@@ -122,6 +163,15 @@ def _write(tmp_path, name, source):
     path = tmp_path / f"{name}.py"
     path.write_text(source)
     return path
+
+
+def _main(argv):
+    """One harness run on a fresh registry: production runs one policy per
+    subprocess, a test that judges one file twice must not trip the duplicate
+    registration."""
+    from automil.registry._state import _clear_registry
+    _clear_registry()
+    return policy_smoke.main(argv)
 
 
 class TestHarnessVerdicts:
@@ -155,10 +205,42 @@ class TestHarnessVerdicts:
         assert policy_smoke.main([str(tmp_path / "absent.py")]) == 2
 
 
+class TestTheStoppingSeamIsJudgedByTaskFamily:
+    def test_a_survival_stopping_rule_passes_on_a_survival_cell(self, tmp_path, capsys):
+        path = str(_write(tmp_path, "c_index_stop", READS_C_INDEX))
+        assert _main(["--task-family", "survival", path]) == 0
+        assert _main([path]) == 1
+        assert "val_c_index" in capsys.readouterr().err
+
+    def test_a_classification_stopping_rule_passes_on_a_classification_cell(self, tmp_path, capsys):
+        path = str(_write(tmp_path, "auc_stop", READS_AUC))
+        assert _main([path]) == 0
+        assert _main(["--task-family", "survival", path]) == 1
+        assert "val_auc" in capsys.readouterr().err
+
+    def test_an_unknown_task_family_is_a_usage_error(self, tmp_path):
+        path = str(_write(tmp_path, "auc_stop", READS_AUC))
+        assert policy_smoke.main(["--task-family", "regression", path]) == 2
+
+
+class TestTheSchedulerSeamIsDTFDs:
+    def test_a_multistep_milestone_tweak_passes(self, tmp_path):
+        assert policy_smoke.main([str(_write(tmp_path, "milestones", READS_MILESTONES))]) == 0
+
+    def test_a_wrapper_that_forgets_tier2_is_refused_by_name(self, tmp_path, capsys):
+        assert policy_smoke.main([str(_write(tmp_path, "forgets_tier2", FORGETS_TIER2))]) == 1
+        err = capsys.readouterr().err
+        assert "tier2" in err and "scheduler" in err
+
+
 class TestHarnessCoverage:
-    def test_every_call_order_and_seam_is_exercised(self, tmp_path):
+    @pytest.mark.parametrize("family, stop_keys", [
+        ("classification", "val_auc,val_loss"), ("survival", "val_c_index,val_loss"),
+    ])
+    def test_every_call_order_and_seam_is_exercised(self, tmp_path, family, stop_keys):
         """A policy that records what the harness did: all three call orders,
-        the scheduler seam, the stopping seam, and a non-main role."""
+        the stopping seam with the family's metrics, and the DTFD tiers each
+        with their MultiStepLR scheduler."""
         recorder = tmp_path / "record.txt"
         source = HEADER.format(name="recorder") + f'''class Recorder(PolicyVariant):
     def wrap_optimizer_for(self, opt, *, role):
@@ -169,9 +251,9 @@ class TestHarnessCoverage:
     def wrap_optimizer(self, opt):
         return opt
 
-    def wrap_scheduler(self, sched):
+    def wrap_scheduler_for(self, sched, *, role):
         with open({str(recorder)!r}, "a") as fh:
-            fh.write("scheduler\\n")
+            fh.write("scheduler:" + role + ":" + type(sched).__name__ + "\\n")
         return sched
 
     def should_stop(self, *, default, epoch, metrics):
@@ -179,10 +261,12 @@ class TestHarnessCoverage:
             fh.write("stop:" + ",".join(sorted(metrics)) + "\\n")
         return default
 '''
-        assert policy_smoke.main([str(_write(tmp_path, "recorder", source))]) == 0
+        path = str(_write(tmp_path, "recorder", source))
+        assert policy_smoke.main(["--task-family", family, path]) == 0
         lines = recorder.read_text().splitlines()
-        # one wrap per call order, plus the scheduler-and-stopping run
+        # one wrap per call order, plus the stopping run
         assert lines.count("optimizer:main") == len(policy_smoke.CALL_ORDERS) + 1
         assert "optimizer:tier1" in lines and "optimizer:tier2" in lines
-        assert "scheduler" in lines
-        assert any(line.startswith("stop:val_auc,val_loss") for line in lines)
+        assert "scheduler:tier1:MultiStepLR" in lines and "scheduler:tier2:MultiStepLR" in lines
+        assert not any(line.startswith("scheduler:main") for line in lines)
+        assert lines.count(f"stop:{stop_keys}") == policy_smoke.STEPS_PER_ORDER
