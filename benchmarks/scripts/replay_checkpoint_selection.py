@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from autobench.campaign import PROTOCOL, STAGE_FOLDS
 from autobench.pipeline.selection import SelectionTracker
 
 EPOCH_LINE = re.compile(r"^\[epoch (\d+)\](?: (.*))?$")
@@ -326,15 +327,28 @@ def _best_node(means: Mapping[str, tuple[float, float]], index: int) -> tuple[ob
     return (node, *eligible[node])
 
 
+#: Fold segments a complete run of each kind carries: the baseline registers
+#: every split fold; a reproduction or a discovery attempt runs the discovery
+#: folds. A run with fewer segments was killed and must not rank as a winner.
+FOLDS_REQUIRED = {
+    "baseline": PROTOCOL["split_folds"],
+    "baseline-reproduction": len(STAGE_FOLDS["discovery"]),
+    "node": len(STAGE_FOLDS["discovery"]),
+}
+
+
 def cell_summary(cell_id: str, rows: Sequence[dict]) -> tuple[object, ...]:
     baseline = [row for row in rows if row["kind"] == "baseline"]
     repro = [row for row in rows if row["kind"] == "baseline-reproduction"]
     nodes = _grouped([row for row in rows if kind_group(row["kind"]) == "node"], lambda row: row["kind"])
-    n_folds = max((len(r) for r in nodes.values()), default=0)
+    n_folds = FOLDS_REQUIRED["node"]
     means = {node: (fold_mean(r, "primary@old", n_folds), fold_mean(r, "primary@new", n_folds)) for node, r in nodes.items()}
     return (
-        cell_id, fold_mean(baseline, "primary@old", len(baseline)), fold_mean(baseline, "primary@new", len(baseline)),
-        fold_mean(repro, "primary@old", len(repro)), fold_mean(repro, "primary@new", len(repro)),
+        cell_id,
+        fold_mean(baseline, "primary@old", FOLDS_REQUIRED["baseline"]),
+        fold_mean(baseline, "primary@new", FOLDS_REQUIRED["baseline"]),
+        fold_mean(repro, "primary@old", FOLDS_REQUIRED["baseline-reproduction"]),
+        fold_mean(repro, "primary@new", FOLDS_REQUIRED["baseline-reproduction"]),
         *_best_node(means, 0), *_best_node(means, 1),
     )
 

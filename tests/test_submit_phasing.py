@@ -220,6 +220,43 @@ class TestCellAttempts:
         assert [a.node_id for a in attempts if not a.finished] == ["node_0003", "node_0009"]
         assert next_attempt_seq(attempts) == 7
 
+    def test_a_cancelled_attempt_is_finished_once_cancel_archived_its_running_spec(self, tmp_path):
+        """``automil cancel`` confirms the process dead and moves the running
+        spec into the archive; the daemon writes result.json only if it is up
+        to reap it. The cancel record alone ends the attempt's flight."""
+        adir = tmp_path / "automil"
+        archive = adir / "orchestrator" / "archive"
+        (archive / "node_0002").mkdir(parents=True)
+        (archive / "node_0002" / "spec.json").write_text(_spec("node_0002", "c", 1))
+        (archive / "node_0002" / "node_0002_running_spec.json").write_text("{}")
+        nodes = {"node_0002": {"cell_id": "c", "status": "cancelled", "metadata": {"axis": "lr"}}}
+        (attempt,) = cell_attempts(adir, nodes, "c")
+        assert attempt.finished is True
+
+    def test_a_launch_between_the_two_scans_is_not_missed(self, tmp_path, monkeypatch):
+        """The daemon writes archive/<node>/spec.json first and unlinks the
+        queue file second. Reading the archive before the queue would miss a
+        spec launched between the two reads; the queue-first census cannot."""
+        from automil.cells import phasing
+
+        adir = tmp_path / "automil"
+        queue = adir / "orchestrator" / "queue"
+        archive = adir / "orchestrator" / "archive"
+        queue.mkdir(parents=True)
+        (queue / "node_0002.json").write_text(_spec("node_0002", "c", 1))
+        real_archived = phasing._archived_specs
+
+        def archived_then_daemon_launches(orchestrator):
+            found = real_archived(orchestrator)
+            (archive / "node_0002").mkdir(parents=True, exist_ok=True)
+            (archive / "node_0002" / "spec.json").write_text(_spec("node_0002", "c", 1))
+            (queue / "node_0002.json").unlink()
+            return found
+
+        monkeypatch.setattr(phasing, "_archived_specs", archived_then_daemon_launches)
+        nodes = {"node_0002": {"cell_id": "c", "status": "running", "metadata": {"axis": "lr"}}}
+        assert [a.node_id for a in cell_attempts(adir, nodes, "c")] == ["node_0002"]
+
     def test_no_orchestrator_dir_means_no_attempts(self, tmp_path):
         assert cell_attempts(tmp_path / "automil", {}, "c") == ()
         assert next_attempt_seq(()) == 1

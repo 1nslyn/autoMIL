@@ -89,6 +89,9 @@ def _run_order(order: str, policy_cls: type) -> None:
     optimizer = runtime.wrap_optimizer(raw)
     criterion = nn.CrossEntropyLoss()
     for _ in range(STEPS_PER_ORDER):
+        # nnMIL reads the learning rate off the wrapper every epoch; every
+        # scheduler the trainers attach mutates the same param_groups.
+        optimizer.param_groups[0]["lr"]
         if order.startswith("zero_grad"):
             optimizer.zero_grad()
         loss = criterion(model(features), labels)
@@ -129,26 +132,31 @@ def _run_stopping(policy_cls: type, family: str) -> None:
 
 
 def _run_dtfd_tiers(policy_cls: type) -> None:
-    """Both DTFD tiers as the trainer drives them: an optimizer per role, a
-    ``MultiStepLR`` on the target ``scheduler_target`` resolves, the
-    scheduler wrapped per role, gradients zeroed between forward and backward."""
+    """Both DTFD tiers as the trainer drives them: two parameter sets, both
+    optimizers wrapped and both ``MultiStepLR`` schedulers built and wrapped
+    BEFORE either tier trains (one policy instance wraps both, so state a
+    policy keeps per wrap on itself collides here), then the tiers step in
+    turn, gradients zeroed between forward and backward."""
     import torch
     from torch import nn
 
     from autobench.pipeline.policy_dispatch import PolicyRuntime
 
-    model, features, labels = _model_and_batch()
+    tier1, features, labels = _model_and_batch()
+    tier2 = nn.Linear(4, 3)
     runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
     criterion = nn.CrossEntropyLoss()
-    for role in ROLES:
-        raw = torch.optim.Adam(model.parameters(), lr=1e-2)
+    tiers = []
+    for role, module in zip(ROLES, (tier1, tier2)):
+        raw = torch.optim.Adam(module.parameters(), lr=1e-2)
         optimizer = runtime.wrap_optimizer(raw, role=role)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
             runtime.scheduler_target(optimizer, raw, role=role), milestones=[1, 2], gamma=0.2,
         )
-        scheduler = runtime.wrap_scheduler(scheduler, role=role)
-        for _ in range(STEPS_PER_ORDER):
-            loss = criterion(model(features), labels)
+        tiers.append((module, optimizer, runtime.wrap_scheduler(scheduler, role=role)))
+    for _ in range(STEPS_PER_ORDER):
+        for module, optimizer, scheduler in tiers:
+            loss = criterion(module(features), labels)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

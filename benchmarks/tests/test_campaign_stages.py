@@ -395,6 +395,7 @@ def _attempts(
                 bound_at + timedelta(seconds=index + 1)
             ).isoformat(),
             "metadata": {
+                "attempt_seq": index + 1,
                 "cell_id": yaml.safe_load(
                     (adir / "config.yaml").read_text()
                 )["campaign"]["budget_cell_id"],
@@ -1207,6 +1208,7 @@ def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell
     config = yaml.safe_load((promotion / "config.yaml").read_text())
     assert config["cap"]["budget"] == "7d"
     assert config["cap"]["mode"] == "wall_clock"
+    assert "phasing" not in config["cap"]          # discovery's batches stay behind
     assert config["run"]["command"] == cell["commands"]["promotion"]
     assert config["training"]["fold_count"] == 2
     assert config["campaign"]["stage"] == "promotion"
@@ -1559,6 +1561,43 @@ def test_stage_process_evidence_rejects_inconsistent_eligible_promotion(
     })
     with pytest.raises(CampaignStageError, match="eligible promotion"):
         _process_evidence(drifted)
+
+
+def test_process_evidence_follows_the_admission_sequence_not_the_clock(staged_cell):
+    """The freeze records the sequence submit minted under its lock and the
+    exported history follows it: a submit stamped by a clock that ran
+    behind keeps the position it was judged at."""
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+    frozen = freeze_discovery(cell_root)
+    audit = frozen["discovery"]["attempt_audit"]
+    assert [row["attempt_seq"] for row in audit] == list(range(1, DISCOVERY_ATTEMPTS + 1))
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
+    state = freeze_promotion(cell_root)
+    skewed = json.loads(json.dumps(state))
+    rows = skewed["discovery"]["attempt_audit"]
+    rows[0]["submitted_at"], rows[1]["submitted_at"] = rows[1]["submitted_at"], rows[0]["submitted_at"]
+    anytime = _process_evidence(skewed)["discovery"]["validation_anytime"]
+    assert [step["node_id"] for step in anytime[:2]] == [rows[0]["node_id"], rows[1]["node_id"]]
+    rows[1]["attempt_seq"] = rows[0]["attempt_seq"]
+    with pytest.raises(CampaignStageError, match="attempt_seq"):
+        _process_evidence(skewed)
+
+
+def test_a_spec_without_an_admission_sequence_cannot_freeze(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+    spec_path = adir / "orchestrator" / "archive" / "node_0002" / "spec.json"
+    spec = json.loads(spec_path.read_text())
+    del spec["metadata"]["attempt_seq"]
+    spec_path.write_text(json.dumps(spec))
+    with pytest.raises(CampaignStageError, match="attempt_seq"):
+        freeze_discovery(cell_root)
 
 
 def test_exact_validation_tie_prefers_native_baseline(staged_cell):

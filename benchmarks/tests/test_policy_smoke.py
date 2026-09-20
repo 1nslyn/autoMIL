@@ -140,6 +140,56 @@ READS_MILESTONES = HEADER.format(name="milestones") + '''class Milestones(Policy
         return sched
 '''
 
+NO_PARAM_GROUPS = HEADER.format(name="no_param_groups") + '''class NoParamGroups(PolicyVariant):
+    """A wrapper that delegates only zero_grad and step: nnMIL reads
+    optimizer.param_groups[0]["lr"] every epoch and would crash at once."""
+
+    def wrap_optimizer(self, opt):
+        class _Wrapped:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def zero_grad(self, *a, **kw):
+                self.inner.zero_grad(*a, **kw)
+
+            def step(self, *a, **kw):
+                self.inner.step(*a, **kw)
+
+        return _Wrapped(opt)
+'''
+
+SHARED_SLOW = HEADER.format(name="shared_slow") + '''class SharedSlow(PolicyVariant):
+    """Lookahead with the slow weights kept on the POLICY, not the wrapper:
+    DTFD wraps both tiers with one policy instance before training, so the
+    second wrap overwrites the first tier's buffers."""
+
+    def wrap_optimizer(self, opt):
+        import torch
+        policy = self
+        policy.slow = [p.detach().clone() for g in opt.param_groups for p in g["params"]]
+
+        class _Wrapped:
+            def __init__(self, inner):
+                self.inner = inner
+
+            @property
+            def param_groups(self):
+                return self.inner.param_groups
+
+            def zero_grad(self, *a, **kw):
+                self.inner.zero_grad(*a, **kw)
+
+            def step(self, *a, **kw):
+                self.inner.step(*a, **kw)
+                with torch.no_grad():
+                    params = [p for g in self.inner.param_groups for p in g["params"]]
+                    for slow, fast in zip(policy.slow, params):
+                        slow.add_(0.5 * (fast - slow))
+                        fast.copy_(slow)
+
+        return _Wrapped(opt)
+'''
+
 FORGETS_TIER2 = HEADER.format(name="forgets_tier2") + '''class ForgetsTier2(PolicyVariant):
     def wrap_optimizer(self, opt):
         return opt
@@ -223,6 +273,19 @@ class TestTheStoppingSeamIsJudgedByTaskFamily:
         assert policy_smoke.main(["--task-family", "regression", path]) == 2
 
 
+class TestTheOptimizerSeamIsTheTrainers:
+    def test_a_wrapper_without_param_groups_is_refused(self, tmp_path, capsys):
+        assert policy_smoke.main([str(_write(tmp_path, "no_param_groups", NO_PARAM_GROUPS))]) == 1
+        assert "param_groups" in capsys.readouterr().err
+
+    def test_per_wrap_state_kept_on_the_policy_is_refused(self, tmp_path, capsys):
+        assert policy_smoke.main([str(_write(tmp_path, "shared_slow", SHARED_SLOW))]) == 1
+        assert "tier" in capsys.readouterr().err
+
+    def test_per_wrapper_state_passes(self, tmp_path):
+        assert policy_smoke.main([str(_write(tmp_path, "lookahead", LOOKAHEAD))]) == 0
+
+
 class TestTheSchedulerSeamIsDTFDs:
     def test_a_multistep_milestone_tweak_passes(self, tmp_path):
         assert policy_smoke.main([str(_write(tmp_path, "milestones", READS_MILESTONES))]) == 0
@@ -269,4 +332,9 @@ class TestHarnessCoverage:
         assert "optimizer:tier1" in lines and "optimizer:tier2" in lines
         assert "scheduler:tier1:MultiStepLR" in lines and "scheduler:tier2:MultiStepLR" in lines
         assert not any(line.startswith("scheduler:main") for line in lines)
+        # DTFD wraps both tiers, then builds both schedulers, before any step
+        dtfd = [line for line in lines if line.endswith(":tier1") or line.endswith(":tier2")
+                or ":tier1:" in line or ":tier2:" in line]
+        assert dtfd == ["optimizer:tier1", "scheduler:tier1:MultiStepLR",
+                        "optimizer:tier2", "scheduler:tier2:MultiStepLR"]
         assert lines.count(f"stop:{stop_keys}") == policy_smoke.STEPS_PER_ORDER

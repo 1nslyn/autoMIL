@@ -124,33 +124,37 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # all experiments and allowing resubmit to silently overwrite completed nodes.
     # Fix: check queue/ with the flat path (unchanged), then iterate all backend
     # subdirs under running/ for the running-spec check.
-    queue_conflict = adir / "orchestrator" / "queue" / f"{node}.json"
-    if queue_conflict.exists():
-        raise click.ClickException(
-            f"Refusing to submit: {node} is already present in "
-            f"orchestrator/queue/. Wait for it to finish or remove "
-            f"the stale spec file before resubmitting."
-        )
-    running_root = adir / "orchestrator" / "running"
-    if running_root.exists():
-        for backend_dir in running_root.iterdir():
-            if backend_dir.is_dir():
-                running_conflict = backend_dir / f"{node}.json"
-                if running_conflict.exists():
+    def _refuse_if_held() -> None:
+        """Refuse while the orchestrator holds this node id: queued, running,
+        or launched (the daemon writes archive/<node>/spec.json when it
+        launches and bills a node; a submit against that id would erase the
+        charged attempt's record, whatever the graph says about the node).
+        Run once here for a fast refusal and again under the submission lock,
+        where the decision is binding."""
+        orchestrator = adir / "orchestrator"
+        if (orchestrator / "queue" / f"{node}.json").exists():
+            raise click.ClickException(
+                f"Refusing to submit: {node} is already present in "
+                f"orchestrator/queue/. Wait for it to finish or remove "
+                f"the stale spec file before resubmitting."
+            )
+        running_root = orchestrator / "running"
+        if running_root.exists():
+            for backend_dir in running_root.iterdir():
+                if backend_dir.is_dir() and (backend_dir / f"{node}.json").exists():
                     raise click.ClickException(
                         f"Refusing to submit: {node} is currently running in "
                         f"orchestrator/running/{backend_dir.name}/. Wait for it "
                         f"to finish or remove the stale spec file before resubmitting."
                     )
-    # The daemon writes archive/<node>/spec.json when it launches (and bills)
-    # a node; a submit against that id would erase the charged attempt's
-    # record, whatever the graph says about the node.
-    if (adir / "orchestrator" / "archive" / node / "spec.json").exists():
-        raise click.ClickException(
-            f"Refusing to submit: {node} was already launched "
-            f"(orchestrator/archive/{node}/spec.json exists). A node id is "
-            f"charged once; propose a new node instead."
-        )
+        if (orchestrator / "archive" / node / "spec.json").exists():
+            raise click.ClickException(
+                f"Refusing to submit: {node} was already launched "
+                f"(orchestrator/archive/{node}/spec.json exists). A node id is "
+                f"charged once; propose a new node instead."
+            )
+
+    _refuse_if_held()
 
     # Guard against submitting a child before its parent has completed.
     # If the parent is still a pending/running proposal, the Pareto-dominance
@@ -342,15 +346,18 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         cwd=git_root, capture_output=True, text=True, check=True,
     ).stdout.strip()
 
-    # Create the archive directory and copy files. Submit owns this directory
-    # until the daemon launches the node (checked above), so start it empty:
-    # a file copied before a later file was refused must not survive into
-    # this submission's overlay, where launch-time revalidation would reject
-    # it as unmanifested after the attempt was charged.
+    # Stage the overlay outside the archive and move it into
+    # archive/<node>/ under the submission lock, after the hold check is
+    # repeated there: the archive is replaced only once no other submit and
+    # no launch of this node can be in progress, and a file copied before a
+    # later file was refused never lingers into this submission's overlay
+    # (launch-time revalidation would reject it as unmanifested, after the
+    # attempt was charged).
     archive = adir / "orchestrator" / "archive" / node
-    if archive.exists():
-        shutil.rmtree(archive)
-    archive.mkdir(parents=True)
+    staging = adir / "orchestrator" / "staging" / node
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
 
     overlay_manifest = {}
     deletions = []
@@ -402,7 +409,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             src.resolve().relative_to(git_root.resolve())
         except ValueError:
             raise click.ClickException(f"Path escapes repository root: {f}")
-        dst = archive / f
+        dst = staging / f
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         content_hash = hashlib.sha256(src.read_bytes()).hexdigest()
@@ -413,7 +420,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # after the policy has classified the selected variant kinds.
     if _active_variant_path.exists():
         _applied_rel = f"{automil_rel}applied_variant.json"
-        _applied_dst = archive / _applied_rel
+        _applied_dst = staging / _applied_rel
         _applied_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(_active_variant_path), str(_applied_dst))
         _applied_hash = hashlib.sha256(_applied_dst.read_bytes()).hexdigest()
@@ -861,11 +868,19 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         spec.setdefault("metadata", {})["agent_session"] = _campaign_agent_session
 
     queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
-    with submission_lock(adir):
-        _seq = _phasing_gate()
-        if _seq is not None:
-            spec["metadata"]["attempt_seq"] = _seq
-        queue_file.write_text(json.dumps(spec, indent=2))
+    try:
+        with submission_lock(adir):
+            _refuse_if_held()
+            _seq = _phasing_gate()
+            if _seq is not None:
+                spec["metadata"]["attempt_seq"] = _seq
+            if archive.exists():
+                shutil.rmtree(archive)
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            staging.rename(archive)
+            queue_file.write_text(json.dumps(spec, indent=2))
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
     # Register the node in the graph so next_id is bumped and proposals
     # don't collide with submitted experiment IDs. Route through

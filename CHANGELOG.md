@@ -41,16 +41,21 @@ autoMIL: F2-readiness framework refactor.
   (opening batch on five axes, at most three consecutive attempts per axis
   without a keep, two robustness neighbours in the final batch; `automil
   propose` records `--axis`, `--predicted-delta` and `--role`; the census is
-  the specs on disk in the admission order submit mints under its lock, an
-  attempt is in flight until the daemon's terminal record exists, and a
-  fully submitted cell takes no more); and every policy file is smoke-run
-  through the trainers' three call orders, the stopping seam with the
-  cell's task-family metrics and the DTFD tiers with their `MultiStepLR`
-  schedulers at submit (`registry.policy_smoke`,
+  the specs on disk, queue read before archive, in the admission order
+  submit mints under its lock (`metadata.attempt_seq`, which the freeze
+  records and the exported history follows), an attempt is in flight until
+  a terminal record exists (the daemon's result or the running spec
+  `automil cancel` archived), and a fully submitted cell takes no more);
+  and every policy file is smoke-run through the trainers' three call
+  orders (reading `param_groups` as nnMIL does), the stopping seam with the
+  cell's task-family metrics and both DTFD tiers wrapped before either
+  trains, each with its `MultiStepLR`, at submit (`registry.policy_smoke`,
   `autobench.pipeline.policy_smoke --task-family`), so a policy that would
-  crash the trainer is refused for free; every submit starts from an empty
-  `archive/<node>/`, so a file copied before a refusal never lingers into
-  the next overlay.
+  crash the trainer is refused for free; the overlay is staged and moved
+  into `archive/<node>/` under the submission lock after the hold check
+  runs again there, so a refused file never lingers into the next overlay
+  and a concurrent launch of the same id is never erased. The promotion
+  stage carries no `cap.phasing`.
 
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over

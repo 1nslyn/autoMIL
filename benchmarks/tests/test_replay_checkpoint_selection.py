@@ -113,6 +113,36 @@ def test_replay_stops_where_the_v4_trainer_would_and_flags_a_later_maximum(mod, 
     assert (fold_0["would_stop_epoch"], fold_0["new_epoch"], fold_0["later_max_ignored"]) == (3, 1, False)
 
 
+def test_a_killed_candidate_with_fewer_folds_than_the_stage_never_ranks_as_winner(mod, tmp_path):
+    """A discovery attempt killed after two of three fold segments must not
+    become the cell's best node on its two high folds; the baseline (all
+    split folds) and a complete candidate are the only ranked entries."""
+    fold = "[epoch 0] val_loss=0.5 val_auc={v}\n[selected] epoch=0 source=best\n"
+    root = _cell(tmp_path / "k", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
+    nodes = root / "automil" / "orchestrator" / "archive"
+    (nodes / "node_0002").mkdir(parents=True)
+    (nodes / "node_0002" / "run.log").write_text(fold.format(v=0.99) * 2)          # killed
+    (nodes / "node_0003").mkdir(parents=True)
+    (nodes / "node_0003" / "run.log").write_text(fold.format(v=0.70) * mod.FOLDS_REQUIRED["node"])
+    cell = mod.load_cell(root)
+    rows = [row for kind, log in mod.cell_logs(root)
+            for row in mod.replay_log(cell, kind, log, mod.StopRule(patience=10))]
+    summary = mod.cell_summary(cell.cell_id, rows)
+    assert summary[1] == pytest.approx(0.60)          # baseline old-rule mean
+    assert summary[5] == "node_0003" and summary[8] == "node_0003"
+    # a cell whose every candidate was killed has no best node at all: the
+    # required count comes from the stage, never from the longest log
+    orphaned = _cell(tmp_path / "o", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
+    killed = orphaned / "automil" / "orchestrator" / "archive" / "node_0002"
+    killed.mkdir(parents=True)
+    (killed / "run.log").write_text(fold.format(v=0.99) * 2)
+    cell = mod.load_cell(orphaned)
+    rows = [row for kind, log in mod.cell_logs(orphaned)
+            for row in mod.replay_log(cell, kind, log, mod.StopRule(patience=10))]
+    summary = mod.cell_summary(cell.cell_id, rows)
+    assert summary[5] == "" and summary[8] == ""
+
+
 def test_the_clam_floor_belongs_to_the_classification_arm_only(mod):
     """CLAM classification refuses to stop before epoch 50 (its vendored
     stopper's floor); CLAM survival runs the adapter's plain patience rule."""

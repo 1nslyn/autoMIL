@@ -15,10 +15,12 @@ freeze census walks), minus the specs the cap refused at launch. Attempts are
 ordered by the admission sequence ``automil submit`` mints under the lock
 (``metadata.attempt_seq``), so the position a submission was judged at is the
 position it keeps, whatever node ids the proposals carry and whatever the
-submitting host's clock says. An attempt is in flight until the daemon has
-written its terminal record (``orchestrator/archive/<node>/result.json``):
-the queue file and the running intent both have gaps (the daemon deletes the
-queue file before it publishes the intent), the terminal record has none.
+submitting host's clock says. An attempt is in flight until a terminal
+record exists: the daemon's ``orchestrator/archive/<node>/result.json``, or
+the running spec ``automil cancel`` moves into the archive once the process is
+confirmed dead (the daemon reaps that later; if it is down at the time, never).
+The queue file and the running intent both have gaps (the daemon deletes the
+queue file before it publishes the intent); the terminal records have none.
 """
 from __future__ import annotations
 
@@ -124,22 +126,52 @@ def _read_spec(path: Path) -> dict | None:
     return spec if isinstance(spec, dict) else None
 
 
+def _queued_specs(orchestrator: Path) -> list[tuple[str, dict]]:
+    """``(node_id, spec)`` for every readable spec in ``queue/``."""
+    found = []
+    for path in (orchestrator / "queue").glob("*.json"):
+        spec = _read_spec(path)
+        if spec is not None:
+            found.append((path.stem, spec))
+    return found
+
+
+def _archived_specs(orchestrator: Path) -> list[tuple[str, dict]]:
+    """``(node_id, spec)`` for every readable ``archive/<node>/spec.json``."""
+    found = []
+    for path in (orchestrator / "archive").glob("*/spec.json"):
+        spec = _read_spec(path)
+        if spec is not None:
+            found.append((path.parent.name, spec))
+    return found
+
+
 def _cell_specs(adir: Path, cell_id: str) -> dict[str, dict]:
     """``node_id -> spec`` for the cell's queued and launched specs, minus the
-    ones the cap refused at launch (never charged, never an attempt)."""
+    ones the cap refused at launch (never charged, never an attempt).
+
+    The queue is read before the archive because the daemon launches a spec
+    by writing ``archive/<node>/spec.json`` FIRST and unlinking the queue
+    file second: a spec that vanishes from the queue between the two reads
+    is already in the archive, so no launch can slip between them. The other
+    order has a gap exactly one launch wide.
+    """
     orchestrator = adir / "orchestrator"
     specs: dict[str, dict] = {}
-    for path in list((orchestrator / "archive").glob("*/spec.json")) + \
-            list((orchestrator / "queue").glob("*.json")):
-        spec = _read_spec(path)
-        if spec is None:
-            continue
+    for node_id, spec in _queued_specs(orchestrator) + _archived_specs(orchestrator):
         meta = spec.get("metadata") if isinstance(spec.get("metadata"), dict) else {}
         if meta.get("cell_id") != cell_id or meta.get("cap_refused"):
             continue
-        node_id = path.parent.name if path.name == "spec.json" else path.stem
         specs.setdefault(node_id, spec)
     return specs
+
+
+def _finished(archive: Path, node_id: str) -> bool:
+    """A terminal record exists: the daemon's result, or the running spec
+    ``automil cancel`` archived after confirming the process dead."""
+    node_dir = archive / node_id
+    return (node_dir / "result.json").is_file() or \
+        (node_dir / f"{node_id}_running_spec.json").is_file()
 
 
 def _attempt_seq(node_id: str, spec: Mapping) -> int:
@@ -166,7 +198,7 @@ def cell_attempts(adir: Path, nodes: Mapping[str, Mapping], cell_id: str) -> tup
         attempts.append(Attempt(
             node_id=node_id, axis=meta.get("axis"), role=meta.get("role"),
             status=node.get("status"), seq=_attempt_seq(node_id, spec),
-            finished=(archive / node_id / "result.json").is_file(),
+            finished=_finished(archive, node_id),
         ))
     return tuple(sorted(attempts, key=lambda a: (a.seq, a.node_id)))
 

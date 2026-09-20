@@ -154,6 +154,7 @@ echo "training tree clean at $(git rev-parse --short HEAD)"
 PIN=$(python3 -c "import json;print(json.load(open('$CAMPAIGN_REL/toolset.json'))['ancestor_memory']['CLAUDE.md'])")
 [ "$(sha256sum CLAUDE.md | cut -c1-64)" = "$PIN" ] || { echo "ERROR: CLAUDE.md drifted from the pinned hash"; exit 1; }
 echo "CLAUDE.md matches the pinned hash"
+PROTOCOL_VERSION=$(uv run --frozen --no-sync --package autobench python -c 'from autobench.campaign import PROTOCOL_VERSION; print(PROTOCOL_VERSION)')
 cat <<EOM
 
 done. Before any member submits, run one reproduction gate per cohort so a
@@ -162,7 +163,7 @@ launcher's rule applies: --force only supersedes a measurement-mode block.
   sbatch --account=def-jma-ab --time=3:00:00 --gpus-per-node=h100:1 --cpus-per-task=12 --mem=64G \\
     --chdir="$DST_REPO" --wrap='set -a; source benchmarks/.env; set +a
       for c in tcga_luad__os__titan__titan tcga_hnsc__os__titan__titan cptac_pdac__os__titan__titan; do
-        root=$CAMPAIGN_REL/runtime/\${c}__s42__preprint-v3
+        root=$CAMPAIGN_REL/runtime/\${c}__s42__${PROTOCOL_VERSION}
         force=\$(python3 -c "import json,sys;b=(json.load(open(\"\$root/campaign_state.json\")).get(\"baseline_reproduction\") or {});print(\"--force\" if b.get(\"mode\")==\"measurement\" else \"\")")
         uv run --frozen --no-sync --package autobench python benchmarks/scripts/campaign_stage.py run-baseline-reproduction --cell-root "\$root" --gpu 0 \$force
       done'

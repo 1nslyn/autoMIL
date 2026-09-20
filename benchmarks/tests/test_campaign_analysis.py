@@ -105,6 +105,7 @@ def _search_process(cell_id: str) -> dict:
             "node_id": f"node_{index + 1:04d}",
             "source_spec_sha256": f"{index + 1:064x}",
             "submitted_at": f"2026-08-04T00:{index:02d}:00+00:00",
+            "attempt_seq": index + 1,
             "agent_session_id": f"session-{cell_id}",
             "agent_session_binding_sha256": "b" * 64,
             "candidate_class": "config-only",

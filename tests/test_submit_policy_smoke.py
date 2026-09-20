@@ -224,6 +224,37 @@ class TestARefusedSubmitLeavesNoOverlayBehind:
         assert archived == sorted(spec["overlay_manifest"])
         assert "train.py" not in archived
 
+    def test_a_launch_during_the_submit_is_not_erased(self, tmp_path, monkeypatch):
+        """Two submits of one node pass preflight; the daemon launches the
+        first while the second is copying its overlay. The hold check runs
+        again under the lock, so the charged record survives and no second
+        queue spec appears."""
+        from contextlib import contextmanager
+
+        from automil.cells import phasing
+
+        runner, adir = _project(tmp_path, monkeypatch, None)
+        config_path = adir / "config.yaml"
+        cfg = yaml.safe_load(config_path.read_text())
+        cfg["cap"] = {**(cfg.get("cap") or {}), "mode": "wall_clock"}   # no agent session here
+        config_path.write_text(yaml.safe_dump(cfg))
+        launched = adir / "orchestrator" / "archive" / "node_0001"
+        real_lock = phasing.submission_lock
+
+        @contextmanager
+        def lock_after_the_daemon_launched(a):
+            launched.mkdir(parents=True, exist_ok=True)
+            (launched / "spec.json").write_text('{"id": "node_0001"}')
+            with real_lock(a):
+                yield
+
+        monkeypatch.setattr(phasing, "submission_lock", lock_after_the_daemon_launched)
+        refused = _submit(runner)
+        assert refused.exit_code != 0 and "launched" in refused.output
+        assert (launched / "spec.json").read_text() == '{"id": "node_0001"}'
+        assert not (adir / "orchestrator" / "queue" / "node_0001.json").exists()
+        assert not (adir / "orchestrator" / "staging" / "node_0001").exists()
+
     def test_a_launched_record_refuses_the_node_id(self, tmp_path, monkeypatch):
         """``archive/<node>/spec.json`` is the daemon's record of a charged
         launch; a submit against that id would erase it."""

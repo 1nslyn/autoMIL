@@ -1417,6 +1417,22 @@ def _candidate_identity(
     return content_sha256(payload), payload
 
 
+def _spec_attempt_seq(spec: Mapping[str, Any], name: str) -> int:
+    """The admission sequence ``automil submit`` minted for the spec under
+    its submission lock: the order the attempts were judged in, which no
+    clock and no node id can reorder."""
+    seq = (spec.get("metadata") or {}).get("attempt_seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+        raise CampaignStageError(
+            f"discovery spec {name} carries no admission sequence (metadata.attempt_seq)"
+        )
+    return seq
+
+
+def _attempt_order(row: Mapping[str, Any]) -> tuple[int, str, str]:
+    return (row["attempt_seq"], row["submitted_at"], row["node_id"])
+
+
 def _pending_stage_work(adir: Path) -> list[str]:
     pending: list[str] = []
     queue = adir / "orchestrator" / "queue"
@@ -1616,6 +1632,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
             "node_id": archive.name,
             "source_spec_sha256": file_sha256(archive / "spec.json"),
             "submitted_at": submitted_at,
+            "attempt_seq": _spec_attempt_seq(spec, archive.name),
             "agent_session_id": expected_session["session_id"],
             "agent_session_binding_sha256": expected_session["binding_sha256"],
             "candidate_class": "inadmissible",
@@ -1762,7 +1779,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         "unique_complete_candidates": len(unique_eligible),
         "frozen": True,
         "frozen_at": frozen_at,
-        "attempt_audit": attempt_audit,
+        "attempt_audit": sorted(attempt_audit, key=_attempt_order),
         "promoted_candidates": promoted,
     })
     state["revision"] += 1
@@ -2093,6 +2110,9 @@ def _materialize_promotion_unlocked(
         # kill switch mid-evaluation. Containment-size the time wall instead.
         config["cap"]["budget"] = PROMOTION_WALL_CLOCK_CONTAINMENT
         config["cap"]["mode"] = "wall_clock"
+        # The batches and the phasing rule belong to the agent's discovery;
+        # the controller submits the shortlist in one go.
+        config["cap"].pop("phasing", None)
         config["training"] = {"fold_count": len(STAGE_FOLDS["promotion"])}
         config.setdefault("campaign", {})["stage"] = "promotion"
         temporary_adir.mkdir(parents=True)
@@ -3621,10 +3641,10 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
             f"process evidence requires exactly {DISCOVERY_ATTEMPTS} discovery attempts"
         )
     audit_fields = {
-        "node_id", "source_spec_sha256", "submitted_at", "agent_session_id",
-        "agent_session_binding_sha256", "candidate_class", "policy_hash",
-        "result_status", "termination_reason", "budget_killed", "outcome_class",
-        "elapsed_seconds", "peak_vram_mb", "eligible", "reason",
+        "node_id", "source_spec_sha256", "submitted_at", "attempt_seq",
+        "agent_session_id", "agent_session_binding_sha256", "candidate_class",
+        "policy_hash", "result_status", "termination_reason", "budget_killed",
+        "outcome_class", "elapsed_seconds", "peak_vram_mb", "eligible", "reason",
         "candidate_sha256", "validation_mean",
     }
     classes = ("config-only", "train-only-source", "inadmissible")
@@ -3657,6 +3677,9 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
             raise CampaignStageError("discovery process timestamp is invalid") from exc
         if submitted.tzinfo is None:
             raise CampaignStageError("discovery process timestamp lacks timezone")
+        seq = row.get("attempt_seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+            raise CampaignStageError("discovery process attempt_seq is invalid")
         for key in ("elapsed_seconds", "peak_vram_mb"):
             value = row.get(key)
             if value is not None and (
@@ -3681,7 +3704,9 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise CampaignStageError("eligible discovery process row is incomplete")
         ordered.append(json.loads(json.dumps(row)))
-    ordered.sort(key=lambda row: (row["submitted_at"], row["node_id"]))
+    if len({row["attempt_seq"] for row in ordered}) != len(ordered):
+        raise CampaignStageError("discovery process attempt_seq is not unique")
+    ordered.sort(key=_attempt_order)
     discovery_baseline_folds = [
         fold for fold in baseline.get("validation_folds", [])
         if fold.get("fold_index") in STAGE_FOLDS["discovery"]
@@ -3979,9 +4004,9 @@ def validate_process_evidence_artifact(
     ):
         raise CampaignStageError(f"{cell_id}: discovery census is not exact")
     audit_fields = {
-        "node_id", "source_spec_sha256", "submitted_at", "agent_session_id",
-        "agent_session_binding_sha256", "candidate_class", "policy_hash",
-        "result_status", "termination_reason", "budget_killed",
+        "node_id", "source_spec_sha256", "submitted_at", "attempt_seq",
+        "agent_session_id", "agent_session_binding_sha256", "candidate_class",
+        "policy_hash", "result_status", "termination_reason", "budget_killed",
         "outcome_class", "elapsed_seconds", "peak_vram_mb", "eligible",
         "reason", "candidate_sha256", "validation_mean",
     }
@@ -3989,6 +4014,9 @@ def validate_process_evidence_artifact(
     for row in attempts:
         if not isinstance(row, dict) or set(row) != audit_fields:
             raise CampaignStageError(f"{cell_id}: discovery attempt schema drift")
+        seq = row.get("attempt_seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+            raise CampaignStageError(f"{cell_id}: discovery attempt_seq is invalid")
         for key in (
             "node_id", "submitted_at", "agent_session_id", "result_status",
             "termination_reason", "reason",
@@ -4051,9 +4079,9 @@ def validate_process_evidence_artifact(
             raise CampaignStageError(
                 f"{cell_id}: eligible discovery attempt is incomplete"
             )
-    if attempts != sorted(
-        attempts, key=lambda row: (row["submitted_at"], row["node_id"]),
-    ):
+    if len({row["attempt_seq"] for row in attempts}) != len(attempts):
+        raise CampaignStageError(f"{cell_id}: discovery attempt_seq is not unique")
+    if attempts != sorted(attempts, key=_attempt_order):
         raise CampaignStageError(f"{cell_id}: discovery attempt order drift")
     if (
         len({row["node_id"] for row in attempts}) != DISCOVERY_ATTEMPTS
