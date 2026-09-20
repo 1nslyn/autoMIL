@@ -60,17 +60,28 @@ worker() {  # worker-id
 pids=(); for w in $(seq 0 $((N_WORKERS - 1))); do worker "$w" & pids+=($!); done
 RC=0; for pid in "${pids[@]}"; do wait "$pid" || RC=1; done
 
+# Summary: per cell, the registered baseline fold by fold (how far the folds
+# sit from each other), then the re-run fold by fold and its difference from
+# the registered value. The last line is the basis for the epsilon.
 python3 - "$RUNTIME" "$ROSTER" <<'PYEOF'
-import json, sys
+import json, statistics, sys
 from pathlib import Path
 runtime = Path(sys.argv[1]); cells = json.loads(Path(sys.argv[2]).read_text())["cell_ids"]
 worst = 0.0
 for cell in cells:
-    block = json.loads((runtime / cell / "campaign_state.json").read_text()).get("baseline_reproduction") or {}
-    deltas = [abs(float(row["delta"])) for row in block.get("folds", [])]
-    matches = [row.get("prediction_hash_match") for row in block.get("folds", [])]
-    peak = max(deltas) if deltas else None
-    print(f"{cell}: mode={block.get('mode')} max_abs_delta={peak} hash_match={matches}")
+    state = json.loads((runtime / cell / "campaign_state.json").read_text())
+    base = sorted((state.get("baseline") or {}).get("validation_folds") or [], key=lambda f: f["fold_index"])
+    values = [float(f["primary_value"]) for f in base if f.get("primary_value") is not None]
+    print(f"{cell}")
+    if values:
+        print("  baseline folds: " + "  ".join(f"{f['fold_index']}={float(f['primary_value']):.3f}" for f in base)
+              + f"  | mean {statistics.mean(values):.3f}  range {max(values) - min(values):.3f}  sd {statistics.pstdev(values):.3f}")
+    block = state.get("baseline_reproduction") or {}
+    rows = block.get("folds", [])
+    if rows:
+        print("  re-run folds:   " + "  ".join(f"{r['fold_index']}={float(r['reproduction_primary_value']):.3f} ({float(r['delta']):+.3f})" for r in rows)
+              + f"  | mode {block.get('mode')}  hash_match {[r.get('prediction_hash_match') for r in rows]}")
+    deltas = [abs(float(r["delta"])) for r in rows]
     worst = max([worst] + deltas)
 print(f"observed_max_abs_delta={worst:.6f}")
 PYEOF
