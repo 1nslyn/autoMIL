@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 import click
 
@@ -265,6 +266,10 @@ def propose(parent: str, desc: str, techniques: tuple, kind: str | None,
         if axis:
             extra["axis"] = axis
         if predicted_delta is not None:
+            if not math.isfinite(predicted_delta):
+                raise click.ClickException(
+                    f"--predicted-delta must be a finite number, got {predicted_delta!r}"
+                )
             extra["predicted_delta"] = float(predicted_delta)
         if role:
             extra["role"] = role

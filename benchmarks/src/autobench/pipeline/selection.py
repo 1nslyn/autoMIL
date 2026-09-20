@@ -24,8 +24,12 @@ import math
 
 class SelectionTracker:
     def __init__(self, patience: int) -> None:
-        if int(patience) < 1:
-            raise ValueError(f"patience must be a positive integer, got {patience!r}")
+        # Zero is legal (a degenerate one-epoch run, as the vendored stoppers
+        # already allow): a `--hparams` override is applied after the attempt
+        # is charged, so refusing it here would only turn a bad run into a
+        # crash.
+        if isinstance(patience, bool) or int(patience) != patience or int(patience) < 0:
+            raise ValueError(f"patience must be a non-negative integer, got {patience!r}")
         self.patience = int(patience)
         self.best_value: float | None = None
         self.best_epoch = -1

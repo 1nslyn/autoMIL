@@ -106,10 +106,19 @@ class TestSelectionTracker:
         t.observe(3, 0.5)
         assert t.early_stop and t.best_epoch == 0
 
-    def test_patience_must_be_positive(self):
+    def test_patience_must_be_a_non_negative_integer(self):
         from autobench.pipeline.selection import SelectionTracker
-        with pytest.raises(ValueError):
-            SelectionTracker(patience=0)
+        for bad in (-1, 1.5, True):
+            with pytest.raises(ValueError):
+                SelectionTracker(patience=bad)
+
+    def test_patience_zero_is_a_one_epoch_run_not_a_crash(self):
+        """`--hparams '{"patience": 0}'` is applied after the attempt is
+        charged; the tracker selects epoch 0 and asks to stop at once, as the
+        vendored stoppers do, instead of raising."""
+        t = self._tracker(patience=0)
+        assert t.observe(0, 0.6) is True
+        assert t.early_stop and t.best_epoch == 0
 
 
 # ---------------------------------------------------------------------------

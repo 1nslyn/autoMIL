@@ -428,6 +428,12 @@ class TestProposeRecordsThePhasingFields:
         assert meta["axis"] == "lr" and meta["predicted_delta"] == 0.01
         assert "role" not in meta
 
+    @pytest.mark.parametrize("delta", ["nan", "inf", "-inf"])
+    def test_a_non_finite_predicted_delta_is_refused(self, tmp_path, monkeypatch, delta):
+        runner, adir = _phased_project(tmp_path, monkeypatch)
+        refused = _propose(runner, "node_0001", "lr", delta=delta)
+        assert refused.exit_code != 0 and "finite" in refused.output
+
     def test_a_neighbour_must_be_proposed_under_the_best_node(self, tmp_path, monkeypatch):
         runner, adir = _phased_project(tmp_path, monkeypatch)
         child = _node_id(_propose(runner, "node_0001", "lr"))

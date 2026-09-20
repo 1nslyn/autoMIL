@@ -153,9 +153,10 @@ def _stop_metrics(arm: str | None, family: str, epoch: int, loss: float) -> dict
 
 
 def _first_stop_epoch(arm: str | None, family: str) -> int:
-    """nnMIL's survival trainers validate from epoch 2 (a warm-up); every
-    other loop asks from epoch 0."""
-    return 2 if (arm, family) == ("nnmil", "survival") else 0
+    """Every loop the campaign runs asks from epoch 0, including nnMIL's
+    survival trainer for the locked ``nllsurv`` loss (the porpoise trainer);
+    only nnMIL's Cox trainer, which no cell runs, warms up for two epochs."""
+    return 0
 
 
 def _dtfd_tiers(runtime, features, labels):

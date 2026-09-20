@@ -62,14 +62,19 @@ autoMIL: F2-readiness framework refactor.
   process and moved into `archive/<node>/` under the submission lock after
   the hold check runs again there, so a refused file never lingers into
   the next overlay and a concurrent launch of the same id is never erased;
-  `submit --parent` cannot re-parent a proposal. The daemon writes archived
-  specs atomically and, on restart, finalizes a billed launch that never
-  reached its running intent (an attempt nothing else could finish). The
+  `submit --parent` cannot re-parent a proposal, and `propose` refuses a
+  non-finite predicted delta. The daemon writes archived specs atomically,
+  on restart finalizes a billed launch that never reached its running intent
+  (an attempt nothing else could finish), and refuses at launch a queued spec
+  whose VRAM request exceeds the largest GPU on the host (it would otherwise
+  sit in the queue forever, holding every later batch). The
   materialization audit locks `cap.phasing` and `registry.policy_smoke`;
   the promotion stage carries no `cap.phasing`. The vendored CLAM and nnMIL
   stoppers derive `early_stop` from their counter instead of latching it,
   so a stop a policy suppressed clears once the metric improves again, as
-  the shared tracker's does.
+  the shared tracker's does; the tracker accepts a `patience` of zero (a
+  one-epoch run, as the vendored stoppers already allowed) because a
+  `--hparams` override lands after the attempt is charged.
 
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over

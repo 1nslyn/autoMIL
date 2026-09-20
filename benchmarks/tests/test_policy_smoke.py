@@ -269,8 +269,9 @@ HOLDS_SCHEDULER = HEADER.format(name="holds_scheduler") + '''class HoldsSchedule
 '''
 
 STATEFUL_FROM_EPOCH_ZERO = HEADER.format(name="stateful_from_zero") + '''class StatefulFromZero(PolicyVariant):
-    """Initializes at epoch 0 and compares afterwards: nnMIL's survival
-    trainers ask from epoch 2, so the state never exists there."""
+    """Initializes at epoch 0 and compares afterwards: legal on every loop
+    the campaign runs, all of which ask from epoch 0 (nnMIL survival runs the
+    porpoise trainer for the locked nllsurv loss, which validates every epoch)."""
 
     def wrap_optimizer(self, opt):
         return opt
@@ -461,11 +462,15 @@ class TestTheStoppingSeamIsJudgedByTaskFamily:
         assert _main(["--arm", "abmil", "--task-family", "survival", path]) == 0
         assert _main(["--arm", "clam", "--task-family", "survival", path]) == 0
 
-    def test_nnmil_survival_asks_from_epoch_two(self, tmp_path, capsys):
+    def test_every_campaign_loop_asks_from_epoch_zero(self, tmp_path):
+        """The campaign locks nnMIL survival to the porpoise trainer (nllsurv),
+        which validates from epoch 0; a policy anchoring state on the first
+        validated epoch runs there and must pass here."""
+        from autobench.pipeline.nnmil.train import select_nnmil_trainer
+        assert select_nnmil_trainer("survival", "nllsurv") == "survival_porpoise"
         path = str(_write(tmp_path, "stateful_from_zero", STATEFUL_FROM_EPOCH_ZERO))
         assert _main(["--arm", "nnmil", "--task-family", "classification", path]) == 0
-        assert _main(["--arm", "nnmil", "--task-family", "survival", path]) == 1
-        assert "previous" in capsys.readouterr().err
+        assert _main(["--arm", "nnmil", "--task-family", "survival", path]) == 0
 
 
 class TestTheOptimizerSeamIsTheTrainers:
