@@ -6,14 +6,21 @@ spends more than a declared number of consecutive attempts on one axis
 without a kept result, and closes with a declared number of pre-registered
 robustness neighbours of the best node. ``automil propose`` records the axis,
 the predicted delta and the role on each proposal; ``automil submit`` asks
-:func:`phasing_refusal` before it writes a queue spec, so a refusal costs
-nothing. Attempt order is node-id order, the order the campaign's freeze
-census uses.
+:func:`phasing_refusal` under :func:`submission_lock` before it writes a queue
+spec, so a refusal costs nothing and two submits cannot both take one slot.
+
+An attempt is a spec on disk: queued (``orchestrator/queue/<node>.json``) or
+launched (``orchestrator/archive/<node>/spec.json``, the record the campaign's
+freeze census walks), minus the specs the cap refused at launch. Attempts are
+ordered by the moment they were submitted, so the rules judge the sequence the
+agent actually produced, whatever node ids the proposals carry.
 """
 from __future__ import annotations
 
+import fcntl
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,6 +74,10 @@ class PhasingPolicy:
             raise ValueError(
                 f"cap.phasing.batches sum to {policy.total}, cap.eval_budget is {budget}"
             )
+        if policy.opening_axes_min > policy.batches[0]:
+            raise ValueError("cap.phasing.opening_axes_min exceeds the opening batch")
+        if policy.reserve_neighbours_min > policy.batches[-1]:
+            raise ValueError("cap.phasing.reserve_neighbours_min exceeds the final batch")
         return policy
 
     @property
@@ -96,43 +107,85 @@ class Attempt:
     axis: str | None
     role: str | None
     status: str | None
+    submitted_at: str
 
 
-def cell_attempts(nodes: Mapping[str, Mapping], cell_id: str) -> tuple[Attempt, ...]:
-    """The cell's submitted attempts in node-id order: every node tagged with
-    the cell that has left ``pending``, except the bootstrapped root and a
-    spec the cap refused at launch (it was never charged)."""
-    from automil.graph import node_cell_id
+def _read_spec(path: Path) -> dict | None:
+    try:
+        spec = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return spec if isinstance(spec, dict) else None
 
+
+def _cell_specs(adir: Path, cell_id: str) -> dict[str, dict]:
+    """``node_id -> spec`` for the cell's queued and launched specs, minus the
+    ones the cap refused at launch (never charged, never an attempt)."""
+    orchestrator = adir / "orchestrator"
+    specs: dict[str, dict] = {}
+    for path in list((orchestrator / "archive").glob("*/spec.json")) + \
+            list((orchestrator / "queue").glob("*.json")):
+        spec = _read_spec(path)
+        if spec is None:
+            continue
+        meta = spec.get("metadata") if isinstance(spec.get("metadata"), dict) else {}
+        if meta.get("cell_id") != cell_id or meta.get("cap_refused"):
+            continue
+        node_id = path.parent.name if path.name == "spec.json" else path.stem
+        specs.setdefault(node_id, spec)
+    return specs
+
+
+def cell_attempts(adir: Path, nodes: Mapping[str, Mapping], cell_id: str) -> tuple[Attempt, ...]:
+    """The cell's attempts in submission order (queued or launched specs on
+    disk, the census the freeze walks), with each node's axis, role and
+    status read from ``nodes`` (a ``graph.json`` node mapping)."""
     attempts = []
-    for node_id, node in sorted(nodes.items()):
-        if node_cell_id(node) != cell_id or node.get("bootstrapped"):
-            continue
-        if node.get("status") in (None, "pending", "cancelled"):
-            continue
+    for node_id, spec in _cell_specs(adir, cell_id).items():
+        node = nodes.get(node_id) if isinstance(nodes.get(node_id), Mapping) else {}
         meta = node.get("metadata") if isinstance(node.get("metadata"), Mapping) else {}
         attempts.append(Attempt(
             node_id=node_id, axis=meta.get("axis"), role=meta.get("role"),
-            status=node.get("status"),
+            status=node.get("status"), submitted_at=str(spec.get("submitted_at") or ""),
         ))
-    return tuple(attempts)
+    return tuple(sorted(attempts, key=lambda a: (a.submitted_at, a.node_id)))
 
 
 def in_flight_node_ids(adir: Path, cell_id: str) -> frozenset[str]:
     """Node ids of the cell's specs still in ``orchestrator/queue`` or
     ``orchestrator/running/<backend>/``."""
     orchestrator = adir / "orchestrator"
-    paths = list((orchestrator / "queue").glob("*.json")) + \
-        list((orchestrator / "running").glob("*/*.json"))
     ids = set()
-    for path in paths:
-        try:
-            spec = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if (spec.get("metadata") or {}).get("cell_id") == cell_id:
+    for path in list((orchestrator / "queue").glob("*.json")) + \
+            list((orchestrator / "running").glob("*/*.json")):
+        spec = _read_spec(path)
+        if spec is not None and (spec.get("metadata") or {}).get("cell_id") == cell_id:
             ids.add(path.stem)
     return frozenset(ids)
+
+
+@contextmanager
+def submission_lock(adir: Path) -> Iterator[None]:
+    """Serialize "read the census, decide, write the queue spec" across
+    submit processes: two submits that both see seven attempts must not both
+    take the eighth slot."""
+    lock_dir = adir / "orchestrator" / "queue"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    with open(lock_dir / ".submission.lock", "a+") as lock_f:
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+
+
+def _quota_refusal(have: int, remaining_after: int, needed: int, what: str) -> str | None:
+    """Refuse a submission that leaves a batch quota unreachable: ``have``
+    counts this submission, ``remaining_after`` the slots left in the batch."""
+    if have + remaining_after < needed:
+        return (f"this submission leaves the {what} unreachable: {have} so far with "
+                f"{remaining_after} slot(s) left in the batch, {needed} required")
+    return None
 
 
 def phasing_refusal(
@@ -147,8 +200,11 @@ def phasing_refusal(
 ) -> str | None:
     """Why the next submission would break the declared phasing, or ``None``.
 
-    The candidate is attempt ``len(attempts) + 1``. Past the budget the
-    phasing says nothing: the budget gate refuses that.
+    The candidate is attempt ``len(attempts) + 1``. Quotas are checked for
+    feasibility at every attempt of their batch, so a prefix that could no
+    longer meet them is refused at the first attempt that makes it so, never
+    at the last. Past the budget the phasing says nothing: the budget gate
+    refuses that.
     """
     if not axis:
         return ("propose with --axis (and --predicted-delta): cap.phasing "
@@ -168,24 +224,28 @@ def phasing_refusal(
             return (f"attempt {k} opens batch {batch}; it can start only after every "
                     f"attempt of batches 1-{batch - 1} has finished (in flight: "
                     f"{', '.join(still_running)})")
-    if k == policy.batch_bounds(1)[1]:
-        axes = {a.axis for a in attempts[:k - 1]} | {axis}
-        if len(axes) < policy.opening_axes_min:
-            return (f"the opening batch would close with {len(axes)} distinct axes "
-                    f"({', '.join(sorted(axes))}); {policy.opening_axes_min} are required")
+    if batch == 1:
+        axes = {a.axis for a in attempts} | {axis}
+        refusal = _quota_refusal(len(axes), last - k, policy.opening_axes_min,
+                                 f"opening batch's {policy.opening_axes_min} distinct axes")
+        if refusal:
+            return refusal
     m = policy.max_consecutive_per_axis
     recent = attempts[-m:] if m <= len(attempts) else ()
     if len(recent) == m and all(a.axis == axis for a in recent) \
             and not any(a.status == "keep" for a in recent):
         return (f"attempt {k} would be the {m + 1}th consecutive attempt on axis "
                 f"{axis!r} without a kept result; change axis")
-    if k == policy.total:
-        final = [a for a in attempts[first - 1:] if a.role == NEIGHBOUR]
-        n = len(final) + (1 if role == NEIGHBOUR else 0)
-        if n < policy.reserve_neighbours_min:
-            return (f"the final batch would close with {n} robustness neighbour(s) of "
-                    f"the best node; {policy.reserve_neighbours_min} are required "
-                    f"(propose --role neighbour under {best_node_id})")
+    if batch == len(policy.batches):
+        neighbours = sum(1 for a in attempts[first - 1:] if a.role == NEIGHBOUR)
+        neighbours += 1 if role == NEIGHBOUR else 0
+        refusal = _quota_refusal(
+            neighbours, last - k, policy.reserve_neighbours_min,
+            f"final batch's {policy.reserve_neighbours_min} robustness neighbour(s) of "
+            f"the best node (propose --role neighbour under {best_node_id})",
+        )
+        if refusal:
+            return refusal
     return None
 
 

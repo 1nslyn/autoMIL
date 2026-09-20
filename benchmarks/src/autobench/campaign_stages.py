@@ -1794,12 +1794,14 @@ def _companion_guard_floor(
     certified winner is that it is not worse than the native baseline by more
     than one validation slide.
 
-    Both sides come from :func:`_recorded_fold_aggregates`, so the comparison
-    happens on the same recorded grid the margin is aligned to. The margin is
-    judged as the gate judges it: ``max(one-slide quantum, se_multiplier x
-    paired SE)`` of the per-fold companion deltas against the baseline
-    (:func:`automil.graph.companion_margin`), so a drop smaller than its own
-    fold-to-fold noise does not decide a cell at either stage.
+    The drop and the margin are judged as the gate judges them, from the same
+    per-fold evidence: the drop is the difference of per-fold means
+    (:func:`automil.graph.companion_delta`) and the margin is
+    ``max(one-slide quantum, se_multiplier x paired SE)`` of the per-fold
+    companion deltas (:func:`automil.graph.companion_margin`), so a drop
+    smaller than its own fold-to-fold noise does not decide a cell at either
+    stage, and no recovered or hand-rounded aggregate can make the two stages
+    disagree about one candidate.
 
     The declaration is read from the FROZEN ``graph.json`` meta, not from
     ``config.yaml``. The config is editable by anything with a shell in the
@@ -1842,8 +1844,8 @@ def _companion_guard_floor(
     # one-slide step and its own margin — derived from the same published
     # counts, over the folds this stage actually averages.
     margin = _stage_guard_margin(adir, stage_folds, margin)
-    floor = _recorded_fold_aggregates(stage_baseline).get(metric)
-    if floor is None:
+    baseline_folds = _fold_metric_values(stage_baseline, metric)
+    if len(baseline_folds) != len(stage_folds):
         raise CampaignStageError(
             f"cannot apply the companion guard at freeze: the baseline records "
             f"no {metric}"
@@ -1851,8 +1853,8 @@ def _companion_guard_floor(
     return {
         "metric": metric,
         "margin": float(margin),
-        "baseline": floor,
-        "baseline_folds": _fold_metric_values(stage_baseline, metric),
+        "baseline": sum(baseline_folds.values()) / len(baseline_folds),
+        "baseline_folds": baseline_folds,
         "se_multiplier": _se_multiplier({"scoring": frozen}),
     }
 
@@ -1898,19 +1900,20 @@ def _companion_guard_shortfall(
     more than the margin it was judged against, or ``None`` if it cleared it.
     Fails CLOSED on a candidate that does not record the metric — the same
     rule the gate applies, for the same reason."""
-    from automil.graph import companion_margin
+    from automil.graph import companion_delta, companion_margin
 
     if floor is None:
         return None
     metric = floor["metric"]
-    value = _recorded_fold_aggregates(folds).get(metric)
-    if value is None:
+    candidate_folds = _fold_metric_values(folds, metric)
+    if len(candidate_folds) != len(folds):
         return float("inf"), float(floor["margin"])
+    value = sum(candidate_folds.values()) / len(candidate_folds)
+    drop = -companion_delta(value, float(floor["baseline"]), candidate_folds, floor["baseline_folds"])
     margin = companion_margin(
         float(floor["margin"]), float(floor["se_multiplier"]),
-        _fold_metric_values(folds, metric), floor["baseline_folds"],
+        candidate_folds, floor["baseline_folds"],
     )
-    drop = float(floor["baseline"]) - value
     # Same ulp slack as the gate: a drop of exactly the margin is a drop of one
     # validation slide, which is not evidence of harm.
     return (drop, margin) if drop - margin > 1e-9 else None

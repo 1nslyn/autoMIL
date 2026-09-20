@@ -202,7 +202,8 @@ def _echo_phasing(cells) -> None:
         return
     for cell in cells:
         click.echo(batch_position(
-            policy, cell_attempts(nodes, cell.cell_id), in_flight_node_ids(adir, cell.cell_id),
+            policy, cell_attempts(adir, nodes, cell.cell_id),
+            in_flight_node_ids(adir, cell.cell_id),
         ))
 
 

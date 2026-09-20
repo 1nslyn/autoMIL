@@ -538,6 +538,16 @@ class TestGuardMarginScalesWithPairedNoise:
         assert verdict == "pass"
         assert keep_or_discard(META_SE, parent, child) == "keep"
 
+    def test_the_delta_is_the_difference_of_fold_means_when_paired(self):
+        """The recorded aggregate can differ from its folds (a recovered run
+        writes an unrounded mean); both stages judge the same per-fold means."""
+        parent = _fold_node(PARENT_AUC, PARENT_BACC)
+        child = _fold_node(CHILD_AUC, UNIFORM_CHILD_BACC)        # folds mean 0.58
+        child["metrics"]["val_bacc"] = 0.61                       # a stale aggregate
+        verdict, delta, _, _ = guard_basis(META_SE, parent, child)
+        assert delta == pytest.approx(-0.02)
+        assert verdict == "fail"
+
     def test_a_uniform_drop_past_the_quantum_still_fails(self):
         parent = _fold_node(PARENT_AUC, PARENT_BACC)
         child = _fold_node(CHILD_AUC, UNIFORM_CHILD_BACC)

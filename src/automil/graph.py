@@ -453,13 +453,26 @@ def guard_basis(
     parent_value = _node_metric(parent_node, metric)
     if parent_value is None:
         return "none", None, metric, None
-    delta = child_value - parent_value
-    margin = companion_margin(
-        margin, _se_multiplier(meta),
-        node_fold_metric_values(child_node, metric),
-        node_fold_metric_values(parent_node, metric),
-    )
+    child_folds = node_fold_metric_values(child_node, metric)
+    parent_folds = node_fold_metric_values(parent_node, metric)
+    delta = companion_delta(child_value, parent_value, child_folds, parent_folds)
+    margin = companion_margin(margin, _se_multiplier(meta), child_folds, parent_folds)
     return ("fail" if delta + margin < -_GUARD_EPS else "pass"), delta, metric, margin
+
+
+def companion_delta(
+    child_value: float, parent_value: float,
+    child_folds: dict[int, float] | None, parent_folds: dict[int, float] | None,
+) -> float:
+    """The child−parent companion delta: the difference of per-fold means when
+    the two nodes carry the same fold set, else of the recorded aggregates.
+    The campaign freeze computes the same quantity from the same fold
+    evidence, so one recovered or hand-rounded aggregate cannot make the two
+    stages disagree about the same candidate."""
+    if child_folds and parent_folds and set(child_folds) == set(parent_folds):
+        n = len(child_folds)
+        return sum(child_folds.values()) / n - sum(parent_folds.values()) / n
+    return child_value - parent_value
 
 
 def companion_margin(

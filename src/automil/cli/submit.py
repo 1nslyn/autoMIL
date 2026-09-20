@@ -759,20 +759,33 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # queue write so a refusal is free (the budget charges at launch).
     from automil.cells.phasing import (  # noqa: E402
         PhasingPolicy, cell_attempts, in_flight_node_ids, phasing_refusal,
+        submission_lock,
     )
     try:
         _phasing = PhasingPolicy.from_config(_automil_cfg.get("cap"))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    if _phasing is not None:
-        _nodes = graph_json.get("nodes", {})
+
+    def _phasing_gate() -> None:
+        """Refuse a submission that breaks the declared phasing; runs under the
+        submission lock, right before the queue write, on a fresh read of the
+        graph and the specs on disk."""
+        if _phasing is None:
+            return
+        _fresh = graph_json
+        if (adir / "graph.json").exists():
+            try:
+                _fresh = json.loads((adir / "graph.json").read_text())
+            except (json.JSONDecodeError, OSError):
+                _fresh = graph_json
+        _nodes = _fresh.get("nodes", {})
         _candidate = _nodes.get(node) or {}
         _candidate_meta = _candidate.get("metadata") or {}
         _refusal = phasing_refusal(
-            _phasing, cell_attempts(_nodes, _cell.cell_id),
+            _phasing, cell_attempts(adir, _nodes, _cell.cell_id),
             axis=_candidate_meta.get("axis"), role=_candidate_meta.get("role"),
             parent_id=parent or _candidate.get("parent_id"),
-            best_node_id=(graph_json.get("meta") or {}).get("best_node_id"),
+            best_node_id=(_fresh.get("meta") or {}).get("best_node_id"),
             in_flight=in_flight_node_ids(adir, _cell.cell_id),
         )
         if _refusal is not None:
@@ -828,7 +841,9 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         spec.setdefault("metadata", {})["agent_session"] = _campaign_agent_session
 
     queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
-    queue_file.write_text(json.dumps(spec, indent=2))
+    with submission_lock(adir):
+        _phasing_gate()
+        queue_file.write_text(json.dumps(spec, indent=2))
 
     # Register the node in the graph so next_id is bumped and proposals
     # don't collide with submitted experiment IDs. Route through

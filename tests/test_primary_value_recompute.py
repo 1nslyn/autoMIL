@@ -117,6 +117,21 @@ def test_fold_entry_that_cannot_support_the_formula_is_dropped():
     ]
 
 
+def test_a_malformed_fold_entry_is_skipped_not_fatal():
+    """An entry without a fold index (or with a junk one) is dropped by the
+    map; the metrics projection must skip it the same way instead of raising
+    inside the terminal writer."""
+    res = {"validation_folds": [
+        {"fold_index": 0, "metrics": {"val_auc": 0.7}, "primary_value": 0.7},
+        {"metrics": {"val_auc": 0.9}},
+        {"fold_index": None, "metrics": {"val_auc": 0.9}},
+        {"fold_index": True, "metrics": {"val_auc": 0.9}},
+    ]}
+    assert fold_primary_value_entries(res, "val_auc") == [
+        {"fold_index": 0, "primary_value": 0.7, "metrics": {"val_auc": 0.7}},
+    ]
+
+
 def test_fold_entry_without_metrics_is_dropped_never_trusted():
     """A bare reported fold value is unverifiable evidence. Trusting it
     hands the paired margin to the agent: fold values fabricated as

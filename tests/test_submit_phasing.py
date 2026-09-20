@@ -33,7 +33,12 @@ POLICY = PhasingPolicy(batches=(2, 2, 1), opening_axes_min=2,
 
 
 def _attempt(node_id, axis, status="discard", role=None):
-    return Attempt(node_id=node_id, axis=axis, role=role, status=status)
+    return Attempt(node_id=node_id, axis=axis, role=role, status=status,
+                   submitted_at=f"2026-09-20T00:00:{int(node_id[-2:]):02d}+00:00")
+
+
+BIG = PhasingPolicy(batches=(8, 8, 8, 6), opening_axes_min=5,
+                    max_consecutive_per_axis=3, reserve_neighbours_min=2)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +105,30 @@ class TestPhasingRefusal:
         assert "distinct axes" in self._refusal(first, axis="lr")
         assert self._refusal(first, axis="wd") is None
 
+    def test_a_prefix_that_can_no_longer_reach_the_axes_quota_is_refused_early(self):
+        # Eight-attempt opening batch on five axes: after lr, wd, lr, wd, lr
+        # (two axes, three slots left) a sixth on wd leaves at most four.
+        prefix = [_attempt(f"node_000{i}", axis) for i, axis in
+                  enumerate(("lr", "wd", "lr", "wd", "lr"), start=2)]
+        refuse = phasing_refusal(BIG, tuple(prefix), axis="wd", role=None,
+                                 parent_id="node_0001", best_node_id="node_0001",
+                                 in_flight=frozenset())
+        assert refuse is not None and "unreachable" in refuse
+        assert phasing_refusal(BIG, tuple(prefix), axis="dropout", role=None,
+                               parent_id="node_0001", best_node_id="node_0001",
+                               in_flight=frozenset()) is None
+
+    def test_a_final_batch_that_can_no_longer_seat_its_neighbours_is_refused_early(self):
+        done = [_attempt(f"node_{i:04d}", ("lr", "wd", "dropout")[i % 3]) for i in range(2, 30)]
+        assert len(done) == 28                      # attempt 29 is next; 30 is the last
+        refuse = phasing_refusal(BIG, tuple(done), axis="lr", role=None,
+                                 parent_id="node_0001", best_node_id="node_0001",
+                                 in_flight=frozenset())
+        assert refuse is not None and "neighbour" in refuse and "unreachable" in refuse
+        assert phasing_refusal(BIG, tuple(done), axis="lr", role="neighbour",
+                               parent_id="node_0001", best_node_id="node_0001",
+                               in_flight=frozenset()) is None
+
     def test_consecutive_attempts_on_one_axis_need_a_kept_result(self):
         two_lr = [_attempt("node_0002", "lr"), _attempt("node_0003", "lr")]
         policy = PhasingPolicy(batches=(3, 2), opening_axes_min=1,
@@ -131,27 +160,63 @@ class TestPhasingRefusal:
         assert self._refusal(done, axis="lr") is None   # the budget gate refuses, not this
 
 
+def _spec(node_id, cell_id, submitted_at, *, cap_refused=False):
+    meta = {"cell_id": cell_id}
+    if cap_refused:
+        meta["cap_refused"] = True
+    return json.dumps({"id": node_id, "submitted_at": submitted_at, "metadata": meta})
+
+
 class TestCellAttempts:
-    def test_submitted_nodes_of_the_cell_in_id_order(self):
+    def test_attempts_are_the_specs_on_disk_in_submission_order(self, tmp_path):
+        adir = tmp_path / "automil"
+        queue = adir / "orchestrator" / "queue"
+        archive = adir / "orchestrator" / "archive"
+        queue.mkdir(parents=True)
+        # launched (archived spec), in an order that differs from the node ids
+        for node_id, at in (("node_0003", "T01"), ("node_0002", "T02"), ("node_0005", "T03"),
+                            ("node_0006", "T04"), ("node_0008", "T05")):
+            (archive / node_id).mkdir(parents=True)
+            (archive / node_id / "spec.json").write_text(
+                _spec(node_id, "c", at, cap_refused=(node_id == "node_0006")))
+        (queue / "node_0009.json").write_text(_spec("node_0009", "c", "T06"))   # queued
+        (queue / "node_0010.json").write_text(_spec("node_0010", "other", "T07"))
         nodes = {
-            "node_0001": {"cell_id": "c", "bootstrapped": True, "status": "keep",
-                          "type": "executed", "metadata": {}},
-            "node_0003": {"cell_id": "c", "status": "keep", "type": "executed",
-                          "metadata": {"axis": "wd", "role": "neighbour"}},
-            "node_0002": {"cell_id": "c", "status": "running", "type": "proposed",
-                          "metadata": {"axis": "lr"}},
-            "node_0004": {"cell_id": "c", "status": "pending", "type": "proposed",
-                          "metadata": {"axis": "lr"}},                        # not submitted
-            "node_0005": {"cell_id": "c", "status": "cancelled", "type": "proposed",
-                          "cancel_reason": "cap", "metadata": {"axis": "lr"}},  # never launched
-            "node_0006": {"cell_id": "other", "status": "keep", "type": "executed",
-                          "metadata": {"axis": "lr"}},
-            "node_0007": {"status": "keep", "type": "executed"},              # legacy, no cell
+            "node_0001": {"cell_id": "c", "bootstrapped": True, "status": "keep", "metadata": {}},
+            "node_0002": {"cell_id": "c", "status": "keep", "metadata": {"axis": "wd", "role": "neighbour"}},
+            "node_0003": {"cell_id": "c", "status": "running", "metadata": {"axis": "lr"}},
+            "node_0004": {"cell_id": "c", "status": "pending", "metadata": {"axis": "lr"}},   # proposed only
+            "node_0005": {"cell_id": "c", "status": "cancelled", "metadata": {"axis": "lr", "cancel_reason": "cli"}},
+            "node_0006": {"cell_id": "c", "status": "cancelled", "metadata": {"axis": "lr", "cancel_reason": "cap"}},
+            "node_0007": {"cell_id": "c", "status": "running", "metadata": {"axis": "lr"}},   # phantom: no spec
+            "node_0008": {"cell_id": "c", "status": "crash", "metadata": {"axis": "dropout"}},
+            "node_0009": {"cell_id": "c", "status": "running", "metadata": {"axis": "lr"}},
         }
-        attempts = cell_attempts(nodes, "c")
-        assert [a.node_id for a in attempts] == ["node_0002", "node_0003"]
-        assert attempts[1] == Attempt(node_id="node_0003", axis="wd", role="neighbour",
-                                      status="keep")
+        attempts = cell_attempts(adir, nodes, "c")
+        assert [a.node_id for a in attempts] == \
+            ["node_0003", "node_0002", "node_0005", "node_0008", "node_0009"]
+        assert attempts[1] == Attempt(node_id="node_0002", axis="wd", role="neighbour",
+                                      status="keep", submitted_at="T02")
+        # a launched-then-cancelled attempt was charged and stays counted;
+        # the cap-refused spec, the pending proposal and the phantom do not
+        assert attempts[2].status == "cancelled"
+
+    def test_no_orchestrator_dir_means_no_attempts(self, tmp_path):
+        assert cell_attempts(tmp_path / "automil", {}, "c") == ()
+
+
+class TestSubmissionLock:
+    def test_the_lock_is_exclusive(self, tmp_path):
+        import fcntl
+        from automil.cells.phasing import submission_lock
+
+        adir = tmp_path / "automil"
+        with submission_lock(adir):
+            with open(adir / "orchestrator" / "queue" / ".submission.lock", "a+") as other:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with open(adir / "orchestrator" / "queue" / ".submission.lock", "a+") as other:
+            fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)   # released
 
 
 class TestBatchPosition:
@@ -232,9 +297,14 @@ def _submit(runner, node, parent):
 
 
 def _complete(adir: Path, node: str, status: str = "discard") -> None:
-    """Simulate the daemon finishing ``node``: the queue spec is gone and the
-    graph node is terminal."""
-    (adir / "orchestrator" / "queue" / f"{node}.json").unlink()
+    """Simulate the daemon launching and finishing ``node``: the spec moves
+    from the queue to the node's archive (the record the census walks) and
+    the graph node is terminal."""
+    queued = adir / "orchestrator" / "queue" / f"{node}.json"
+    archive = adir / "orchestrator" / "archive" / node
+    archive.mkdir(parents=True, exist_ok=True)
+    (archive / "spec.json").write_text(queued.read_text())
+    queued.unlink()
     graph = json.loads((adir / "graph.json").read_text())
     graph["nodes"][node]["type"] = "executed"
     graph["nodes"][node]["status"] = status
@@ -300,6 +370,24 @@ class TestSubmitEnforcesThePhasing:
         assert refused.exit_code != 0 and "neighbour" in refused.output
         neighbour = _node_id(_propose(runner, "node_0001", "wd", role="neighbour"))
         assert _submit(runner, neighbour, "node_0001").exit_code == 0
+
+    def test_submission_order_is_what_the_rules_judge(self, tmp_path, monkeypatch):
+        """Three lr proposals then a wd one, submitted lr, lr, wd, lr: the last
+        lr is the third consecutive lr only in node-id order; in submission
+        order it follows wd and is admitted."""
+        runner, adir = _phased_project(tmp_path, monkeypatch)
+        # batches (2,2,1) with max 2 consecutive: lr, wd | lr, lr would be the
+        # 2nd consecutive... use the opening batch: lr then wd, then batch 2.
+        lr1 = _node_id(_propose(runner, "node_0001", "lr", desc="lr one"))
+        lr2 = _node_id(_propose(runner, "node_0001", "lr", desc="lr two"))
+        wd = _node_id(_propose(runner, "node_0001", "wd"))
+        assert _submit(runner, lr1, "node_0001").exit_code == 0
+        assert _submit(runner, wd, "node_0001").exit_code == 0
+        _complete(adir, lr1)
+        _complete(adir, wd)
+        assert _submit(runner, lr2, "node_0001").exit_code == 0     # attempt 3, batch 2
+        status = runner.invoke(main, ["cell", "status"])
+        assert "3/5 submitted" in status.output
 
     def test_a_node_submitted_without_a_proposal_is_refused(self, tmp_path, monkeypatch):
         runner, adir = _phased_project(tmp_path, monkeypatch)

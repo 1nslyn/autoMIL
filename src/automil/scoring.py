@@ -387,9 +387,10 @@ def fold_primary_value_entries(
     if folds is None:
         return None
     metrics_by_fold = {
-        int(entry["fold_index"]): {k: float(v) for k, v in entry["metrics"].items()}
+        entry["fold_index"]: {k: float(v) for k, v in entry["metrics"].items()}
         for entry in raw
         if isinstance(entry, Mapping) and isinstance(entry.get("metrics"), Mapping)
+        and isinstance(entry.get("fold_index"), int) and not isinstance(entry["fold_index"], bool)
     } if isinstance(raw, list) else {}
     return [
         {"fold_index": i, "primary_value": folds[i],
