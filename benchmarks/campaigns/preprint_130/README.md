@@ -379,15 +379,21 @@ only the fresh folds); a baseline whose retry cached every fold has no timing
 and is submitted with `--cell <id> --e5-hours <five-fold hours>`. Nothing from a rehearsal set is mirrored,
 frozen into the campaign selections, or certified.
 
-**Session record.** Whatever the outcome, the job's exit copies the
-runtime's own transcript of the cell's session,
+**Session record.** The runtime's own transcript of the cell's session,
 `~/.claude/projects/<cwd>/<session-id>.jsonl` (every user, assistant and
 tool message) with its sidecar directory (subagent transcripts, fetched
-tool results), from the submitter's home into `<cell root>/operator/session/`
-(`store_session_record.sh <cell-root>`; every session the activity journal
-saw, including one that failed before binding; idempotent; run it by hand
-for a cell whose job predates it). The home copy is pruned by the runtime after
-its cleanup period, so the cell root is the record, beside
+tool results), is copied from the submitter's home into
+`<cell root>/automil/sessions/<session-id>/` (`transcript.jsonl`,
+`subagents/`, `record.json`). The framework's `SessionEnd` hook stores it as
+the session ends, and the job's exit runs
+`automil activity store-sessions --root <cell-root>` for every session the
+activity journal saw (including one that failed before binding; idempotent;
+run it by hand for a cell whose job predates it). Records made before this
+layout sit at `<cell root>/operator/session/<session-id>.jsonl` and move with
+`mkdir -p automil/sessions/<id> && mv operator/session/<id>.jsonl automil/sessions/<id>/transcript.jsonl && mv operator/session/<id>/* automil/sessions/<id>/`.
+`automil viz start` in the cell root shows the session beside the tree. The
+home copy is pruned by the runtime after its cleanup period, so the cell root
+is the record, beside
 `automil/.activity.jsonl` (session open, bind and end), `automil/graph.json`,
 `automil/results.tsv`, `automil/learnings.md`, `automil/plan.md`,
 `automil/orchestrator/orchestrator.log`, `operator/usage_before.txt`,

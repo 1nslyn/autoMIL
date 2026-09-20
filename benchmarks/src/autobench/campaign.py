@@ -1221,7 +1221,7 @@ def materialize_discovery_cells(
                 json.dumps(cell, indent=2, sort_keys=True) + "\n"
             )
             (staging_adir / ".gitignore").write_text(
-                "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
+                "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\nsessions/\n"
                 ".activity.jsonl\n.activity.samples.json\n.activity.lock\n"
                 ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
             )

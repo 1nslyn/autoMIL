@@ -418,6 +418,48 @@ def ingest_prometheus_metrics(
         return observed_sessions
 
 
+@dataclass(frozen=True)
+class JournalSession:
+    """One journaled runtime session, as the dashboard and the record store see it."""
+
+    session_id: str
+    cell_id: str | None
+    opened_at: float
+    ended_at: float | None
+    ended_by: str | None
+    binding_sha256: str | None
+
+
+def journal_sessions(automil_dir: Path | str) -> tuple[JournalSession, ...]:
+    """Every session the journal knows, in the order they were opened.
+
+    ``ended_by`` is ``None`` while a session is open, ``"hook"`` when the
+    runtime's own SessionEnd hook closed it, and the recorded ``finalized_by``
+    marker for an attested close. A corrupt journal raises ``ActivityError``.
+    """
+    root = Path(automil_dir)
+    if not (root / ACTIVITY_JOURNAL_FILENAME).exists():
+        return ()
+    with _activity_lock(root, exclusive=False):
+        replay = _read_journal_unlocked(root)
+    sessions = []
+    for session in replay.sessions.values():
+        ended_by = None
+        if session.end_event is not None:
+            ended_by = session.end_event.get("finalized_by") or "hook"
+        sessions.append(
+            JournalSession(
+                session_id=session.session_id,
+                cell_id=session.cell_id,
+                opened_at=session.opened_at,
+                ended_at=session.ended_at,
+                ended_by=ended_by,
+                binding_sha256=session.binding_sha256,
+            )
+        )
+    return tuple(sessions)
+
+
 def read_activity_report(
     automil_dir: Path | str,
     cell_id: str,

@@ -68,10 +68,21 @@ def _held_out_ids() -> frozenset:
     return _held_out_ids_cached(mtime)
 
 
-def redact(s: str) -> str:
-    """Apply all compiled redaction patterns to a string. Returns a new string."""
+def redact_secrets(s: str) -> str:
+    """Mask credential-shaped substrings. Pure: no project lookup, no cwd.
+
+    The dashboard record builders run outside any project cwd and must not
+    consult graph.json through ``_find_automil_dir``; they need only the
+    pattern half of :func:`redact`.
+    """
     for pattern, replacement in _PATTERNS:
         s = pattern.sub(replacement, s)
+    return s
+
+
+def redact(s: str) -> str:
+    """Apply all compiled redaction patterns to a string. Returns a new string."""
+    s = redact_secrets(s)
     # D-139 dynamic: redact held-out node IDs to <HELD_OUT> placeholder
     held_out = _held_out_ids()
     if held_out:

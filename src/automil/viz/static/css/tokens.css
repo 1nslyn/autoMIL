@@ -1,0 +1,156 @@
+/* autoMIL design tokens: the paper's palette (ocean breeze) on a paper-like page. */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../fonts/IBMPlexSans-Regular.woff2) format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../fonts/IBMPlexSans-Italic.woff2) format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(../fonts/IBMPlexSans-Medium.woff2) format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(../fonts/IBMPlexSans-SemiBold.woff2) format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../fonts/IBMPlexMono-Regular.woff2) format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(../fonts/IBMPlexMono-Medium.woff2) format("woff2");
+}
+
+:root {
+  /* palette (paper/preprint/PAPER-DESIGN-SYSTEM.md) */
+  --seafoam: #bfdfd2;
+  --teal-muted: #51999f;
+  --teal-main: #4198ac;
+  --cyan-light: #7bc0cd;
+  --sand: #dbcb92;
+  --amber-light: #ecb66c;
+  --orange-warm: #ea9e58;
+  --coral: #ed8d5a;
+
+  /* page */
+  --paper: #fcfcfb;
+  --paper-2: #f4f4f2;
+  --paper-3: #ebebe8;
+  --ink: #262626;
+  --ink-2: #4a4a4a;
+  --muted: #6f6f6f;
+  --faint: #9a9a9a;
+  --hairline: #d9d9d9;
+  --hairline-2: #e6e6e3;
+
+  /* semantic */
+  --accent: var(--teal-main);
+  --accent-ink: #2f7686;
+  --accent-tint: #e7f2f4;
+  --status-keep: var(--teal-main);
+  --status-gate: var(--teal-muted);
+  --status-discard: #e2e2df;
+  --status-discard-stroke: #9a9a9a;
+  --status-pending: var(--sand);
+  --status-running: var(--cyan-light);
+  --status-crash: var(--coral);
+  --status-partial: var(--amber-light);
+  --status-cancelled: #f0f0ee;
+  --held-out: var(--coral);
+  --lane-research: var(--cyan-light);
+  --lane-execution: var(--seafoam);
+  --lane-evidence: var(--teal-main);
+  --lane-test: var(--coral);
+
+  /* type */
+  --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-base: 0.9375rem;
+  --fs-md: 1.0625rem;
+  --fs-lg: 1.375rem;
+  --fs-xl: 1.875rem;
+  --fs-hero: clamp(1.9rem, 3.4vw, 2.6rem);
+  --lh: 1.55;
+
+  /* spacing */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 72px;
+  --gutter: 16px;
+  --measure: 66ch;
+  --page-max: 1280px;
+  --header-h: 56px;
+  --runbar-h: 44px;
+  --drawer-w: 520px;
+  --radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #161717;
+    --paper-2: #1e2020;
+    --paper-3: #262929;
+    --ink: #e8e8e6;
+    --ink-2: #cfcfcc;
+    --muted: #a3a3a0;
+    --faint: #7a7a77;
+    --hairline: #3a3d3d;
+    --hairline-2: #2c2f2f;
+    --accent-ink: #7fc3d2;
+    --accent-tint: #1d3236;
+    --status-discard: #33393a;
+    --status-discard-stroke: #7a7a77;
+    --status-cancelled: #2a2d2d;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #161717;
+  --paper-2: #1e2020;
+  --paper-3: #262929;
+  --ink: #e8e8e6;
+  --ink-2: #cfcfcc;
+  --muted: #a3a3a0;
+  --faint: #7a7a77;
+  --hairline: #3a3d3d;
+  --hairline-2: #2c2f2f;
+  --accent-ink: #7fc3d2;
+  --accent-tint: #1d3236;
+  --status-discard: #33393a;
+  --status-discard-stroke: #7a7a77;
+  --status-cancelled: #2a2d2d;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --gutter: 28px;
+  }
+}

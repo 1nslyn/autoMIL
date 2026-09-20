@@ -1,171 +1,58 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>autoMIL Experiment Graph</title>
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="autoMIL: a coding agent runs the experiment loop of multiple instance learning on an existing code base; every attempt, decision and transcript is recorded and shown here.">
+  <title>autoMIL</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%234198ac'/%3E%3Ccircle cx='16' cy='9' r='3.2' fill='%23fff'/%3E%3Ccircle cx='9' cy='23' r='3.2' fill='%23fff'/%3E%3Ccircle cx='23' cy='23' r='3.2' fill='%23fff'/%3E%3Cpath d='M16 12v4M16 16l-7 4M16 16l7 4' stroke='%23fff' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./static/css/tokens.css">
+  <link rel="stylesheet" href="./static/css/base.css">
+  <link rel="stylesheet" href="./static/css/layout.css">
+  <link rel="stylesheet" href="./static/css/views.css">
 </head>
 <body>
-    <header class="top-bar">
-        <div class="top-bar-left">
-            <h1 class="logo">autoMIL</h1>
-            <nav class="tab-bar">
-                <button class="tab active" data-tab="tree">Tree</button>
-                <button class="tab" data-tab="leaderboard">Leaderboard</button>
-                <button class="tab" data-tab="potential">Branch Potential</button>
-                <button class="tab" data-tab="techniques">Techniques</button>
-            </nav>
-        </div>
-        <div class="top-bar-right">
-            <div class="stats-bar">
-                <div class="stat-card">
-                    <span class="stat-label">Executed</span>
-                    <strong id="stat-executed">0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Proposed</span>
-                    <strong id="stat-proposed">0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Best primary value</span>
-                    <strong id="stat-best">0.000</strong>
-                </div>
-            </div>
-            <div class="connection-status" id="connection-status">
-                <span class="status-dot disconnected"></span>
-                <span class="status-text">Offline</span>
-            </div>
-        </div>
-    </header>
-
-    <div class="layout">
-        <main class="content" id="content">
-            <div class="view active" id="view-tree">
-                <div id="tree-3d"></div>
-                <div class="tree-legend">
-                    <div class="legend-item"><span class="legend-dot" style="background:#34d399; box-shadow:0 0 6px #34d399"></span>Keep</div>
-                    <div class="legend-item"><span class="legend-dot" style="background:#475569"></span>Discard</div>
-                    <div class="legend-item"><span class="legend-dot" style="background:#f59e0b; box-shadow:0 0 6px #f59e0b"></span>Proposed</div>
-                    <div class="legend-item"><span class="legend-dot" style="background:#38bdf8; box-shadow:0 0 6px #38bdf8"></span>Running</div>
-                    <div class="legend-item"><span class="legend-dot" style="background:#ef4444"></span>Crash/OOM</div>
-                    <div class="legend-item legend-size">Size = primary value</div>
-                </div>
-                <div class="nav-hint">Rotate: left drag &middot; Pan: right drag &middot; Zoom: scroll &middot; Click: select node</div>
-                <button class="reset-view-btn" id="reset-view" title="Reset camera to fit all nodes">Reset View</button>
-                <div class="empty-state" id="tree-empty">No experiment data available.</div>
-            </div>
-            <div class="view" id="view-leaderboard">
-                <div class="glass-card">
-                    <h2 class="view-title">Leaderboard</h2>
-                    <div id="leaderboard-lineage" class="lineage-bar"></div>
-                    <div class="table-wrap">
-                        <table id="leaderboard-table">
-                            <thead>
-                                <tr>
-                                    <th>Rank</th>
-                                    <th>Description</th>
-                                    <th>Primary value</th>
-                                    <th>Parent &Delta;</th>
-                                    <th>Global &Delta;</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                    <div class="empty-state" id="leaderboard-empty">No executed experiments yet.</div>
-                </div>
-            </div>
-            <div class="view" id="view-potential">
-                <div class="glass-card">
-                    <h2 class="view-title">Branch Potential</h2>
-                    <div class="table-wrap">
-                        <table id="potential-table">
-                            <thead>
-                                <tr>
-                                    <th>Rank</th>
-                                    <th>Description</th>
-                                    <th>Parent Node</th>
-                                    <th>Techniques</th>
-                                    <th>Potential</th>
-                                    <th>Tier</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                    <div class="empty-state" id="potential-empty">No proposed experiments.</div>
-                </div>
-            </div>
-            <div class="view" id="view-techniques">
-                <div class="glass-card">
-                    <h2 class="view-title">Technique Effectiveness</h2>
-                    <div class="table-wrap">
-                        <table id="techniques-table">
-                            <thead>
-                                <tr>
-                                    <th>Technique</th>
-                                    <th>Times Tried</th>
-                                    <th>Best Parent &Delta;</th>
-                                    <th>Avg Parent &Delta;</th>
-                                    <th>Verdict</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                    <div class="empty-state" id="techniques-empty">No technique data available.</div>
-                </div>
-            </div>
-        </main>
+  <header class="header">
+    <a class="wordmark" href="#/">autoMIL</a>
+    <nav class="nav" id="nav" aria-label="Site">
+      <a href="#/runs" data-route="runs">Runs</a>
+      <a href="#/?scroll=how" data-route="home">How it works</a>
+      <a href="#/remote" data-route="remote">Remote access</a>
+      <a href="https://github.com/leoyin1127/autoMIL" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <div class="header-right">
+      <span class="conn recorded" id="conn"><span class="status-dot"></span><span id="conn-text">Recorded</span></span>
+      <button class="quiet" id="theme-toggle" title="Switch light and dark">Theme</button>
     </div>
+  </header>
+  <div class="runbar" id="runbar" hidden></div>
+  <main id="app" aria-live="polite"></main>
+  <footer class="footer" id="footer">
+    <span>autoMIL. Shuolin Yin, Yeonwoo Seo, Jun Ma.</span>
+    <a href="https://github.com/leoyin1127/autoMIL" target="_blank" rel="noopener">Source (Apache-2.0)</a>
+    <a href="https://github.com/leoyin1127/autoMIL/issues" target="_blank" rel="noopener">Issues</a>
+    <span id="footer-note"></span>
+  </footer>
+  <aside class="drawer" id="drawer" aria-label="Node detail"></aside>
+  <div class="tooltip" id="tooltip"></div>
 
-    <!-- Detail panel overlay -->
-    <div class="detail-panel" id="detail-panel">
-        <button class="detail-close" id="detail-close">&times;</button>
-        <div class="detail-primary-value" id="detail-primary-value">-</div>
-        <div class="detail-header">
-            <span class="detail-id" id="detail-id"></span>
-            <span class="detail-badge" id="detail-status"></span>
-        </div>
-        <div class="detail-type" id="detail-type"></div>
-
-        <div class="detail-section">
-            <h4>Metrics</h4>
-            <div class="metrics-grid" id="detail-metrics"></div>
-        </div>
-
-        <div class="detail-section">
-            <h4>Deltas</h4>
-            <div class="metrics-grid" id="detail-deltas"></div>
-        </div>
-
-        <div class="detail-section">
-            <h4>Techniques</h4>
-            <div class="tags" id="detail-techniques"></div>
-        </div>
-
-        <div class="detail-section">
-            <h4>Description</h4>
-            <p id="detail-description"></p>
-        </div>
-
-        <div class="detail-section">
-            <h4>Lineage</h4>
-            <div class="lineage-bar" id="detail-lineage"></div>
-        </div>
-
-        <div class="detail-section">
-            <h4>Info</h4>
-            <div class="info-grid" id="detail-info"></div>
-        </div>
-    </div>
-
-    <script src="/static/vendor/d3.v7.min.js"></script>
-    <script src="/static/vendor/three.min.js"></script>
-    <script src="/static/vendor/three-spritetext.min.js"></script>
-    <script src="/static/vendor/3d-force-graph.min.js"></script>
-    <script src="/static/app.js"></script>
+  <script src="./static/vendor/d3.v7.min.js"></script>
+  <script src="./static/vendor/marked.min.js"></script>
+  <script src="./static/vendor/purify.min.js"></script>
+  <script src="./static/js/core.js"></script>
+  <script src="./static/js/source.js"></script>
+  <script src="./static/js/markdown.js"></script>
+  <script src="./static/js/views/home.js"></script>
+  <script src="./static/js/views/runs.js"></script>
+  <script src="./static/js/views/tree.js"></script>
+  <script src="./static/js/views/progress.js"></script>
+  <script src="./static/js/views/node.js"></script>
+  <script src="./static/js/views/timeline.js"></script>
+  <script src="./static/js/views/agent.js"></script>
+  <script src="./static/js/views/nodes.js"></script>
+  <script src="./static/js/views/notes.js"></script>
+  <script src="./static/js/views/remote.js"></script>
+  <script src="./static/js/main.js"></script>
 </body>
 </html>

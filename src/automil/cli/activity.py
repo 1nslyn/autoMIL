@@ -38,6 +38,13 @@ def ingest() -> None:
         record_hook_event,
     )
 
+    store_warning = None
+    if payload.get("hook_event_name") == "SessionEnd":
+        # The transcript is the only record of the agent's reasoning and the
+        # runtime prunes its own copy; copy it first, so accounting trouble
+        # below never costs the record.
+        store_warning = _store_transcript(automil_dir, payload)
+
     try:
         if payload.get("hook_event_name") == "SessionEnd":
             # Scrape and record under one activity lock: the old two-step
@@ -93,7 +100,68 @@ def ingest() -> None:
             if payload.get("hook_event_name") == "SessionStart":
                 observe_activity_metrics(automil_dir)
     except ActivityError as exc:
+        if store_warning:
+            click.echo(store_warning, err=True)
         raise click.ClickException(str(exc)) from exc
+    if store_warning:
+        click.echo(store_warning, err=True)
+
+
+def _store_transcript(automil_dir, payload: dict) -> str | None:
+    """Copy the session transcript into the project; a problem is a warning."""
+    from pathlib import Path
+
+    from automil.session_record import SessionRecordError, store_session_record
+
+    transcript_path = payload.get("transcript_path")
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return "session record not stored: the hook payload carried no transcript_path"
+    try:
+        outcome = store_session_record(automil_dir, payload.get("session_id"), Path(transcript_path))
+    except (SessionRecordError, OSError) as exc:
+        return f"session record not stored: {exc}"
+    if outcome.action == "missing":
+        return f"session record not stored: {outcome.detail}"
+    return None
+
+
+@activity.command("store-sessions", hidden=True)
+@click.option(
+    "--root", "root", default=None, type=click.Path(),
+    help="Project root (or its automil/ dir). Default: discover from the working directory.",
+)
+@click.option(
+    "--claude-config-dir", "config_dir", default=None, type=click.Path(),
+    help="The runtime's config dir holding projects/<slug>/<session>.jsonl (default: CLAUDE_CONFIG_DIR or ~/.claude).",
+)
+def store_sessions(root: str | None, config_dir: str | None) -> None:
+    """Copy every journaled session's transcript into automil/sessions/.
+
+    The SessionEnd hook stores a session as it ends; this covers sessions
+    whose runtime was killed first. Exit status 1 when any session has no
+    transcript left to copy.
+    """
+    from pathlib import Path
+
+    from automil.session_record import store_journaled_sessions
+
+    if root is not None:
+        candidate = Path(root).resolve()
+        automil_dir = candidate if candidate.name == "automil" else candidate / "automil"
+        if not (automil_dir / "config.yaml").exists():
+            raise click.ClickException(f"{root}: no automil/config.yaml found")
+    else:
+        automil_dir = _find_automil_dir()
+    outcomes = store_journaled_sessions(automil_dir, config_dir=Path(config_dir) if config_dir else None)
+    if not outcomes:
+        click.echo(f"no session in {automil_dir / '.activity.jsonl'}")
+        raise SystemExit(1)
+    missing = False
+    for outcome in outcomes:
+        click.echo(f"{outcome.session_id}: {outcome.action} ({outcome.detail})")
+        missing = missing or outcome.action == "missing"
+    if missing:
+        raise SystemExit(1)
 
 
 @activity.command("close", hidden=True)

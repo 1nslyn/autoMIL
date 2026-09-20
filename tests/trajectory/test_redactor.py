@@ -172,3 +172,16 @@ def test_apply_size_cap_sentinel_on_pathological_bloat() -> None:
         # If sentinel: must have gen_ai.event.name = "truncated"
         if result.get("gen_ai.event.name") == "truncated":
             assert "_dropped_size" in result
+
+
+def test_redact_secrets_masks_patterns_without_touching_the_project(monkeypatch) -> None:
+    """The pure variant never looks for a project; only the patterns apply."""
+    from automil.trajectory import redactor
+
+    def _boom() -> None:  # pragma: no cover - the assertion is that it is never called
+        raise AssertionError("redact_secrets must not resolve a project dir")
+
+    monkeypatch.setattr(redactor, "_held_out_ids", _boom)
+    text = "export HF_TOKEN=hf_abcdefghijklmnopqrstuvwxyz1234 && echo node_0007"
+    assert redactor.redact_secrets(text) == "export HF_TOKEN=[REDACTED] && echo node_0007"
+    assert redactor.redact_secrets("plain text") == "plain text"

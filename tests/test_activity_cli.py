@@ -435,3 +435,75 @@ def test_activity_close_finalizes_dead_session_and_refuses_live_one(
     )
     assert again.exit_code != 0
     assert "already ended" in again.output
+
+
+def _hook_env_project(tmp_path, monkeypatch):
+    """A project whose hooks can run; the exporter is unreachable (fallback path)."""
+    _write_config(tmp_path, _config())
+    monkeypatch.chdir(tmp_path)
+    return tmp_path / "automil"
+
+
+def test_session_end_stores_the_transcript_before_accounting(tmp_path, monkeypatch):
+    cli_runner = CliRunner()
+    from tests.viz.conftest import SID, write_mini_session
+
+    automil = _hook_env_project(tmp_path, monkeypatch)
+    transcript = write_mini_session(tmp_path / "home" / "projects" / "-x")
+    automil.joinpath(".activity.jsonl").write_text(
+        '{"cell_id":null,"event":"session_open","observed_at":1.0,"session_id":"%s"}\n' % SID
+    )
+    automil.joinpath(".activity.samples.json").write_text(json.dumps({
+        "schema_version": 1, "sessions": {SID: {"active_seconds": 5.0, "observed_at": 2.0}},
+    }))
+    payload = {"hook_event_name": "SessionEnd", "session_id": SID, "transcript_path": str(transcript)}
+    result = cli_runner.invoke(main, ["activity", "ingest"], input=json.dumps(payload))
+    assert result.exit_code == 0, result.output
+    assert (automil / "sessions" / SID / "transcript.jsonl").read_bytes() == transcript.read_bytes()
+    assert (automil / "sessions" / SID / "subagents" / "agent-agent1.jsonl").is_file()
+
+
+def test_session_end_without_transcript_path_warns_and_still_accounts(tmp_path, monkeypatch):
+    cli_runner = CliRunner()
+    from tests.viz.conftest import SID
+
+    automil = _hook_env_project(tmp_path, monkeypatch)
+    automil.joinpath(".activity.jsonl").write_text(
+        '{"cell_id":null,"event":"session_open","observed_at":1.0,"session_id":"%s"}\n' % SID
+    )
+    automil.joinpath(".activity.samples.json").write_text(json.dumps({
+        "schema_version": 1, "sessions": {SID: {"active_seconds": 5.0, "observed_at": 2.0}},
+    }))
+    payload = {"hook_event_name": "SessionEnd", "session_id": SID}
+    result = cli_runner.invoke(main, ["activity", "ingest"], input=json.dumps(payload))
+    assert result.exit_code == 0, result.output
+    assert "session record not stored" in result.output
+    assert not (automil / "sessions").exists()
+    assert "session_end" in automil.joinpath(".activity.jsonl").read_text()
+
+
+def test_store_sessions_copies_journaled_sessions_and_reports_missing(tmp_path, monkeypatch):
+    cli_runner = CliRunner()
+    from tests.viz.conftest import SID, write_mini_session
+
+    automil = _hook_env_project(tmp_path, monkeypatch)
+    home = tmp_path / "claude"
+    write_mini_session(home / "projects" / "-x")
+    missing = "9999eeee-0000-4000-8000-000000000000"
+    automil.joinpath(".activity.jsonl").write_text(
+        '{"cell_id":null,"event":"session_open","observed_at":1.0,"session_id":"%s"}\n'
+        '{"cell_id":null,"event":"session_open","observed_at":2.0,"session_id":"%s"}\n' % (SID, missing)
+    )
+    result = cli_runner.invoke(
+        main, ["activity", "store-sessions", "--root", str(tmp_path), "--claude-config-dir", str(home)],
+    )
+    assert result.exit_code == 1, result.output
+    assert f"{SID}: stored" in result.output and f"{missing}: missing" in result.output
+    assert (automil / "sessions" / SID / "transcript.jsonl").is_file()
+    again = cli_runner.invoke(
+        main, ["activity", "store-sessions", "--root", str(automil), "--claude-config-dir", str(home)],
+    )
+    assert f"{SID}: unchanged" in again.output
+    assert "store-sessions" not in cli_runner.invoke(main, ["--help"]).output
+    bad = cli_runner.invoke(main, ["activity", "store-sessions", "--root", str(tmp_path / "nowhere")])
+    assert bad.exit_code != 0 and "no automil/config.yaml" in bad.output
