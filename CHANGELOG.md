@@ -8,6 +8,26 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Protocol `preprint-v4`: the checkpoint is selected on the primary
+  validation metric.** Every arm restores and reports the epoch with the
+  highest validation AUC (classification, ordinal included) or the highest
+  in-fold validation C-index (survival), the same rule for the native
+  baseline and every candidate. The v3 loss rule sat at epochs 0-3 on every
+  rehearsal arm while the objective kept rising for 7-20 epochs, so each
+  arm reported a near-untrained model and the five rehearsal agents spent
+  their budgets moving the loss minimum later (every KRAS "winner" was such
+  a workaround). One primitive, `autobench.pipeline.selection.SelectionTracker`,
+  drives the abmil/dtfd/titan classification loops and the four survival
+  adapters; CLAM's and nnMIL's vendored callbacks implement the same
+  contract in place (strictly greater improves, a tie keeps the earlier
+  epoch, a non-finite value never selects and counts toward patience), and a
+  contract test drives identical trajectories through all three. The
+  validation loss is still computed for the `[epoch k]` line and the
+  stopping policies; it no longer votes. nnMIL defaults a missing `auroc` or
+  C-index to NaN (a finite 0.0 would have become the epoch-0 checkpoint),
+  and the survival adapters drop the vendored callback's on-disk
+  `best_<model>.pth` round trip for an in-memory deep copy.
+
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over
   `scoring.formula` alone — but a project may now declare
