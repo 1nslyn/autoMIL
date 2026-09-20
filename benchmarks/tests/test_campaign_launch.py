@@ -278,6 +278,23 @@ def test_preflight_rejects_memory_variants_on_the_path(launch_host):
         _preflight(launch_host)
 
 
+def test_preflight_rejects_populated_rules_directories_on_the_path(launch_host):
+    # An empty rules directory loads nothing; a single rule file anywhere on
+    # the path (here the repository, then the cell itself) is refused.
+    repo_rules = launch_host["repo_root"] / ".claude" / "rules"
+    repo_rules.mkdir(parents=True)
+    _preflight(launch_host)
+    (repo_rules / "workflow.md").write_text("# personal workflow rules\n")
+    with pytest.raises(CampaignLaunchError, match="unpinned rules directory"):
+        _preflight(launch_host)
+    (repo_rules / "workflow.md").unlink()
+    cell_rules = launch_host["cell_root"] / ".claude" / "rules"
+    cell_rules.mkdir()
+    (cell_rules / "style.md").write_text("# scoped rules\n")
+    with pytest.raises(CampaignLaunchError, match="unpinned rules directory"):
+        _preflight(launch_host)
+
+
 def test_preflight_requires_the_locked_protocol(launch_host):
     from autobench.campaign import AGENT_PROTOCOL_FILE as protocol_file
 
@@ -297,6 +314,15 @@ def test_preflight_rejects_user_memory_and_plugins(launch_host):
     plugins.mkdir()
     (plugins / "something").mkdir()
     with pytest.raises(CampaignLaunchError, match="user-level plugins"):
+        _preflight(launch_host)
+
+
+def test_preflight_rejects_user_rules(launch_host):
+    user_rules = launch_host["home"] / ".claude" / "rules"
+    user_rules.mkdir(parents=True)
+    _preflight(launch_host)
+    (user_rules / "coding-style.md").write_text("# global rules\n")
+    with pytest.raises(CampaignLaunchError, match="user-level rules"):
         _preflight(launch_host)
 
 

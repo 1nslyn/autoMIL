@@ -185,7 +185,8 @@ def _check_memory_surface(
             )
     # The runtime reads memory files from the cwd upward to the filesystem
     # root, not stopping at the repository, so the whole path must be clean:
-    # nothing unpinned, and no local/scoped variants anywhere on it.
+    # nothing unpinned, no local/scoped variants, and no populated
+    # `.claude/rules` directory (its files load as instructions) anywhere on it.
     directory = cell_root
     while True:
         if directory != cell_root:
@@ -203,6 +204,11 @@ def _check_memory_surface(
                 raise CampaignLaunchError(
                     f"unpinned memory variant on the memory path: {variant}"
                 )
+        rules = directory / ".claude" / "rules"
+        if rules.is_dir() and any(rules.iterdir()):
+            raise CampaignLaunchError(
+                f"unpinned rules directory on the memory path: {rules}"
+            )
         if directory == directory.parent:
             break
         directory = directory.parent
@@ -212,6 +218,12 @@ def _check_memory_surface(
             raise CampaignLaunchError(
                 f"user-level memory {user_memory} exists; the formal session "
                 "instruction surface must be exactly the frozen protocol"
+            )
+        user_rules = home / ".claude" / "rules"
+        if user_rules.is_dir() and any(user_rules.iterdir()):
+            raise CampaignLaunchError(
+                f"user-level rules under {user_rules} would load into the "
+                "formal session; remove them on this host"
             )
     if toolset["user_plugins_absent"]:
         plugins = home / ".claude" / "plugins"

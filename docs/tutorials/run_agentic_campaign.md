@@ -140,6 +140,9 @@ condition — never bypass it.
 
 - `~/.claude/CLAUDE.md` does not exist, and no `CLAUDE.local.md` or
   `.claude/CLAUDE.md` sits on any directory between the cell root and `/`.
+- `~/.claude/rules/` is absent or empty, and so is every `.claude/rules/` on
+  that same walk: the runtime loads every file in a rules directory as
+  instructions, so a synced dotfiles rules folder would join the surface.
 - No **unpinned plain `CLAUDE.md`** sits on that same walk either. Only the
   repository `CLAUDE.md` is pinned, so a stray `~/CLAUDE.md`, or one in the
   directory holding your clone, refuses the launch — this catches people out
