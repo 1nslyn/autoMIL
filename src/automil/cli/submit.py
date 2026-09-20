@@ -351,6 +351,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                     PurityValidator,
                 )
                 from automil.registry.errors import ValidationError
+                from automil.registry.config import load_registry_config
                 try:
                     PurityValidator(
                         strict_policy=(
@@ -358,6 +359,13 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                         ),
                     ).check(abs_path)                       # 1. AST-only, no import
                     InterfaceValidator().check(abs_path)    # 2. static interface proof
+                    _smoke = load_registry_config(adir).policy_smoke
+                    if _smoke is not None:
+                        # 3. the consumer's own seams, in a subprocess: a
+                        # policy that would crash the trainer is refused here,
+                        # free, instead of charging an attempt at launch.
+                        from automil.registry.validators.smoke import run_policy_smoke
+                        run_policy_smoke(abs_path, _smoke, cwd=git_root)
                 except ValidationError as e:
                     raise click.ClickException(
                         f"Refusing to submit: variant module {f!r} failed "
