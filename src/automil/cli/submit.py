@@ -747,6 +747,29 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
         )
 
+    # cap.phasing: fixed batches and the phasing rule, refused before the
+    # queue write so a refusal is free (the budget charges at launch).
+    from automil.cells.phasing import (  # noqa: E402
+        PhasingPolicy, cell_attempts, in_flight_node_ids, phasing_refusal,
+    )
+    try:
+        _phasing = PhasingPolicy.from_config(_automil_cfg.get("cap"))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if _phasing is not None:
+        _nodes = graph_json.get("nodes", {})
+        _candidate = _nodes.get(node) or {}
+        _candidate_meta = _candidate.get("metadata") or {}
+        _refusal = phasing_refusal(
+            _phasing, cell_attempts(_nodes, _cell.cell_id),
+            axis=_candidate_meta.get("axis"), role=_candidate_meta.get("role"),
+            parent_id=parent or _candidate.get("parent_id"),
+            best_node_id=(graph_json.get("meta") or {}).get("best_node_id"),
+            in_flight=in_flight_node_ids(adir, _cell.cell_id),
+        )
+        if _refusal is not None:
+            raise click.ClickException(f"Refusing to submit {node}: {_refusal}")
+
     # Write spec to queue
     spec = {
         "id": node,

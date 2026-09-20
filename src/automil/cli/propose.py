@@ -172,11 +172,37 @@ PRESERVING_KINDS = frozenset({"regularization", "hp"})
 @click.option("--mil-model", default=None,
               help="MIL model identifier — stored in node metadata so `automil submit` "
                    "can inherit it as a fallback (D-12, REC-04).")
-def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_model: str | None):
+@click.option("--axis", default=None,
+              help="The axis this attempt varies (required when cap.phasing is declared; "
+                   "the phasing checks read it).")
+@click.option("--predicted-delta", type=float, default=None,
+              help="The predicted change of the primary metric, written before launch "
+                   "(required when cap.phasing is declared).")
+@click.option("--role", type=click.Choice(["neighbour"]), default=None,
+              help="'neighbour': a pre-registered robustness neighbour of the current "
+                   "best node (the final batch must hold the declared number).")
+def propose(parent: str, desc: str, techniques: tuple, kind: str | None,
+            mil_model: str | None, axis: str | None, predicted_delta: float | None,
+            role: str | None):
     """Add a new experiment proposal to the graph."""
     adir = _find_automil_dir()
     from automil.admissibility import load_candidate_policy
     candidate_policy = load_candidate_policy(adir)
+    from automil.cells.phasing import PhasingPolicy
+    import yaml
+    config_path = adir / "config.yaml"
+    _cfg = yaml.safe_load(config_path.read_text()) if config_path.exists() else {}
+    try:
+        phasing = PhasingPolicy.from_config((_cfg or {}).get("cap"))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    axis = axis.strip() if isinstance(axis, str) else axis
+    if phasing is not None and (not axis or predicted_delta is None):
+        raise click.ClickException(
+            "cap.phasing is declared: every proposal needs --axis <label> and "
+            "--predicted-delta <float> (the axis is what the batch checks read; "
+            "the prediction is written before launch, as the protocol asks)."
+        )
     if candidate_policy.mode == "architecture-preserving" and (
         kind is None or kind not in PRESERVING_KINDS
     ):
@@ -200,6 +226,12 @@ def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_mod
     with locked_update(
         str(adir / "graph.json"), technique_map=_load_technique_map(adir)
     ) as graph:
+        if role == "neighbour" and parent != graph.meta.get("best_node_id"):
+            raise click.ClickException(
+                f"Refusing to propose: a robustness neighbour must be a child of "
+                f"the current best node ({graph.meta.get('best_node_id')}), "
+                f"not of {parent}."
+            )
         # Duplicate guard: refuse exact-description sibling proposals under the
         # same parent that are still pending or running. Prevents waste from
         # accidental double-proposes (the 0063="dup of 0057" case). Exact-match
@@ -225,14 +257,23 @@ def propose(parent: str, desc: str, techniques: tuple, kind: str | None, mil_mod
             techniques=list(techniques),
             kind=kind or "unspecified",
         )
+        from automil.graph import merged_metadata
+        extra: dict = {}
         if mil_model:
             from automil.cells.state import normalize_mil_model
-            from automil.graph import merged_metadata
+            extra["mil_model"] = normalize_mil_model(mil_model)
+        if axis:
+            extra["axis"] = axis
+        if predicted_delta is not None:
+            extra["predicted_delta"] = float(predicted_delta)
+        if role:
+            extra["role"] = role
+        if extra:
             gnode = graph.get_node(node_id)
             # L-8a: copy-on-write (see graph.merged_metadata docstring) — a
             # plain setdefault+assign mutates node["metadata"] in place,
             # which is reachable from another writer via aliasing.
-            gnode["metadata"] = merged_metadata(gnode, {"mil_model": normalize_mil_model(mil_model)})
+            gnode["metadata"] = merged_metadata(gnode, extra)
         graph.recalculate_scores()
         # graph.save() runs on context exit under the lock.
 

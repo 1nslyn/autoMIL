@@ -162,6 +162,7 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
             f"{cb:<19}  {_format_evals(cell):<9}  {cell.completed_evals:<6}  "
             f"{cell.status.value:<14}  {running_count:<7}"
         )
+    _echo_phasing(cells)
     if cell_id is None:
         _echo_registry_errors(registry_errors)
         inspection_errors.extend(str(error) for error in registry_errors)
@@ -169,6 +170,40 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
         if "activity " in message:
             click.echo(f"DEGRADED  {message}")
     _finish_inspection(inspection_errors)
+
+
+def _echo_phasing(cells) -> None:
+    """One line per cell on where it stands in its declared batches."""
+    import json
+
+    import yaml
+
+    from automil.cells.phasing import (
+        PhasingPolicy, batch_position, cell_attempts, in_flight_node_ids,
+    )
+    from automil.cli._helpers import _find_automil_dir
+
+    adir = _find_automil_dir()
+    config_path = adir / "config.yaml"
+    graph_path = adir / "graph.json"
+    if not (config_path.exists() and graph_path.exists()):
+        return
+    try:
+        policy = PhasingPolicy.from_config((yaml.safe_load(config_path.read_text()) or {}).get("cap"))
+    except ValueError as exc:
+        click.echo(f"DEGRADED  {exc}")
+        return
+    if policy is None:
+        return
+    try:
+        nodes = json.loads(graph_path.read_text()).get("nodes", {})
+    except (OSError, json.JSONDecodeError) as exc:
+        click.echo(f"DEGRADED  cannot read graph.json for the phasing line: {exc}")
+        return
+    for cell in cells:
+        click.echo(batch_position(
+            policy, cell_attempts(nodes, cell.cell_id), in_flight_node_ids(adir, cell.cell_id),
+        ))
 
 
 @cell_group.command("list")
