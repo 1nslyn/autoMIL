@@ -51,6 +51,8 @@ class TestUnplaceableSpec:
         assert not (orch.archive_dir / "node_0001" / "result.json").exists()   # never charged
         node = json.loads((orch.automil_dir / "graph.json").read_text())["nodes"]["node_0001"]
         assert node["status"] == "cancelled"
+        assert node["cancel_reason"] == "unplaceable"      # not the budget's "cap"
+        assert node.get("cell_id") is None                 # a cell-less spec gets no placeholder
 
     @pytest.mark.parametrize("vram", [2.0, 47.0])
     def test_a_request_that_fits_the_largest_gpu_stays_queued(self, tmp_path, vram):

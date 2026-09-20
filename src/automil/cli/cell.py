@@ -162,7 +162,7 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
             f"{cb:<19}  {_format_evals(cell):<9}  {cell.completed_evals:<6}  "
             f"{cell.status.value:<14}  {running_count:<7}"
         )
-    _echo_phasing(cells)
+    inspection_errors.extend(_echo_phasing(cells))
     if cell_id is None:
         _echo_registry_errors(registry_errors)
         inspection_errors.extend(str(error) for error in registry_errors)
@@ -172,8 +172,9 @@ def cell_status(cell_id: str | None, no_header: bool) -> None:
     _finish_inspection(inspection_errors)
 
 
-def _echo_phasing(cells) -> None:
-    """One line per cell on where it stands in its declared batches."""
+def _echo_phasing(cells) -> list[str]:
+    """One line per cell on where it stands in its declared batches; returns
+    the DEGRADED reasons so the command exits non-zero on a broken census."""
     import json
 
     import yaml
@@ -185,24 +186,28 @@ def _echo_phasing(cells) -> None:
     config_path = adir / "config.yaml"
     graph_path = adir / "graph.json"
     if not (config_path.exists() and graph_path.exists()):
-        return
+        return []
     try:
         policy = PhasingPolicy.from_config((yaml.safe_load(config_path.read_text()) or {}).get("cap"))
     except ValueError as exc:
         click.echo(f"DEGRADED  {exc}")
-        return
+        return [str(exc)]
     if policy is None:
-        return
+        return []
     try:
         nodes = json.loads(graph_path.read_text()).get("nodes", {})
     except (OSError, json.JSONDecodeError) as exc:
-        click.echo(f"DEGRADED  cannot read graph.json for the phasing line: {exc}")
-        return
+        reason = f"cannot read graph.json for the phasing line: {exc}"
+        click.echo(f"DEGRADED  {reason}")
+        return [reason]
+    degraded: list[str] = []
     for cell in cells:
         try:
             click.echo(batch_position(policy, cell_attempts(adir, nodes, cell.cell_id)))
         except ValueError as exc:
             click.echo(f"DEGRADED  {exc}")
+            degraded.append(str(exc))
+    return degraded
 
 
 @cell_group.command("list")

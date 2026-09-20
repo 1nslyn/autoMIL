@@ -47,6 +47,7 @@ from automil.launch_binding import LaunchBindingError, validate_launch_binding
 from automil.runtime_helpers import atomic_write_text, group_mkdtemp
 
 from autobench.campaign import (
+    SE_MULTIPLIER,
     ACTIVE_CELL_COUNT,
     ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
@@ -1839,6 +1840,28 @@ def _companion_guard_floor(
         raise CampaignStageError(
             f"cannot read the frozen scoring declaration: {exc}"
         ) from exc
+    # The hash-bound cell record names the guard; the graph must have frozen
+    # exactly that one (a frozen guard the record does not carry can only be
+    # stricter and is applied as frozen). k is the protocol's, not the
+    # cell's: both are inputs to this authoritative decision, and both are
+    # seeded from a config.yaml anything with a shell in the cell can edit.
+    try:
+        record_guard = json.loads(
+            (adir / "campaign_cell.json").read_text()
+        ).get("guard")
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"cannot read the campaign cell record: {exc}") from exc
+    if record_guard is not None and frozen.get("guard") != record_guard:
+        raise CampaignStageError(
+            f"graph.json froze scoring.guard {frozen.get('guard')!r}; the "
+            f"campaign record carries {record_guard!r}"
+        )
+    frozen_k = _se_multiplier({"scoring": frozen})
+    if frozen_k != SE_MULTIPLIER:
+        raise CampaignStageError(
+            f"graph.json froze scoring.se_multiplier {frozen_k!r}; the protocol "
+            f"records {SE_MULTIPLIER}"
+        )
     try:
         declared = _guard_declaration({"scoring": frozen})
     except ValueError as exc:
@@ -1872,17 +1895,21 @@ def _companion_guard_floor(
         "margin": float(margin),
         "baseline": sum(baseline_folds.values()) / len(baseline_folds),
         "baseline_folds": baseline_folds,
-        "se_multiplier": _se_multiplier({"scoring": frozen}),
+        "se_multiplier": SE_MULTIPLIER,
     }
 
 
 def _fold_metric_values(folds: list[Mapping[str, Any]], metric: str) -> dict[int, float]:
     """``fold_index -> metric`` over normalized fold entries (every fold
-    carries the full recorded metrics block, see :func:`_validation_folds`)."""
+    carries the full recorded metrics block, see :func:`_validation_folds`).
+    A fold whose value is missing or non-finite is left out, so a count
+    check against the fold set fails closed on it."""
     return {
-        int(fold["fold_index"]): float(fold["metrics"][metric])
+        int(fold["fold_index"]): float(value)
         for fold in folds
-        if metric in (fold.get("metrics") or {})
+        for value in [(fold.get("metrics") or {}).get(metric)]
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value)
     }
 
 

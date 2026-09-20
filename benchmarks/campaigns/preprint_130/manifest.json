@@ -7128,6 +7128,7 @@
     "promotion_candidates": 10,
     "promotion_wall_clock_containment": "7d",
     "protocol_version": "preprint-v4",
+    "se_multiplier": 1.0,
     "seed": 42,
     "split_folds": 5,
     "stage_folds": {

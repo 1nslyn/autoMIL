@@ -129,7 +129,7 @@ AGENT_PROTOCOL = {
 }
 
 
-def _make_staged_cell(tmp_path, *, task_family: str = "binary"):
+def _make_staged_cell(tmp_path, *, task_family: str = "binary", guard: dict | None = None):
     cell_root = tmp_path / "dataset__arm__task"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
@@ -176,6 +176,8 @@ def _make_staged_cell(tmp_path, *, task_family: str = "binary"):
             "task": "task",
         },
     }
+    if guard is not None:
+        cell_without_hash["guard"] = guard        # as the materializer records it
     cell = {**cell_without_hash, "cell_sha256": content_sha256(cell_without_hash)}
     manifest_path = tmp_path / "manifest.json"
     manifest_cells = [cell] + [
@@ -734,16 +736,69 @@ def test_freeze_requires_baseline_and_exact_attempt_budget(staged_cell):
         freeze_discovery(cell_root)
 
 
-def _declare_guard(adir, *, margin=0.0099, metric="val_bacc"):
-    config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
-    config.setdefault("scoring", {})["guard"] = {
+def _guard_block(*, margin=0.0099, metric="val_bacc"):
+    return {
         "metric": metric,
         "margin": margin,
         "validation_class_counts": {
             str(fold): {"pos": 17, "neg": 30} for fold in range(3)
         },
     }
+
+
+def _declare_guard(adir, *, margin=0.0099, metric="val_bacc"):
+    config = yaml.safe_load((adir / "config.yaml").read_text()) or {}
+    config.setdefault("scoring", {})["guard"] = _guard_block(margin=margin, metric=metric)
     (adir / "config.yaml").write_text(yaml.safe_dump(config))
+
+
+def _tamper_frozen_scoring(adir, mutate):
+    graph_path = adir / "graph.json"
+    graph = json.loads(graph_path.read_text())
+    mutate(graph["meta"]["scoring"])
+    graph_path.write_text(json.dumps(graph))
+
+
+def test_freeze_guard_refuses_a_multiplier_the_protocol_does_not_record(staged_cell):
+    """k is part of the companion bar (max(quantum, k x paired SE)) and the
+    freeze is the authoritative decision: a k the protocol does not record
+    would widen the bar for every candidate while the cell audited clean."""
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))
+    _tamper_frozen_scoring(adir, lambda scoring: scoring.__setitem__("se_multiplier", 50.0))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _set_companion_folds(adir, [0.62, 0.60, 0.40])     # a collapse only k=50 would forgive
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+    with pytest.raises(CampaignStageError, match="se_multiplier"):
+        freeze_discovery(cell_root)
+
+
+def test_freeze_guard_refuses_a_frozen_guard_the_record_does_not_carry(tmp_path):
+    """The hash-bound cell record names the companion metric; a graph.json
+    that froze another one (retargeted before the first proposal, or edited
+    since) must not decide the cell."""
+    cell_root, adir, cell, _, _ = _make_staged_cell(tmp_path, guard=_guard_block())
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))
+    _tamper_frozen_scoring(adir, lambda scoring: scoring["guard"].__setitem__("metric", "val_auc"))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _set_companion(adir, 0.40)
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+    with pytest.raises(CampaignStageError, match="guard"):
+        freeze_discovery(cell_root)
+
+
+def test_companion_shortfall_fails_closed_on_a_non_finite_companion_fold():
+    """A candidate whose companion is undefined on one fold has not shown it
+    kept the companion: the same fail-closed rule the gate applies."""
+    from autobench.campaign_stages import _companion_guard_shortfall
+    floor = {"metric": "val_bacc", "margin": 0.0099, "baseline": 0.60,
+             "baseline_folds": {0: 0.60, 1: 0.60, 2: 0.60}, "se_multiplier": 1.0}
+    folds = [{"fold_index": 0, "metrics": {"val_bacc": 0.60}},
+             {"fold_index": 1, "metrics": {"val_bacc": float("nan")}},
+             {"fold_index": 2, "metrics": {"val_bacc": 0.60}}]
+    assert _companion_guard_shortfall(floor, folds) == (float("inf"), 0.0099)
 
 
 def _set_companion(adir, value):

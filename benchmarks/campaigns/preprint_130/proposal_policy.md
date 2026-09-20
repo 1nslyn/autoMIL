@@ -261,10 +261,10 @@ policy variant can only adapt what is handed to it:
   BETWEEN the forward and the backward pass (anything that changes
   parameters in place inside `zero_grad` trips autograd's version check on
   the backward); CLAM calls it AFTER `step()`. `automil submit` runs every
-  policy file through all three orders, the scheduler and stopping seams,
-  and the two DTFD roles on a tiny model before accepting it
-  (`registry.policy_smoke`); a failure there is refused for free and names
-  the order that broke.
+  policy file through all three orders and the stopping seam the way your
+  arm drives it, plus the two DTFD roles and their schedulers on a DTFD
+  cell, on a tiny model before accepting it (`registry.policy_smoke`); a
+  failure there is refused for free and names the order that broke.
 - `wrap_scheduler(sched)` — live **only on the DTFD arm** (both tasks). On
   clam, abmil, titan, and nnmil no scheduler object is ever passed; a
   scheduler wrapper there is silently inert. Do not spend attempts

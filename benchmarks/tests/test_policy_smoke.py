@@ -252,6 +252,32 @@ READS_BACC = HEADER.format(name="bacc_stop") + '''class BaccStop(PolicyVariant):
         return bool(default) or metrics["val_bacc"] > 0.99
 '''
 
+READS_METRIC_NUMERICALLY = HEADER.format(name="bucket_stop") + '''class BucketStop(PolicyVariant):
+    """Buckets the primary metric with int(): fine on a finite value, a crash
+    on the -inf or nan every arm passes for an undefined metric."""
+
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def should_stop(self, *, default, epoch, metrics):
+        key = "val_c_index" if "val_c_index" in metrics else "val_auc"
+        return bool(default) or int(metrics[key] * 20) >= 19
+'''
+
+GUARDS_THE_METRIC = HEADER.format(name="guarded_bucket_stop") + '''class GuardedBucketStop(PolicyVariant):
+    """The same rule, skipping an undefined metric the way a loop expects."""
+
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def should_stop(self, *, default, epoch, metrics):
+        key = "val_c_index" if "val_c_index" in metrics else "val_auc"
+        value = metrics[key]
+        if value != value or value in (float("inf"), float("-inf")):
+            return bool(default)
+        return bool(default) or int(value * 20) >= 19
+'''
+
 HOLDS_SCHEDULER = HEADER.format(name="holds_scheduler") + '''class HoldsScheduler(PolicyVariant):
     """A DTFD policy keeps its scheduler and reads the learning rate when
     asked to stop: legal on DTFD, where the schedulers exist before the
@@ -461,6 +487,21 @@ class TestTheStoppingSeamIsJudgedByTaskFamily:
         # the ABMIL survival adapter zeroes before the forward pass: legal there
         assert _main(["--arm", "abmil", "--task-family", "survival", path]) == 0
         assert _main(["--arm", "clam", "--task-family", "survival", path]) == 0
+
+    @pytest.mark.parametrize("arm", ["abmil", "clam", "dtfd", "titan", "nnmil"])
+    def test_the_stopping_run_passes_the_arms_undefined_metric_once(self, tmp_path, capsys, arm):
+        """Every loop hands the policy -inf (abmil, dtfd) or nan (the rest,
+        and every survival adapter) when the metric is undefined; a policy
+        that crashes on it must be refused here, before the attempt is
+        charged, not in the real loop after."""
+        path = str(_write(tmp_path, "bucket_stop", READS_METRIC_NUMERICALLY))
+        assert _main(["--arm", arm, path]) == 1
+        err = capsys.readouterr().err
+        assert "stopping seam" in err and ("inf" in err or "nan" in err)
+        assert _main(["--task-family", "survival", "--arm", arm, path]) == 1
+        guarded = str(_write(tmp_path, "guarded_bucket_stop", GUARDS_THE_METRIC))
+        assert _main(["--arm", arm, guarded]) == 0
+        assert _main(["--task-family", "survival", "--arm", arm, guarded]) == 0
 
     def test_every_campaign_loop_asks_from_epoch_zero(self, tmp_path):
         """The campaign locks nnMIL survival to the porpoise trainer (nllsurv),

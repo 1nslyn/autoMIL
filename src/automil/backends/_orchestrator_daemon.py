@@ -1664,7 +1664,7 @@ class ExperimentOrchestrator:
         self._refuse_queued_spec(spec, cell_id=str(cell_id), cancel_reason="cap")
         return True
 
-    def _refuse_queued_spec(self, spec: dict, *, cell_id: str, cancel_reason: str) -> None:
+    def _refuse_queued_spec(self, spec: dict, *, cell_id: str | None, cancel_reason: str) -> None:
         """Drop a queued spec that must never launch: unlink ``queue/<node>.json``,
         archive the spec with ``metadata.cap_refused`` (the one flag every
         census reads as "refused at launch, never charged") and the reason,
@@ -1691,7 +1691,7 @@ class ExperimentOrchestrator:
         except OSError:
             logger.exception("Could not archive refused spec for %s", node_id)
 
-        self._cancel_node_for_cap_refusal(node_id, cell_id)
+        self._cancel_node_for_cap_refusal(node_id, cell_id, cancel_reason=cancel_reason)
 
     def _largest_gpu_gb(self) -> float | None:
         """Total memory of the largest visible CUDA GPU, or ``None`` when the
@@ -1716,14 +1716,17 @@ class ExperimentOrchestrator:
             "and cancelling the node; resubmit with a smaller --vram.",
             spec.get("id", "?"), needed_gb, largest, largest - self.safety_margin_gb,
         )
+        cell_id = (spec.get("metadata") or {}).get("cell_id")
         self._refuse_queued_spec(
-            spec, cell_id=str((spec.get("metadata") or {}).get("cell_id") or "-"),
-            cancel_reason="unplaceable",
+            spec, cell_id=str(cell_id) if cell_id else None, cancel_reason="unplaceable",
         )
         return True
 
-    def _cancel_node_for_cap_refusal(self, node_id: str, cell_id: str) -> None:
-        """Mark a cap-refused node cancelled in graph.json (same shape as dequeue)."""
+    def _cancel_node_for_cap_refusal(
+        self, node_id: str, cell_id: str | None, *, cancel_reason: str = "cap",
+    ) -> None:
+        """Mark a refused node cancelled in graph.json (same shape as dequeue),
+        with the reason the archived spec carries."""
         from automil.graph import locked_update, merged_metadata
 
         try:
@@ -1738,12 +1741,13 @@ class ExperimentOrchestrator:
                     )
                     return
                 g.cancel(node_id)
-                node["cancel_reason"] = "cap"
+                node["cancel_reason"] = cancel_reason
                 # L-8a: copy-on-write (graph.merged_metadata) — node["metadata"]
                 # can be aliased with another node's dict (gate/evaluate.py
                 # creates gate-eval children via a shallow dict(node) copy).
                 node["metadata"] = merged_metadata(node, {"cap_refused": True})
-                node.setdefault("cell_id", cell_id)
+                if cell_id is not None:
+                    node.setdefault("cell_id", cell_id)
         except Exception:  # noqa: BLE001 — a graph failure must not wedge the loop
             logger.exception("cap refusal: could not cancel graph node %s", node_id)
 

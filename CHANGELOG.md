@@ -54,7 +54,7 @@ autoMIL: F2-readiness framework refactor.
   (its metrics dict, its first validated epoch, its own call order between
   two decisions for the task family, on DTFD after the tiers and their
   schedulers exist) and
-  DTFD's wrap order (both tier optimizers, then
+  on a DTFD cell its wrap order (both tier optimizers, then
   both `MultiStepLR` schedulers, before either trains), at submit
   (`registry.policy_smoke`, `autobench.pipeline.policy_smoke --task-family
   --arm`), so a policy that would
@@ -112,6 +112,28 @@ autoMIL: F2-readiness framework refactor.
   and checks every payload and every opened path.
 - `tests/viz/test_app_js_metrics_reader.py` (source-text assertions on the
   old `app.js`) is replaced by behaviour tests on the served payloads.
+
+  Review round 9 (four Opus 5 reviewers, 2026-09-20): a submit refused or
+  killed before the queue write leaves nothing behind (the queue spec is
+  written atomically and the staged overlay is removed on every exit path),
+  so a torn queue file can no longer refuse every later submit of the cell;
+  `automil cell status` exits non-zero when the phasing census is
+  unreadable; an unplaceable spec's node records `cancel_reason:
+  unplaceable` (not the budget's `cap`) and no placeholder cell id; the
+  consecutive-axis refusal names the remedy the CLI accepts (`propose` with
+  a different `--axis`); an invalid `automil/config.yaml` is a refusal line,
+  not a traceback. The submit-time smoke hands the policy the arm's
+  undefined-metric values once (`-inf` on abmil and dtfd, `nan` elsewhere
+  and on every survival adapter) and names the metrics in the failure text.
+  The companion bar's multiplier is protocol (`PROTOCOL["se_multiplier"]`,
+  written into every cell's `scoring` block and audited): the freeze applies
+  the protocol's multiplier and the guard the hash-bound cell record carries,
+  refuses a graph that froze another, and fails a candidate closed when its
+  companion is non-finite on a fold. The brief and this entry now say the
+  scheduler seam and the two DTFD roles are exercised on a DTFD cell only;
+  the frozen agent protocol was rebuilt from the corrected brief with the
+  model name `Claude Opus 5 (1M context)`, and the manifest regenerated for
+  the new protocol field.
 
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over

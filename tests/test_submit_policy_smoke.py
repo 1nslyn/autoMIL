@@ -277,3 +277,57 @@ class TestARefusedSubmitLeavesNoOverlayBehind:
         refused = _submit(runner)
         assert refused.exit_code != 0 and "launched" in refused.output
         assert (launched / "spec.json").exists()
+
+
+def _wall_clock(adir: Path) -> None:
+    """Two submits in one project need the wall-clock cap (agent-active
+    accounting wants an open session)."""
+    config_path = adir / "config.yaml"
+    cfg = yaml.safe_load(config_path.read_text()) or {}
+    cfg.setdefault("cap", {})["mode"] = "wall_clock"
+    config_path.write_text(yaml.safe_dump(cfg))
+
+
+class TestSubmitHygiene:
+    """What a refused or interrupted submit leaves behind."""
+
+    def test_a_refused_submit_leaves_no_staging_directory(self, tmp_path, monkeypatch):
+        runner, adir = _project(tmp_path, monkeypatch, {
+            "command": ["{python}", "-c", "import sys; sys.exit(3)"], "timeout_s": 30})
+        _wall_clock(adir)
+        assert _submit(runner).exit_code != 0
+        staging = adir / "orchestrator" / "staging"
+        assert not staging.exists() or not any(staging.iterdir())
+
+    def test_a_malformed_smoke_declaration_is_a_refusal_not_a_traceback(self, tmp_path, monkeypatch):
+        runner, adir = _project(tmp_path, monkeypatch, {
+            "command": ["{python}", "-m", "x"], "timeout_s": "soon"})
+        _wall_clock(adir)
+        result = _submit(runner)
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, (ValueError, TypeError)), result.exception
+        assert "Error:" in result.output and "policy_smoke" in result.output
+
+    def test_a_failed_queue_write_leaves_no_queue_file(self, tmp_path, monkeypatch):
+        """A submit killed inside the queue write must not leave a torn queue
+        file: the phasing census reads queue files first and treats an
+        unreadable one as an error, which would refuse every later submit of
+        the cell."""
+        import os
+        runner, adir = _project(tmp_path, monkeypatch, None)
+        real_replace = os.replace
+        _wall_clock(adir)
+
+        def replace_except_the_queue_file(src, dst, *args, **kwargs):
+            dst_path = Path(dst)
+            if dst_path.name == "node_0001.json" and dst_path.parent.name == "queue":
+                raise OSError("disk full")
+            return real_replace(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(os, "replace", replace_except_the_queue_file)
+        assert _submit(runner).exit_code != 0
+        queue = adir / "orchestrator" / "queue"
+        assert not (queue / "node_0001.json").exists()
+        assert not list(queue.glob("*.tmp"))
+        monkeypatch.setattr(os, "replace", real_replace)
+        assert _submit(runner).exit_code == 0

@@ -138,10 +138,32 @@ def _train_step(order, model, optimizer, criterion, features, labels, scaler=Non
     return loss
 
 
-def _stop_metrics(arm: str | None, family: str, epoch: int, loss: float) -> dict[str, float]:
+def _stop_metrics(
+    arm: str | None, family: str, epoch: int, loss: float, *, undefined: bool = False,
+) -> dict[str, float]:
     """Exactly the per-epoch validation metrics the arm's trainer passes to
     ``should_stop`` for the family (a policy reading a key its cell never
-    supplies must fail here, one reading a key it does must pass)."""
+    supplies must fail here, one reading a key it does must pass).
+
+    ``undefined`` is the epoch whose metric could not be computed (a
+    single-class validation fold, non-finite predictions): ABMIL and DTFD
+    hand the policy ``-inf`` for the AUC (DTFD ``+inf`` for the loss), every
+    other loop and every survival adapter ``nan``. A policy that crashes on
+    those values would crash the real loop after the attempt is charged.
+    """
+    if undefined:
+        nan, inf = float("nan"), float("inf")
+        if family == "survival":
+            return {"val_loss": nan, "val_c_index": nan}
+        if arm == "dtfd":
+            return {"val_auc": -inf, "val_loss": inf}
+        if arm == "abmil":
+            return {"val_auc": -inf, "val_loss": nan}
+        if arm == "clam":
+            return {"val_loss": nan, "val_error": nan, "val_auc": nan}
+        if arm == "nnmil":
+            return {"val_loss": nan, "val_bacc": nan, "val_f1": nan, "val_auc": nan}
+        return {"val_auc": nan, "val_loss": nan}
     rising = 0.5 + 0.05 * epoch
     if family == "survival":
         return {"val_loss": loss, "val_c_index": rising}
@@ -240,9 +262,17 @@ def _run_stopping(policy_cls: type, arm: str | None, family: str) -> None:
     first = _first_stop_epoch(arm, family)
     for epoch in range(first, first + STEPS_PER_ORDER):
         step()
-        runtime.should_stop(
-            False, epoch=epoch, metrics=_stop_metrics(arm, family, epoch, loss_value()),
+        # The middle epoch carries the arm's undefined-metric values.
+        metrics = _stop_metrics(
+            arm, family, epoch, loss_value(), undefined=(epoch == first + 1),
         )
+        try:
+            runtime.should_stop(False, epoch=epoch, metrics=metrics)
+        except Exception as exc:
+            raise RuntimeError(
+                f"should_stop(epoch={epoch}, metrics={metrics}) raised "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
 
 def _checks(policy_cls: type, arm: str | None, family: str) -> Sequence[tuple[str, Callable[[], None]]]:

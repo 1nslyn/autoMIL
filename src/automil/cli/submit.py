@@ -15,6 +15,7 @@ import click
 import yaml
 
 from automil.cli import main
+from automil.runtime_helpers import atomic_write_text
 from automil.cli._helpers import (
     _find_automil_dir,
     _find_git_root,
@@ -228,7 +229,12 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         CandidateClass,
         load_candidate_policy,
     )
-    candidate_policy = load_candidate_policy(adir)
+    try:
+        candidate_policy = load_candidate_policy(adir)
+    except (ValueError, TypeError) as exc:
+        raise click.ClickException(
+            f"Refusing to submit: automil/config.yaml is invalid. {exc}"
+        ) from exc
 
     def _is_variant_module_path(rel_path: str) -> bool:
         """True if rel_path is a variant module under <consumer>/automil/variants/<*>/."""
@@ -383,530 +389,530 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # must never share (and truncate) each other's overlay before the lock
     # decides between them.
     staging = Path(tempfile.mkdtemp(prefix=f"{node}.", dir=str(staging_root)))
-
-    overlay_manifest = {}
-    deletions = []
-    framework_overlay_files: list[str] = []
-    for f in file_list:
-        # Phase 1 variant-module validator chain (REG-03 / Plan 01-04 T-01-14:
-        # purity FIRST, then interface).
-        if _is_variant_module_path(f):
-            abs_path = git_root / f
-            if abs_path.exists():
-                from automil.registry.validators import (
-                    InterfaceValidator,
-                    PurityValidator,
-                )
-                from automil.registry.errors import ValidationError
-                from automil.registry.config import load_registry_config
-                try:
-                    PurityValidator(
-                        strict_policy=(
-                            candidate_policy.mode == "architecture-preserving"
-                        ),
-                    ).check(abs_path)                       # 1. AST-only, no import
-                    InterfaceValidator().check(abs_path)    # 2. static interface proof
-                    _smoke = load_registry_config(adir).policy_smoke
-                    if _smoke is not None:
-                        # 3. the consumer's own seams, in a subprocess: a
-                        # policy that would crash the trainer is refused here,
-                        # free, instead of charging an attempt at launch.
-                        from automil.registry.validators.smoke import run_policy_smoke
-                        run_policy_smoke(abs_path, _smoke, cwd=git_root)
-                except ValidationError as e:
-                    raise click.ClickException(
-                        f"Refusing to submit: variant module {f!r} failed "
-                        f"{e.validator_name} validation. {e.reason} "
-                        f"Fix: {e.fix_suggestion}"
-                    ) from e
-
-        # Reject absolute paths and directory traversal
-        if os.path.isabs(f) or ".." in Path(f).parts:
-            raise click.ClickException(f"Invalid path (must be relative, no ..): {f}")
-        # The overlay lands in archive/<node>/, next to the records the
-        # daemon and `automil cancel` write there; an overlay file of the
-        # same name would be read as one of them.
-        if _is_reserved_archive_path(f, node):
-            raise click.ClickException(
-                f"Refusing to submit: overlay path {f!r} collides with the "
-                f"orchestrator's own archive record for {node}."
-            )
-        src = git_root / f
-        if not src.exists():
-            # File was deleted - record as deletion
-            deletions.append(f)
-            click.echo(f"  {f}: deleted (will be removed in worktree)")
-            continue
-        # Verify resolved path is inside the git root
-        try:
-            src.resolve().relative_to(git_root.resolve())
-        except ValueError:
-            raise click.ClickException(f"Path escapes repository root: {f}")
-        dst = staging / f
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-        content_hash = hashlib.sha256(src.read_bytes()).hexdigest()
-        overlay_manifest[f] = f"sha256:{content_hash}"
-
-    # Framework-managed variant selection is not part of --files, but it still
-    # changes the live candidate. Include its exact bytes in the overlay digest
-    # after the policy has classified the selected variant kinds.
-    if _active_variant_path.exists():
-        _applied_rel = f"{automil_rel}applied_variant.json"
-        _applied_dst = staging / _applied_rel
-        _applied_dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(_active_variant_path), str(_applied_dst))
-        _applied_hash = hashlib.sha256(_applied_dst.read_bytes()).hexdigest()
-        overlay_manifest[_applied_rel] = f"sha256:{_applied_hash}"
-        framework_overlay_files.append(_applied_rel)
-        click.echo(
-            f"  [variant] Copied active_variant.json → archive/{node}/{_applied_rel}"
-            f" (will be overlaid into worktree by orchestrator)."
-        )
-
-    if (
-        not overlay_manifest
-        and not deletions
-        and verdict.candidate_class is not CandidateClass.CONFIG_ONLY
-    ):
-        raise click.ClickException("No files to snapshot or delete")
-
-    # Compute config_hash from manifest + deletions
-    parts = [f"{p}:{h}" for p, h in sorted(overlay_manifest.items())]
-    parts.extend(f"DELETE:{d}" for d in sorted(deletions))
-    if override is not None:
-        parts.append(f"OVERRIDE:{override}")
-    config_hash = hashlib.sha256(
-        (base_commit + "\n" + "\n".join(parts)).encode()
-    ).hexdigest()[:16]
-
-    # D-76: read backend name from automil/config.yaml (default "local" if absent).
-    # Written here so cancel.py / resubmit.py know which BACKENDS[name] to use.
-    # opaque_id is NOT written at submit time — the daemon writes it on launch.
-    _automil_cfg = yaml.safe_load((adir / "config.yaml").read_text()) if (adir / "config.yaml").exists() else {}
-    _backend_name: str = _automil_cfg.get("backend", {}).get("name", "local")
-    _base_run_command = (_automil_cfg.get("run") or {}).get("command")
-    if _base_run_command is not None and not isinstance(_base_run_command, str):
-        raise click.ClickException("run.command must be a string or null")
-    _base_run_command_sha256 = hashlib.sha256(
-        (_base_run_command or "").encode()
-    ).hexdigest()
-
-    # D-134 + P2.3: Resolve cap config — CLI flag > cap.<key> duration >
-    # framework fallback. Honored only on the submit that opens the cell.
-    from automil.cells.capconfig import resolve_cap_config  # noqa: E402
     try:
-        _cap = resolve_cap_config(
-            _automil_cfg,
-            budget_override=budget_seconds,
-            buffer_override=safety_buffer_seconds,
-        )
-    except ValueError as exc:
-        raise click.ClickException(str(exc))
-    if _cap.budget_seconds <= 0:
-        raise click.ClickException(f"budget must be > 0 (got {_cap.budget_seconds}s)")
-    if not (0 < _cap.safety_buffer_seconds < _cap.budget_seconds):
-        raise click.ClickException(
-            f"safety buffer must satisfy 0 < buffer < budget "
-            f"(got buffer={_cap.safety_buffer_seconds}s, budget={_cap.budget_seconds}s)"
-        )
 
-    # Resolve one exact budget identity from the current config schema.  The
-    # The observer uses the same resolver, so accounting and submission cannot
-    # silently choose different cells.
-    from automil.cells import (  # noqa: E402
-        ActivityError,
-        CellSchemaError,
-        blocks_new_work,
-        consumed_seconds,
-        get_cell,
-        get_or_create_cell,
-        read_activity_report,
-        resolve_cell_identity,
-    )
-
-    # D-12 (REC-04): explicit flag, then current config, then proposal metadata.
-    _mil_model_raw = (
-        mil_model
-        or (_automil_cfg.get("run") or {}).get("mil_model")
-        or (graph_json.get("nodes", {}).get(node) or {})
-           .get("metadata", {}).get("mil_model")
-    )
-    if not _mil_model_raw:
-        raise click.ClickException(
-            "--mil-model is required (or set run.mil_model in config.yaml, or pass it "
-            "at propose time with automil propose --mil-model). This pins the budget cell "
-            "to a specific MIL model so re-parenting does not open a fresh budget. (D-12, REC-04)"
-        )
-    try:
-        _identity = resolve_cell_identity(_automil_cfg, mil_model=_mil_model_raw)
-    except ValueError as exc:
-        raise click.ClickException(f"cannot resolve budget cell: {exc}") from exc
-    _dataset_name = _identity.dataset
-    _encoder_name = _identity.encoder
-    _mil_model_norm = _identity.mil_model
-
-    # Existing cells own their immutable accounting mode (D-134). Resolve the
-    # target journal before choosing a time source: consulting current config
-    # first can either demand activity evidence from a wall-clock cell or bypass
-    # an agent-active journal after a config edit.
-    cells_dir = adir / "cells"
-    try:
-        _persisted_cell = get_cell(_identity.cell_id, cells_dir=cells_dir)
-    except CellSchemaError as exc:
-        raise click.ClickException(str(exc)) from exc
-    _effective_mode = (
-        _persisted_cell.mode if _persisted_cell is not None else _cap.mode
-    )
-    _campaign_cfg = _automil_cfg.get("campaign")
-    if _campaign_cfg is not None and not isinstance(_campaign_cfg, dict):
-        raise click.ClickException("campaign must be a mapping in config.yaml")
-    if _campaign_cfg is not None and _persisted_cell is None:
-        raise click.ClickException(
-            "campaign budget cell is missing; open the campaign agent session "
-            "before the first submit"
-        )
-
-    _activity_report = None
-    _active_seconds = None
-    if _effective_mode == "agent_active":
-        from automil.cells.activity import (  # noqa: PLC0415
-            assess_activity,
-            bind_activity_session,
-            read_unbound_activity_report,
-        )
-        from automil.activity_metrics import observe_activity_metrics  # noqa: PLC0415
-
-        try:
-            # Refresh durable cumulative evidence immediately before admission;
-            # this distinguishes an unavailable endpoint from an empty or
-            # foreign scrape without fabricating consumed seconds.
-            _activity_observation = observe_activity_metrics(adir)
-            _activity_report = read_activity_report(adir, _identity.cell_id)
-
-            # A normal project SessionStart is intentionally unbound: submit is
-            # the first point where the final identity precedence
-            # (--mil-model -> config -> proposal) is known. Campaign sessions
-            # are bound earlier to their stronger launch digest and must never
-            # be silently rebound here.
-            if (
-                not _activity_report.sessions
-                and _campaign_cfg is None
-                and _persisted_cell is None
-            ):
-                unbound = read_unbound_activity_report(adir)
-                unbound_assessment = assess_activity(
-                    unbound, _activity_observation,
-                )
-                if (
-                    unbound.sessions != unbound.open_sessions
-                    or len(unbound.sessions) != 1
-                ):
-                    raise ActivityError(
-                        "agent_active accounting requires exactly one open, "
-                        "project-local SessionStart"
+        overlay_manifest = {}
+        deletions = []
+        framework_overlay_files: list[str] = []
+        for f in file_list:
+            # Phase 1 variant-module validator chain (REG-03 / Plan 01-04 T-01-14:
+            # purity FIRST, then interface).
+            if _is_variant_module_path(f):
+                abs_path = git_root / f
+                if abs_path.exists():
+                    from automil.registry.validators import (
+                        InterfaceValidator,
+                        PurityValidator,
                     )
-                if not unbound_assessment.admissible:
-                    raise ActivityError(
-                        unbound_assessment.reason
-                        or "project-local activity evidence is not admissible"
-                    )
-                bind_activity_session(
-                    adir,
-                    _identity.cell_id,
-                    unbound.sessions[0],
+                    from automil.registry.errors import ValidationError
+                    from automil.registry.config import load_registry_config
+                    try:
+                        PurityValidator(
+                            strict_policy=(
+                                candidate_policy.mode == "architecture-preserving"
+                            ),
+                        ).check(abs_path)                       # 1. AST-only, no import
+                        InterfaceValidator().check(abs_path)    # 2. static interface proof
+                        _smoke = load_registry_config(adir).policy_smoke
+                        if _smoke is not None:
+                            # 3. the consumer's own seams, in a subprocess: a
+                            # policy that would crash the trainer is refused here,
+                            # free, instead of charging an attempt at launch.
+                            from automil.registry.validators.smoke import run_policy_smoke
+                            run_policy_smoke(abs_path, _smoke, cwd=git_root)
+                    except ValidationError as e:
+                        raise click.ClickException(
+                            f"Refusing to submit: variant module {f!r} failed "
+                            f"{e.validator_name} validation. {e.reason} "
+                            f"Fix: {e.fix_suggestion}"
+                        ) from e
+
+            # Reject absolute paths and directory traversal
+            if os.path.isabs(f) or ".." in Path(f).parts:
+                raise click.ClickException(f"Invalid path (must be relative, no ..): {f}")
+            # The overlay lands in archive/<node>/, next to the records the
+            # daemon and `automil cancel` write there; an overlay file of the
+            # same name would be read as one of them.
+            if _is_reserved_archive_path(f, node):
+                raise click.ClickException(
+                    f"Refusing to submit: overlay path {f!r} collides with the "
+                    f"orchestrator's own archive record for {node}."
                 )
-                _activity_report = read_activity_report(adir, _identity.cell_id)
-
-            assessment = assess_activity(
-                _activity_report, _activity_observation,
-            )
-        except ActivityError as exc:
-            raise click.ClickException(
-                f"activity accounting is invalid: {exc}"
-            ) from exc
-        if assessment.complete:
-            raise click.ClickException(
-                "this cell's bound session has ended and agent_active cells "
-                "are single-session: a new Claude session cannot rebind an "
-                "existing cell. Continue in the original session, or use "
-                "cap.mode: wall_clock for multi-session work"
-            )
-        if (
-            len(_activity_report.sessions) != 1
-            or len(_activity_report.open_sessions) != 1
-        ):
-            raise click.ClickException(
-                "agent_active accounting requires exactly one bound open "
-                "session; this cell accepts work only from its one bound "
-                "session (a new session cannot rebind an existing cell)"
-            )
-        if not assessment.admissible:
-            raise click.ClickException(
-                "agent_active accounting is degraded and new work is paused: "
-                f"{assessment.reason or assessment.health.value}"
-            )
-        _active_seconds = assessment.active_seconds
-
-    # The manifest payload is consumer-owned; the binding contract is generic.
-    # Verify its bytes, then prove command, budget, and cell hashes all resolve
-    # from the same unique manifest row before stamping them into the queue spec.
-    _campaign_spec: dict[str, object] | None = None
-    _campaign_agent_session: dict[str, str] | None = None
-    if _campaign_cfg is not None:
-        _required_campaign = (
-            "campaign_id", "manifest", "manifest_sha256", "cell_id",
-            "cell_sha256", "budget_cell_id", "stage",
-        )
-        _missing_campaign = [
-            key for key in _required_campaign
-            if not isinstance(_campaign_cfg.get(key), str)
-            or not str(_campaign_cfg.get(key)).strip()
-        ]
-        if _missing_campaign:
-            raise click.ClickException(
-                f"campaign metadata is missing non-empty string field(s) {_missing_campaign}"
-            )
-        _manifest_rel = Path(str(_campaign_cfg["manifest"]))
-        if _manifest_rel.is_absolute() or ".." in _manifest_rel.parts:
-            raise click.ClickException("campaign.manifest must be a safe git-root-relative path")
-        _manifest_path = git_root / _manifest_rel
-        if not _manifest_path.is_file():
-            raise click.ClickException(f"campaign manifest not found: {_manifest_rel}")
-        _manifest_actual = hashlib.sha256(_manifest_path.read_bytes()).hexdigest()
-        if _manifest_actual != _campaign_cfg["manifest_sha256"]:
-            raise click.ClickException(
-                "campaign manifest hash differs from config.yaml; regenerate or "
-                "rematerialize the cell before submitting"
-            )
-        try:
-            from automil.admissibility import validate_campaign_binding
-
-            _campaign_binding = {
-                key: _campaign_cfg[key] for key in _required_campaign
-            }
-            if "protocol_version" in _campaign_cfg:
-                _campaign_binding["protocol_version"] = _campaign_cfg[
-                    "protocol_version"
-                ]
-            from automil.admissibility import enforce_attempt_timeout_cap
-
-            # Timeout cap: --timeout above the audited cell default would
-            # unbind the hash-locked failure-containment constant. RAW config
-            # value — same reference the daemon's launch revalidation uses.
-            enforce_attempt_timeout_cap(
-                timeout,
-                (_automil_cfg.get("orchestrator") or {}).get("default_timeout_min"),
-            )
-            _campaign_spec = validate_campaign_binding(
-                _manifest_path,
-                _campaign_binding,
-                base_run_command=_base_run_command,
-                budget_cell_id=_identity.cell_id,
-            )
-            _protocol_sha256 = _campaign_cfg.get("agent_protocol_sha256")
-            if (
-                not isinstance(_protocol_sha256, str)
-                or len(_protocol_sha256) != 64
-                or any(char not in "0123456789abcdef" for char in _protocol_sha256)
-            ):
-                raise ValueError("campaign agent protocol binding is missing")
-            _session_path = adir.parent / "agent_session.json"
+            src = git_root / f
+            if not src.exists():
+                # File was deleted - record as deletion
+                deletions.append(f)
+                click.echo(f"  {f}: deleted (will be removed in worktree)")
+                continue
+            # Verify resolved path is inside the git root
             try:
-                _session = json.loads(_session_path.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
-                raise ValueError(
-                    "open the campaign agent session before the first submit"
-                ) from exc
-            from automil.launch_binding import validate_launch_binding
+                src.resolve().relative_to(git_root.resolve())
+            except ValueError:
+                raise click.ClickException(f"Path escapes repository root: {f}")
+            dst = staging / f
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            content_hash = hashlib.sha256(src.read_bytes()).hexdigest()
+            overlay_manifest[f] = f"sha256:{content_hash}"
 
-            _launch_binding = validate_launch_binding(
-                _session,
-                campaign_id=str(_campaign_cfg["campaign_id"]),
-                cell_id=str(_campaign_cfg["cell_id"]),
-                agent_protocol_sha256=_protocol_sha256,
-                require_open=True,
+        # Framework-managed variant selection is not part of --files, but it still
+        # changes the live candidate. Include its exact bytes in the overlay digest
+        # after the policy has classified the selected variant kinds.
+        if _active_variant_path.exists():
+            _applied_rel = f"{automil_rel}applied_variant.json"
+            _applied_dst = staging / _applied_rel
+            _applied_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(_active_variant_path), str(_applied_dst))
+            _applied_hash = hashlib.sha256(_applied_dst.read_bytes()).hexdigest()
+            overlay_manifest[_applied_rel] = f"sha256:{_applied_hash}"
+            framework_overlay_files.append(_applied_rel)
+            click.echo(
+                f"  [variant] Copied active_variant.json → archive/{node}/{_applied_rel}"
+                f" (will be overlaid into worktree by orchestrator)."
             )
-            _campaign_agent_session = {
-                "session_id": _launch_binding["session_id"],
-                "agent_protocol_sha256": _protocol_sha256,
-                "binding_sha256": _launch_binding["binding_sha256"],
-            }
-            if _activity_report is None:
-                raise ValueError("campaign discovery requires agent_active accounting")
-            expected_session = (_launch_binding["session_id"],)
-            expected_binding = (
-                (_launch_binding["session_id"], _launch_binding["binding_sha256"]),
+
+        if (
+            not overlay_manifest
+            and not deletions
+            and verdict.candidate_class is not CandidateClass.CONFIG_ONLY
+        ):
+            raise click.ClickException("No files to snapshot or delete")
+
+        # Compute config_hash from manifest + deletions
+        parts = [f"{p}:{h}" for p, h in sorted(overlay_manifest.items())]
+        parts.extend(f"DELETE:{d}" for d in sorted(deletions))
+        if override is not None:
+            parts.append(f"OVERRIDE:{override}")
+        config_hash = hashlib.sha256(
+            (base_commit + "\n" + "\n".join(parts)).encode()
+        ).hexdigest()[:16]
+
+        # D-76: read backend name from automil/config.yaml (default "local" if absent).
+        # Written here so cancel.py / resubmit.py know which BACKENDS[name] to use.
+        # opaque_id is NOT written at submit time — the daemon writes it on launch.
+        _automil_cfg = yaml.safe_load((adir / "config.yaml").read_text()) if (adir / "config.yaml").exists() else {}
+        _backend_name: str = _automil_cfg.get("backend", {}).get("name", "local")
+        _base_run_command = (_automil_cfg.get("run") or {}).get("command")
+        if _base_run_command is not None and not isinstance(_base_run_command, str):
+            raise click.ClickException("run.command must be a string or null")
+        _base_run_command_sha256 = hashlib.sha256(
+            (_base_run_command or "").encode()
+        ).hexdigest()
+
+        # D-134 + P2.3: Resolve cap config — CLI flag > cap.<key> duration >
+        # framework fallback. Honored only on the submit that opens the cell.
+        from automil.cells.capconfig import resolve_cap_config  # noqa: E402
+        try:
+            _cap = resolve_cap_config(
+                _automil_cfg,
+                budget_override=budget_seconds,
+                buffer_override=safety_buffer_seconds,
             )
-            if _activity_report.sessions != expected_session:
-                raise ValueError(
-                    "activity journal is not exclusive to the bound campaign session"
-                )
-            if _activity_report.bindings != expected_binding:
-                raise ValueError(
-                    "activity journal is not bound to agent_session.json"
-                )
-            if _activity_report.complete:
-                raise ValueError("the bound campaign agent session has already ended")
         except ValueError as exc:
+            raise click.ClickException(str(exc))
+        if _cap.budget_seconds <= 0:
+            raise click.ClickException(f"budget must be > 0 (got {_cap.budget_seconds}s)")
+        if not (0 < _cap.safety_buffer_seconds < _cap.budget_seconds):
             raise click.ClickException(
-                f"campaign config is not bound to its manifest: {exc}"
-            ) from exc
+                f"safety buffer must satisfy 0 < buffer < budget "
+                f"(got buffer={_cap.safety_buffer_seconds}s, budget={_cap.budget_seconds}s)"
+            )
 
-    if _campaign_spec is not None:
-        _cell = _persisted_cell
-        if _cell is None:
+        # Resolve one exact budget identity from the current config schema.  The
+        # The observer uses the same resolver, so accounting and submission cannot
+        # silently choose different cells.
+        from automil.cells import (  # noqa: E402
+            ActivityError,
+            CellSchemaError,
+            blocks_new_work,
+            consumed_seconds,
+            get_cell,
+            get_or_create_cell,
+            read_activity_report,
+            resolve_cell_identity,
+        )
+
+        # D-12 (REC-04): explicit flag, then current config, then proposal metadata.
+        _mil_model_raw = (
+            mil_model
+            or (_automil_cfg.get("run") or {}).get("mil_model")
+            or (graph_json.get("nodes", {}).get(node) or {})
+               .get("metadata", {}).get("mil_model")
+        )
+        if not _mil_model_raw:
+            raise click.ClickException(
+                "--mil-model is required (or set run.mil_model in config.yaml, or pass it "
+                "at propose time with automil propose --mil-model). This pins the budget cell "
+                "to a specific MIL model so re-parenting does not open a fresh budget. (D-12, REC-04)"
+            )
+        try:
+            _identity = resolve_cell_identity(_automil_cfg, mil_model=_mil_model_raw)
+        except ValueError as exc:
+            raise click.ClickException(f"cannot resolve budget cell: {exc}") from exc
+        _dataset_name = _identity.dataset
+        _encoder_name = _identity.encoder
+        _mil_model_norm = _identity.mil_model
+
+        # Existing cells own their immutable accounting mode (D-134). Resolve the
+        # target journal before choosing a time source: consulting current config
+        # first can either demand activity evidence from a wall-clock cell or bypass
+        # an agent-active journal after a config edit.
+        cells_dir = adir / "cells"
+        try:
+            _persisted_cell = get_cell(_identity.cell_id, cells_dir=cells_dir)
+        except CellSchemaError as exc:
+            raise click.ClickException(str(exc)) from exc
+        _effective_mode = (
+            _persisted_cell.mode if _persisted_cell is not None else _cap.mode
+        )
+        _campaign_cfg = _automil_cfg.get("campaign")
+        if _campaign_cfg is not None and not isinstance(_campaign_cfg, dict):
+            raise click.ClickException("campaign must be a mapping in config.yaml")
+        if _campaign_cfg is not None and _persisted_cell is None:
             raise click.ClickException(
                 "campaign budget cell is missing; open the campaign agent session "
                 "before the first submit"
             )
-        expected_cap = (
-            _cap.budget_seconds,
-            _cap.safety_buffer_seconds,
-            _cap.mode,
-            _cap.eval_budget,
-        )
-        actual_cap = (
-            _cell.budget_seconds,
-            _cell.safety_buffer_seconds,
-            _cell.mode,
-            _cell.eval_budget,
-        )
-        if actual_cap != expected_cap:
-            raise click.ClickException(
-                "campaign budget cell differs from the frozen config"
+
+        _activity_report = None
+        _active_seconds = None
+        if _effective_mode == "agent_active":
+            from automil.cells.activity import (  # noqa: PLC0415
+                assess_activity,
+                bind_activity_session,
+                read_unbound_activity_report,
             )
-    else:
-        _cell = get_or_create_cell(
-            dataset=_identity.dataset,
-            encoder=_identity.encoder,
-            mil_model=_identity.mil_model,
-            budget_seconds=_cap.budget_seconds,
-            safety_buffer_seconds=_cap.safety_buffer_seconds,
-            mode=_cap.mode,
-            task=_identity.task,
-            eval_budget=_cap.eval_budget,
-            cells_dir=cells_dir,
-        )
+            from automil.activity_metrics import observe_activity_metrics  # noqa: PLC0415
 
-    _consumed = consumed_seconds(
-        _cell, agent_active_seconds=_active_seconds,
-    )
-    _time_refusing = (
-        _cell.budget_seconds - _consumed <= _cell.safety_buffer_seconds
-    )
-    if blocks_new_work(_cell) or _time_refusing:
-        # H-2: name whichever axis is binding. The eval axis can bind while the
-        # status still reads ACTIVE (status only advances on the next daemon tick).
-        _evals_msg = (
-            f", {_cell.consumed_evals}/{_cell.eval_budget} evaluations consumed"
-            if _cell.eval_budget is not None else ""
-        )
-        raise click.ClickException(
-            f"Cell {_cell.cell_id[:8]} is {_cell.status.value}: budget exhausted "
-            f"({_consumed:.0f}/{_cell.budget_seconds}s consumed"
-            f"{_evals_msg}). "
-            f"Wait for cell to finalize, or submit with a different "
-            f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
-        )
-
-    # cap.phasing: fixed batches and the phasing rule, refused before the
-    # queue write so a refusal is free (the budget charges at launch).
-    from automil.cells.phasing import (  # noqa: E402
-        DECLARATIONS, PhasingPolicy, cell_attempts, next_attempt_seq, phasing_refusal,
-        submission_lock,
-    )
-    try:
-        _phasing = PhasingPolicy.from_config(_automil_cfg.get("cap"))
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    def _phasing_gate() -> dict | None:
-        """Refuse a submission that breaks the declared phasing; runs under the
-        submission lock, right before the queue write, on a fresh read of the
-        graph and the specs on disk. Returns the metadata the spec carries for
-        the census: the admission sequence and the proposal's declarations
-        (axis, role, predicted delta), which a result can then never rewrite.
-        ``None`` without a phasing declaration."""
-        if _phasing is None:
-            return None
-        _fresh = graph_json
-        if (adir / "graph.json").exists():
             try:
-                _fresh = json.loads((adir / "graph.json").read_text())
-            except (json.JSONDecodeError, OSError):
-                _fresh = graph_json
-        _nodes = _fresh.get("nodes", {})
-        _candidate = _nodes.get(node) or {}
-        _candidate_meta = _candidate.get("metadata") or {}
-        try:
-            _attempts = cell_attempts(adir, _nodes, _cell.cell_id)
-        except ValueError as exc:
-            raise click.ClickException(f"Refusing to submit {node}: {exc}") from exc
-        _refusal = phasing_refusal(
-            _phasing, _attempts,
-            axis=_candidate_meta.get("axis"), role=_candidate_meta.get("role"),
-            parent_id=_candidate.get("parent_id") or parent,
-            best_node_id=(_fresh.get("meta") or {}).get("best_node_id"),
+                # Refresh durable cumulative evidence immediately before admission;
+                # this distinguishes an unavailable endpoint from an empty or
+                # foreign scrape without fabricating consumed seconds.
+                _activity_observation = observe_activity_metrics(adir)
+                _activity_report = read_activity_report(adir, _identity.cell_id)
+
+                # A normal project SessionStart is intentionally unbound: submit is
+                # the first point where the final identity precedence
+                # (--mil-model -> config -> proposal) is known. Campaign sessions
+                # are bound earlier to their stronger launch digest and must never
+                # be silently rebound here.
+                if (
+                    not _activity_report.sessions
+                    and _campaign_cfg is None
+                    and _persisted_cell is None
+                ):
+                    unbound = read_unbound_activity_report(adir)
+                    unbound_assessment = assess_activity(
+                        unbound, _activity_observation,
+                    )
+                    if (
+                        unbound.sessions != unbound.open_sessions
+                        or len(unbound.sessions) != 1
+                    ):
+                        raise ActivityError(
+                            "agent_active accounting requires exactly one open, "
+                            "project-local SessionStart"
+                        )
+                    if not unbound_assessment.admissible:
+                        raise ActivityError(
+                            unbound_assessment.reason
+                            or "project-local activity evidence is not admissible"
+                        )
+                    bind_activity_session(
+                        adir,
+                        _identity.cell_id,
+                        unbound.sessions[0],
+                    )
+                    _activity_report = read_activity_report(adir, _identity.cell_id)
+
+                assessment = assess_activity(
+                    _activity_report, _activity_observation,
+                )
+            except ActivityError as exc:
+                raise click.ClickException(
+                    f"activity accounting is invalid: {exc}"
+                ) from exc
+            if assessment.complete:
+                raise click.ClickException(
+                    "this cell's bound session has ended and agent_active cells "
+                    "are single-session: a new Claude session cannot rebind an "
+                    "existing cell. Continue in the original session, or use "
+                    "cap.mode: wall_clock for multi-session work"
+                )
+            if (
+                len(_activity_report.sessions) != 1
+                or len(_activity_report.open_sessions) != 1
+            ):
+                raise click.ClickException(
+                    "agent_active accounting requires exactly one bound open "
+                    "session; this cell accepts work only from its one bound "
+                    "session (a new session cannot rebind an existing cell)"
+                )
+            if not assessment.admissible:
+                raise click.ClickException(
+                    "agent_active accounting is degraded and new work is paused: "
+                    f"{assessment.reason or assessment.health.value}"
+                )
+            _active_seconds = assessment.active_seconds
+
+        # The manifest payload is consumer-owned; the binding contract is generic.
+        # Verify its bytes, then prove command, budget, and cell hashes all resolve
+        # from the same unique manifest row before stamping them into the queue spec.
+        _campaign_spec: dict[str, object] | None = None
+        _campaign_agent_session: dict[str, str] | None = None
+        if _campaign_cfg is not None:
+            _required_campaign = (
+                "campaign_id", "manifest", "manifest_sha256", "cell_id",
+                "cell_sha256", "budget_cell_id", "stage",
+            )
+            _missing_campaign = [
+                key for key in _required_campaign
+                if not isinstance(_campaign_cfg.get(key), str)
+                or not str(_campaign_cfg.get(key)).strip()
+            ]
+            if _missing_campaign:
+                raise click.ClickException(
+                    f"campaign metadata is missing non-empty string field(s) {_missing_campaign}"
+                )
+            _manifest_rel = Path(str(_campaign_cfg["manifest"]))
+            if _manifest_rel.is_absolute() or ".." in _manifest_rel.parts:
+                raise click.ClickException("campaign.manifest must be a safe git-root-relative path")
+            _manifest_path = git_root / _manifest_rel
+            if not _manifest_path.is_file():
+                raise click.ClickException(f"campaign manifest not found: {_manifest_rel}")
+            _manifest_actual = hashlib.sha256(_manifest_path.read_bytes()).hexdigest()
+            if _manifest_actual != _campaign_cfg["manifest_sha256"]:
+                raise click.ClickException(
+                    "campaign manifest hash differs from config.yaml; regenerate or "
+                    "rematerialize the cell before submitting"
+                )
+            try:
+                from automil.admissibility import validate_campaign_binding
+
+                _campaign_binding = {
+                    key: _campaign_cfg[key] for key in _required_campaign
+                }
+                if "protocol_version" in _campaign_cfg:
+                    _campaign_binding["protocol_version"] = _campaign_cfg[
+                        "protocol_version"
+                    ]
+                from automil.admissibility import enforce_attempt_timeout_cap
+
+                # Timeout cap: --timeout above the audited cell default would
+                # unbind the hash-locked failure-containment constant. RAW config
+                # value — same reference the daemon's launch revalidation uses.
+                enforce_attempt_timeout_cap(
+                    timeout,
+                    (_automil_cfg.get("orchestrator") or {}).get("default_timeout_min"),
+                )
+                _campaign_spec = validate_campaign_binding(
+                    _manifest_path,
+                    _campaign_binding,
+                    base_run_command=_base_run_command,
+                    budget_cell_id=_identity.cell_id,
+                )
+                _protocol_sha256 = _campaign_cfg.get("agent_protocol_sha256")
+                if (
+                    not isinstance(_protocol_sha256, str)
+                    or len(_protocol_sha256) != 64
+                    or any(char not in "0123456789abcdef" for char in _protocol_sha256)
+                ):
+                    raise ValueError("campaign agent protocol binding is missing")
+                _session_path = adir.parent / "agent_session.json"
+                try:
+                    _session = json.loads(_session_path.read_text())
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        "open the campaign agent session before the first submit"
+                    ) from exc
+                from automil.launch_binding import validate_launch_binding
+
+                _launch_binding = validate_launch_binding(
+                    _session,
+                    campaign_id=str(_campaign_cfg["campaign_id"]),
+                    cell_id=str(_campaign_cfg["cell_id"]),
+                    agent_protocol_sha256=_protocol_sha256,
+                    require_open=True,
+                )
+                _campaign_agent_session = {
+                    "session_id": _launch_binding["session_id"],
+                    "agent_protocol_sha256": _protocol_sha256,
+                    "binding_sha256": _launch_binding["binding_sha256"],
+                }
+                if _activity_report is None:
+                    raise ValueError("campaign discovery requires agent_active accounting")
+                expected_session = (_launch_binding["session_id"],)
+                expected_binding = (
+                    (_launch_binding["session_id"], _launch_binding["binding_sha256"]),
+                )
+                if _activity_report.sessions != expected_session:
+                    raise ValueError(
+                        "activity journal is not exclusive to the bound campaign session"
+                    )
+                if _activity_report.bindings != expected_binding:
+                    raise ValueError(
+                        "activity journal is not bound to agent_session.json"
+                    )
+                if _activity_report.complete:
+                    raise ValueError("the bound campaign agent session has already ended")
+            except ValueError as exc:
+                raise click.ClickException(
+                    f"campaign config is not bound to its manifest: {exc}"
+                ) from exc
+
+        if _campaign_spec is not None:
+            _cell = _persisted_cell
+            if _cell is None:
+                raise click.ClickException(
+                    "campaign budget cell is missing; open the campaign agent session "
+                    "before the first submit"
+                )
+            expected_cap = (
+                _cap.budget_seconds,
+                _cap.safety_buffer_seconds,
+                _cap.mode,
+                _cap.eval_budget,
+            )
+            actual_cap = (
+                _cell.budget_seconds,
+                _cell.safety_buffer_seconds,
+                _cell.mode,
+                _cell.eval_budget,
+            )
+            if actual_cap != expected_cap:
+                raise click.ClickException(
+                    "campaign budget cell differs from the frozen config"
+                )
+        else:
+            _cell = get_or_create_cell(
+                dataset=_identity.dataset,
+                encoder=_identity.encoder,
+                mil_model=_identity.mil_model,
+                budget_seconds=_cap.budget_seconds,
+                safety_buffer_seconds=_cap.safety_buffer_seconds,
+                mode=_cap.mode,
+                task=_identity.task,
+                eval_budget=_cap.eval_budget,
+                cells_dir=cells_dir,
+            )
+
+        _consumed = consumed_seconds(
+            _cell, agent_active_seconds=_active_seconds,
         )
-        if _refusal is not None:
-            raise click.ClickException(f"Refusing to submit {node}: {_refusal}")
-        return {
-            "attempt_seq": next_attempt_seq(_attempts),
-            **{key: _candidate_meta[key] for key in DECLARATIONS if key in _candidate_meta},
-        }
-
-    # Write spec to queue
-    spec = {
-        "id": node,
-        "description": desc,
-        "base_commit": base_commit,
-        "overlay_dir": f"archive/{node}",
-        "overlay_manifest": overlay_manifest,
-        "deletions": deletions,
-        "framework_overlay_files": framework_overlay_files,
-        "admissibility": verdict.to_dict(),
-        "base_run_command_sha256": _base_run_command_sha256,
-        "priority": priority,
-        "estimated_vram_gb": vram,
-        "graph_metadata": {
-            "parent_id": parent,
-            "techniques": list(techniques),
-            "config_hash": config_hash,
-        },
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
-    }
-    # D-02: only write timeout_min when explicitly supplied; daemon falls back to
-    # orchestrator.default_timeout_min (config.yaml) when the key is absent.
-    if timeout is not None:
-        spec["timeout_min"] = timeout
-    # D-04 (CFG-03): write per-node run-command override suffix into spec.
-    # WR-01 fix: validate shlex.split() at submit time so malformed quotes
-    # raise a ClickException immediately rather than crashing the daemon at
-    # launch time (after the spec has already been dequeued).
-    if override is not None:
-        try:
-            shlex.split(override)
-        except ValueError as exc:
+        _time_refusing = (
+            _cell.budget_seconds - _consumed <= _cell.safety_buffer_seconds
+        )
+        if blocks_new_work(_cell) or _time_refusing:
+            # H-2: name whichever axis is binding. The eval axis can bind while the
+            # status still reads ACTIVE (status only advances on the next daemon tick).
+            _evals_msg = (
+                f", {_cell.consumed_evals}/{_cell.eval_budget} evaluations consumed"
+                if _cell.eval_budget is not None else ""
+            )
             raise click.ClickException(
-                f"--override contains unbalanced quotes and cannot be parsed: {exc}"
-            ) from exc
-        spec["run_command_override"] = override
-    spec.setdefault("metadata", {})["backend"] = _backend_name
-    # D-97: write metadata.runtime so orchestrator + cancel.py know which
-    # runtime made this submission. AUTOMIL_RUNTIME is set by the agent runtime
-    # (never inferred — D-87). Falls back to "unknown" if unset.
-    spec.setdefault("metadata", {})["runtime"] = os.environ.get("AUTOMIL_RUNTIME", "unknown")
-    # D-117: stamp metadata.cell_id — symmetric to metadata.backend and metadata.runtime.
-    # The daemon's _running_in_cell() filters in-cell experiments by this field.
-    # Direct backend specs may be cell-less; every CLI submit is explicitly metered.
-    spec.setdefault("metadata", {})["cell_id"] = _cell.cell_id
-    if _campaign_spec is not None:
-        spec.setdefault("metadata", {})["campaign"] = _campaign_spec
-        spec.setdefault("metadata", {})["agent_session"] = _campaign_agent_session
+                f"Cell {_cell.cell_id[:8]} is {_cell.status.value}: budget exhausted "
+                f"({_consumed:.0f}/{_cell.budget_seconds}s consumed"
+                f"{_evals_msg}). "
+                f"Wait for cell to finalize, or submit with a different "
+                f"(dataset={_dataset_name}, encoder={_encoder_name}, mil_model={_mil_model_norm}) tuple."
+            )
 
-    queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
-    try:
+        # cap.phasing: fixed batches and the phasing rule, refused before the
+        # queue write so a refusal is free (the budget charges at launch).
+        from automil.cells.phasing import (  # noqa: E402
+            DECLARATIONS, PhasingPolicy, cell_attempts, next_attempt_seq, phasing_refusal,
+            submission_lock,
+        )
+        try:
+            _phasing = PhasingPolicy.from_config(_automil_cfg.get("cap"))
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        def _phasing_gate() -> dict | None:
+            """Refuse a submission that breaks the declared phasing; runs under the
+            submission lock, right before the queue write, on a fresh read of the
+            graph and the specs on disk. Returns the metadata the spec carries for
+            the census: the admission sequence and the proposal's declarations
+            (axis, role, predicted delta), which a result can then never rewrite.
+            ``None`` without a phasing declaration."""
+            if _phasing is None:
+                return None
+            _fresh = graph_json
+            if (adir / "graph.json").exists():
+                try:
+                    _fresh = json.loads((adir / "graph.json").read_text())
+                except (json.JSONDecodeError, OSError):
+                    _fresh = graph_json
+            _nodes = _fresh.get("nodes", {})
+            _candidate = _nodes.get(node) or {}
+            _candidate_meta = _candidate.get("metadata") or {}
+            try:
+                _attempts = cell_attempts(adir, _nodes, _cell.cell_id)
+            except ValueError as exc:
+                raise click.ClickException(f"Refusing to submit {node}: {exc}") from exc
+            _refusal = phasing_refusal(
+                _phasing, _attempts,
+                axis=_candidate_meta.get("axis"), role=_candidate_meta.get("role"),
+                parent_id=_candidate.get("parent_id") or parent,
+                best_node_id=(_fresh.get("meta") or {}).get("best_node_id"),
+            )
+            if _refusal is not None:
+                raise click.ClickException(f"Refusing to submit {node}: {_refusal}")
+            return {
+                "attempt_seq": next_attempt_seq(_attempts),
+                **{key: _candidate_meta[key] for key in DECLARATIONS if key in _candidate_meta},
+            }
+
+        # Write spec to queue
+        spec = {
+            "id": node,
+            "description": desc,
+            "base_commit": base_commit,
+            "overlay_dir": f"archive/{node}",
+            "overlay_manifest": overlay_manifest,
+            "deletions": deletions,
+            "framework_overlay_files": framework_overlay_files,
+            "admissibility": verdict.to_dict(),
+            "base_run_command_sha256": _base_run_command_sha256,
+            "priority": priority,
+            "estimated_vram_gb": vram,
+            "graph_metadata": {
+                "parent_id": parent,
+                "techniques": list(techniques),
+                "config_hash": config_hash,
+            },
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # D-02: only write timeout_min when explicitly supplied; daemon falls back to
+        # orchestrator.default_timeout_min (config.yaml) when the key is absent.
+        if timeout is not None:
+            spec["timeout_min"] = timeout
+        # D-04 (CFG-03): write per-node run-command override suffix into spec.
+        # WR-01 fix: validate shlex.split() at submit time so malformed quotes
+        # raise a ClickException immediately rather than crashing the daemon at
+        # launch time (after the spec has already been dequeued).
+        if override is not None:
+            try:
+                shlex.split(override)
+            except ValueError as exc:
+                raise click.ClickException(
+                    f"--override contains unbalanced quotes and cannot be parsed: {exc}"
+                ) from exc
+            spec["run_command_override"] = override
+        spec.setdefault("metadata", {})["backend"] = _backend_name
+        # D-97: write metadata.runtime so orchestrator + cancel.py know which
+        # runtime made this submission. AUTOMIL_RUNTIME is set by the agent runtime
+        # (never inferred — D-87). Falls back to "unknown" if unset.
+        spec.setdefault("metadata", {})["runtime"] = os.environ.get("AUTOMIL_RUNTIME", "unknown")
+        # D-117: stamp metadata.cell_id — symmetric to metadata.backend and metadata.runtime.
+        # The daemon's _running_in_cell() filters in-cell experiments by this field.
+        # Direct backend specs may be cell-less; every CLI submit is explicitly metered.
+        spec.setdefault("metadata", {})["cell_id"] = _cell.cell_id
+        if _campaign_spec is not None:
+            spec.setdefault("metadata", {})["campaign"] = _campaign_spec
+            spec.setdefault("metadata", {})["agent_session"] = _campaign_agent_session
+
+        queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
         with submission_lock(adir):
             _refuse_if_held()
             _stamp = _phasing_gate()
@@ -916,7 +922,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                 shutil.rmtree(archive)
             archive.parent.mkdir(parents=True, exist_ok=True)
             staging.rename(archive)
-            queue_file.write_text(json.dumps(spec, indent=2))
+            atomic_write_text(queue_file, json.dumps(spec, indent=2))
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

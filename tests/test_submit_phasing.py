@@ -142,6 +142,7 @@ class TestPhasingRefusal:
         refuse = phasing_refusal(policy, tuple(two_lr), axis="lr", role=None,
                                  parent_id="node_0001", best_node_id="node_0001")
         assert "consecutive" in refuse
+        assert "propose" in refuse and "--axis" in refuse   # the remedy the CLI accepts
         kept = [_attempt("node_0002", "lr"), _attempt("node_0003", "lr", status="keep")]
         assert phasing_refusal(policy, tuple(kept), axis="lr", role=None,
                                parent_id="node_0001", best_node_id="node_0001") is None
@@ -573,6 +574,15 @@ class TestSubmitEnforcesThePhasing:
         runner, adir = _phased_project(tmp_path, monkeypatch)
         refused = _submit(runner, "node_0042", "node_0001")
         assert refused.exit_code != 0 and "axis" in refused.output
+
+    def test_cell_status_fails_when_the_phasing_census_is_broken(self, tmp_path, monkeypatch):
+        runner, adir = _phased_project(tmp_path, monkeypatch)
+        a1 = _node_id(_propose(runner, "node_0001", "lr"))
+        assert _submit(runner, a1, "node_0001").exit_code == 0
+        (adir / "orchestrator" / "queue" / f"{a1}.json").write_text("")   # a torn queue file
+        status = runner.invoke(main, ["cell", "status"])
+        assert "DEGRADED" in status.output and "not a readable spec" in status.output
+        assert status.exit_code != 0
 
     def test_cell_status_reports_the_batch_position(self, tmp_path, monkeypatch):
         runner, adir = _phased_project(tmp_path, monkeypatch)

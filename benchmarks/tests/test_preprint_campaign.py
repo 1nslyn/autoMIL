@@ -710,6 +710,33 @@ def test_audit_rejects_a_hand_edited_frozen_guard(tmp_path):
         )
 
 
+def test_audit_rejects_a_multiplier_the_protocol_does_not_record(tmp_path):
+    """`scoring.se_multiplier` sets the companion bar with the frozen margin
+    (max(quantum, k x paired SE)); a cell that raised it would run its guard
+    under a tolerance the manifest does not record."""
+    fake_repo, manifest_path, roots = _materialized(tmp_path)
+    config_path = roots[0] / "config.yaml"
+    original = config_path.read_text()
+    config = yaml.safe_load(original)
+    assert config["scoring"]["se_multiplier"] == PROTOCOL["se_multiplier"]
+    config["scoring"]["se_multiplier"] = 50.0
+    config_path.write_text(yaml.safe_dump(config))
+    with pytest.raises(CampaignManifestError, match="se_multiplier"):
+        audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)
+    config_path.write_text(original)
+    audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)
+
+    cell = json.loads((roots[0] / "campaign_cell.json").read_text())
+    (roots[0] / "graph.json").write_text(json.dumps({
+        "schema_version": 3,
+        "meta": {"scoring": {"formula": config["scoring"]["formula"],
+                             "guard": cell["guard"], "se_multiplier": 50.0}},
+        "nodes": {},
+    }))
+    with pytest.raises(CampaignManifestError, match="se_multiplier"):
+        audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)
+
+
 def test_audit_rejects_a_tampered_exporter_port(tmp_path):
     fake_repo = tmp_path / "repo"
     _copy_campaign_sources(fake_repo)

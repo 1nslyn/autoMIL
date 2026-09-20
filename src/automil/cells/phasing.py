@@ -298,7 +298,8 @@ def phasing_refusal(
     if len(recent) == m and all(a.axis == axis for a in recent) \
             and not any(a.status == "keep" for a in recent):
         return (f"attempt {k} would be the {m + 1}th consecutive attempt on axis "
-                f"{axis!r} without a kept result; change axis")
+                f"{axis!r} without a kept result; propose a new node with a "
+                f"different --axis")
     if batch == len(policy.batches):
         neighbours = sum(1 for a in attempts[first - 1:] if a.role == NEIGHBOUR)
         neighbours += 1 if role == NEIGHBOUR else 0

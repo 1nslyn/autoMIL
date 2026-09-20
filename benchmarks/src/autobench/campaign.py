@@ -243,6 +243,11 @@ EXPECTED_IDENTITY_LOCKED_HPARAMS = (
     "mDim", "numLayer_Res",           # dtfd width + residual depth
     "hidden_dim",                     # nnmil model width
 )
+# How many paired standard errors the keep margin and the companion bar
+# clear (max(floor, SE_MULTIPLIER x paired SE)). Written into every cell's
+# scoring block, frozen into the gate's graph at the first proposal, and
+# checked again at freeze: the companion bar is part of the protocol.
+SE_MULTIPLIER = 1.0
 # The discovery budget is spent in fixed, non-overlapping batches; the
 # framework enforces the structure at submit (src/automil/cells/phasing.py).
 DISCOVERY_PHASING = {
@@ -259,6 +264,7 @@ PROTOCOL = {
     "split_folds": 5,
     "discovery_attempts": DISCOVERY_ATTEMPTS,
     "discovery_phasing": DISCOVERY_PHASING,
+    "se_multiplier": SE_MULTIPLIER,
     # v4: every arm restores the epoch with the highest primary validation
     # metric (ties keep the earlier epoch); the validation loss no longer votes.
     "checkpoint_selection": {
@@ -1132,6 +1138,7 @@ def materialize_discovery_cells(
         # The framework-side selector (CR-1b recompute + per-fold projection):
         # campaign-owned, template-independent, audited below.
         config.setdefault("scoring", {})["formula"] = primary
+        config["scoring"]["se_multiplier"] = SE_MULTIPLIER
         # The companion guard rides the same rail: campaign-owned, frozen in
         # the cell, audited below. Selection stays single-metric — the guard
         # can only reject a child, never promote one, so nothing about the
@@ -1421,6 +1428,15 @@ def audit_materialized_campaign(
                 f"{cell_id}: selection-formula drift (expected "
                 f"{_expected_formula})"
             )
+        # k sets the companion bar with the frozen margin (max(quantum,
+        # k x paired SE)) and the keep margin; a raised k would run the
+        # guard under a tolerance the protocol does not record.
+        if (config.get("scoring") or {}).get("se_multiplier") != SE_MULTIPLIER:
+            raise CampaignManifestError(
+                f"{cell_id}: scoring.se_multiplier drift (config declares "
+                f"{(config.get('scoring') or {}).get('se_multiplier')!r}, the "
+                f"protocol records {SE_MULTIPLIER})"
+            )
         # Exact-match, like the formula: a materialized cell whose guard was
         # edited (widened, retargeted, deleted) would gate on a margin the
         # manifest does not record, and the frozen counts would no longer
@@ -1460,6 +1476,13 @@ def audit_materialized_campaign(
                     f"{cell_id}: graph.json froze scoring.guard "
                     f"{_frozen_scoring.get('guard')!r}; the manifest records "
                     f"{cell.get('guard')!r}"
+                )
+            from automil.graph import _se_multiplier
+            frozen_k = _se_multiplier({"scoring": _frozen_scoring})
+            if frozen_k != SE_MULTIPLIER:
+                raise CampaignManifestError(
+                    f"{cell_id}: graph.json froze scoring.se_multiplier "
+                    f"{frozen_k!r}; the protocol records {SE_MULTIPLIER}"
                 )
         policy = load_candidate_policy(adir)
         expected_editable = (
