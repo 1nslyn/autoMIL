@@ -1691,12 +1691,12 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                     "validation_mean": candidate["discovery_mean"],
                 })
                 if guard_drop is not None:
+                    drop, margin = guard_drop
                     audit.update({
                         "eligible": False,
                         "reason": (
                             f"companion guard: {guard_floor['metric']} fell "
-                            f"{guard_drop:.4f} below the baseline (margin "
-                            f"{guard_floor['margin']})"
+                            f"{drop:.4f} below the baseline (margin {margin:.4f})"
                         ),
                     })
                 else:
@@ -1795,7 +1795,11 @@ def _companion_guard_floor(
     than one validation slide.
 
     Both sides come from :func:`_recorded_fold_aggregates`, so the comparison
-    happens on the same recorded grid the margin is aligned to.
+    happens on the same recorded grid the margin is aligned to. The margin is
+    judged as the gate judges it: ``max(one-slide quantum, se_multiplier x
+    paired SE)`` of the per-fold companion deltas against the baseline
+    (:func:`automil.graph.companion_margin`), so a drop smaller than its own
+    fold-to-fold noise does not decide a cell at either stage.
 
     The declaration is read from the FROZEN ``graph.json`` meta, not from
     ``config.yaml``. The config is editable by anything with a shell in the
@@ -1805,7 +1809,7 @@ def _companion_guard_floor(
     parent-relative gate — which reads the frozen value — went on stamping
     candidates ``discard``. One declaration, one authority.
     """
-    from automil.graph import _guard_declaration
+    from automil.graph import _guard_declaration, _se_multiplier
 
     try:
         frozen = (
@@ -1844,7 +1848,23 @@ def _companion_guard_floor(
             f"cannot apply the companion guard at freeze: the baseline records "
             f"no {metric}"
         )
-    return {"metric": metric, "margin": float(margin), "baseline": floor}
+    return {
+        "metric": metric,
+        "margin": float(margin),
+        "baseline": floor,
+        "baseline_folds": _fold_metric_values(stage_baseline, metric),
+        "se_multiplier": _se_multiplier({"scoring": frozen}),
+    }
+
+
+def _fold_metric_values(folds: list[Mapping[str, Any]], metric: str) -> dict[int, float]:
+    """``fold_index -> metric`` over normalized fold entries (every fold
+    carries the full recorded metrics block, see :func:`_validation_folds`)."""
+    return {
+        int(fold["fold_index"]): float(fold["metrics"][metric])
+        for fold in folds
+        if metric in (fold.get("metrics") or {})
+    }
 
 
 def _stage_guard_margin(adir: Path, folds, declared: float) -> float:
@@ -1873,19 +1893,27 @@ def _stage_guard_margin(adir: Path, folds, declared: float) -> float:
 
 def _companion_guard_shortfall(
     floor: Mapping[str, Any] | None, folds: list[Mapping[str, Any]],
-) -> float | None:
-    """How far a candidate fell below the companion floor, or ``None`` if it
-    cleared it. Fails CLOSED on a candidate that does not record the metric —
-    the same rule the gate applies, for the same reason."""
+) -> tuple[float, float] | None:
+    """``(drop, margin)`` when a candidate fell below the companion floor by
+    more than the margin it was judged against, or ``None`` if it cleared it.
+    Fails CLOSED on a candidate that does not record the metric — the same
+    rule the gate applies, for the same reason."""
+    from automil.graph import companion_margin
+
     if floor is None:
         return None
-    value = _recorded_fold_aggregates(folds).get(floor["metric"])
+    metric = floor["metric"]
+    value = _recorded_fold_aggregates(folds).get(metric)
     if value is None:
-        return float("inf")
+        return float("inf"), float(floor["margin"])
+    margin = companion_margin(
+        float(floor["margin"]), float(floor["se_multiplier"]),
+        _fold_metric_values(folds, metric), floor["baseline_folds"],
+    )
     drop = float(floor["baseline"]) - value
     # Same ulp slack as the gate: a drop of exactly the margin is a drop of one
     # validation slide, which is not evidence of harm.
-    return drop if drop - floor["margin"] > 1e-9 else None
+    return (drop, margin) if drop - margin > 1e-9 else None
 
 
 def _map_overlay_path(path: str, source_adir_rel: str, target_adir_rel: str) -> str:
@@ -2534,12 +2562,13 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
         }
         guard_drop = _companion_guard_shortfall(promotion_floor, five_folds)
         if guard_drop is not None:
+            drop, margin = guard_drop
             job.update({
                 "status": "ineligible",
                 "reason": (
                     f"companion guard: {promotion_floor['metric']} fell "
-                    f"{guard_drop:.4f} below the baseline over five folds "
-                    f"(margin {promotion_floor['margin']})"
+                    f"{drop:.4f} below the baseline over five folds "
+                    f"(margin {margin:.4f})"
                 ),
                 "validation_mean": selection_candidate["validation_mean"],
             })

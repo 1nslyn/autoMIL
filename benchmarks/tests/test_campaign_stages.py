@@ -857,6 +857,56 @@ def test_freeze_promotes_normally_when_the_companion_holds(staged_cell):
     ]
 
 
+def _set_companion_folds(adir, per_fold):
+    """Set every completed attempt's companion metric per discovery fold (in
+    fold order); the aggregate becomes their mean, rounded the way the
+    trainer records it."""
+    mean = round(sum(per_fold) / len(per_fold), 4)
+    for archive in (adir / "orchestrator" / "archive").iterdir():
+        path = archive / "result.json"
+        result = json.loads(path.read_text())
+        if result.get("status") != "completed":
+            continue
+        result["metrics"]["val_bacc"] = mean
+        for fold, value in zip(sorted(result["validation_folds"], key=lambda f: f["fold_index"]), per_fold):
+            fold["metrics"]["val_bacc"] = value
+        path.write_text(json.dumps(result))
+
+
+def test_freeze_guard_margin_widens_with_the_paired_fold_noise(staged_cell):
+    """The companion is judged like the primary: against max(one-slide
+    quantum, k x paired SE of the per-fold deltas). A mean drop past the
+    quantum whose per-fold deltas are noisier than the drop itself is not
+    evidence of harm and must not decide the cell."""
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))   # baseline val_bacc 0.60 on every fold
+    _attempts(adir, cell["cell_id"], completed=12)
+    # deltas +0.02, 0.00, -0.08: mean -0.02 (past the 0.0099 quantum), paired SE 0.0306
+    _set_companion_folds(adir, [0.62, 0.60, 0.52])
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    assert state["discovery"]["complete_candidates"] == 12
+    assert len(state["discovery"]["promoted_candidates"]) == 10
+
+
+def test_freeze_guard_uniform_drop_past_the_quantum_still_rejects(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _set_companion_folds(adir, [0.58, 0.58, 0.58])       # deltas -0.02 x3: paired SE 0
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    audit = state["discovery"]["attempt_audit"]
+    rejected = [row for row in audit if "companion guard" in (row.get("reason") or "")]
+    assert len(rejected) == 12
+    assert "(margin 0.0099)" in rejected[0]["reason"]
+    assert state["discovery"]["complete_candidates"] == 0
+
+
 def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))

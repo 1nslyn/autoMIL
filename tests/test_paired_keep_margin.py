@@ -26,7 +26,10 @@ DELTA = 0.015  # the campaign's predeclared accept_margin
 
 
 def _entries(folds: dict[int, float]) -> list[dict]:
-    return [{"fold_index": i, "primary_value": c} for i, c in sorted(folds.items())]
+    # The projection keeps each fold's validated metrics beside its primary
+    # value, so the companion guard can pair per-fold companions the same way.
+    return [{"fold_index": i, "primary_value": c, "metrics": {"val_auc": c}}
+            for i, c in sorted(folds.items())]
 
 
 def _mean(folds: dict[int, float]) -> float:

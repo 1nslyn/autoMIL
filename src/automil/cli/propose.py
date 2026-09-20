@@ -133,7 +133,7 @@ def _print_leaderboard(graph, top: int = 10) -> None:
             # the primary signal too, the label would suggest a cause it did
             # not have; here it tells the agent the change moved the decision
             # boundary rather than the ranking.
-            g_verdict, g_delta, g_metric = guard_basis(graph.meta, parent, node)
+            g_verdict, g_delta, g_metric, g_margin = guard_basis(graph.meta, parent, node)
             # Only for nodes the gate actually ran on. `partial` and `crash`
             # bypass keep/discard entirely, so labelling them would present a
             # hypothetical verdict as a real rejection.
@@ -142,6 +142,7 @@ def _print_leaderboard(graph, top: int = 10) -> None:
                 versus += (
                     f"  GUARD-FAIL {g_metric or 'companion (declaration invalid)'} "
                     f"{f'{g_delta:+.4f}' if g_delta is not None else 'unreported'}"
+                    f"{f' (bar {g_margin:.4f})' if g_margin is not None else ''}"
                 )
         else:
             versus = "root"

@@ -389,17 +389,26 @@ def _node_metric(node: dict | None, metric: str) -> float | None:
 
 def guard_basis(
     meta: dict | None, parent_node: dict | None, child_node: dict | None,
-) -> tuple[str, float | None, str | None]:
-    """The companion guard's verdict, observed child−parent delta, and metric.
+) -> tuple[str, float | None, str | None, float | None]:
+    """The companion guard's verdict, observed child−parent delta, metric, and margin.
 
-    Returns ``(verdict, delta, metric)`` where verdict is ``"none"`` (no
-    guard applies), ``"pass"``, or ``"fail"``; ``delta`` is ``None`` whenever
-    it could not be measured, and ``metric`` is ``None`` only when nothing was
-    validly declared. Public so display surfaces label a discard with the SAME
-    evidence the gate used — a node rejected by the guard while winning on
-    the primary signal is otherwise indistinguishable from an ordinary loss —
-    and carrying the metric name here keeps those surfaces from re-parsing a
-    declaration that may be exactly what is broken.
+    Returns ``(verdict, delta, metric, margin)`` where verdict is ``"none"``
+    (no guard applies), ``"pass"``, or ``"fail"``; ``delta`` is ``None``
+    whenever it could not be measured; ``metric`` is ``None`` only when
+    nothing was validly declared; ``margin`` is the bar the verdict was
+    judged against, ``None`` when no comparison was made. Public so display
+    surfaces label a discard with the SAME evidence the gate used — a node
+    rejected by the guard while winning on the primary signal is otherwise
+    indistinguishable from an ordinary loss — and carrying the metric name
+    here keeps those surfaces from re-parsing a declaration that may be
+    exactly what is broken.
+
+    The margin is judged the way the primary metric's is:
+    ``max(declared margin, se_multiplier x paired SE)``, where the paired SE
+    is that of the per-fold child−parent deltas of the companion
+    (:func:`automil.scoring.paired_delta_se`) whenever both nodes carry the
+    same fold set, and the declared one-slide quantum otherwise. A drop
+    smaller than its own fold-to-fold noise is not evidence of harm.
 
     Three asymmetries, each load-bearing:
 
@@ -429,9 +438,9 @@ def guard_basis(
         # (the config path raises at seeding). Fail CLOSED for the same
         # reason an unknown frozen formula does: one typo must not silently
         # switch a declared protection off for the whole graph.
-        return "fail", None, None
+        return "fail", None, None, None
     if declared is None or parent_node is None:
-        return "none", None, None
+        return "none", None, None, None
     metric, margin = declared
     # CHILD FIRST. The child-side rule is the anti-gaming rule, so it must not
     # be conditional on the parent's evidence: checking the parent first made
@@ -440,12 +449,61 @@ def guard_basis(
     # wrote the key disabled the guard for its whole lineage.
     child_value = _node_metric(child_node, metric)
     if child_value is None:
-        return "fail", None, metric
+        return "fail", None, metric, None
     parent_value = _node_metric(parent_node, metric)
     if parent_value is None:
-        return "none", None, metric
+        return "none", None, metric, None
     delta = child_value - parent_value
-    return ("fail" if delta + margin < -_GUARD_EPS else "pass"), delta, metric
+    margin = companion_margin(
+        margin, _se_multiplier(meta),
+        node_fold_metric_values(child_node, metric),
+        node_fold_metric_values(parent_node, metric),
+    )
+    return ("fail" if delta + margin < -_GUARD_EPS else "pass"), delta, metric, margin
+
+
+def companion_margin(
+    declared: float, se_multiplier: float,
+    child_folds: dict[int, float] | None, parent_folds: dict[int, float] | None,
+) -> float:
+    """``max(declared, se_multiplier x paired SE)`` of the companion's per-fold
+    deltas, or ``declared`` when the two nodes cannot be paired. Shared by the
+    parent-relative gate and the campaign's baseline-relative freeze so both
+    stages judge the companion by one rule."""
+    from automil.scoring import paired_delta_se
+
+    if se_multiplier <= 0:
+        return declared
+    se = paired_delta_se(child_folds, parent_folds)
+    if se is None:
+        return declared
+    return max(declared, se_multiplier * se)
+
+
+def node_fold_metric_values(node: dict | None, metric: str) -> dict[int, float] | None:
+    """``fold_index -> metric`` for a node's per-fold validated metrics, from
+    the same two sources as :func:`node_fold_primary_values`. ``None`` unless
+    EVERY fold entry carries a finite value for ``metric``: a companion the
+    trainer nulled on one fold cannot be paired on the others."""
+    if not isinstance(node, dict):
+        return None
+    entries = node.get("fold_primary_values")
+    if not isinstance(entries, list) or not entries:
+        meta = node.get("metadata")
+        entries = meta.get("validation_folds") if isinstance(meta, dict) else None
+    if not isinstance(entries, list) or not entries:
+        return None
+    values: dict[int, float] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return None
+        index = entry.get("fold_index")
+        value = _finite((entry.get("metrics") or {}).get(metric)) \
+            if isinstance(entry.get("metrics"), dict) else None
+        if isinstance(index, bool) or not isinstance(index, int) or value is None:
+            return None
+        values[index] = value
+    return values or None
 
 
 def _primary_value_matches_folds(node: dict | None, folds: dict[int, float] | None) -> bool:
