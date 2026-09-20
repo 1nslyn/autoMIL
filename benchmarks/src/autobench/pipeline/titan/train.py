@@ -1,8 +1,8 @@
 """Single-fold training for the TITAN linear probe.
 
-Standard CE + Adam on frozen slide embeddings, early-stopping on val CE
-loss (protocol v3; AUC reported at the selected checkpoint, not voting),
-final evaluation via the SAME ``compute_extended_metrics`` every other arm
+Standard CE + Adam on frozen slide embeddings, the checkpoint selected on
+the primary validation metric, val AUC (protocol v4; the val CE loss is
+reported beside it), final evaluation via the SAME ``compute_extended_metrics`` every other arm
 uses -- so ``test_auc``/``test_bacc`` are computed by identical code
 across all four models (design spec §4, §7).
 """
@@ -27,6 +27,7 @@ from autobench.pipeline.evaluate import (
     write_predictions_csv,
 )
 from autobench.pipeline.policy_dispatch import PolicyRuntime
+from autobench.pipeline.selection import SelectionTracker
 from autobench.pipeline.val_loss import ce_loss
 from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSlideDataset
@@ -132,10 +133,8 @@ def train_titan_fold(
     val_loader = DataLoader(val_ds, batch_size=max(1, len(val_ds)), shuffle=False)
     test_loader = DataLoader(test_ds, batch_size=max(1, len(test_ds)), shuffle=False)
 
-    best_val_loss = float("inf")
-    best_state = copy.deepcopy(model.state_dict())
-    best_epoch = -1  # -1: never improved; the pre-training snapshot is kept
-    epochs_without_improvement = 0
+    tracker = SelectionTracker(head_cfg.patience)
+    best_state = copy.deepcopy(model.state_dict())  # kept when no epoch is ever selected
 
     start = time.time()
     for _epoch in range(exp_cfg.train.max_epochs):
@@ -156,24 +155,14 @@ def train_titan_fold(
             return_probs=True,
         )
         val_auc = val_metrics["auc_roc"]
-        # Protocol v3: the checkpoint is selected on continuous val CE loss;
-        # AUC is reported at that checkpoint, not voting. ce_loss maps any
-        # non-finite probabilities to +inf, so a degenerate epoch never wins.
+        # Protocol v4: the checkpoint is selected on the primary validation
+        # metric (AUC; a NaN AUC never selects); the CE loss is reported
+        # beside it for policies.
         val_loss = ce_loss(y_true_v, y_probs_v)
-        improved = val_loss < best_val_loss
-
-        if improved:
-            best_val_loss = val_loss
+        if tracker.observe(_epoch, val_auc):
             best_state = copy.deepcopy(model.state_dict())
-            best_epoch = _epoch
-            epochs_without_improvement = 0
-        else:
-            epochs_without_improvement += 1
 
-        default_stop = (
-            exp_cfg.train.early_stopping
-            and epochs_without_improvement >= head_cfg.patience
-        )
+        default_stop = exp_cfg.train.early_stopping and tracker.early_stop
         if policy_runtime.should_stop(
             default_stop, epoch=_epoch, metrics={"val_auc": val_auc, "val_loss": val_loss},
         ):
@@ -185,8 +174,8 @@ def train_titan_fold(
     # pre-loop deepcopy that predates any training step (best_epoch == -1,
     # e.g. an all-NaN val split) — NOT the "final weights kept" of the arms
     # that print source=final.
-    print(f"[selected] epoch={best_epoch} "
-          f"source={'best' if best_epoch >= 0 else 'untrained'}", flush=True)
+    print(f"[selected] epoch={tracker.best_epoch} "
+          f"source={'best' if tracker.best_epoch >= 0 else 'untrained'}", flush=True)
     test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
                              predictions_path=os.path.join(fold_dir, "predictions.csv"))
     val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,

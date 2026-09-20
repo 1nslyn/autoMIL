@@ -2,9 +2,10 @@
 
 Unlike DTFD's two-tier pseudo-bag distillation, ABMIL is a STANDARD one-tier
 MIL trainer: one forward per slide (full bag, no pseudo-bag split), one
-CrossEntropy loss, one Adam optimizer. Early stopping selects the checkpoint
-on val CE loss (protocol v3; AUC is reported there, not voting) with
-best-state restore -- same discipline as ``dtfd/train.py``.
+CrossEntropy loss, one Adam optimizer. The checkpoint is selected on the
+primary validation metric, val AUC (protocol v4; the val CE loss is reported
+beside it for policies), with best-state restore -- same discipline as
+``dtfd/train.py``.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import torch
 
 from autobench.pipeline.abmil.config import ABMILConfig
 from autobench.pipeline.abmil.dataset import ABMILSlide, _read_bag
+from autobench.pipeline.selection import SelectionTracker
 from autobench.pipeline.val_loss import ce_loss
 from autobench.pipeline.abmil.model import build_abmil_model
 from autobench.pipeline.determinism import seed_everything as _seed_everything
@@ -155,10 +157,8 @@ def train_abmil_fold(
         policy_runtime = policy_runtime or PolicyRuntime()
         optimizer = policy_runtime.wrap_optimizer(optimizer)
 
-        best_loss = float("inf")
-        best_snap: dict | None = None
-        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
-        epochs_no_improve = 0
+        tracker = SelectionTracker(cfg.patience)
+        best_snap: dict | None = None  # None: nothing selected; final weights kept
 
         start = time.time()
         for _epoch in range(cfg.max_epochs):
@@ -170,17 +170,12 @@ def train_abmil_fold(
                     return_probs=True,
                 )
                 cur_auc = _val_auc(cur_metrics)
-                # Protocol v3: the checkpoint is selected on continuous val
-                # CE loss; AUC is reported at that checkpoint, not voting.
+                # Protocol v4: the checkpoint is selected on the primary
+                # validation metric (AUC); the CE loss is reported beside it.
                 cur = ce_loss(y_true_v, y_probs_v)
-                if cur < best_loss:
-                    best_loss = cur
+                if tracker.observe(_epoch, cur_auc):
                     best_snap = copy.deepcopy(model.state_dict())
-                    best_epoch = _epoch
-                    epochs_no_improve = 0
-                else:
-                    epochs_no_improve += 1
-                default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
+                default_stop = cfg.early_stopping and tracker.early_stop
                 if policy_runtime.should_stop(
                     default_stop, epoch=_epoch,
                     metrics={"val_auc": cur_auc, "val_loss": cur},
@@ -191,7 +186,7 @@ def train_abmil_fold(
             model.load_state_dict(best_snap)
         # A3: source=best when a val-selected snapshot was restored above,
         # source=final when the final weights were kept (no restore).
-        print(f"[selected] epoch={best_epoch} "
+        print(f"[selected] epoch={tracker.best_epoch} "
               f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
         test_metrics = (

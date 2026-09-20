@@ -117,10 +117,10 @@ def val_scores(
     device: torch.device,
     seed: int,
 ) -> tuple[float, float]:
-    """(val AUC for reporting, val CE loss for v3 checkpoint selection).
+    """(val AUC for checkpoint selection, val CE loss for the epoch line).
 
-    AUC is NaN-safe → -inf; loss is non-finite-safe → +inf, so a
-    degenerate epoch can neither win reporting nor win selection.
+    AUC is NaN-safe → -inf and loss is non-finite-safe → +inf, so a
+    degenerate epoch can neither be selected nor read as a perfect loss.
     """
     metrics, y_true, y_probs = evaluate_dtfd(
         bundle, slides, cfg, num_classes, device, seed, return_probs=True,
