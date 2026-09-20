@@ -191,12 +191,10 @@ class ClassificationTrainer(BaseTrainer):
         warmup_steps = len(self.train_loader) * self.config.get('warmup_epochs', 5)
         lr_scheduler = cosine_lr(optimizer, self.config.get('learning_rate', 3e-4), warmup_steps, total_steps)
         
-        # Setup early stopping
-        metric = self.dataset_info.get('metric', 'bacc')
+        # Checkpoint selection on validation AUC (protocol v4) + early stopping
         early_stopping = EarlyStopping(
             patience=self.config.get('patience', 10),
             verbose=True,
-            metric=metric,
             save_dir=self.save_dir,
             model_type=self.model_type,
             logger=self.logger
@@ -285,22 +283,19 @@ class ClassificationTrainer(BaseTrainer):
             torch.save(self.model.state_dict(), latest_model_path)
             self.logger.info(f"Saved latest model to {latest_model_path}")
             
-            # Early stopping - extract metrics from val_metrics
+            # Extract metrics from val_metrics.
             # Note: evaluate() returns prefixed metrics like "val_val/bacc" (split='val' + prefix='val')
-            # Check both prefixed and unprefixed keys for compatibility
-            # val/loss is only emitted when val probs are finite and the val
-            # split has >1 class; absent must read as NaN so the non-finite
-            # guard skips the epoch — a 0.0 default would be a PERFECT loss
-            # (score -0.0 beats every real loss) and would permanently
-            # capture the checkpoint.
+            # Check both prefixed and unprefixed keys for compatibility.
+            # val/loss and val/auroc are only emitted when val probs are finite
+            # and the val split has >1 class; an absent value must read as NaN
+            # so the non-finite guard skips the epoch -- a 0.0 default would be
+            # a finite (worst) AUC and would become the epoch-0 checkpoint.
             val_loss = val_metrics.get('val_val/loss', val_metrics.get('val/loss', float('nan')))
             val_bacc = val_metrics.get('val_val/bacc', val_metrics.get('val/bacc', 0.0))
             val_f1 = val_metrics.get('val_val/weighted_f1', val_metrics.get('val/weighted_f1', 0.0))
-            val_auc = val_metrics.get('val_val/auroc', val_metrics.get('val/auroc', 0.0))
-            val_kappa = val_metrics.get('val_val/kappa', val_metrics.get('val/kappa', None))
+            val_auc = val_metrics.get('val_val/auroc', val_metrics.get('val/auroc', float('nan')))
             
-            early_stopping(val_loss, val_bacc, val_f1, val_auc, self.model,
-                           val_kappa=val_kappa, epoch=epoch)
+            early_stopping(val_auc, self.model, epoch=epoch)
             default_stop = early_stopping.early_stop
             if self.policy_runtime is not None:
                 default_stop = self.policy_runtime.should_stop(

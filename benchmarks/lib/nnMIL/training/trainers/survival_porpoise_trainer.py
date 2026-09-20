@@ -189,16 +189,13 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         warmup_steps = len(self.train_loader) * self.config.get('warmup_epochs', 5)
         lr_scheduler = cosine_lr(optimizer, self.config.get('learning_rate', 1e-4), warmup_steps, total_steps)
         
-        # Setup early stopping
-        metric = self.dataset_info.get('metric', 'c_index')
+        # Checkpoint selection on the validation C-index (protocol v4) + early stopping
         early_stopping = EarlyStoppingSurvival(
             patience=self.config.get('patience', 10),
             verbose=True,
-            metric=metric,
             save_dir=self.save_dir,
             model_type=self.model_type,
             logger=self.logger,
-            mode='min',  # select on val NLL loss: val c-index is near-random with few events
         )
         
         # Setup mixed precision
@@ -285,17 +282,17 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
             self.model.eval()
             torch.set_grad_enabled(False)
             val_metrics = self.evaluate('val')
-            # Select on val NLL loss, not the tiny-event val c-index (see
-            # SurvivalTrainer._compute_val_loss for rationale).
+            # The val NLL loss is reported on the epoch line; the checkpoint is
+            # selected on the val C-index below.
             val_loss = self._compute_val_loss(loss_fn)
             torch.set_grad_enabled(True)
             self.model.train()
 
-            # c-index kept for logging/reference only; selection is on val loss
-            val_cidx = val_metrics.get('val_c_index', 0.0)
+            # An absent C-index must read as NaN so the callback skips the epoch.
+            val_cidx = val_metrics.get('val_c_index', float('nan'))
             val_cidx = float(val_cidx.item()) if isinstance(val_cidx, torch.Tensor) else float(val_cidx)
             self.logger.info(f"Val loss: {val_loss:.4f}, Val c-index: {val_cidx:.4f}")
-            early_stopping(val_loss, val_cidx, self.model, epoch=epoch)
+            early_stopping(val_cidx, self.model, epoch=epoch)
             default_stop = early_stopping.early_stop
             if self.policy_runtime is not None:
                 default_stop = self.policy_runtime.should_stop(
