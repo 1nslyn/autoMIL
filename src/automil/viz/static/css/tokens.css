@@ -1,0 +1,130 @@
+/* autoMIL design tokens: white page, black rules, mono labels, teal for data. */
+
+@font-face { font-family: "Manrope"; font-weight: 500; font-display: swap; src: url(../fonts/Manrope-500.woff2) format("woff2"); }
+@font-face { font-family: "Manrope"; font-weight: 600; font-display: swap; src: url(../fonts/Manrope-600.woff2) format("woff2"); }
+@font-face { font-family: "Manrope"; font-weight: 700; font-display: swap; src: url(../fonts/Manrope-700.woff2) format("woff2"); }
+@font-face { font-family: "Manrope"; font-weight: 800; font-display: swap; src: url(../fonts/Manrope-800.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; font-display: swap; src: url(../fonts/JetBrainsMono-400.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 500; font-display: swap; src: url(../fonts/JetBrainsMono-500.woff2) format("woff2"); }
+
+:root {
+  /* palette (paper/preprint/PAPER-DESIGN-SYSTEM.md) */
+  --seafoam: #bfdfd2;
+  --teal-muted: #51999f;
+  --teal-main: #4198ac;
+  --cyan-light: #7bc0cd;
+  --sand: #dbcb92;
+  --amber-light: #ecb66c;
+  --orange-warm: #ea9e58;
+  --coral: #ed8d5a;
+
+  /* page */
+  --paper: #ffffff;
+  --paper-2: #f4f4f4;
+  --paper-3: #e9e9e9;
+  --ink: #111111;
+  --ink-2: #3a3a3a;
+  --muted: #6e6e6e;
+  --faint: #9a9a9a;
+  --rule: #111111;
+  --rule-2: #e4e4e4;
+  --hairline: #111111;
+  --hairline-2: #e4e4e4;
+  --band: #ffffff;
+
+  /* semantic: teal is for data only */
+  --accent: var(--teal-main);
+  --accent-ink: #2b7386;
+  --accent-tint: #e4f0f3;
+  --status-keep: var(--teal-main);
+  --status-gate: var(--teal-muted);
+  --status-discard: #ffffff;
+  --status-discard-stroke: #8c8c8c;
+  --status-pending: var(--sand);
+  --status-running: var(--cyan-light);
+  --status-crash: var(--coral);
+  --status-partial: var(--amber-light);
+  --status-cancelled: #f4f4f4;
+  --lane-research: var(--cyan-light);
+  --lane-execution: var(--seafoam);
+  --lane-evidence: var(--teal-main);
+  --lane-test: var(--coral);
+
+  /* type */
+  --sans: "Manrope", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.875rem;
+  --fs-base: 1rem;
+  --fs-md: 1.125rem;
+  --fs-lead: 1.15rem;
+  --fs-lg: 1.5rem;
+  --fs-xl: 2rem;
+  --fs-hero: clamp(2.4rem, 4.6vw, 3.5rem);
+  --lh: 1.55;
+
+  /* spacing */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 56px;
+  --s-8: 88px;
+  --gutter: 20px;
+  --measure: 62ch;
+  --page-max: 1280px;
+  --header-h: 64px;
+  --runbar-h: 48px;
+  --drawer-w: 540px;
+  --radius: 0px;
+  --radius-sm: 0px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #111111;
+    --paper-2: #1a1a1a;
+    --paper-3: #262626;
+    --ink: #f2f2f2;
+    --ink-2: #cfcfcf;
+    --muted: #a0a0a0;
+    --faint: #767676;
+    --rule: #f2f2f2;
+    --rule-2: #2c2c2c;
+    --hairline: #f2f2f2;
+    --hairline-2: #2c2c2c;
+    --band: #111111;
+    --accent-ink: #86c7d4;
+    --accent-tint: #1d3439;
+    --status-discard: #111111;
+    --status-discard-stroke: #8c8c8c;
+    --status-cancelled: #1a1a1a;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #111111;
+  --paper-2: #1a1a1a;
+  --paper-3: #262626;
+  --ink: #f2f2f2;
+  --ink-2: #cfcfcf;
+  --muted: #a0a0a0;
+  --faint: #767676;
+  --rule: #f2f2f2;
+  --rule-2: #2c2c2c;
+  --hairline: #f2f2f2;
+  --hairline-2: #2c2c2c;
+  --band: #111111;
+  --accent-ink: #86c7d4;
+  --accent-tint: #1d3439;
+  --status-discard: #111111;
+  --status-discard-stroke: #8c8c8c;
+  --status-cancelled: #1a1a1a;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --gutter: 40px;
+  }
+}

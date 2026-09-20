@@ -117,8 +117,11 @@ LOG="$LOG_DIR/${CELL}.log"
 OPDIR="$RUNTIME/$CELL/operator"; mkdir -p "$OPDIR"
 # The runtime's transcript of the session into the cell root, whatever the
 # outcome (the home copy is pruned by the runtime after its cleanup period).
+# The SessionEnd hook stores it as the session ends; this covers a runtime
+# that was killed first. Same implementation, one storage layout:
+# <cell root>/automil/sessions/<session-id>/.
 store_session_record() {  # cell
-    "$PROJECT_DIR/benchmarks/scripts/slurm/store_session_record.sh" "$RUNTIME/$1" >> "$LOG" 2>&1 \
+    uv run --frozen --no-sync automil activity store-sessions --root "$RUNTIME/$1" >> "$LOG" 2>&1 \
         || echo "[$1] session record not stored (see $LOG)"
 }
 trap 'store_session_record "$CELL"; normalize_cell_modes "$CELL"' EXIT

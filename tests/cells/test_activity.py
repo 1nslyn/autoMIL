@@ -386,3 +386,66 @@ def test_journal_schema_rejects_obsolete_wait_events(tmp_path):
 
     with pytest.raises(ActivityError, match="unknown journal event"):
         read_activity_report(tmp_path, "cell-1")
+
+
+def test_journal_sessions_lists_open_bound_and_ended_sessions(tmp_path):
+    from automil.cells.activity import journal_sessions
+
+    assert journal_sessions(tmp_path) == ()
+    _record(tmp_path, "SessionStart", 10.0, cell_id=None, session_id="s-open")
+    _record(tmp_path, "SessionStart", 20.0, cell_id=None, session_id="s-done")
+    bind_activity_session(tmp_path, "cell-1", "s-done", "a" * 64, observed_at=21.0)
+    (tmp_path / ACTIVITY_SAMPLES_FILENAME).write_text(json.dumps({
+        "schema_version": 1,
+        "sessions": {"s-done": {"active_seconds": 5.0, "observed_at": 30.0}},
+    }))
+    _record(tmp_path, "SessionEnd", 30.0, cell_id="cell-1", session_id="s-done")
+
+    sessions = journal_sessions(tmp_path)
+    assert [s.session_id for s in sessions] == ["s-open", "s-done"]
+    open_session, done = sessions
+    assert (open_session.opened_at, open_session.ended_at, open_session.cell_id) == (10.0, None, None)
+    assert (done.opened_at, done.ended_at, done.cell_id, done.binding_sha256) == (
+        20.0, 30.0, "cell-1", "a" * 64,
+    )
+    assert done.ended_by == "hook"
+
+
+def test_journal_sessions_reports_operator_close_and_a_corrupt_journal(tmp_path):
+    from automil.cells.activity import ACTIVITY_JOURNAL_FILENAME, journal_sessions
+
+    _record(tmp_path, "SessionStart", 10.0, cell_id=None, session_id="s-1")
+    (tmp_path / ACTIVITY_SAMPLES_FILENAME).write_text(json.dumps({
+        "schema_version": 1,
+        "sessions": {"s-1": {"active_seconds": 5.0, "observed_at": 12.0}},
+    }))
+    from automil.cells.activity import close_dead_session
+    close_dead_session(tmp_path, "s-1", "runtime died", finalized_by="operator-close")
+    (session,) = journal_sessions(tmp_path)
+    assert session.ended_by == "operator-close"
+
+    with (tmp_path / ACTIVITY_JOURNAL_FILENAME).open("a") as fh:
+        fh.write("not json\n")
+    with pytest.raises(ActivityError):
+        journal_sessions(tmp_path)
+
+
+def test_replay_keeps_the_hook_fallback_marker_apart_from_an_operator_close(tmp_path):
+    """Both closes promote the same stored sample; the ledger must still say which ran."""
+    from automil.cells.activity import close_dead_session, journal_sessions
+
+    for session_id, marker in (("s-hook", "hook-exporter-unreachable"), ("s-op", "operator-close")):
+        _record(tmp_path, "SessionStart", 10.0, cell_id=None, session_id=session_id)
+        samples = json.loads((tmp_path / ACTIVITY_SAMPLES_FILENAME).read_text()) if (tmp_path / ACTIVITY_SAMPLES_FILENAME).exists() else {"schema_version": 1, "sessions": {}}
+        samples["sessions"][session_id] = {"active_seconds": 5.0, "observed_at": 12.0}
+        (tmp_path / ACTIVITY_SAMPLES_FILENAME).write_text(json.dumps(samples))
+        close_dead_session(tmp_path, session_id, "runtime gone", finalized_by=marker)
+
+    by_id = {s.session_id: s for s in journal_sessions(tmp_path)}
+    assert by_id["s-hook"].ended_by == "hook-exporter-unreachable"
+    assert by_id["s-op"].ended_by == "operator-close"
+    # the marker survives a full replay of the journal, not only the in-memory write
+    lines = [json.loads(line) for line in (tmp_path / ACTIVITY_JOURNAL_FILENAME).read_text().splitlines()]
+    ends = {e["session_id"]: e["finalized_by"] for e in lines if e["event"] == "session_end"}
+    assert ends == {"s-hook": "hook-exporter-unreachable", "s-op": "operator-close"}
+    assert read_activity_report(tmp_path, "cell-1").event_count >= 0  # replay still validates

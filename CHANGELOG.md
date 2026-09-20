@@ -75,6 +75,43 @@ autoMIL: F2-readiness framework refactor.
   the shared tracker's does; the tracker accepts a `patience` of zero (a
   one-epoch run, as the vendored stoppers already allowed) because a
   `--hparams` override lands after the attempt is charged.
+- **The dashboard is the project site, and the agent's record is on it.**
+  `automil viz start` serves a static site that reads one record layout
+  (`record/index.json`, per-run `graph.json`, `timeline.json`,
+  `sessions.json`, `agent_links.json`, `nodes/<id>.json`,
+  `sessions/<id>/turns/<k>.json`) built from the project's own files; the
+  same layout is written to disk by the new `automil viz export --out DIR`
+  (`--single-file` inlines it into one HTML page), so the hosted site, a
+  local server and an exported copy are the same frontend. Views: the
+  lineage tree with the primary-value chart and a node drawer that states
+  the keep/discard verdict with the graph's own helpers, the discovery
+  timeline (agent actions, experiment runs, best value on one axis), the
+  transcript reader (every turn, tool call, result and subagent, linked to
+  the nodes it created), the nodes table, the notes, the runs page and a
+  home page. The look is a white page with black rules, a visible column grid on
+  the hero, Manrope headlines and JetBrains Mono labels, teal for data only; runs
+  of tool-only turns fold into one line in the transcript. The hosted site can
+  connect to a user's own server through an
+  SSH tunnel: the server answers CORS only for `viz.cors_origins`
+  (default automil.org) and loopback origins, on the record routes and the
+  event stream. The tree is drawn in three dimensions by default (a top-down
+  layout on the page's paper, the kept lineage in teal; a flat lineage tree is one
+  click away); the old dark glow style is gone.
+- **Session transcripts are stored by the framework.** `automil activity
+  ingest` copies the runtime's transcript and sidecar into
+  `automil/sessions/<session-id>/` on `SessionEnd`, and the hidden
+  `automil activity store-sessions [--root]` stores every journaled session
+  (the campaign launcher's exit trap calls it; `store_session_record.sh` is
+  removed). Open sessions are read from the runtime's own file and streamed
+  as they grow (`transcript_delta` frames on `/events`).
+- **Validation-only, one enforcement point.** `viz/record_graph.py`
+  projects every node and result through `firewall.is_held_out_metric_key`,
+  no loader has a path under `archive/<node>/certify/`, run logs are served
+  for terminal nodes only and re-redacted, and secrets in tool results are
+  masked. `tests/viz/test_firewall_forged.py` plants a `test_auc` everywhere
+  and checks every payload and every opened path.
+- `tests/viz/test_app_js_metrics_reader.py` (source-text assertions on the
+  old `app.js`) is replaced by behaviour tests on the served payloads.
 
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over

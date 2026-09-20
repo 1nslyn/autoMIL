@@ -32,6 +32,8 @@ except ImportError:
     print("watchdog required: uv add watchdog")
     sys.exit(1)
 
+from automil.viz.record_routes import DEFAULT_CORS_ORIGINS, cors_headers, cors_middleware, register_record_routes
+
 VIZ_DIR = Path(__file__).parent
 STATIC_DIR = VIZ_DIR / "static"
 
@@ -116,9 +118,23 @@ class GraphWatcher(FileSystemEventHandler):
         self.subscribers: list[asyncio.Queue] = []
         self._prev_data: dict | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._clock = None
 
     def set_loop(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
+
+    def set_clock(self, clock) -> None:
+        """The run host's clock; frames carry the projected, UTC-stamped graph."""
+        self._clock = clock
+
+    def _project(self, data: dict) -> dict:
+        """The validation-only graph the frontend reads (see record_graph)."""
+        from automil.viz.clock import host_clock
+        from automil.viz.record_graph import project_graph
+
+        clock = self._clock or host_clock()
+        running = [nid for nid, node in data.get("nodes", {}).items() if node.get("status") == "running"]
+        return project_graph(data, clock, running)
 
     def _maybe_notify(self, path: str):
         name = Path(path).name
@@ -169,6 +185,7 @@ class GraphWatcher(FileSystemEventHandler):
             return
 
         self._overlay_running_status(data)
+        data = self._project(data)
 
         changed, added, removed = [], [], []
         meta_changed = False
@@ -212,7 +229,9 @@ class GraphWatcher(FileSystemEventHandler):
         data = await _read_graph_json(GRAPH_FILE)
         if data is None:
             data = {"nodes": {}, "meta": {}, "technique_stats": {}}
-        self._overlay_running_status(data)
+        else:
+            self._overlay_running_status(data)
+            data = self._project(data)
         self._prev_data = data
         return json.dumps({
             "type": "graph_update",
@@ -226,15 +245,15 @@ watcher = GraphWatcher()
 
 
 async def sse_handler(request):
-    response = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-        },
-    )
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+    }
+    # The stream sends its headers now, so the cross-origin grant (a hosted
+    # site reading this host through a tunnel) has to be decided here.
+    headers.update(cors_headers(request, request.app.get("cors_origins", DEFAULT_CORS_ORIGINS)))
+    response = web.StreamResponse(status=200, headers=headers)
     await response.prepare(request)
 
     initial = await watcher.get_initial()
@@ -268,6 +287,13 @@ async def _on_shutdown(app):
 
 
 async def index_handler(request):
+    return web.FileResponse(STATIC_DIR / "index.html")
+
+
+async def spa_fallback(request):
+    """Any path the router does not know is a frontend route: serve the page."""
+    if request.path.startswith(("/static/", "/record/", "/api/")) or request.path == "/events":
+        raise web.HTTPNotFound()
     return web.FileResponse(STATIC_DIR / "index.html")
 
 
@@ -321,12 +347,22 @@ async def _no_cache_static(request, handler):
     return response
 
 
-def create_app() -> web.Application:
-    app = web.Application(middlewares=[_no_cache_static])
+def create_app(run_source=None, cors_origins=DEFAULT_CORS_ORIGINS) -> web.Application:
+    """The dashboard application: page, record routes, SSE, and the gate stats.
+
+    ``run_source`` is the project's :class:`automil.viz.record.RunSource`;
+    without one the record routes answer 404 (the promotion-rate route and the
+    page still work, which is what the older tests exercise).
+    """
+    app = web.Application(middlewares=[cors_middleware(cors_origins), _no_cache_static])
+    app["run_source"] = run_source
+    app["cors_origins"] = tuple(cors_origins)
     app.router.add_get("/", index_handler)
     app.router.add_get("/events", sse_handler)
     app.router.add_get("/api/promotion-rate", promotion_rate_handler)
+    register_record_routes(app)
     app.router.add_static("/static", STATIC_DIR)
+    app.router.add_get("/{tail:.*}", spa_fallback)
     app.on_shutdown.append(_on_shutdown)
     return app
 
@@ -335,6 +371,7 @@ def cmd_start(
     port: int | None = None,
     project_root: Path | None = None,
     host: str | None = None,
+    tz_name: str | None = None,
 ):
     global GRAPH_FILE, GPU_STATE_FILE, PID_FILE, LOG_FILE
     if project_root is None:
@@ -354,22 +391,26 @@ def cmd_start(
     # opts in explicitly. The SSE stream and gpu_state.json carry PIDs,
     # GPU utilization, and node descriptions; on a shared workstation those
     # should not be browseable by every host on the subnet.
+    cfg_loaded: dict = {}
+    config_path = automil_dir / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml as _yaml  # noqa: PLC0415
+            cfg_loaded = _yaml.safe_load(config_path.read_text()) or {}
+        except Exception:
+            cfg_loaded = {}
+    viz_cfg = cfg_loaded.get("viz") if isinstance(cfg_loaded.get("viz"), dict) else {}
+    raw_origins = viz_cfg.get("cors_origins")
+    cors_origins = tuple(str(o) for o in raw_origins) if isinstance(raw_origins, list) else DEFAULT_CORS_ORIGINS
+
     if host is None or port is None:
-        cfg_loaded: dict = {}
-        config_path = automil_dir / "config.yaml"
-        if config_path.exists():
-            try:
-                import yaml as _yaml  # noqa: PLC0415
-                cfg_loaded = _yaml.safe_load(config_path.read_text()) or {}
-            except Exception:
-                cfg_loaded = {}
 
         if host is None:
-            cfg_host: str | None = (cfg_loaded.get("viz") or {}).get("host")
+            cfg_host: str | None = viz_cfg.get("host")
             host = cfg_host or os.environ.get("AUTOMIL_VIZ_HOST") or "127.0.0.1"
 
         if port is None:
-            raw_port = (cfg_loaded.get("viz") or {}).get("port")
+            raw_port = viz_cfg.get("port")
             try:
                 port = int(raw_port) if raw_port is not None else DEFAULT_PORT
             except (TypeError, ValueError):
@@ -398,8 +439,22 @@ def cmd_start(
     if orch_dir.exists():
         observer.schedule(watcher, str(orch_dir), recursive=False)
 
+    from automil.viz.clock import host_clock  # noqa: PLC0415
+    from automil.viz.hostinfo import start_banner  # noqa: PLC0415
+    from automil.viz.record import RunSource  # noqa: PLC0415
+
+    try:
+        clock = host_clock(tz_name=tz_name)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return
+    watcher.set_clock(clock)
+    run_source = RunSource(automil_dir, clock)
+
     async def run_server():
-        app = create_app()
+        from automil.viz.live import LiveRecord  # noqa: PLC0415
+
+        app = create_app(run_source=run_source, cors_origins=cors_origins)
         runner = web.AppRunner(app)
         await runner.setup()
         try:
@@ -418,6 +473,10 @@ def cmd_start(
                     "intended.", host, port,
                 )
             logging.info(f"Viz server running on http://{host}:{port}")
+            print(start_banner(host, port), flush=True)
+
+            live = LiveRecord(run_source, watcher.subscribers)
+            live_task = asyncio.ensure_future(live.run())
 
             # Wait for shutdown signal
             stop_event = asyncio.Event()
@@ -427,6 +486,7 @@ def cmd_start(
 
             await stop_event.wait()
             logging.info("Shutting down...")
+            live_task.cancel()
         finally:
             await runner.cleanup()
 
