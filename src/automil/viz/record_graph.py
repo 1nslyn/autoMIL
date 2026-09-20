@@ -170,14 +170,14 @@ def node_verdict(
             "se_multiplier": _number(scoring.get("se_multiplier", 1.0)),
             "basis": "none",
             "basis_se": None,
-            "guard": {"verdict": "none", "delta": None, "metric": None, "decisive": False},
+            "guard": {"verdict": "none", "delta": None, "metric": None, "margin": None, "decisive": False},
             "explanation": explanation,
         }
     parent_value = _number(parent.get("primary_value"))
     delta = child_value - parent_value
     basis, basis_se = margin_se_basis(meta, dict(parent), dict(node))
     bar = effective_accept_margin(meta, dict(parent), dict(node))
-    g_verdict, g_delta, g_metric = guard_basis(meta, dict(parent), dict(node))
+    g_verdict, g_delta, g_metric, g_margin = guard_basis(meta, dict(parent), dict(node))
     decisive = g_verdict == "fail" and delta > bar
     se_text = {
         "paired": f"paired SE {basis_se:.4f}" if basis_se is not None else "paired SE unavailable",
@@ -192,7 +192,8 @@ def node_verdict(
         tail = ""
     else:
         g_value = f"{g_delta:+.4f}" if g_delta is not None else "unreported"
-        tail = f" Guard {g_metric or 'companion'} {g_value}: {g_verdict}."
+        g_bar = f" against a bar of {g_margin:.4f}" if g_margin is not None else ""
+        tail = f" Guard {g_metric or 'companion'} {g_value}{g_bar}: {g_verdict}."
         if decisive:
             tail += " The guard decided."
     return {
@@ -209,7 +210,7 @@ def node_verdict(
         "basis": basis,
         "basis_se": basis_se,
         "child_se": node_primary_se(dict(node)),
-        "guard": {"verdict": g_verdict, "delta": g_delta, "metric": g_metric, "decisive": decisive},
+        "guard": {"verdict": g_verdict, "delta": g_delta, "metric": g_metric, "margin": g_margin, "decisive": decisive},
         "explanation": ("Kept: " if decision == "keep" else "Discarded: ") + head + tail,
     }
 

@@ -66,8 +66,8 @@ def test_verdict_matches_the_graph_helpers_on_the_same_dicts():
     assert verdict["bar"] == effective_accept_margin(meta, parent, kept)
     assert (verdict["basis"], verdict["basis_se"]) == margin_se_basis(meta, parent, kept)
     assert verdict["basis"] == "paired"
-    g_verdict, g_delta, g_metric = guard_basis(meta, parent, kept)
-    assert verdict["guard"] == {"verdict": g_verdict, "delta": g_delta, "metric": g_metric, "decisive": False}
+    g_verdict, g_delta, g_metric, g_margin = guard_basis(meta, parent, kept)
+    assert verdict["guard"] == {"verdict": g_verdict, "delta": g_delta, "metric": g_metric, "margin": g_margin, "decisive": False}
     assert verdict["explanation"].startswith("Kept: +0.0533 over the parent, above the bar")
     assert verdict["accept_margin"] == 0.015 and verdict["se_multiplier"] == 1.0
 

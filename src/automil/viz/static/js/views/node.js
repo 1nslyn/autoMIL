@@ -47,7 +47,7 @@
       rows.push([h('dt', 'parent'), h('dd', v.parent_id + ' at ' + fmt.num(v.parent_primary_value))]);
       rows.push([h('dt', 'change'), h('dd', fmt.delta(v.delta))]);
       rows.push([h('dt', 'bar to clear'), h('dd', fmt.num(v.bar) + ` (max of δ ${fmt.num(v.accept_margin)} and ${fmt.num(v.se_multiplier, 1)} × ${v.basis} SE ${v.basis_se != null ? fmt.num(v.basis_se) : 'n/a'})`)]);
-      if (v.guard && v.guard.verdict !== 'none') rows.push([h('dt', 'guard ' + (v.guard.metric || '')), h('dd', `${v.guard.delta != null ? fmt.delta(v.guard.delta) : 'unreported'}: ${v.guard.verdict}${v.guard.decisive ? ', decided the outcome' : ''}`)]);
+      if (v.guard && v.guard.verdict !== 'none') rows.push([h('dt', 'guard ' + (v.guard.metric || '')), h('dd', `${v.guard.delta != null ? fmt.delta(v.guard.delta) : 'unreported'}${v.guard.margin != null ? ' against a bar of ' + fmt.num(v.guard.margin) : ''}: ${v.guard.verdict}${v.guard.decisive ? ', decided the outcome' : ''}`)]);
     }
     if (!v.consistent) rows.push([h('dt', 'note'), h('dd', `stored status ${v.stored_status} differs from the recomputed decision`)]);
     return h('div.verdict', { class: v.decision }, h('div', v.explanation), rows.length ? h('dl.kv', { style: { marginTop: '8px' } }, rows) : null);
