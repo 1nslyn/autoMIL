@@ -15,7 +15,7 @@
     sel.selectAll('*').remove();
     const box = svg.getBoundingClientRect();
     const width = box.width || 900;
-    const margin = { top: 24, right: 20, bottom: 30, left: 110 };
+    const margin = { top: 16, right: 20, bottom: 30, left: 120 };
     const innerW = Math.max(100, width - margin.left - margin.right);
     const nodes = timeline.nodes.filter((n) => parse(n.submitted_at) || parse(n.launched_at) || parse(n.completed_at));
     nodes.sort((a, b) => (parse(a.submitted_at) || parse(a.launched_at) || 0) - (parse(b.submitted_at) || parse(b.launched_at) || 0));
@@ -43,6 +43,12 @@
     const clip = sel.append('defs').append('clipPath').attr('id', 'tl-clip').append('rect').attr('width', innerW).attr('height', height);
     const body = g.append('g').attr('clip-path', 'url(#tl-clip)');
 
+    /* lane backgrounds, behind everything */
+    const backdrop = g.insert('g', ':first-child');
+    backdrop.append('rect').attr('class', 'lane-bg').attr('x', -margin.left + 8).attr('y', -6).attr('width', innerW + margin.left - 8).attr('height', laneAgentH + 12).attr('rx', 4);
+    backdrop.append('rect').attr('class', 'lane-bg alt').attr('x', -margin.left + 8).attr('y', laneAgentH + gap - 6).attr('width', innerW + margin.left - 8).attr('height', laneRunsH + 12).attr('rx', 4);
+    backdrop.append('rect').attr('class', 'lane-bg').attr('x', -margin.left + 8).attr('y', laneAgentH + gap + laneRunsH + gap - 6).attr('width', innerW + margin.left - 8).attr('height', laneValueH + 12).attr('rx', 4);
+
     /* axis */
     g.append('g').attr('class', 'axis').attr('transform', `translate(0,${laneAgentH + gap + laneRunsH + gap + laneValueH})`)
       .call(d3.axisBottom(x).ticks(Math.max(3, Math.floor(innerW / 110))).tickSize(3));
@@ -60,7 +66,7 @@
     const marks = timeline.events.filter((e) => MARK_KINDS.includes(e.kind) && parse(e.at));
     const markY = { prompt: 14, propose: 24, submit: 24, reconcile: 34, rank: 34, notification: 14, compact: 34 };
     body.selectAll('rect.mark').data(marks).enter().append('rect').attr('class', 'mark')
-      .attr('x', (e) => x(parse(e.at)) - 2).attr('y', (e) => y0 + markY[e.kind]).attr('width', 4).attr('height', 8)
+      .attr('x', (e) => x(parse(e.at)) - 3).attr('y', (e) => y0 + markY[e.kind]).attr('width', 6).attr('height', 9).attr('rx', 1)
       .attr('fill', (e) => ({ prompt: AM.cssVar('--ink'), propose: AM.cssVar('--sand'), submit: AM.cssVar('--accent'), reconcile: AM.cssVar('--cyan-light'), rank: AM.cssVar('--cyan-light'), notification: AM.cssVar('--amber-light'), compact: AM.cssVar('--faint') }[e.kind]))
       .on('mousemove', (event, e) => AM.tooltip.show(`${esc(e.kind)} ${e.node_id ? '<span class="mono">' + esc(e.node_id) + '</span>' : ''}<br>${esc(fmt.truncate(e.label, 80))}<br>${esc(fmt.when(e.at))}`, event.clientX, event.clientY))
       .on('mouseleave', () => AM.tooltip.hide())

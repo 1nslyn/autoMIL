@@ -24,7 +24,9 @@ autoMIL: F2-readiness framework refactor.
   home page. The hosted site can connect to a user's own server through an
   SSH tunnel: the server answers CORS only for `viz.cors_origins`
   (default automil.org) and loopback origins, on the record routes and the
-  event stream. The 3D force graph and its three vendored libraries are gone.
+  event stream. The tree is drawn in three dimensions by default (a top-down
+  layout on the page's paper, the kept lineage in teal; a flat lineage tree is one
+  click away); the old dark glow style is gone.
 - **Session transcripts are stored by the framework.** `automil activity
   ingest` copies the runtime's transcript and sidecar into
   `automil/sessions/<session-id>/` on `SessionEnd`, and the hidden

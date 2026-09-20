@@ -66,11 +66,12 @@
       .attr('class', 'point')
       .attr('cx', (n, i) => x(ordered.indexOf(n)))
       .attr('cy', (n) => y(n.primary_value))
-      .attr('r', 4.5)
-      .attr('fill', (n) => AM.statusColor(n.status));
+      .attr('r', 6)
+      .attr('fill', (n) => AM.statusColor(n.status))
+      .classed('kept', (n) => KEEP_CLASS.has(n.status));
     points.filter((n) => FAILED.has(n.status) || n.primary_value == null).append('path')
       .attr('class', 'point')
-      .attr('d', 'M-4,-4L4,4M-4,4L4,-4')
+      .attr('d', 'M-5,-5L5,5M-5,5L5,-5')
       .attr('transform', (n) => `translate(${x(ordered.indexOf(n))},${failedY})`)
       .attr('stroke', (n) => AM.statusColor(n.status))
       .attr('stroke-width', 1.5);

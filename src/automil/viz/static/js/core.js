@@ -215,6 +215,7 @@ window.AM = (function () {
 
   /* ---- theme ---- */
   function initTheme() {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => window.dispatchEvent(new CustomEvent('am:theme')));
     let saved = null;
     try { saved = localStorage.getItem('am.theme'); } catch (e) { saved = null; }
     if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;

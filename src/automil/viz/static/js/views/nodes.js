@@ -5,7 +5,7 @@
 
   const COLUMNS = [
     { key: 'id', label: 'Node', get: (n) => n.id, render: (n) => h('td.mono', n.id) },
-    { key: 'status', label: 'Status', get: (n) => n.status, render: (n) => h('td', h('span.status-dot', { class: AM.statusClass(n.status) }), AM.statusLabel(n.status)) },
+    { key: 'status', label: 'Status', get: (n) => n.status, render: (n) => h('td', { style: { whiteSpace: 'nowrap' } }, h('span.status-dot', { class: AM.statusClass(n.status) }), AM.statusLabel(n.status)) },
     { key: 'description', label: 'Description', get: (n) => n.description || '', render: (n) => h('td.desc-cell', { title: n.description || '' }, n.description || '') },
     { key: 'primary_value', label: 'Value', num: true, get: (n) => n.primary_value, render: (n) => h('td.num', n.type === 'executed' ? fmt.num(n.primary_value) : '–') },
     { key: 'parent_delta', label: 'vs parent', num: true, get: (n, g) => delta(n, g), render: (n, g) => { const d = delta(n, g); return h('td.num', { class: d > 0 ? 'delta-pos' : d < 0 ? 'delta-neg' : '' }, d == null ? '–' : fmt.delta(d)); } },
