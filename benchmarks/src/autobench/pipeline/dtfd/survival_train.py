@@ -38,6 +38,7 @@ from autobench.pipeline.evaluate import (
     write_survival_predictions_csv,
 )
 from autobench.pipeline.policy_dispatch import PolicyRuntime
+from autobench.pipeline.selection import SelectionTracker
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -314,13 +315,12 @@ def train_dtfd_survival_fold(
         sched0 = policy_runtime.wrap_scheduler(sched0, role="tier1")
         sched1 = policy_runtime.wrap_scheduler(sched1, role="tier2")
 
-        # Select on val LOSS, not the noisy few-event val c-index (as CLAM/
-        # ABMIL/TITAN do). DTFDBundle has no unified state_dict, so use DTFD's
-        # own snapshot/restore instead of EarlyStoppingSurvival.
-        best_loss = float("inf")
-        best_snap: dict | None = None
-        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
-        epochs_no_improve = 0
+        # Protocol v4: the checkpoint is selected on the primary validation
+        # metric, the in-fold C-index; the val loss is reported beside it.
+        # DTFDBundle has no unified state_dict, so DTFD's own snapshot/restore
+        # holds the selected weights.
+        tracker = SelectionTracker(cfg.patience)
+        best_snap: dict | None = None  # None: nothing selected; final weights kept
 
         # (no timer reset here — the FOLD-TIMING CONTRACT timer above covers
         # setup too; a second assignment silently excluded it from
@@ -339,14 +339,9 @@ def train_dtfd_survival_fold(
                     f"    [DTFD-surv] epoch {epoch + 1}: "
                     f"val_loss={v_loss:.4f} val_c_index={v_cidx:.4f}"
                 )
-                if v_loss < best_loss:
-                    best_loss = v_loss
+                if tracker.observe(epoch, v_cidx):
                     best_snap = _snapshot(bundle)
-                    best_epoch = epoch
-                    epochs_no_improve = 0
-                else:
-                    epochs_no_improve += 1
-                default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
+                default_stop = cfg.early_stopping and tracker.early_stop
                 if policy_runtime.should_stop(
                     default_stop,
                     epoch=epoch,
@@ -358,7 +353,7 @@ def train_dtfd_survival_fold(
             _restore(bundle, best_snap)
         # A3: source=best when a val-selected snapshot was restored above,
         # source=final when the final weights were kept (no restore).
-        print(f"[selected] epoch={best_epoch} "
+        print(f"[selected] epoch={tracker.best_epoch} "
               f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
