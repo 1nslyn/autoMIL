@@ -197,8 +197,9 @@ class TestCellAttempts:
             (archive / node_id / "spec.json").write_text(
                 _spec(node_id, "c", seq, cap_refused=(node_id == "node_0006"), submitted_at=at,
                       axis=axis, role=role))
-            if node_id != "node_0003":
-                (archive / node_id / "result.json").write_text("{}")   # the daemon's terminal record
+            if node_id != "node_0003":                                   # the daemon's completion record
+                (adir / "orchestrator" / "completed").mkdir(exist_ok=True)
+                (adir / "orchestrator" / "completed" / f"{node_id}.json").write_text("{}")
         (queue / "node_0009.json").write_text(_spec("node_0009", "c", 6))   # queued
         (queue / "node_0010.json").write_text(_spec("node_0010", "other", 7))
         nodes = {
@@ -223,9 +224,20 @@ class TestCellAttempts:
         # the cap-refused spec, the pending proposal and the phantom do not
         assert attempts[2].status == "cancelled"
         # in flight = no terminal record yet: the launching node_0003 (archived,
-        # no result.json) and the queued node_0009
+        # no completion record) and the queued node_0009
         assert [a.node_id for a in attempts if not a.finished] == ["node_0003", "node_0009"]
         assert next_attempt_seq(attempts) == 7
+
+    def test_an_overlay_file_named_like_a_record_is_not_a_terminal_record(self, tmp_path):
+        """The daemon's completion record lives outside archive/<node>/; a
+        result.json an overlay carried into the archive finishes nothing."""
+        adir = tmp_path / "automil"
+        archive = adir / "orchestrator" / "archive"
+        (archive / "node_0002").mkdir(parents=True)
+        (archive / "node_0002" / "spec.json").write_text(_spec("node_0002", "c", 1))
+        (archive / "node_0002" / "result.json").write_text('{"status": "completed"}')
+        (attempt,) = cell_attempts(adir, {}, "c")
+        assert attempt.finished is False
 
     def test_a_cancelled_attempt_is_finished_once_cancel_archived_its_running_spec(self, tmp_path):
         """``automil cancel`` confirms the process dead and moves the running
@@ -395,10 +407,11 @@ def _launch(adir: Path, node: str) -> None:
 
 def _complete(adir: Path, node: str, status: str = "discard") -> None:
     """Simulate the daemon launching and finishing ``node``: the archived
-    spec, the terminal record (``result.json``) and a terminal graph node."""
+    spec, the completion record and a terminal graph node."""
     _launch(adir, node)
-    (adir / "orchestrator" / "archive" / node / "result.json").write_text(
-        json.dumps({"status": "completed" if status != "crash" else "crash"}))
+    (adir / "orchestrator" / "completed").mkdir(exist_ok=True)
+    (adir / "orchestrator" / "completed" / f"{node}.json").write_text(
+        json.dumps({"id": node, "status": "completed" if status != "crash" else "crash"}))
     graph = json.loads((adir / "graph.json").read_text())
     graph["nodes"][node]["type"] = "executed"
     graph["nodes"][node]["status"] = status

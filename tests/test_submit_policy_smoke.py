@@ -255,6 +255,18 @@ class TestARefusedSubmitLeavesNoOverlayBehind:
         assert not (adir / "orchestrator" / "queue" / "node_0001.json").exists()
         assert not (adir / "orchestrator" / "staging" / "node_0001").exists()
 
+    @pytest.mark.parametrize("path", ["result.json", "spec.json", "run.log", "certify/held_out.json",
+                                      "node_0001_running_spec.json"])
+    def test_an_overlay_may_not_carry_the_orchestrators_records(self, tmp_path, monkeypatch, path):
+        runner, adir = _project(tmp_path, monkeypatch, None)
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}")
+        refused = runner.invoke(main, ["submit", "--node", "node_0001", "--desc", "t",
+                                       "--files", "automil/variants/clam_mb/v0001.py", "--files", path])
+        assert refused.exit_code != 0 and "collides" in refused.output
+        assert not (adir / "orchestrator" / "queue" / "node_0001.json").exists()
+
     def test_a_launched_record_refuses_the_node_id(self, tmp_path, monkeypatch):
         """``archive/<node>/spec.json`` is the daemon's record of a charged
         launch; a submit against that id would erase it."""

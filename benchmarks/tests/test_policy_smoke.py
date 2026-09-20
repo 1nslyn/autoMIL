@@ -323,6 +323,39 @@ SYNC_ARMED_BY_STOP = HEADER.format(name="sync_armed_by_stop") + '''class SyncArm
         return bool(default)
 '''
 
+RESTORES_TIER2_IN_ZERO_GRAD = HEADER.format(name="restores_tier2") + '''class RestoresTier2(PolicyVariant):
+    """The rehearsal crash aimed at one role: weights restored in place inside
+    zero_grad for tier2 only, which DTFD calls between forward and backward."""
+
+    def wrap_optimizer_for(self, opt, *, role):
+        import torch
+        if role != "tier2":
+            return opt
+
+        class _Wrapped:
+            def __init__(self, inner):
+                self.inner = inner
+                self.raw = [p.detach().clone() for g in inner.param_groups for p in g["params"]]
+
+            @property
+            def param_groups(self):
+                return self.inner.param_groups
+
+            def zero_grad(self, *a, **kw):
+                with torch.no_grad():
+                    for raw, p in zip(self.raw, [p for g in self.inner.param_groups for p in g["params"]]):
+                        p.copy_(raw)
+                self.inner.zero_grad(*a, **kw)
+
+            def step(self, *a, **kw):
+                self.inner.step(*a, **kw)
+
+        return _Wrapped(opt)
+
+    def wrap_optimizer(self, opt):
+        return opt
+'''
+
 FORGETS_TIER2 = HEADER.format(name="forgets_tier2") + '''class ForgetsTier2(PolicyVariant):
     def wrap_optimizer(self, opt):
         return opt
@@ -424,6 +457,9 @@ class TestTheStoppingSeamIsJudgedByTaskFamily:
         assert _main(["--arm", "abmil", path]) == 1          # zero_grad between forward and backward
         err = capsys.readouterr().err
         assert "stopping seam" in err and "inplace" in err.lower() or "modified" in err.lower()
+        # the ABMIL survival adapter zeroes before the forward pass: legal there
+        assert _main(["--arm", "abmil", "--task-family", "survival", path]) == 0
+        assert _main(["--arm", "clam", "--task-family", "survival", path]) == 0
 
     def test_nnmil_survival_asks_from_epoch_two(self, tmp_path, capsys):
         path = str(_write(tmp_path, "stateful_from_zero", STATEFUL_FROM_EPOCH_ZERO))
@@ -459,6 +495,11 @@ class TestTheSchedulerSeamIsDTFDs:
         together; refused under DTFD's real order."""
         assert policy_smoke.main([str(_write(tmp_path, "captures", CAPTURES_IN_SCHEDULER))]) == 1
         assert "tier" in capsys.readouterr().err
+
+    def test_an_in_place_restore_aimed_at_tier2_is_refused(self, tmp_path, capsys):
+        assert _main(["--arm", "dtfd", str(_write(tmp_path, "restores_tier2", RESTORES_TIER2_IN_ZERO_GRAD))]) == 1
+        err = capsys.readouterr().err
+        assert "inplace" in err.lower() or "modified" in err.lower()
 
     def test_a_wrapper_that_forgets_tier2_is_refused_by_name(self, tmp_path, capsys):
         assert policy_smoke.main([str(_write(tmp_path, "forgets_tier2", FORGETS_TIER2))]) == 1

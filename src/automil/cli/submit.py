@@ -40,6 +40,18 @@ def _git_lines(git_root: Path, *args: str) -> list[str]:
     return result.stdout.strip().splitlines()
 
 
+#: Names the orchestrator writes at the root of archive/<node>/.
+_RESERVED_ARCHIVE_NAMES = frozenset({"spec.json", "result.json", "run.log", "certify.json"})
+
+
+def _is_reserved_archive_path(rel_path: str, node: str) -> bool:
+    parts = Path(rel_path).parts
+    if not parts:
+        return False
+    head = parts[0]
+    return head in _RESERVED_ARCHIVE_NAMES or head == "certify" or head == f"{node}_running_spec.json"
+
+
 @main.command()
 @click.option("--node", required=True, help="Node ID (e.g., node_0042)")
 @click.option("--desc", required=True, help="Experiment description")
@@ -411,6 +423,14 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         # Reject absolute paths and directory traversal
         if os.path.isabs(f) or ".." in Path(f).parts:
             raise click.ClickException(f"Invalid path (must be relative, no ..): {f}")
+        # The overlay lands in archive/<node>/, next to the records the
+        # daemon and `automil cancel` write there; an overlay file of the
+        # same name would be read as one of them.
+        if _is_reserved_archive_path(f, node):
+            raise click.ClickException(
+                f"Refusing to submit: overlay path {f!r} collides with the "
+                f"orchestrator's own archive record for {node}."
+            )
         src = git_root / f
         if not src.exists():
             # File was deleted - record as deletion

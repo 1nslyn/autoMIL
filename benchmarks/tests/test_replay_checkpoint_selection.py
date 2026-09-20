@@ -185,6 +185,18 @@ def test_only_the_recorded_reproduction_attempt_is_replayed(mod, tmp_path):
     assert [kind for kind, _ in mod.cell_logs(mod.load_cell(unrecorded))] == ["baseline"]
 
 
+def test_a_rerun_after_a_crash_replays_the_run_that_finished(mod):
+    """Baseline retries append to one run.log: the epochs of the run that
+    died are abandoned when a fresh epoch 0 starts, and the completed rerun
+    is what gets replayed. A backwards step to a later epoch is corruption."""
+    died = "[epoch 0] val_loss=0.9 val_auc=0.50\n[epoch 1] val_loss=0.8 val_auc=0.55\n"
+    fold = "[epoch 0] val_loss=0.7 val_auc=0.60\n[epoch 1] val_loss=0.6 val_auc=0.70\n[selected] epoch=0 source=best\n"
+    segments = mod.parse_segments((died + fold * 2).splitlines())
+    assert len(segments) == 2 and all(s.epochs[0][1]["val_auc"] == 0.60 for s in segments)
+    with pytest.raises(mod.InputError, match="without a \\[selected\\] line"):
+        mod.parse_segments("[epoch 0] val_auc=0.5\n[epoch 2] val_auc=0.5\n[epoch 1] val_auc=0.5\n".splitlines())
+
+
 def test_the_clam_floor_belongs_to_the_classification_arm_only(mod):
     """CLAM classification refuses to stop before epoch 50 (its vendored
     stopper's floor); CLAM survival runs the adapter's plain patience rule."""

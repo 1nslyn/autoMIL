@@ -16,8 +16,8 @@ ordered by the admission sequence ``automil submit`` mints under the lock
 (``metadata.attempt_seq``), so the position a submission was judged at is the
 position it keeps, whatever node ids the proposals carry and whatever the
 submitting host's clock says. An attempt is in flight until a terminal
-record exists: the daemon's ``orchestrator/archive/<node>/result.json``, or
-the running spec ``automil cancel`` moves into the archive once the process is
+record exists: the daemon's ``orchestrator/completed/<node>.json``, or the
+running spec ``automil cancel`` moves into the archive once the process is
 confirmed dead (the daemon reaps that later; if it is down at the time, never).
 The queue file and the running intent both have gaps (the daemon deletes the
 queue file before it publishes the intent); the terminal records have none.
@@ -181,12 +181,13 @@ def _cell_specs(adir: Path, cell_id: str) -> dict[str, dict]:
     return specs
 
 
-def _finished(archive: Path, node_id: str) -> bool:
-    """A terminal record exists: the daemon's result, or the running spec
+def _finished(orchestrator: Path, node_id: str) -> bool:
+    """A terminal record exists: the daemon's completion record
+    (``completed/<node>.json``, written by every path that finalizes an
+    attempt and never part of an overlay), or the running spec
     ``automil cancel`` archived after confirming the process dead."""
-    node_dir = archive / node_id
-    return (node_dir / "result.json").is_file() or \
-        (node_dir / f"{node_id}_running_spec.json").is_file()
+    return (orchestrator / "completed" / f"{node_id}.json").is_file() or \
+        (orchestrator / "archive" / node_id / f"{node_id}_running_spec.json").is_file()
 
 
 def _attempt_seq(node_id: str, spec: Mapping) -> int:
@@ -206,7 +207,7 @@ def cell_attempts(adir: Path, nodes: Mapping[str, Mapping], cell_id: str) -> tup
     (stamped at admission from the proposal, written once), the status from
     ``nodes`` (a ``graph.json`` node mapping, the framework's verdict) and
     ``finished`` from the terminal records."""
-    archive = adir / "orchestrator" / "archive"
+    orchestrator = adir / "orchestrator"
     attempts = []
     for node_id, spec in _cell_specs(adir, cell_id).items():
         node = nodes.get(node_id) if isinstance(nodes.get(node_id), Mapping) else {}
@@ -214,7 +215,7 @@ def cell_attempts(adir: Path, nodes: Mapping[str, Mapping], cell_id: str) -> tup
         attempts.append(Attempt(
             node_id=node_id, axis=meta.get("axis"), role=meta.get("role"),
             status=node.get("status"), seq=_attempt_seq(node_id, spec),
-            finished=_finished(archive, node_id),
+            finished=_finished(orchestrator, node_id),
         ))
     return tuple(sorted(attempts, key=lambda a: (a.seq, a.node_id)))
 

@@ -137,14 +137,21 @@ def _parse_token(token: str) -> tuple[str, float]:
 
 
 def parse_segments(lines: Iterable[str]) -> tuple[Segment, ...]:
-    """Split a run.log into fold segments, each closed by its [selected] line."""
+    """Split a run.log into fold segments, each closed by its [selected] line.
+
+    A baseline that crashed and was rerun appends to the same log, so a
+    fresh ``[epoch 0]`` after an unclosed segment starts over: the abandoned
+    epochs belong to the run that died. Any other backwards step is corruption.
+    """
     segments: list[Segment] = []
     pending: list[tuple[int, dict[str, float]]] = []
     for raw in lines:
         line = raw.rstrip("\r\n")
         if epoch_match := EPOCH_LINE.match(line):
             index = int(epoch_match.group(1))
-            if pending and index <= pending[-1][0]:
+            if pending and index == 0:
+                pending = []
+            elif pending and index <= pending[-1][0]:
                 raise InputError(f"epoch {index} follows epoch {pending[-1][0]} without a [selected] line")
             pending.append((index, dict(_parse_token(t) for t in (epoch_match.group(2) or "").split())))
         elif selected_match := SELECTED_LINE.match(line):

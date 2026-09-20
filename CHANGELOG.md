@@ -45,13 +45,15 @@ autoMIL: F2-readiness framework refactor.
   census is the specs on disk, queue read before archive, in the admission
   order submit mints under its lock (`metadata.attempt_seq`, which the
   freeze records and the exported history follows), an attempt is in flight until
-  a terminal record exists (the daemon's result or the running spec
-  `automil cancel` archived), and a fully submitted cell takes no more);
+  a terminal record exists (the daemon's completion record or the running
+  spec `automil cancel` archived; an overlay may not carry a file named like
+  either), and a fully submitted cell takes no more);
   and every policy file is smoke-run through the trainers' three call
   orders (reading `param_groups` as nnMIL does, nnMIL's order also through
   a `GradScaler`), the stopping seam exactly as the cell's arm drives it
   (its metrics dict, its first validated epoch, its own call order between
-  two decisions, on DTFD after the tiers and their schedulers exist) and
+  two decisions for the task family, on DTFD after the tiers and their
+  schedulers exist) and
   DTFD's wrap order (both tier optimizers, then
   both `MultiStepLR` schedulers, before either trains), at submit
   (`registry.policy_smoke`, `autobench.pipeline.policy_smoke --task-family

@@ -38,12 +38,19 @@ STEPS_PER_ORDER = 3
 ROLES = ("tier1", "tier2")
 TASK_FAMILIES = ("classification", "survival")
 ARMS = ("abmil", "clam", "dtfd", "nnmil", "titan")
-#: The call order each arm's trainer uses between two stopping decisions.
+#: The call order each arm's CLASSIFICATION trainer uses between two stopping
+#: decisions; every non-DTFD survival adapter zeroes before the forward pass.
 ARM_ORDER = {
     "titan": CALL_ORDERS[0], "nnmil": CALL_ORDERS[0],
     "abmil": CALL_ORDERS[1], "dtfd": CALL_ORDERS[1],
     "clam": CALL_ORDERS[2],
 }
+
+
+def _stop_order(arm: str | None, family: str) -> str:
+    if family == "survival" and arm != "dtfd":
+        return CALL_ORDERS[0]
+    return ARM_ORDER.get(arm, CALL_ORDERS[0])
 
 
 class SmokeFailure(Exception):
@@ -160,8 +167,11 @@ def _dtfd_tiers(runtime, features, labels):
     import torch
     from torch import nn
 
+    # Two layers on each tier, so a weight the backward pass needs is saved
+    # on both: an in-place change between forward and backward trips
+    # autograd's version check whichever role it targets.
     tier1 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2))
-    tier2 = nn.Linear(4, 3)
+    tier2 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 3))
     raws = [torch.optim.Adam(module.parameters(), lr=1e-2) for module in (tier1, tier2)]
     optimizers = [runtime.wrap_optimizer(raw, role=role) for role, raw in zip(ROLES, raws)]
     schedulers = [
@@ -215,7 +225,7 @@ def _run_stopping(policy_cls: type, arm: str | None, family: str) -> None:
         step = lambda: _step_dtfd_tiers(tiers, features, labels)  # noqa: E731
         loss_value = lambda: 0.7  # noqa: E731
     else:
-        order = ARM_ORDER.get(arm, CALL_ORDERS[0])
+        order = _stop_order(arm, family)
         optimizer = runtime.wrap_optimizer(torch.optim.Adam(model.parameters(), lr=1e-2))
         criterion = nn.CrossEntropyLoss()
         last = {"loss": 0.7}
