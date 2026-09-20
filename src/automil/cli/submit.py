@@ -793,7 +793,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     # cap.phasing: fixed batches and the phasing rule, refused before the
     # queue write so a refusal is free (the budget charges at launch).
     from automil.cells.phasing import (  # noqa: E402
-        PhasingPolicy, cell_attempts, next_attempt_seq, phasing_refusal,
+        DECLARATIONS, PhasingPolicy, cell_attempts, next_attempt_seq, phasing_refusal,
         submission_lock,
     )
     try:
@@ -801,11 +801,13 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    def _phasing_gate() -> int | None:
+    def _phasing_gate() -> dict | None:
         """Refuse a submission that breaks the declared phasing; runs under the
         submission lock, right before the queue write, on a fresh read of the
-        graph and the specs on disk. Returns the admission sequence number the
-        spec carries (``None`` without a phasing declaration)."""
+        graph and the specs on disk. Returns the metadata the spec carries for
+        the census: the admission sequence and the proposal's declarations
+        (axis, role, predicted delta), which a result can then never rewrite.
+        ``None`` without a phasing declaration."""
         if _phasing is None:
             return None
         _fresh = graph_json
@@ -829,7 +831,10 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         )
         if _refusal is not None:
             raise click.ClickException(f"Refusing to submit {node}: {_refusal}")
-        return next_attempt_seq(_attempts)
+        return {
+            "attempt_seq": next_attempt_seq(_attempts),
+            **{key: _candidate_meta[key] for key in DECLARATIONS if key in _candidate_meta},
+        }
 
     # Write spec to queue
     spec = {
@@ -884,9 +889,9 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     try:
         with submission_lock(adir):
             _refuse_if_held()
-            _seq = _phasing_gate()
-            if _seq is not None:
-                spec["metadata"]["attempt_seq"] = _seq
+            _stamp = _phasing_gate()
+            if _stamp is not None:
+                spec["metadata"] = {**spec["metadata"], **_stamp}
             if archive.exists():
                 shutil.rmtree(archive)
             archive.parent.mkdir(parents=True, exist_ok=True)

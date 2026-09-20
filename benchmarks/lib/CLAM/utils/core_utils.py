@@ -68,12 +68,20 @@ class EarlyStopping:
         self.verbose = verbose
         self.counter = 0
         self.best_score = None
-        self.early_stop = False
         self.best_epoch = -1  # epoch of the checkpoint currently saved
+        self._epoch = -1      # last epoch observed (the stop_epoch floor reads it)
+
+    @property
+    def early_stop(self) -> bool:
+        """Patience exhausted right now, past the stop_epoch floor. Derived,
+        never latched: a stop a policy suppressed must not stick once the
+        AUC improves again (the counter resets, and so does this)."""
+        return self.counter >= self.patience and self._epoch > self.stop_epoch
 
     def __call__(self, epoch, val_auc, model, ckpt_name = 'checkpoint.pt'):
 
         score = val_auc
+        self._epoch = epoch
 
         # A non-finite val AUC must never become (or defend) the checkpoint:
         # with a finite best, NaN fails `score <= best` and the else branch
@@ -85,8 +93,6 @@ class EarlyStopping:
         if self.best_score is None and score == float('-inf'):
             self.counter += 1
             print(f'EarlyStopping: non-finite val AUC at epoch {epoch}; no checkpoint saved ({self.counter}/{self.patience})')
-            if self.counter >= self.patience and epoch > self.stop_epoch:
-                self.early_stop = True
         elif self.best_score is None:
             self.best_score = score
             self.best_epoch = epoch
@@ -96,8 +102,6 @@ class EarlyStopping:
             # Not strictly better (a tie keeps the earlier epoch).
             self.counter += 1
             print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
-            if self.counter >= self.patience and epoch > self.stop_epoch:
-                self.early_stop = True
         else:
             previous = self.best_score
             self.best_score = score

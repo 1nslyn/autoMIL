@@ -44,16 +44,13 @@ ARM_PATIENCE: Mapping[str, int] = {"clam": 20, "abmil": 20, "dtfd": 20, "titan":
 #: CLAM classification's vendored stopper refuses to stop before epoch 50; the
 #: CLAM survival adapter runs the plain patience rule like every other arm.
 CLAM_CLASSIFICATION_FLOOR = 50
-LOG_KINDS = (  # (glob under the cell root, fixed kind or None for the node directory name)
-    ("baseline-execution/archive/run.log", "baseline"),
-    ("baseline-reproduction/attempt-*/archive/run.log", "baseline-reproduction"),
-    ("automil/orchestrator/archive/node_*/run.log", None),
-)
+BASELINE_LOG = "baseline-execution/archive/run.log"
+NODE_LOGS = "automil/orchestrator/archive/node_*/run.log"
 COLUMNS = (
     "cell_id", "arm", "task_family", "kind", "fold", "epochs_run", "old_epoch", "new_epoch",
     "primary@old", "primary@new", "loss@old", "loss@new", "changed", "would_stop_epoch",
     "later_max_ignored", "n_epochs_at_new_max", "n_absent_metric_epochs",
-    "n_zero_sentinel_epochs", "old_rule_recomputed", "log",
+    "n_zero_sentinel_epochs", "old_rule_recomputed", "complete", "log",
 )
 ARM_KIND_HEADER = (
     "arm", "kind", "folds", "changed", "median shift", "max shift", "mean primary new-old",
@@ -89,6 +86,14 @@ class Cell:
     cell_id: str
     arm: str
     task_family: str
+    #: Nodes the framework recorded as completed (graph status keep or
+    #: discard); a crashed run's log may still carry every ``[selected]``
+    #: line, since the markers precede the final evaluation.
+    completed_nodes: frozenset[str]
+    baseline_completed: bool
+    #: The reproduction attempt the campaign state names (each attempt is a
+    #: separate run; only the recorded one carries the gate's verdict).
+    reproduction_archive: str | None
 
 
 @dataclass(frozen=True)
@@ -149,19 +154,52 @@ def parse_segments(lines: Iterable[str]) -> tuple[Segment, ...]:
     return tuple(segments)
 
 
+def _read_json(path: Path, default):
+    if not path.is_file():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise InputError(f"{path}: {exc!r}") from None
+
+
 def load_cell(root: Path) -> Cell:
     meta_path = root / "automil" / "campaign_cell.json"
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        return Cell(root, str(meta["cell_id"]), str(meta["framework"]), str(meta["task_family"]))
+        cell_id, arm, family = str(meta["cell_id"]), str(meta["framework"]), str(meta["task_family"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise InputError(f"{meta_path}: {exc!r}") from None
-
-
-def cell_logs(root: Path) -> tuple[tuple[str, Path], ...]:
-    return tuple(
-        (kind or path.parent.name, path) for pattern, kind in LOG_KINDS for path in sorted(root.glob(pattern))
+    nodes = (_read_json(root / "automil" / "graph.json", {}).get("nodes") or {})
+    completed = frozenset(
+        node_id for node_id, node in nodes.items()
+        if isinstance(node, dict) and node.get("status") in ("keep", "discard")
     )
+    state = _read_json(root / "campaign_state.json", {})
+    baseline_completed = (state.get("baseline") or {}).get("result_status") == "completed"
+    reproduction = (state.get("baseline_reproduction") or {}).get("archive")
+    return Cell(root, cell_id, arm, family, completed, baseline_completed,
+                str(reproduction) if reproduction else None)
+
+
+def cell_logs(cell: Cell) -> tuple[tuple[str, Path], ...]:
+    """``(kind, log)`` for the baseline, the recorded reproduction attempt and
+    every node archive under the cell root."""
+    logs = [("baseline", cell.root / BASELINE_LOG)]
+    if cell.reproduction_archive:
+        logs.append(("baseline-reproduction", cell.root / cell.reproduction_archive / "archive" / "run.log"))
+    logs.extend((path.parent.name, path) for path in sorted(cell.root.glob(NODE_LOGS)))
+    return tuple((kind, path) for kind, path in logs if path.is_file())
+
+
+def run_completed(cell: Cell, kind: str) -> bool:
+    """Whether the framework recorded the run as completed: the campaign
+    state for the baseline and its reproduction, the graph for a node."""
+    if kind == "baseline":
+        return cell.baseline_completed
+    if kind == "baseline-reproduction":
+        return True
+    return kind in cell.completed_nodes
 
 
 def stop_rule(arm: str, task_family: str, patience_override: int | None) -> StopRule:
@@ -220,6 +258,7 @@ def fold_row(cell: Cell, kind: str, log: Path, fold: int, segment: Segment, rule
         "n_absent_metric_epochs": sum(1 for o in observations if math.isnan(o.value)),
         "n_zero_sentinel_epochs": sum(1 for o in observations if o.zero_sentinel),
         "old_rule_recomputed": first_loss_minimum(observations),
+        "complete": run_completed(cell, kind),
         "log": str(log.relative_to(cell.root)),
     }
 
@@ -243,7 +282,7 @@ def replay_cells(roots: Sequence[Path], patience_override: int | None) -> tuple[
         except InputError as exc:
             skipped.append(Skipped(root, str(exc)))
             continue
-        for kind, path in cell_logs(root):
+        for kind, path in cell_logs(cell):
             try:
                 fold_rows = replay_log(cell, kind, path, rule)
             except InputError as exc:
@@ -337,22 +376,10 @@ FOLDS_REQUIRED = {
 }
 
 
-def _latest_complete_reproduction(rows: Sequence[dict]) -> list[dict]:
-    """The fold rows of the latest reproduction attempt that ran every
-    discovery fold: attempts are separate runs under
-    ``baseline-reproduction/attempt-N/`` and must never be pooled."""
-    complete = [
-        group for group in _grouped(rows, lambda row: row["log"]).values()
-        if len(group) == FOLDS_REQUIRED["baseline-reproduction"]
-    ]
-    if not complete:
-        return []
-    return max(complete, key=lambda group: int(re.search(r"attempt-(\d+)", group[0]["log"]).group(1)))
-
-
 def cell_summary(cell_id: str, rows: Sequence[dict]) -> tuple[object, ...]:
+    rows = [row for row in rows if row["complete"]]     # a killed or crashed run never ranks
     baseline = [row for row in rows if row["kind"] == "baseline"]
-    repro = _latest_complete_reproduction([row for row in rows if row["kind"] == "baseline-reproduction"])
+    repro = [row for row in rows if row["kind"] == "baseline-reproduction"]
     nodes = _grouped([row for row in rows if kind_group(row["kind"]) == "node"], lambda row: row["kind"])
     n_folds = FOLDS_REQUIRED["node"]
     means = {node: (fold_mean(r, "primary@old", n_folds), fold_mean(r, "primary@new", n_folds)) for node, r in nodes.items()}

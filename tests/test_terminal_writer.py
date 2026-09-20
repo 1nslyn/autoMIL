@@ -350,6 +350,8 @@ def test_result_metadata_cannot_supply_the_fold_evidence(tmp_path: Path) -> None
     from automil.terminal_writer import write_terminal_state
 
     graph, node_id = _make_graph(tmp_path)
+    graph.nodes[node_id]["metadata"] = {"axis": "lr", "predicted_delta": 0.01}   # pre-registered
+    graph.save()
     completed_dir, archive_dir = _make_dirs(tmp_path, node_id)
     claimed = [
         {"fold_index": i, "primary_value": 0.85,
@@ -360,7 +362,8 @@ def test_result_metadata_cannot_supply_the_fold_evidence(tmp_path: Path) -> None
         "status": "completed",
         "primary_value": 0.85,
         "metrics": {"val_auc": 0.85, "val_bacc": 0.40},
-        "metadata": {"validation_folds": claimed, "budget_killed": False},
+        "metadata": {"validation_folds": claimed, "budget_killed": False,
+                     "axis": "scheduler", "role": "neighbour", "predicted_delta": 0.3},
     }
     write_terminal_state(
         node_id=node_id, result=result, graph=graph,
@@ -371,5 +374,7 @@ def test_result_metadata_cannot_supply_the_fold_evidence(tmp_path: Path) -> None
     node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(node_id)
     assert "validation_folds" not in node["metadata"]
     assert node["metadata"]["budget_killed"] is False        # the rest still propagates
+    assert node["metadata"]["axis"] == "lr" and "role" not in node["metadata"]
+    assert node["metadata"]["predicted_delta"] == 0.01       # the pre-registration stands
     assert node_fold_metric_values(node, "val_bacc") is None
     assert node_fold_primary_values(node) is None

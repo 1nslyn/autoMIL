@@ -169,8 +169,11 @@ class TestPhasingRefusal:
         assert refuse is not None and "all 5 attempts" in refuse
 
 
-def _spec(node_id, cell_id, seq, *, cap_refused=False, submitted_at="2026-09-20T00:00:00+00:00"):
-    meta = {"cell_id": cell_id, "attempt_seq": seq}
+def _spec(node_id, cell_id, seq, *, cap_refused=False, submitted_at="2026-09-20T00:00:00+00:00",
+          axis="lr", role=None):
+    meta = {"cell_id": cell_id, "attempt_seq": seq, "axis": axis}
+    if role:
+        meta["role"] = role
     if cap_refused:
         meta["cap_refused"] = True
     return json.dumps({"id": node_id, "submitted_at": submitted_at, "metadata": meta})
@@ -184,21 +187,25 @@ class TestCellAttempts:
         queue.mkdir(parents=True)
         # launched (archived spec), in an order that differs from the node ids
         # AND from the submitted_at stamps (a skewed clock must not reorder)
-        for node_id, seq, at in (("node_0003", 1, "2026-09-20T00:00:09+00:00"),
-                                 ("node_0002", 2, "2026-09-20T00:00:01+00:00"),
-                                 ("node_0005", 3, "2026-09-20T00:00:02+00:00"),
-                                 ("node_0006", 4, "2026-09-20T00:00:03+00:00"),
-                                 ("node_0008", 5, "2026-09-20T00:00:04+00:00")):
+        for node_id, seq, at, axis, role in (
+                ("node_0003", 1, "2026-09-20T00:00:09+00:00", "lr", None),
+                ("node_0002", 2, "2026-09-20T00:00:01+00:00", "wd", "neighbour"),
+                ("node_0005", 3, "2026-09-20T00:00:02+00:00", "lr", None),
+                ("node_0006", 4, "2026-09-20T00:00:03+00:00", "lr", None),
+                ("node_0008", 5, "2026-09-20T00:00:04+00:00", "dropout", None)):
             (archive / node_id).mkdir(parents=True)
             (archive / node_id / "spec.json").write_text(
-                _spec(node_id, "c", seq, cap_refused=(node_id == "node_0006"), submitted_at=at))
+                _spec(node_id, "c", seq, cap_refused=(node_id == "node_0006"), submitted_at=at,
+                      axis=axis, role=role))
             if node_id != "node_0003":
                 (archive / node_id / "result.json").write_text("{}")   # the daemon's terminal record
         (queue / "node_0009.json").write_text(_spec("node_0009", "c", 6))   # queued
         (queue / "node_0010.json").write_text(_spec("node_0010", "other", 7))
         nodes = {
             "node_0001": {"cell_id": "c", "bootstrapped": True, "status": "keep", "metadata": {}},
-            "node_0002": {"cell_id": "c", "status": "keep", "metadata": {"axis": "wd", "role": "neighbour"}},
+            # the node's metadata claims another axis (a result rewrote it):
+            # the census reads the spec, stamped at admission
+            "node_0002": {"cell_id": "c", "status": "keep", "metadata": {"axis": "scheduler", "role": None}},
             "node_0003": {"cell_id": "c", "status": "running", "metadata": {"axis": "lr"}},
             "node_0004": {"cell_id": "c", "status": "pending", "metadata": {"axis": "lr"}},   # proposed only
             "node_0005": {"cell_id": "c", "status": "cancelled", "metadata": {"axis": "lr", "cancel_reason": "cli"}},

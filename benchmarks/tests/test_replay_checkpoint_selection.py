@@ -47,14 +47,35 @@ def mod():
     return module
 
 
-def _cell(root: Path, arm: str = "nnmil", task_family: str = "binary", log: str = FOLD_0 + FOLD_1) -> Path:
+def _cell(root: Path, arm: str = "nnmil", task_family: str = "binary", log: str = FOLD_0 + FOLD_1,
+          *, reproduction: str | None = None) -> Path:
     (root / "automil").mkdir(parents=True)
     (root / "automil" / "campaign_cell.json").write_text(json.dumps(
         {"cell_id": root.name, "framework": arm, "task_type": "classification", "task_family": task_family}
     ))
+    state = {"baseline": {"result_status": "completed"}}
+    if reproduction:
+        state["baseline_reproduction"] = {"archive": reproduction}
+    (root / "campaign_state.json").write_text(json.dumps(state))
     (root / "baseline-execution" / "archive").mkdir(parents=True)
     (root / "baseline-execution" / "archive" / "run.log").write_text(log)
     return root
+
+
+def _node(root: Path, node_id: str, log: str, status: str = "discard") -> None:
+    """A node archive with its run log and the framework's verdict in graph.json."""
+    archive = root / "automil" / "orchestrator" / "archive" / node_id
+    archive.mkdir(parents=True)
+    (archive / "run.log").write_text(log)
+    graph_path = root / "automil" / "graph.json"
+    graph = json.loads(graph_path.read_text()) if graph_path.exists() else {"nodes": {}}
+    graph["nodes"][node_id] = {"status": status}
+    graph_path.write_text(json.dumps(graph))
+
+
+def _all_rows(mod, root: Path, rule):
+    cell = mod.load_cell(root)
+    return [row for kind, log in mod.cell_logs(cell) for row in mod.replay_log(cell, kind, log, rule)]
 
 
 def _rows(mod, root: Path, rule):
@@ -113,56 +134,51 @@ def test_replay_stops_where_the_v4_trainer_would_and_flags_a_later_maximum(mod, 
     assert (fold_0["would_stop_epoch"], fold_0["new_epoch"], fold_0["later_max_ignored"]) == (3, 1, False)
 
 
-def test_a_killed_candidate_with_fewer_folds_than_the_stage_never_ranks_as_winner(mod, tmp_path):
-    """A discovery attempt killed after two of three fold segments must not
-    become the cell's best node on its two high folds; the baseline (all
-    split folds) and a complete candidate are the only ranked entries."""
+def test_a_killed_or_crashed_candidate_never_ranks_as_winner(mod, tmp_path):
+    """A discovery attempt killed after two of three fold segments, or one
+    the framework recorded as crashed (a crash in the final evaluation
+    leaves every ``[selected]`` line in the log), must not become the cell's
+    best node; the required fold count comes from the stage, never from the
+    longest log."""
     fold = "[epoch 0] val_loss=0.5 val_auc={v}\n[selected] epoch=0 source=best\n"
     root = _cell(tmp_path / "k", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
-    nodes = root / "automil" / "orchestrator" / "archive"
-    (nodes / "node_0002").mkdir(parents=True)
-    (nodes / "node_0002" / "run.log").write_text(fold.format(v=0.99) * 2)          # killed
-    (nodes / "node_0003").mkdir(parents=True)
-    (nodes / "node_0003" / "run.log").write_text(fold.format(v=0.70) * mod.FOLDS_REQUIRED["node"])
+    n = mod.FOLDS_REQUIRED["node"]
+    _node(root, "node_0002", fold.format(v=0.99) * 2)                       # killed mid-run
+    _node(root, "node_0003", fold.format(v=0.70) * n)                       # complete
+    _node(root, "node_0004", fold.format(v=0.98) * n, status="crash")       # crashed after the folds
     cell = mod.load_cell(root)
-    rows = [row for kind, log in mod.cell_logs(root)
-            for row in mod.replay_log(cell, kind, log, mod.StopRule(patience=10))]
-    summary = mod.cell_summary(cell.cell_id, rows)
+    summary = mod.cell_summary(cell.cell_id, _all_rows(mod, root, mod.StopRule(patience=10)))
     assert summary[1] == pytest.approx(0.60)          # baseline old-rule mean
     assert summary[5] == "node_0003" and summary[8] == "node_0003"
-    # a cell whose every candidate was killed has no best node at all: the
-    # required count comes from the stage, never from the longest log
+    # a cell whose every candidate was killed or crashed has no best node at all
     orphaned = _cell(tmp_path / "o", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
-    killed = orphaned / "automil" / "orchestrator" / "archive" / "node_0002"
-    killed.mkdir(parents=True)
-    (killed / "run.log").write_text(fold.format(v=0.99) * 2)
+    _node(orphaned, "node_0002", fold.format(v=0.99) * 2)
+    _node(orphaned, "node_0003", fold.format(v=0.99) * n, status="crash")
     cell = mod.load_cell(orphaned)
-    rows = [row for kind, log in mod.cell_logs(orphaned)
-            for row in mod.replay_log(cell, kind, log, mod.StopRule(patience=10))]
-    summary = mod.cell_summary(cell.cell_id, rows)
+    summary = mod.cell_summary(cell.cell_id, _all_rows(mod, orphaned, mod.StopRule(patience=10)))
     assert summary[5] == "" and summary[8] == ""
 
 
-def test_reproduction_attempts_are_never_pooled(mod, tmp_path):
-    """Two complete reproduction attempts are two runs: the summary reports
-    the latest complete one, and an interrupted attempt cannot complete an
-    earlier one's fold count."""
+def test_only_the_recorded_reproduction_attempt_is_replayed(mod, tmp_path):
+    """Reproduction attempts are separate runs under random attempt names;
+    the campaign state names the one that carries the gate's verdict, and
+    the others (earlier, interrupted or later) are never pooled with it."""
     fold = "[epoch 0] val_loss=0.5 val_auc={v}\n[selected] epoch=0 source=best\n"
-    root = _cell(tmp_path / "r", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
     n = mod.FOLDS_REQUIRED["baseline-reproduction"]
-    for attempt, (v, folds) in enumerate(((0.70, n), (0.80, n), (0.99, n - 1)), start=1):
-        archive = root / "baseline-reproduction" / f"attempt-{attempt}" / "archive"
+    root = _cell(tmp_path / "r", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"],
+                 reproduction="baseline-reproduction/attempt-y_0c3dtr")
+    for name, (v, folds) in {"attempt-86_4_66s": (0.70, n), "attempt-y_0c3dtr": (0.80, n),
+                             "attempt-zz": (0.99, n - 1)}.items():
+        archive = root / "baseline-reproduction" / name / "archive"
         archive.mkdir(parents=True)
         (archive / "run.log").write_text(fold.format(v=v) * folds)
     cell = mod.load_cell(root)
-    rows = [row for kind, log in mod.cell_logs(root)
-            for row in mod.replay_log(cell, kind, log, mod.StopRule(patience=10))]
-    summary = mod.cell_summary(cell.cell_id, rows)
-    assert summary[3] == pytest.approx(0.80)      # attempt-2: the latest complete one
-    (root / "baseline-reproduction" / "attempt-2").rename(root / "baseline-reproduction" / "attempt-10")
-    rows = [row for kind, log in mod.cell_logs(root)
-            for row in mod.replay_log(cell, kind, log, mod.StopRule(patience=10))]
-    assert mod.cell_summary(cell.cell_id, rows)[3] == pytest.approx(0.80)   # numeric, not lexical
+    logs = dict(mod.cell_logs(cell))
+    assert logs["baseline-reproduction"] == root / "baseline-reproduction/attempt-y_0c3dtr/archive/run.log"
+    summary = mod.cell_summary(cell.cell_id, _all_rows(mod, root, mod.StopRule(patience=10)))
+    assert summary[3] == pytest.approx(0.80)
+    unrecorded = _cell(tmp_path / "u", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
+    assert [kind for kind, _ in mod.cell_logs(mod.load_cell(unrecorded))] == ["baseline"]
 
 
 def test_the_clam_floor_belongs_to_the_classification_arm_only(mod):

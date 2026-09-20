@@ -506,7 +506,8 @@ def test_audit_rejects_edited_phasing_and_policy_smoke(tmp_path):
         if json.loads((root / "campaign_cell.json").read_text())["task_family"] == "survival"
     )
     smoke = yaml.safe_load((survival / "config.yaml").read_text())["registry"]["policy_smoke"]
-    assert smoke["command"][-2:] == ["--task-family", "survival"]
+    framework = json.loads((survival / "campaign_cell.json").read_text())["framework"]
+    assert smoke["command"][-4:] == ["--task-family", "survival", "--arm", framework]
 
     def widen(config):
         config["cap"]["phasing"]["batches"] = [30]
@@ -516,7 +517,7 @@ def test_audit_rejects_edited_phasing_and_policy_smoke(tmp_path):
     restore()
 
     def retarget(config):
-        config["registry"]["policy_smoke"]["command"][-1] = "classification"
+        config["registry"]["policy_smoke"]["command"][-3] = "classification"
     restore = _edit(survival, retarget)
     with pytest.raises(CampaignManifestError, match="policy smoke drift"):
         audit_materialized_campaign(roots=roots, manifest_path=manifest_path, repo_root=fake_repo)

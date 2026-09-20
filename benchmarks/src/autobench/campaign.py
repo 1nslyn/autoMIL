@@ -982,15 +982,17 @@ def _task_block(cell: Mapping[str, Any], dataset_raw: Mapping[str, Any]) -> dict
     }
 
 
-def _policy_smoke_for_cell(registry: Mapping[str, Any] | None, task_family: str) -> dict | None:
+def _policy_smoke_for_cell(
+    registry: Mapping[str, Any] | None, task_family: str, framework: str,
+) -> dict | None:
     """The cohort template's ``registry.policy_smoke`` with the cell's task
-    family appended, so the harness judges the stopping seam by the metrics
-    the cell's trainers pass; ``None`` when the template declares none."""
+    family and arm appended, so the harness drives the stopping seam exactly
+    as the cell's trainer does; ``None`` when the template declares none."""
     smoke = (registry or {}).get("policy_smoke")
     if not isinstance(smoke, dict) or not isinstance(smoke.get("command"), list):
         return None
     family = "survival" if task_family == "survival" else "classification"
-    return {**smoke, "command": [*smoke["command"], "--task-family", family]}
+    return {**smoke, "command": [*smoke["command"], "--task-family", family, "--arm", framework]}
 
 
 def materialize_discovery_cells(
@@ -1185,7 +1187,7 @@ def materialize_discovery_cells(
         # The policy smoke judges the stopping seam by the metrics the cell's
         # trainers pass, so the harness learns the task family here (the
         # template is per cohort; a cohort carries both families).
-        smoke = _policy_smoke_for_cell(config.get("registry"), cell["task_family"])
+        smoke = _policy_smoke_for_cell(config.get("registry"), cell["task_family"], cell["framework"])
         if smoke is not None:
             config["registry"]["policy_smoke"] = smoke
         config["activity"] = {"exporter_port": exporter_port}
@@ -1385,7 +1387,7 @@ def audit_materialized_campaign(
                 f"{cell_id}: cannot read policy template: {exc}"
             ) from exc
         if (config.get("registry") or {}).get("policy_smoke") != _policy_smoke_for_cell(
-            _template.get("registry"), cell["task_family"],
+            _template.get("registry"), cell["task_family"], cell["framework"],
         ):
             raise CampaignManifestError(f"{cell_id}: policy smoke drift")
         if (config.get("cap") or {}).get(

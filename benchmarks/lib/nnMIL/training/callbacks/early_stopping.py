@@ -48,7 +48,6 @@ class EarlyStopping:
         self.verbose = verbose
         self.counter = 0
         self.best_score = None
-        self.early_stop = False
         self.save_dir = save_dir
         self.model_type = model_type
         self.logger = logger
@@ -68,6 +67,13 @@ class EarlyStopping:
         elif self.verbose:
             print(msg)
 
+    @property
+    def early_stop(self) -> bool:
+        """Patience exhausted right now. Derived from the counter, never
+        latched: a stop a policy suppressed must not stick once the metric
+        improves again (the counter resets, and so does this)."""
+        return self.counter >= self.patience
+
     def __call__(self, val_auc, model, epoch=None):
         current_epoch = self._epochs_seen if epoch is None else epoch
         self._epochs_seen += 1
@@ -82,8 +88,6 @@ class EarlyStopping:
             # Count toward patience; an all-non-finite run ends with no
             # checkpoint at all rather than certifying epoch-0 garbage.
             self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
             self._log(f'EarlyStopping: non-finite VAL_AUC at epoch {current_epoch}; '
                       f'no checkpoint saved ({self.counter}/{self.patience})')
             return
@@ -101,7 +105,6 @@ class EarlyStopping:
             self._log(f'EarlyStopping counter: {self.counter}/{self.patience} '
                       f'(VAL_AUC: {score:.4f} <= best {self.best_score:.4f})')
             if self.counter >= self.patience:
-                self.early_stop = True
                 self._log(f'Early stopping triggered! No improvement for {self.patience} epochs.')
         else:
             old_score = self.best_score
@@ -260,7 +263,6 @@ class EarlyStoppingSurvival:
         self.verbose = verbose
         self.counter = 0
         self.best_score = None
-        self.early_stop = False
         self.save_dir = save_dir
         self.model_type = model_type
         self.logger = logger
@@ -279,6 +281,13 @@ class EarlyStoppingSurvival:
         elif self.verbose:
             print(msg)
 
+    @property
+    def early_stop(self) -> bool:
+        """Patience exhausted right now. Derived from the counter, never
+        latched: a stop a policy suppressed must not stick once the metric
+        improves again (the counter resets, and so does this)."""
+        return self.counter >= self.patience
+
     def __call__(self, val_c_index, model, epoch=None):
         current_epoch = self._epochs_seen if epoch is None else epoch
         self._epochs_seen += 1
@@ -293,8 +302,6 @@ class EarlyStoppingSurvival:
             # Non-finite first observation: nothing worth saving; count toward
             # patience so an all-degenerate run ends with no checkpoint.
             self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
             self._log(f'EarlyStopping: degenerate C-index at epoch {current_epoch}; '
                       f'no checkpoint saved ({self.counter}/{self.patience})')
             return
@@ -310,7 +317,6 @@ class EarlyStoppingSurvival:
             self._log(f'EarlyStopping counter: {self.counter}/{self.patience} '
                       f'(C-index: {score:.4f} <= best {self.best_score:.4f})')
             if self.counter >= self.patience:
-                self.early_stop = True
                 self._log(f'Early stopping triggered! No improvement for {self.patience} epochs.')
         else:
             old_score = self.best_score

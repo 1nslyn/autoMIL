@@ -7,18 +7,19 @@ call order that exists in the trainers: TITAN, nnMIL and the non-DTFD survival
 adapters zero the gradients before the forward pass; ABMIL classification and
 both DTFD tiers zero them between the forward and the backward pass; CLAM zeros
 them after the step; nnMIL's order is also driven through a ``GradScaler`` as
-on CUDA. Then the stopping seam with the metrics dict the cell's
-task family passes (``--task-family classification``: ``val_auc`` and
-``val_loss``; ``survival``: ``val_c_index`` and ``val_loss``), and the DTFD
-seam, the only trainer that passes a scheduler: both tier optimizers wrapped,
-then both ``MultiStepLR`` schedulers built on the targets the trainer resolves
-and wrapped, before either tier trains.
+on CUDA. Then the stopping seam exactly as the cell's arm drives it
+(``--arm``: the arm's metrics dict, its first validated epoch, and on DTFD
+after both tiers and their schedulers exist on the same runtime) for the
+cell's task family (``--task-family classification`` or ``survival``), and,
+for DTFD or an unspecified arm, the DTFD seam: both tier optimizers wrapped,
+then both ``MultiStepLR`` schedulers built on the targets the trainer
+resolves and wrapped, before either tier trains.
 
 Exit codes: 0 the policy passed; 1 it failed a seam (the diagnostics name the
-call order or the role); 2 usage (missing file, unknown task family, no
+call order or the role); 2 usage (missing file, unknown task family or arm, no
 PolicyVariant subclass in the module).
 
-Usage: python -m autobench.pipeline.policy_smoke [--task-family FAMILY] <path/to/policy.py>
+Usage: python -m autobench.pipeline.policy_smoke [--task-family FAMILY] [--arm ARM] <path/to/policy.py>
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ CALL_ORDERS: tuple[str, ...] = (
 STEPS_PER_ORDER = 3
 ROLES = ("tier1", "tier2")
 TASK_FAMILIES = ("classification", "survival")
+ARMS = ("abmil", "clam", "dtfd", "nnmil", "titan")
 
 
 class SmokeFailure(Exception):
@@ -117,47 +119,37 @@ def _run_order(order: str, policy_cls: type, *, scaled: bool = False) -> None:
             raise SmokeFailure(f"loss became non-finite under {order}")
 
 
-def _stop_metrics(family: str, epoch: int, loss: float) -> dict[str, float]:
-    """The per-epoch validation metrics the family's trainers pass to ``should_stop``."""
-    primary = "val_c_index" if family == "survival" else "val_auc"
-    return {primary: 0.5 + 0.05 * epoch, "val_loss": loss}
+def _stop_metrics(arm: str | None, family: str, epoch: int, loss: float) -> dict[str, float]:
+    """Exactly the per-epoch validation metrics the arm's trainer passes to
+    ``should_stop`` for the family (a policy reading a key its cell never
+    supplies must fail here, one reading a key it does must pass)."""
+    rising = 0.5 + 0.05 * epoch
+    if family == "survival":
+        return {"val_loss": loss, "val_c_index": rising}
+    if arm == "clam":
+        return {"val_loss": loss, "val_error": 0.5 - 0.05 * epoch, "val_auc": rising}
+    if arm == "nnmil":
+        return {"val_loss": loss, "val_bacc": rising, "val_f1": rising, "val_auc": rising}
+    return {"val_auc": rising, "val_loss": loss}
 
 
-def _run_stopping(policy_cls: type, family: str) -> None:
+def _first_stop_epoch(arm: str | None, family: str) -> int:
+    """nnMIL's survival trainers validate from epoch 2 (a warm-up); every
+    other loop asks from epoch 0."""
+    return 2 if (arm, family) == ("nnmil", "survival") else 0
+
+
+def _dtfd_tiers(runtime, features, labels):
+    """Both DTFD tiers as the trainer builds them: two parameter sets, both
+    optimizers wrapped, then both ``MultiStepLR`` schedulers built on the
+    targets the trainer resolves and wrapped, before either tier trains (one
+    policy instance wraps both, so state a policy keeps per wrap on itself
+    collides here as it does there)."""
     import torch
     from torch import nn
 
-    from autobench.pipeline.policy_dispatch import PolicyRuntime
-
-    model, features, labels = _model_and_batch()
-    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
-    optimizer = runtime.wrap_optimizer(torch.optim.Adam(model.parameters(), lr=1e-2))
-    criterion = nn.CrossEntropyLoss()
-    for epoch in range(STEPS_PER_ORDER):
-        optimizer.zero_grad()
-        loss = criterion(model(features), labels)
-        loss.backward()
-        optimizer.step()
-        runtime.should_stop(
-            False, epoch=epoch, metrics=_stop_metrics(family, epoch, float(loss.detach())),
-        )
-
-
-def _run_dtfd_tiers(policy_cls: type) -> None:
-    """Both DTFD tiers as the trainer drives them: two parameter sets, both
-    optimizers wrapped and both ``MultiStepLR`` schedulers built and wrapped
-    BEFORE either tier trains (one policy instance wraps both, so state a
-    policy keeps per wrap on itself collides here), then the tiers step in
-    turn, gradients zeroed between forward and backward."""
-    import torch
-    from torch import nn
-
-    from autobench.pipeline.policy_dispatch import PolicyRuntime
-
-    tier1, features, labels = _model_and_batch()
+    tier1 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2))
     tier2 = nn.Linear(4, 3)
-    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
-    criterion = nn.CrossEntropyLoss()
     raws = [torch.optim.Adam(module.parameters(), lr=1e-2) for module in (tier1, tier2)]
     optimizers = [runtime.wrap_optimizer(raw, role=role) for role, raw in zip(ROLES, raws)]
     schedulers = [
@@ -167,31 +159,87 @@ def _run_dtfd_tiers(policy_cls: type) -> None:
         for role, optimizer, raw in zip(ROLES, optimizers, raws)
     ]
     schedulers = [runtime.wrap_scheduler(sched, role=role) for role, sched in zip(ROLES, schedulers)]
-    tiers = list(zip((tier1, tier2), optimizers, schedulers))
+    return list(zip((tier1, tier2), optimizers, schedulers))
+
+
+def _step_dtfd_tiers(tiers, features, labels) -> None:
+    from torch import nn
+
+    criterion = nn.CrossEntropyLoss()
+    for module, optimizer, scheduler in tiers:
+        loss = criterion(module(features), labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+
+def _run_dtfd_tiers(policy_cls: type) -> None:
+    from autobench.pipeline.policy_dispatch import PolicyRuntime
+
+    _, features, labels = _model_and_batch()
+    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
+    tiers = _dtfd_tiers(runtime, features, labels)
     for _ in range(STEPS_PER_ORDER):
-        for module, optimizer, scheduler in tiers:
-            loss = criterion(module(features), labels)
+        _step_dtfd_tiers(tiers, features, labels)
+
+
+def _run_stopping(policy_cls: type, arm: str | None, family: str) -> None:
+    """The stopping seam as the arm's trainer drives it: on DTFD after both
+    tiers and their schedulers exist on the same runtime (a policy may hold
+    its scheduler and read it here), from the arm's first validated epoch,
+    with the arm's metrics."""
+    import torch
+    from torch import nn
+
+    from autobench.pipeline.policy_dispatch import PolicyRuntime
+
+    model, features, labels = _model_and_batch()
+    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
+    if arm == "dtfd":
+        tiers = _dtfd_tiers(runtime, features, labels)
+        step = lambda: _step_dtfd_tiers(tiers, features, labels)  # noqa: E731
+        loss_value = lambda: 0.7  # noqa: E731
+    else:
+        optimizer = runtime.wrap_optimizer(torch.optim.Adam(model.parameters(), lr=1e-2))
+        criterion = nn.CrossEntropyLoss()
+        last = {"loss": 0.7}
+
+        def step() -> None:
             optimizer.zero_grad()
+            loss = criterion(model(features), labels)
             loss.backward()
             optimizer.step()
-            scheduler.step()
+            last["loss"] = float(loss.detach())
+
+        loss_value = lambda: last["loss"]  # noqa: E731
+    first = _first_stop_epoch(arm, family)
+    for epoch in range(first, first + STEPS_PER_ORDER):
+        step()
+        runtime.should_stop(
+            False, epoch=epoch, metrics=_stop_metrics(arm, family, epoch, loss_value()),
+        )
 
 
-def _checks(policy_cls: type, family: str) -> Sequence[tuple[str, Callable[[], None]]]:
-    return (
+def _checks(policy_cls: type, arm: str | None, family: str) -> Sequence[tuple[str, Callable[[], None]]]:
+    checks = [
         *[(order, lambda order=order: _run_order(order, policy_cls)) for order in CALL_ORDERS],
         (f"{CALL_ORDERS[0]} through a GradScaler (nnMIL on CUDA)",
          lambda: _run_order(CALL_ORDERS[0], policy_cls, scaled=True)),
-        (f"stopping seam ({family} metrics)", lambda: _run_stopping(policy_cls, family)),
-        ("DTFD tiers tier1/tier2 with MultiStepLR schedulers", lambda: _run_dtfd_tiers(policy_cls)),
-    )
+        (f"stopping seam ({arm or 'generic'} {family} metrics)",
+         lambda: _run_stopping(policy_cls, arm, family)),
+    ]
+    if arm in (None, "dtfd"):
+        checks.append(("DTFD tiers tier1/tier2 with MultiStepLR schedulers",
+                       lambda: _run_dtfd_tiers(policy_cls)))
+    return tuple(checks)
 
 
-def smoke(path: Path, family: str = "classification") -> list[str]:
+def smoke(path: Path, family: str = "classification", arm: str | None = None) -> list[str]:
     """Run every check; return the list of failure descriptions (empty = pass)."""
     policy_cls = load_policy_class(path)
     failures = []
-    for label, check in _checks(policy_cls, family):
+    for label, check in _checks(policy_cls, arm, family):
         try:
             check()
         except Exception as exc:  # the policy is untrusted code: any failure is a verdict
@@ -200,22 +248,23 @@ def smoke(path: Path, family: str = "classification") -> list[str]:
     return failures
 
 
-def _parse(args: list[str]) -> tuple[Path, str] | None:
-    """``[--task-family FAMILY] <path>``; ``None`` on a usage error."""
-    family = "classification"
+def _parse(args: list[str]) -> tuple[Path, str, str | None] | None:
+    """``[--task-family FAMILY] [--arm ARM] <path>``; ``None`` on a usage error."""
+    options = {"--task-family": "classification", "--arm": None}
     positional: list[str] = []
     tokens = list(args)
     while tokens:
         token = tokens.pop(0)
-        if token == "--task-family":
+        if token in options:
             if not tokens:
                 return None
-            family = tokens.pop(0)
+            options[token] = tokens.pop(0)
         else:
             positional.append(token)
-    if len(positional) != 1 or family not in TASK_FAMILIES:
+    family, arm = options["--task-family"], options["--arm"]
+    if len(positional) != 1 or family not in TASK_FAMILIES or (arm is not None and arm not in ARMS):
         return None
-    return Path(positional[0]), family
+    return Path(positional[0]), family, arm
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -223,12 +272,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if parsed is None:
         print(__doc__, file=sys.stderr)
         return 2
-    path, family = parsed
+    path, family, arm = parsed
     if not path.is_file():
         print(f"policy_smoke: no such file: {path}", file=sys.stderr)
         return 2
     try:
-        failures = smoke(path, family)
+        failures = smoke(path, family, arm)
     except Exception as exc:  # import or shape errors: usage, not a seam verdict
         print(f"policy_smoke: cannot load {path}: {exc}", file=sys.stderr)
         return 2
@@ -237,8 +286,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         for failure in failures:
             print(f"  {failure}", file=sys.stderr)
         return 1
-    print(f"policy_smoke: {path.name} passed {len(CALL_ORDERS)} call orders, the "
-          f"{family} stopping seam, and the DTFD tiers with their schedulers")
+    print(f"policy_smoke: {path.name} passed {len(CALL_ORDERS)} call orders and the "
+          f"{arm or 'generic'} {family} stopping seam"
+          + (" and the DTFD tiers with their schedulers" if arm in (None, "dtfd") else ""))
     return 0
 
 

@@ -33,6 +33,10 @@ from pathlib import Path
 
 NEIGHBOUR = "neighbour"
 ROLES = (NEIGHBOUR,)
+#: The proposal's pre-registered declarations; ``automil submit`` copies them
+#: from the proposal into the spec at admission, and the census reads them
+#: there, so a result's metadata can never rewrite what was declared.
+DECLARATIONS = ("axis", "role", "predicted_delta")
 
 _KEYS = ("batches", "opening_axes_min", "max_consecutive_per_axis", "reserve_neighbours_min")
 
@@ -198,14 +202,15 @@ def _attempt_seq(node_id: str, spec: Mapping) -> int:
 
 def cell_attempts(adir: Path, nodes: Mapping[str, Mapping], cell_id: str) -> tuple[Attempt, ...]:
     """The cell's attempts in admission order (queued or launched specs on
-    disk, the census the freeze walks), with each node's axis, role and
-    status read from ``nodes`` (a ``graph.json`` node mapping) and
-    ``finished`` from the daemon's terminal record."""
+    disk, the census the freeze walks). Axis and role are read from the spec
+    (stamped at admission from the proposal, written once), the status from
+    ``nodes`` (a ``graph.json`` node mapping, the framework's verdict) and
+    ``finished`` from the terminal records."""
     archive = adir / "orchestrator" / "archive"
     attempts = []
     for node_id, spec in _cell_specs(adir, cell_id).items():
         node = nodes.get(node_id) if isinstance(nodes.get(node_id), Mapping) else {}
-        meta = node.get("metadata") if isinstance(node.get("metadata"), Mapping) else {}
+        meta = spec.get("metadata") if isinstance(spec.get("metadata"), Mapping) else {}
         attempts.append(Attempt(
             node_id=node_id, axis=meta.get("axis"), role=meta.get("role"),
             status=node.get("status"), seq=_attempt_seq(node_id, spec),

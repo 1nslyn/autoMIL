@@ -149,6 +149,8 @@ SELECTORS = [_feed_tracker, _feed_nnmil_classification, _feed_nnmil_survival, _f
 #  expected early_stop) under patience 3.
 TRAJECTORIES = [
     ("rising", [0.5, 0.6, 0.7], 2, 0, False),
+    # a stop a policy suppressed must not stick: the improvement resets it
+    ("recovers_after_exhausted_patience", [0.6, 0.5, 0.5, 0.5, 0.7], 4, 0, False),
     ("drop_keeps_the_best", [0.7, 0.5, 0.6], 0, 2, False),
     ("tie_keeps_the_earlier", [0.6, 0.6, 0.6], 0, 2, False),
     ("nan_first_is_skipped", [NAN, 0.4, 0.5], 2, 0, False),
@@ -167,6 +169,7 @@ class TestSelectorContract:
         selector, feed = factory(tmp_path)
         for epoch, value in enumerate(values):
             feed(epoch, value)
+            selector.early_stop          # read every epoch, as every trainer does
         assert selector.best_epoch == best_epoch, name
         assert selector.counter == counter, name
         assert bool(selector.early_stop) is early_stop, name

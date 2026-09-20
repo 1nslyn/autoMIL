@@ -40,18 +40,21 @@ autoMIL: F2-readiness framework refactor.
   batches of 8/8/8/6 that `automil submit` enforces from `cap.phasing`
   (opening batch on five axes, at most three consecutive attempts per axis
   without a keep, two robustness neighbours in the final batch; `automil
-  propose` records `--axis`, `--predicted-delta` and `--role`; the census is
-  the specs on disk, queue read before archive, in the admission order
-  submit mints under its lock (`metadata.attempt_seq`, which the freeze
-  records and the exported history follows), an attempt is in flight until
+  propose` records `--axis`, `--predicted-delta` and `--role`, which submit
+  stamps into the spec at admission so no result can rewrite them; the
+  census is the specs on disk, queue read before archive, in the admission
+  order submit mints under its lock (`metadata.attempt_seq`, which the
+  freeze records and the exported history follows), an attempt is in flight until
   a terminal record exists (the daemon's result or the running spec
   `automil cancel` archived), and a fully submitted cell takes no more);
   and every policy file is smoke-run through the trainers' three call
   orders (reading `param_groups` as nnMIL does, nnMIL's order also through
-  a `GradScaler`), the stopping seam with the cell's task-family metrics
-  and DTFD's wrap order (both tier optimizers, then both `MultiStepLR`
-  schedulers, before either trains), at submit (`registry.policy_smoke`,
-  `autobench.pipeline.policy_smoke --task-family`), so a policy that would
+  a `GradScaler`), the stopping seam exactly as the cell's arm drives it
+  (its metrics dict, its first validated epoch, on DTFD after the tiers and
+  their schedulers exist) and DTFD's wrap order (both tier optimizers, then
+  both `MultiStepLR` schedulers, before either trains), at submit
+  (`registry.policy_smoke`, `autobench.pipeline.policy_smoke --task-family
+  --arm`), so a policy that would
   crash the trainer is refused for free; the overlay is staged per submit
   process and moved into `archive/<node>/` under the submission lock after
   the hold check runs again there, so a refused file never lingers into
@@ -60,7 +63,10 @@ autoMIL: F2-readiness framework refactor.
   specs atomically and, on restart, finalizes a billed launch that never
   reached its running intent (an attempt nothing else could finish). The
   materialization audit locks `cap.phasing` and `registry.policy_smoke`;
-  the promotion stage carries no `cap.phasing`.
+  the promotion stage carries no `cap.phasing`. The vendored CLAM and nnMIL
+  stoppers derive `early_stop` from their counter instead of latching it,
+  so a stop a policy suppressed clears once the metric improves again, as
+  the shared tracker's does.
 
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over

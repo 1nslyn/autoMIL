@@ -242,6 +242,48 @@ CAPTURES_IN_SCHEDULER = HEADER.format(name="captures_in_scheduler") + '''class C
         return _Wrapped(sched)
 '''
 
+READS_BACC = HEADER.format(name="bacc_stop") + '''class BaccStop(PolicyVariant):
+    """nnMIL passes val_bacc and val_f1 beside val_auc; ABMIL does not."""
+
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def should_stop(self, *, default, epoch, metrics):
+        return bool(default) or metrics["val_bacc"] > 0.99
+'''
+
+HOLDS_SCHEDULER = HEADER.format(name="holds_scheduler") + '''class HoldsScheduler(PolicyVariant):
+    """A DTFD policy keeps its scheduler and reads the learning rate when
+    asked to stop: legal on DTFD, where the schedulers exist before the
+    first stopping call."""
+
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def wrap_scheduler(self, sched):
+        self.scheduler = sched
+        return sched
+
+    def should_stop(self, *, default, epoch, metrics):
+        return bool(default) or self.scheduler.get_last_lr()[0] < 1e-9
+'''
+
+STATEFUL_FROM_EPOCH_ZERO = HEADER.format(name="stateful_from_zero") + '''class StatefulFromZero(PolicyVariant):
+    """Initializes at epoch 0 and compares afterwards: nnMIL's survival
+    trainers ask from epoch 2, so the state never exists there."""
+
+    def wrap_optimizer(self, opt):
+        return opt
+
+    def should_stop(self, *, default, epoch, metrics):
+        if epoch == 0:
+            self.previous = metrics["val_loss"]
+            return bool(default)
+        stalled = metrics["val_loss"] >= self.previous
+        self.previous = metrics["val_loss"]
+        return bool(default) or (stalled and epoch > 50)
+'''
+
 FORGETS_TIER2 = HEADER.format(name="forgets_tier2") + '''class ForgetsTier2(PolicyVariant):
     def wrap_optimizer(self, opt):
         return opt
@@ -323,6 +365,25 @@ class TestTheStoppingSeamIsJudgedByTaskFamily:
     def test_an_unknown_task_family_is_a_usage_error(self, tmp_path):
         path = str(_write(tmp_path, "auc_stop", READS_AUC))
         assert policy_smoke.main(["--task-family", "regression", path]) == 2
+        assert _main(["--arm", "resnet", path]) == 2
+
+    def test_the_arm_decides_which_keys_a_stopping_rule_may_read(self, tmp_path, capsys):
+        path = str(_write(tmp_path, "bacc_stop", READS_BACC))
+        assert _main(["--arm", "nnmil", path]) == 0
+        assert _main(["--arm", "abmil", path]) == 1
+        assert "val_bacc" in capsys.readouterr().err
+
+    def test_a_dtfd_policy_may_read_its_scheduler_when_asked_to_stop(self, tmp_path, capsys):
+        path = str(_write(tmp_path, "holds_scheduler", HOLDS_SCHEDULER))
+        assert _main(["--arm", "dtfd", path]) == 0
+        assert _main(["--arm", "abmil", path]) == 1          # no scheduler ever exists there
+        assert "scheduler" in capsys.readouterr().err
+
+    def test_nnmil_survival_asks_from_epoch_two(self, tmp_path, capsys):
+        path = str(_write(tmp_path, "stateful_from_zero", STATEFUL_FROM_EPOCH_ZERO))
+        assert _main(["--arm", "nnmil", "--task-family", "classification", path]) == 0
+        assert _main(["--arm", "nnmil", "--task-family", "survival", path]) == 1
+        assert "previous" in capsys.readouterr().err
 
 
 class TestTheOptimizerSeamIsTheTrainers:
@@ -360,10 +421,13 @@ class TestTheSchedulerSeamIsDTFDs:
 
 
 class TestHarnessCoverage:
-    @pytest.mark.parametrize("family, stop_keys", [
-        ("classification", "val_auc,val_loss"), ("survival", "val_c_index,val_loss"),
+    @pytest.mark.parametrize("arm, family, stop_keys", [
+        (None, "classification", "val_auc,val_loss"), (None, "survival", "val_c_index,val_loss"),
+        ("dtfd", "classification", "val_auc,val_loss"),
+        ("nnmil", "classification", "val_auc,val_bacc,val_f1,val_loss"),
+        ("clam", "classification", "val_auc,val_error,val_loss"),
     ])
-    def test_every_call_order_and_seam_is_exercised(self, tmp_path, family, stop_keys):
+    def test_every_call_order_and_seam_is_exercised(self, tmp_path, arm, family, stop_keys):
         """A policy that records what the harness did: all three call orders,
         the stopping seam with the family's metrics, and the DTFD tiers each
         with their MultiStepLR scheduler."""
@@ -388,16 +452,21 @@ class TestHarnessCoverage:
         return default
 '''
         path = str(_write(tmp_path, "recorder", source))
-        assert policy_smoke.main(["--task-family", family, path]) == 0
+        argv = ["--task-family", family, path] + (["--arm", arm] if arm else [])
+        assert policy_smoke.main(argv) == 0
         lines = recorder.read_text().splitlines()
-        # one wrap per call order, one for the scaled order, plus the stopping run
-        assert lines.count("optimizer:main") == len(policy_smoke.CALL_ORDERS) + 2
-        assert "optimizer:tier1" in lines and "optimizer:tier2" in lines
-        assert "scheduler:tier1:MultiStepLR" in lines and "scheduler:tier2:MultiStepLR" in lines
-        assert not any(line.startswith("scheduler:main") for line in lines)
-        # DTFD wraps both tiers, then builds both schedulers, before any step
+        # one wrap per call order, one for the scaled order, plus the stopping
+        # run (which on DTFD wraps the tiers instead of a main optimizer)
+        assert lines.count("optimizer:main") == len(policy_smoke.CALL_ORDERS) + (1 if arm == "dtfd" else 2)
         dtfd = [line for line in lines if line.endswith(":tier1") or line.endswith(":tier2")
                 or ":tier1:" in line or ":tier2:" in line]
-        assert dtfd == ["optimizer:tier1", "optimizer:tier2",
-                        "scheduler:tier1:MultiStepLR", "scheduler:tier2:MultiStepLR"]
+        wrap_order = ["optimizer:tier1", "optimizer:tier2",
+                      "scheduler:tier1:MultiStepLR", "scheduler:tier2:MultiStepLR"]
+        if arm is None:
+            assert dtfd == wrap_order                       # the DTFD seam alone
+        elif arm == "dtfd":
+            assert dtfd == wrap_order * 2                   # the seam, then the stopping run
+        else:
+            assert dtfd == []                               # no scheduler exists on this arm
+        assert not any(line.startswith("scheduler:main") for line in lines)
         assert lines.count(f"stop:{stop_keys}") == policy_smoke.STEPS_PER_ORDER
