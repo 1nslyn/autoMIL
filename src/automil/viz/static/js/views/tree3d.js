@@ -33,13 +33,16 @@
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 24, 16), material);
     if (node.status === 'discard' || node.status === 'cancelled') {
       material.color = new THREE.Color(AM.cssVar('--status-discard'));
-      const rim = new THREE.Mesh(new THREE.SphereGeometry(radius + 0.4, 24, 16), new THREE.MeshBasicMaterial({ color: new THREE.Color(AM.cssVar('--status-discard-stroke')), transparent: true, opacity: 0.35 }));
+      const rim = new THREE.Mesh(new THREE.SphereGeometry(radius + 0.5, 24, 16), new THREE.MeshBasicMaterial({ color: new THREE.Color(AM.cssVar('--status-discard-stroke')), transparent: true, opacity: 0.5, side: THREE.BackSide }));
+      group.add(rim);
+    } else {
+      const rim = new THREE.Mesh(new THREE.SphereGeometry(radius + 0.5, 24, 16), new THREE.MeshBasicMaterial({ color: new THREE.Color(AM.cssVar('--ink')), transparent: true, opacity: 0.55, side: THREE.BackSide }));
       group.add(rim);
     }
     group.add(mesh);
     if (!opts.compact && (node.spine || node.status === 'running' || node.status === 'pending') && typeof SpriteText !== 'undefined') {
-      const label = new SpriteText(node.id.replace('node_', ''), 4.2, AM.cssVar('--ink-2'));
-      label.fontFace = 'IBM Plex Mono, Menlo, monospace';
+      const label = new SpriteText(node.id.replace('node_', ''), 4.2, AM.cssVar('--ink'));
+      label.fontFace = 'JetBrains Mono, Menlo, monospace';
       label.backgroundColor = false;
       label.position.y = radius + 5;
       group.add(label);
@@ -56,7 +59,7 @@
     const fg = ForceGraph3D({ controlType: opts.compact ? 'orbit' : 'trackball' })(container)
       .width(container.clientWidth || 600)
       .height(container.clientHeight || 400)
-      .backgroundColor(opts.compact ? AM.cssVar('--band') : paper)
+      .backgroundColor(paper)
       .showNavInfo(false)
       .enableNodeDrag(false)
       .enableNavigationControls(true)
@@ -64,8 +67,8 @@
       .dagLevelDistance(opts.compact ? 36 : 54)
       .nodeThreeObject((node) => sphere(node, opts))
       .nodeThreeObjectExtend(false)
-      .linkColor((link) => (link.spine ? AM.cssVar('--accent') : AM.cssVar('--hairline')))
-      .linkWidth((link) => (link.spine ? (opts.compact ? 1.2 : 2.2) : opts.compact ? 0.5 : 0.9))
+      .linkColor((link) => (link.spine ? AM.cssVar('--ink') : '#b5b5b5'))
+      .linkWidth((link) => (link.spine ? (opts.compact ? 1.4 : 2.4) : opts.compact ? 0.6 : 1.0))
       .linkOpacity(1)
       .linkDirectionalParticles(0)
       .d3Force('charge', d3.forceManyBody().strength(opts.compact ? -40 : -70))
@@ -163,7 +166,7 @@
         const ratio = 1 + distance / norm;
         fg.cameraPosition({ x: node.x * ratio, y: node.y * ratio, z: node.z * ratio }, node, 600);
       },
-      setTheme() { fg.backgroundColor(opts.compact ? AM.cssVar('--band') : AM.cssVar('--paper')); },
+      setTheme() { fg.backgroundColor(AM.cssVar('--paper')); },
       destroy() {
         if (frame) cancelAnimationFrame(frame);
         window.removeEventListener('resize', onResize);

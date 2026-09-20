@@ -36,8 +36,10 @@
     } catch (err) {
       box.append(h('div.error-box', 'The tree could not be drawn.'));
     }
-    const caption = h('div.hero-caption', `${run.title || run.run_id}: ${run.n_executed} attempts, best ${fmt.num(run.best_primary_value)} from a baseline of ${fmt.num(run.baseline_primary_value)}. `,
-      h('a', { href: AM.runHref(run.run_id, 'tree'), text: 'Open this run' }));
+    const caption = h('div.hero-caption',
+      h('span', `${run.title || run.run_id}: ${run.n_executed} attempts, best ${fmt.num(run.best_primary_value)} from a baseline of ${fmt.num(run.baseline_primary_value)}. `,
+        h('a', { href: AM.runHref(run.run_id, 'tree'), text: 'Open this run' })),
+      h('span', 'fig. 1'));
     return { box, caption, destroy() { if (handle) handle.destroy(); } };
   }
 
@@ -71,8 +73,8 @@
 
   function lane(kind, title, actor, steps) {
     return h('div.lane-row', { class: kind },
-      h('div', h('h3', title), h('div.actor', actor)),
-      h('div.lane-steps', steps.map(([head, text]) => h('div.lane-step', h('b', head), text))),
+      h('div', h('h3', h('span.swatch'), title), h('div.actor', actor)),
+      h('div.lane-steps', steps.map(([head, text], i) => h('div.lane-step', h('b', h('span.n', `0${i + 1}`), head), text))),
     );
   }
 
@@ -162,16 +164,26 @@
     const openRun = first ? AM.runHref(first.run_id, 'tree') : '#/runs';
     const hero = await heroVisual(source, index);
 
+    const gain = first && first.best_primary_value != null && first.baseline_primary_value != null ? first.best_primary_value - first.baseline_primary_value : null;
+    const sessions = first ? await source.sessions(first.run_id).catch(() => null) : null;
+    const calls = sessions && sessions.sessions.length ? sessions.sessions.reduce((n, s) => n + (s.n_tool_calls || 0), 0) : null;
     root.append(h('div.band.hero-band', h('div.inner', h('section.hero',
-      h('div',
+      h('div.hero-text',
+        h('div.label', '01 / a framework for agentic MIL research'),
         h('h1', 'A coding agent runs the experiment loop on your existing code base.'),
         h('p.lead', 'It proposes a change, submits it as an experiment, reads the validation result and keeps or discards it. Every attempt, decision and transcript is recorded and shown here.'),
-        h('div.actions', h('a.button.primary.large', { href: openRun, text: first ? 'Open a recorded run' : 'Runs' }), h('a.button.large', { href: '#/?scroll=get-started', text: 'Install' })),
+        h('div.actions', h('a.button.primary.large', { href: openRun, text: first ? 'Open a recorded run \u2192' : 'Runs' }), h('a.button.large', { href: '#/?scroll=get-started', text: 'Install' })),
+        first ? h('div.hero-stats',
+          h('div', h('div.value', String(first.n_executed)), h('div.what', 'attempts in the recorded run')),
+          h('div', h('div.value.teal', gain != null ? fmt.delta(gain, 3) : '\u2013'), h('div.what', 'over the baseline, validation')),
+          h('div', h('div.value', calls != null ? String(calls) : '\u2013'), h('div.what', 'tool calls recorded')),
+        ) : null,
       ),
-      h('div', hero.box, hero.caption),
+      h('div.hero-figure', hero.box, hero.caption),
     ))));
 
-    root.append(h('div.band.tint', { id: 'how' }, h('div.inner',
+    root.append(h('div.band', { id: 'how' }, h('div.inner',
+      h('div.index', '02 / how a run works'),
       h('h2', 'How a run works'),
       h('p.lead', 'autoMIL overlays one directory onto an existing repository. Four lanes share the work: the agent proposes, the orchestrator runs, the framework judges, and the test set waits until the end.'),
       lanesStrip(),
@@ -179,6 +191,7 @@
     )));
 
     root.append(h('div.band', { id: 'record' }, h('div.inner',
+      h('div.index', '03 / the record'),
       h('h2', 'What a run leaves behind'),
       h('p.lead', 'Everything on this site is read from files in the project directory, the same files the framework works from.'),
       h('div.cols-2.uneven',
@@ -192,7 +205,8 @@
       ),
     )));
 
-    root.append(h('div.band.tint', { id: 'benchmark' }, h('div.inner',
+    root.append(h('div.band', { id: 'benchmark' }, h('div.inner',
+      h('div.index', '04 / the benchmark'),
       h('h2', 'The benchmark'),
       h('p.lead', 'Does the ranking of pathology MIL methods change when every method gets the same search opportunity? Four aggregators on three encoders, plus TITAN at slide level, across five task and cohort pairs, on frozen features and splits.'),
       h('div.stat-row',
@@ -206,6 +220,7 @@
     )));
 
     root.append(h('div.band', { id: 'get-started' }, h('div.inner',
+      h('div.index', '05 / get started'),
       h('h2', 'Get started'),
       h('div.cols-2',
         h('ol.steps',
@@ -223,7 +238,8 @@
       ),
     )));
 
-    root.append(h('div.band.tint', { id: 'cite' }, h('div.inner',
+    root.append(h('div.band', { id: 'cite' }, h('div.inner',
+      h('div.index', '06 / authors'),
       h('h2', 'Authors'),
       h('p.authors', 'Shuolin Yin, Yeonwoo Seo and Jun Ma. The framework is released under the Apache-2.0 licence; the code and the issue tracker are on GitHub.'),
       h('pre', '@software{automil,\n  title  = {autoMIL},\n  author = {Yin, Shuolin and Seo, Yeonwoo and Ma, Jun},\n  year   = {2026},\n  url    = {https://github.com/leoyin1127/autoMIL}\n}'),

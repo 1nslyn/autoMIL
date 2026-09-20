@@ -132,14 +132,14 @@
     const { run } = ctx;
     const source = run.source;
     let [timeline, graph] = await Promise.all([source.timeline(run.id), source.graph(run.id)]);
-    const svg = h('svg', { role: 'img', 'aria-label': 'Discovery timeline' });
-    const overview = h('svg', { style: { height: '44px' }, 'aria-label': 'Time range' });
+    const svg = h('svg', { role: 'img', 'aria-label': 'Discovery timeline', style: { width: '100%', display: 'block' } });
+    const overview = h('svg', { style: { height: '44px', width: '100%', display: 'block' }, 'aria-label': 'Time range' });
     const reset = h('button.quiet', { text: 'Whole run' });
     const page = h('div.page.wide',
       h('div.page-title', h('h1', 'Timeline'), h('p', 'What the agent did, when each attempt waited and ran, and how the best validation value moved. Drag on the strip below to zoom; click a bar or a mark to open it.')),
       timeline.warnings && timeline.warnings.length ? h('div.notice', timeline.warnings.join(' ')) : null,
-      h('div.pane', { style: { minHeight: '0' } }, h('div.pane-head', h('h3', 'Overview'), h('span.spacer'), reset), h('div', { style: { padding: '4px 12px' } }, overview)),
-      h('div.pane.timeline-wrap', { style: { marginTop: '12px' } }, h('div', svg),
+      h('div.pane', { style: { minHeight: '0' } }, h('div.pane-head', h('h3', 'Overview'), h('span.spacer'), reset), h('div.pane-body', { style: { padding: '4px 12px', flex: 'none' } }, overview)),
+      h('div.pane.timeline-wrap', { style: { marginTop: '24px' } }, h('div.pane-head', h('h3', 'Timeline')), h('div.pane-body', { style: { flex: 'none' } }, svg),
         h('div.timeline-legend', ...['prompt', 'propose', 'submit', 'reconcile', 'notification', 'compact'].map((k) => h('span', h('span.glyph', { class: k }), k)),
           h('span', h('span.status-dot.status-keep'), 'kept run'), h('span', h('span.status-dot.status-discard'), 'discarded run'), h('span', h('span.status-dot.status-crash'), 'crashed'))),
     );

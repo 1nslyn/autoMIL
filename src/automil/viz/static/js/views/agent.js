@@ -36,7 +36,8 @@
     const status = result ? result.status : 'pending';
     const automil = call.automil;
     const created = automil ? automil.created.map((c) => c.node_id) : [];
-    const chips = created.length ? nodeChips(run, created) : (automil ? nodeChips(run, automil.node_ids.slice(0, 4)) : []);
+    const ids = created.length ? created : (automil ? automil.node_ids : []);
+    const chips = ids.length ? nodeChips(run, ids.slice(0, 6)).concat(ids.length > 6 ? [h('span.tag', { text: `+${ids.length - 6}` })] : []) : [];
     const body = h('div.body');
     const details = h('details.call',
       h('summary',
@@ -141,6 +142,43 @@
     return el;
   }
 
+  /* A turn that only calls tools (no text worth reading) folds with its neighbours. */
+  function toolOnly(turn) {
+    if (turn.kind !== 'assistant') return false;
+    const text = (turn.text || '').trim();
+    return (turn.tool_calls || []).length > 0 && text.length < 80 && !text.includes('\n');
+  }
+
+  function foldBlock(run, sid, group, ctx) {
+    const calls = group.flatMap((t) => t.tool_calls || []);
+    const byTool = new Map();
+    for (const c of calls) byTool.set(c.name, (byTool.get(c.name) || 0) + 1);
+    const tools = Array.from(byTool.entries()).sort((a, b) => b[1] - a[1]).map(([n, k]) => `${n} \u00d7${k}`).join(', ');
+    const created = [];
+    for (const c of calls) for (const cr of (c.automil && c.automil.created) || []) if (!created.includes(cr.node_id)) created.push(cr.node_id);
+    const errors = calls.filter((c) => c.result && c.result.status === 'error').length;
+    const first = group[0];
+    const last = group[group.length - 1];
+    const span = first.at && last.at ? `${fmt.time(first.at)} to ${fmt.time(last.at)}` : '';
+    const fold = h('details.fold', { id: `turn-${first.index}` },
+      h('summary',
+        h('span.caret'),
+        h('span.count', `${group.length} turns, ${calls.length} tool calls`),
+        h('span.tools', tools),
+        span ? h('span.span', span) : null,
+        errors ? h('span.tools', `${errors} failed`) : null,
+        created.length ? h('span.chips', nodeChips(run, created.slice(0, 8)), created.length > 8 ? h('span.tag', { text: `+${created.length - 8}` }) : null) : null,
+      ),
+    );
+    let filled = false;
+    fold.addEventListener('toggle', () => {
+      if (!fold.open || filled) return;
+      filled = true;
+      fold.append(h('div.turns', group.map((t) => renderTurn(run, sid, t, ctx))));
+    });
+    return fold;
+  }
+
   function passes(turn, filters) {
     if (turn.kind === 'human') return filters.prompts;
     if (turn.kind === 'notification') return filters.notifications;
@@ -173,23 +211,22 @@
     const wanted = ctx.route.params.session;
     const session = sessions.sessions.find((s) => s.session_id === wanted) || sessions.sessions[0];
     const sid = session.session_id;
-    const filters = { prompts: true, notifications: true, system: true, tools: true, thinking: true, automilOnly: false };
+    const filters = { prompts: true, notifications: true, system: true, tools: true, thinking: true, fold: true, automilOnly: false };
     const turnsEl = h('div.turns');
     const loadMore = h('div.turn-more');
     const listEl = h('div.session-list', sessions.sessions.map((s) => sessionItem(run, s, s.session_id === sid)));
     const filterEl = h('div.filters',
-      ...[['prompts', 'operator prompts'], ['notifications', 'notifications'], ['system', 'system lines'], ['tools', 'tool calls'], ['thinking', 'thinking'], ['automilOnly', 'only turns with automil commands']].map(([key, label]) => {
+      ...[['fold', 'fold runs of tool calls'], ['prompts', 'operator prompts'], ['notifications', 'notifications'], ['system', 'system lines'], ['tools', 'tool calls'], ['thinking', 'thinking'], ['automilOnly', 'only turns with automil commands']].map(([key, label]) => {
         const box = h('input', { type: 'checkbox', checked: filters[key] || null });
         box.addEventListener('change', () => { filters[key] = box.checked; redraw(); });
         return h('label', box, label);
       }),
     );
     listEl.append(filterEl);
-    page.append(h('div.agent', listEl, h('div', h('div.pane-head', { style: { border: 0, paddingLeft: 0 } },
+    page.append(h('div.agent', listEl, h('div', h('div.session-head',
       h('h3', `Session ${fmt.shortId(sid)}`),
       h('span.muted.small.session-cwd', session.cwd ? `in ${session.cwd}` : ''),
-      h('span.spacer'),
-      h('span.muted.small', session.ended_by ? `ended (${session.ended_by})` : session.live ? 'live' : 'recorded'),
+      h('span.label', { style: { marginLeft: 'auto' } }, session.ended_by ? `ended, ${session.ended_by}` : session.live ? 'live' : 'recorded'),
     ), turnsEl, loadMore)));
 
     let turns = [];
@@ -204,11 +241,25 @@
       if (openTurn) appendOpen(openTurn);
     }
     function appendTurns(list) {
+      const ctx = { filters, run };
+      let group = [];
+      const flush = () => {
+        if (!group.length) return;
+        if (group.length >= 2) turnsEl.append(foldBlock(run, sid, group, ctx));
+        else turnsEl.append(renderTurn(run, sid, group[0], ctx));
+        group = [];
+      };
       for (const turn of list) {
         if (drawn.has(turn.index) || !passes(turn, filters)) continue;
         drawn.add(turn.index);
-        turnsEl.append(renderTurn(run, sid, turn, { filters, run }));
+        if (filters.fold && !filters.automilOnly && toolOnly(turn) && !(turn.tool_calls || []).some((c) => c.automil && c.automil.created.length)) {
+          group.push(turn);
+          continue;
+        }
+        flush();
+        turnsEl.append(renderTurn(run, sid, turn, ctx));
       }
+      flush();
     }
     let openEl = null;
     function appendOpen(turn) {

@@ -21,7 +21,10 @@ autoMIL: F2-readiness framework refactor.
   timeline (agent actions, experiment runs, best value on one axis), the
   transcript reader (every turn, tool call, result and subagent, linked to
   the nodes it created), the nodes table, the notes, the runs page and a
-  home page. The hosted site can connect to a user's own server through an
+  home page. The look is a white page with black rules, a visible column grid on
+  the hero, Manrope headlines and JetBrains Mono labels, teal for data only; runs
+  of tool-only turns fold into one line in the transcript. The hosted site can
+  connect to a user's own server through an
   SSH tunnel: the server answers CORS only for `viz.cors_origins`
   (default automil.org) and loopback origins, on the record routes and the
   event stream. The tree is drawn in three dimensions by default (a top-down
