@@ -912,8 +912,10 @@ def _validate_journal_event(raw: object) -> dict[str, Any]:
                 or not attestation
                 or attestation.strip() != attestation
             ):
-                raise ActivityError("operator close requires a non-empty attestation")
-            event["finalized_by"] = "operator-close"
+                raise ActivityError("an attested close requires a non-empty attestation")
+            # Keep the marker as written: the two paths promote the same
+            # stored sample and the ledger exists to tell them apart.
+            event["finalized_by"] = raw["finalized_by"]
             event["attestation"] = attestation
     return event
 

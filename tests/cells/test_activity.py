@@ -428,3 +428,24 @@ def test_journal_sessions_reports_operator_close_and_a_corrupt_journal(tmp_path)
         fh.write("not json\n")
     with pytest.raises(ActivityError):
         journal_sessions(tmp_path)
+
+
+def test_replay_keeps_the_hook_fallback_marker_apart_from_an_operator_close(tmp_path):
+    """Both closes promote the same stored sample; the ledger must still say which ran."""
+    from automil.cells.activity import close_dead_session, journal_sessions
+
+    for session_id, marker in (("s-hook", "hook-exporter-unreachable"), ("s-op", "operator-close")):
+        _record(tmp_path, "SessionStart", 10.0, cell_id=None, session_id=session_id)
+        samples = json.loads((tmp_path / ACTIVITY_SAMPLES_FILENAME).read_text()) if (tmp_path / ACTIVITY_SAMPLES_FILENAME).exists() else {"schema_version": 1, "sessions": {}}
+        samples["sessions"][session_id] = {"active_seconds": 5.0, "observed_at": 12.0}
+        (tmp_path / ACTIVITY_SAMPLES_FILENAME).write_text(json.dumps(samples))
+        close_dead_session(tmp_path, session_id, "runtime gone", finalized_by=marker)
+
+    by_id = {s.session_id: s for s in journal_sessions(tmp_path)}
+    assert by_id["s-hook"].ended_by == "hook-exporter-unreachable"
+    assert by_id["s-op"].ended_by == "operator-close"
+    # the marker survives a full replay of the journal, not only the in-memory write
+    lines = [json.loads(line) for line in (tmp_path / ACTIVITY_JOURNAL_FILENAME).read_text().splitlines()]
+    ends = {e["session_id"]: e["finalized_by"] for e in lines if e["event"] == "session_end"}
+    assert ends == {"s-hook": "hook-exporter-unreachable", "s-op": "operator-close"}
+    assert read_activity_report(tmp_path, "cell-1").event_count >= 0  # replay still validates
