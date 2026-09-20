@@ -35,3 +35,9 @@ outputs/
 # GSD was removed on 2026-08-06. Keep its planning tree from silently
 # reappearing at the repo root if a gsd-* command is ever run here again.
 /.planning/
+
+# public site build (scripts/site/publish.sh); only vercel.json and README are tracked
+site/record/
+site/static/
+site/index.html
+site/.vercel/

@@ -32,7 +32,7 @@ except ImportError:
     print("watchdog required: uv add watchdog")
     sys.exit(1)
 
-from automil.viz.record_routes import DEFAULT_CORS_ORIGINS, cors_middleware, register_record_routes
+from automil.viz.record_routes import DEFAULT_CORS_ORIGINS, cors_headers, cors_middleware, register_record_routes
 
 VIZ_DIR = Path(__file__).parent
 STATIC_DIR = VIZ_DIR / "static"
@@ -245,14 +245,15 @@ watcher = GraphWatcher()
 
 
 async def sse_handler(request):
-    response = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+    }
+    # The stream sends its headers now, so the cross-origin grant (a hosted
+    # site reading this host through a tunnel) has to be decided here.
+    headers.update(cors_headers(request, request.app.get("cors_origins", DEFAULT_CORS_ORIGINS)))
+    response = web.StreamResponse(status=200, headers=headers)
     await response.prepare(request)
 
     initial = await watcher.get_initial()
@@ -355,6 +356,7 @@ def create_app(run_source=None, cors_origins=DEFAULT_CORS_ORIGINS) -> web.Applic
     """
     app = web.Application(middlewares=[cors_middleware(cors_origins), _no_cache_static])
     app["run_source"] = run_source
+    app["cors_origins"] = tuple(cors_origins)
     app.router.add_get("/", index_handler)
     app.router.add_get("/events", sse_handler)
     app.router.add_get("/api/promotion-rate", promotion_rate_handler)

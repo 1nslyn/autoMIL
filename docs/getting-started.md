@@ -282,7 +282,7 @@ automil status              # quick summary
 automil rank                # top-ranked proposals (UCB)
 automil cell list           # cell budget state
 automil orchestrator status # daemon health
-# Open http://localhost:8420 for the 3D dashboard
+# Open http://localhost:8420 for the dashboard (over SSH: ssh -N -L 8420:127.0.0.1:8420 user@host)
 ```
 
 ## How Experiments Run
@@ -397,7 +397,7 @@ test-selection bias — the rigor the framework exists to provide.
 | `automil trajectory record / export` | JSONL trajectory capture + redacted export bundle |
 | `automil start-loop` / `automil stop-loop` | Control agent loop flag |
 | `automil orchestrator start / stop / status` | Manage GPU scheduler daemon |
-| `automil viz start / stop / status` | Manage 3D dashboard |
+| `automil viz start / stop / status / export` | The dashboard site (live), or exported as a static site |
 
 Run `automil <command> --help` for the full flag listing.
 

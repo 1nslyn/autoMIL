@@ -106,6 +106,14 @@ def test_cors_allows_listed_and_loopback_origins_only(tmp_path: Path):
             assert preflight.headers["Access-Control-Allow-Methods"] == "GET, OPTIONS"
             events_preflight = await client.options("/events", headers={"Origin": "https://automil.org"})
             assert events_preflight.status == 204 and events_preflight.headers["Access-Control-Allow-Origin"] == "https://automil.org"
+            # the stream itself sends its headers before any frame, so the grant must be on them
+            stream = await client.get("/events", headers={"Origin": "https://automil.org"})
+            assert stream.status == 200 and stream.headers["Access-Control-Allow-Origin"] == "https://automil.org"
+            assert stream.headers["Content-Type"].startswith("text/event-stream")
+            stream.close()
+            denied_stream = await client.get("/events", headers={"Origin": "https://evil.example"})
+            assert "Access-Control-Allow-Origin" not in denied_stream.headers
+            denied_stream.close()
             # the page itself is not a cross-origin resource
             page = await client.get("/", headers={"Origin": "https://automil.org"})
             assert "Access-Control-Allow-Origin" not in page.headers

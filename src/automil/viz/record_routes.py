@@ -7,7 +7,6 @@ so a wildcard would let any open tab read the record through the tunnel.
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit
 
@@ -32,26 +31,37 @@ def origin_allowed(origin: str | None, allowed: Iterable[str]) -> bool:
     return parts.scheme in ("http", "https") and parts.hostname in _LOOPBACK_HOSTS
 
 
+def cors_headers(request: web.Request, allowed: Iterable[str]) -> dict[str, str]:
+    """The CORS headers a record or events response gets for this request's origin."""
+    origin = request.headers.get("Origin")
+    if not origin or not origin_allowed(origin, allowed):
+        return {}
+    if not (request.path.startswith(RECORD_PREFIX) or request.path == "/events"):
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Vary": "Origin",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Cache-Control, Last-Event-ID",
+        "Access-Control-Allow-Private-Network": "true",
+        "Access-Control-Max-Age": "3600",
+    }
+
+
 def cors_middleware(allowed: Iterable[str]) -> Callable[..., Any]:
     allowed = tuple(allowed)
 
     @web.middleware
     async def middleware(request: web.Request, handler: Callable[..., Any]) -> web.StreamResponse:
-        origin = request.headers.get("Origin")
-        cross = origin_allowed(origin, allowed) and (
-            request.path.startswith(RECORD_PREFIX) or request.path == "/events"
-        )
         if request.method == "OPTIONS":
             response: web.StreamResponse = web.Response(status=204)
         else:
             response = await handler(request)
-        if cross and origin:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Vary"] = "Origin"
-            response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Cache-Control, Last-Event-ID"
-            response.headers["Access-Control-Allow-Private-Network"] = "true"
-            response.headers["Access-Control-Max-Age"] = "3600"
+        # A streaming response (SSE) has already sent its headers: the handler
+        # merged them itself through cors_headers before preparing.
+        if not response.prepared:
+            for name, value in cors_headers(request, allowed).items():
+                response.headers[name] = value
         return response
 
     return middleware
@@ -140,5 +150,3 @@ def register_record_routes(app: web.Application) -> None:
 async def _preflight(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
-
-_VALIDATORS = {"run": re.compile(_RUN), "node": re.compile(_NODE), "session": re.compile(_SESSION)}

@@ -64,7 +64,7 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 - Experiment tracking (directed tree, not flat log)
 - Knowledge persistence (learnings.md)
 - Result evaluation (val-firewall + Ladder keep/discard)
-- 3D visualization (live dashboard)
+- A site that shows the tree, the agent's transcript and every attempt's record, live or exported
 
 </td>
 </tr>
@@ -94,7 +94,7 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 | **Trajectory recorder**              | Per-submit JSONL using OpenTelemetry `gen_ai.*` keys with secret redaction (`sk-…`, `hf_…`, AWS keys) and bounded rotation (5 MB soft / 50 MB hard).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Multi-GPU orchestrator**           | Background daemon with bin packing, OOM detection, crash recovery, namespaced `running/<backend>/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | **Experiment tree**                  | UCB-inspired scoring balances exploitation and exploration across branches; primary_value-dominance keep/discard gated by the Ladder keep-margin, on a **validation-only** primary_value scalar (the val-firewall).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **3D dashboard**                     | Interactive Three.js visualization with live SSE updates (`localhost:8420`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Dashboard and site**               | `automil viz start` serves the project site at `localhost:8420`: the lineage tree with the value chart, the discovery timeline, the agent transcript (every tool call and result, linked to the nodes it created), every node's record and the notes, updated live. `automil viz export` writes the same site with the run recorded inside it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | **Persistent learnings**             | Knowledge accumulates across sessions. Agents don't repeat mistakes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Setup validation**                 | `automil check` validates protected files, registry purity, backend directives, and `env.required` before experiments run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
@@ -223,7 +223,7 @@ automil orchestrator start
 
 # Terminal 2: visualization (optional)
 tmux new -s viz
-automil viz start            # dashboard at localhost:8420
+automil viz start            # site at localhost:8420 (prints the ssh -L line when over SSH)
 # Ctrl-b d to detach
 
 # Terminal 3: agent loop
@@ -237,7 +237,7 @@ claude --dangerously-skip-permissions   # autonomous mode, no permission prompts
 ```bash
 automil status               # quick summary
 automil rank                 # top proposals
-# Open http://localhost:8420  # 3D experiment tree
+# Open http://localhost:8420  # tree, timeline, agent transcript, nodes, notes
 ```
 
 ---
@@ -404,7 +404,7 @@ automil trajectory record / export                JSONL trajectory capture and r
 # Loop + daemons
 automil start-loop / stop-loop                    Control agent loop flag
 automil orchestrator start / stop / status        GPU scheduler daemon (best-fit bin packing)
-automil viz start / stop / status                 3D visualization dashboard at localhost:8420
+automil viz start / stop / status / export        Dashboard site at localhost:8420; export writes it as a static site
 ```
 
 Run `automil <command> --help` for full flag listings.
