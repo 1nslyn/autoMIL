@@ -1,11 +1,15 @@
 #!/bin/bash
-# SLURM: preprint campaign v3 native baselines — ONE full node, 4x H100.
+# SLURM: preprint campaign native baselines — 2x H100, two workers per GPU.
 #
 # Runs `campaign_stage.py run-baseline` for every not-yet-registered cell of
 # the active roster (tcga_luad, tcga_hnsc, cptac_pdac — reduced 2026-08-23),
-# packing 4 workers onto the node's 4 GPUs. Idempotent: registered cells are
-# skipped, an interrupted cell retrains on the next pass. Auto-resubmits
-# before the 24h wall (SIGUSR1) while unregistered work remains.
+# packing WORKERS_PER_GPU workers onto each of the job's GPUs (a baseline
+# training is feature-I/O bound: ~10% of one H100 and ~50 GB of RAM per
+# worker, so one worker per GPU on a whole node paid four GPUs for one
+# GPU's work). Idempotent: registered cells are skipped, an interrupted cell
+# retrains on the next pass. Auto-resubmits before the 24h wall (SIGUSR1)
+# while unregistered work remains. BL_WORKERS_PER_GPU in the environment
+# overrides the packing (it travels into the resubmitted generations).
 # The 10 Gate-1 regime cells (LUAD uni_v2 x 4 tile arms + TITAN, x kras/os)
 # are ordered first so every arm/task regime is exercised earliest.
 #
@@ -17,9 +21,9 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=48
-#SBATCH --gpus-per-node=h100:4
-#SBATCH --mem=0
+#SBATCH --cpus-per-task=24
+#SBATCH --gpus-per-node=h100:2
+#SBATCH --mem=256G
 #SBATCH --signal=B:USR1@300
 #SBATCH --output=logs/bl_campaign_%j.out
 #SBATCH --error=logs/bl_campaign_%j.err
@@ -49,7 +53,8 @@ ROSTER="$PROJECT_DIR/benchmarks/campaigns/preprint_130/active_roster.json"
 # The mirror mapping, the sealed/public split, and the hash-verified
 # EXPORT_OK marker all live in ONE place — campaign_export.py — and the
 # destination root comes from AUTOBENCH_EXPORT_ROOT in benchmarks/.env.
-N_GPUS=4
+N_GPUS="${SLURM_GPUS_ON_NODE:-2}"
+WORKERS_PER_GPU="${BL_WORKERS_PER_GPU:-2}"
 
 cd "$PROJECT_DIR" || { echo "ERROR: project dir not found: $PROJECT_DIR"; exit 1; }
 [ -d "$RUNTIME" ] || { echo "ERROR: runtime not materialized: $RUNTIME"; exit 1; }
@@ -198,21 +203,21 @@ export_registered() {
     fi
 }
 
-worker() {
-    local gpu="$1" cell rc
+worker() {  # worker-id gpu
+    local id="$1" gpu="$2" cell rc
     while :; do
         cell=$(pop_cell)
         [ -n "$cell" ] || break
-        echo "[gpu$gpu] $(date +%H:%M:%S) start $cell"
+        echo "[w$id/gpu$gpu] $(date +%H:%M:%S) start $cell"
         uv run --frozen --no-sync --package autobench \
             python benchmarks/scripts/campaign_stage.py run-baseline \
             --cell-root "$RUNTIME/$cell" --gpu "$gpu" \
             > "logs/baseline_cells/${cell}.log" 2>&1
         rc=$?
-        echo "[gpu$gpu] $(date +%H:%M:%S) done  $cell rc=$rc"
+        echo "[w$id/gpu$gpu] $(date +%H:%M:%S) done  $cell rc=$rc"
         if [ "$rc" -eq 0 ]; then
             if export_cell "$cell" && [ "$EXPORT_ENABLED" -eq 1 ]; then
-                echo "[gpu$gpu] exported $cell"
+                echo "[w$id/gpu$gpu] exported $cell"
             fi
         else
             echo "$cell rc=$rc" >> "$FAIL_FILE"
@@ -221,7 +226,7 @@ worker() {
 }
 
 echo "================================================"
-echo "preprint campaign v3 baselines — roster: $ROSTER"
+echo "preprint campaign native baselines — roster: $ROSTER"
 echo "Job ${SLURM_JOB_ID:-N/A} | $(hostname) | $(date)"
 echo "================================================"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv 2>/dev/null || true
@@ -244,8 +249,9 @@ fi
 # across the wall would eat the USR1 resubmit and strand the chain — and the
 # GPUs must not idle behind mirror I/O either. The exporter's per-cell
 # destination lock makes the concurrent catch-up and worker exports safe.
-for gpu in $(seq 0 $((N_GPUS - 1))); do
-    worker "$gpu" &
+echo "workers: $((N_GPUS * WORKERS_PER_GPU)) ($WORKERS_PER_GPU per GPU on $N_GPUS GPUs)"
+for w in $(seq 0 $((N_GPUS * WORKERS_PER_GPU - 1))); do
+    worker "$w" "$((w % N_GPUS))" &
 done
 export_registered &
 while [ -n "$(jobs -pr)" ]; do

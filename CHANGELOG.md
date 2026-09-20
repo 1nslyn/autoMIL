@@ -133,7 +133,11 @@ autoMIL: F2-readiness framework refactor.
   scheduler seam and the two DTFD roles are exercised on a DTFD cell only;
   the frozen agent protocol was rebuilt from the corrected brief with the
   model name `Claude Opus 5 (1M context)`, and the manifest regenerated for
-  the new protocol field.
+  the new protocol field. The grid baseline launcher
+  (`submit_baseline_campaign.sh`) asks for two H100s, 24 cores and 256 GB
+  and packs two workers per GPU instead of taking a whole node for one
+  worker per GPU: a baseline training is feature-I/O bound (about a tenth of
+  one GPU), so the old shape paid four GPUs for one GPU's work.
 
 - **Companion non-inferiority guard: a veto without a vote.** Single-metric
   selection stays exactly as it was — the argmax is taken over
