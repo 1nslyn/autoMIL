@@ -102,3 +102,27 @@ def test_policy_should_stop_receives_the_metrics():
     runtime.should_stop(False, epoch=0, metrics=metrics)
     assert _Recorder.seen is not None
     assert set(_Recorder.seen) == EXPECTED_KEYS
+
+
+class _TrackerRecorder:
+    """Stands in for CLAM's EarlyStopping: records what validate() scores."""
+
+    def __init__(self):
+        self.scores = []
+        self.early_stop = False
+
+    def __call__(self, epoch, score, model, ckpt_name=None):
+        self.scores.append(score)
+
+
+@pytest.mark.parametrize("validator", [cu.validate, cu.validate_clam])
+def test_validate_feeds_val_auc_into_the_tracker(validator, tmp_path):
+    """Protocol v4: the checkpoint tracker scores the primary metric (val AUC),
+    never the loss the same call also computes."""
+    tracker = _TrackerRecorder()
+    _, metrics = validator(
+        0, 0, _TinyClam(), _loader(), 2, early_stopping=tracker,
+        loss_fn=nn.CrossEntropyLoss(), results_dir=str(tmp_path),
+    )
+    assert tracker.scores == [metrics["val_auc"]] == [1.0]
+    assert tracker.scores[0] != metrics["val_loss"]
