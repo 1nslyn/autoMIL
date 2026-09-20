@@ -1,10 +1,12 @@
 #!/bin/bash
 # Native five-fold baselines for a rehearsal set (a cell-root directory beside
-# the final grid, see runtime-rehearsal.roster.json). One job, two H100s, one
-# worker per GPU; each worker runs `campaign_stage.py run-baseline` for its
-# share of the set's unregistered cells (longest cells first, so the two
-# workers finish together). Idempotent: registered cells are skipped. Nothing
-# is mirrored to the export root: a rehearsal never enters the final grid.
+# the final grid, see runtime-rehearsal.roster.json). One job, one H100, two
+# workers on it (a baseline training is feature-I/O bound: about a tenth of
+# one GPU and ~50 GB of RAM per worker; BL_WORKERS_PER_GPU overrides); each
+# worker runs `campaign_stage.py run-baseline` for its share of the set's
+# unregistered cells in roster order. Idempotent: registered cells are
+# skipped. Nothing is mirrored to the export root: a rehearsal never enters
+# the final grid.
 #
 # Usage, from the campaign checkout root, as the member who owns the set:
 #   sbatch --account=def-jma-ab benchmarks/scripts/slurm/submit_rehearsal_baselines.sh runtime-rehearsal
@@ -13,9 +15,9 @@
 #SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=24
-#SBATCH --gpus-per-node=h100:2
-#SBATCH --mem=256G
+#SBATCH --cpus-per-task=12
+#SBATCH --gpus-per-node=h100:1
+#SBATCH --mem=128G
 #SBATCH --output=logs/rehearsal_baselines_%j.out
 #SBATCH --error=logs/rehearsal_baselines_%j.err
 
@@ -31,7 +33,8 @@ umask 007
 module load cuda/12.2 2>/dev/null || true
 set -a; source benchmarks/.env; set +a
 export UV_FROZEN=1 UV_NO_SYNC=1
-N_GPUS="${SLURM_GPUS_ON_NODE:-2}"
+N_GPUS="${SLURM_GPUS_ON_NODE:-1}"
+N_WORKERS=$((N_GPUS * ${BL_WORKERS_PER_GPU:-2}))
 LOG_DIR="$PROJECT_DIR/logs/baseline_cells/$RUNTIME_NAME"; mkdir -p "$LOG_DIR"
 
 # Unregistered cells of the set, longest predicted first (5-fold hours from
@@ -48,14 +51,14 @@ for cell in roster["cell_ids"]:
         print(cell)
 PYEOF
 ) || { echo "ERROR: $PENDING"; exit 1; }
-echo "set $RUNTIME_NAME | $(echo "$PENDING" | grep -c .) unregistered cells | $N_GPUS GPUs | $(hostname) | $(date)"
+echo "set $RUNTIME_NAME | $(echo "$PENDING" | grep -c .) unregistered cells | $N_WORKERS workers on $N_GPUS GPU(s) | $(hostname) | $(date)"
 [ -n "$PENDING" ] || { echo "nothing to do"; exit 0; }
 
-worker() {  # gpu
-    local gpu="$1" i=0 cell rc=0
+worker() {  # worker-id
+    local id="$1" gpu=$(($1 % N_GPUS)) i=0 cell rc=0
     while IFS= read -r cell; do
         [ -n "$cell" ] || continue
-        if [ $((i % N_GPUS)) = "$gpu" ]; then
+        if [ $((i % N_WORKERS)) = "$id" ]; then
             echo "[gpu $gpu] $(date +%H:%M) run-baseline $cell"
             if uv run --frozen --no-sync --package autobench python benchmarks/scripts/campaign_stage.py run-baseline \
                     --cell-root "$RUNTIME/$cell" --gpu "$gpu" > "$LOG_DIR/$cell.log" 2>&1; then
@@ -68,7 +71,7 @@ worker() {  # gpu
     done <<< "$PENDING"
     return $rc
 }
-pids=(); for g in $(seq 0 $((N_GPUS - 1))); do worker "$g" & pids+=($!); done
+pids=(); for w in $(seq 0 $((N_WORKERS - 1))); do worker "$w" & pids+=($!); done
 RC=0; for pid in "${pids[@]}"; do wait "$pid" || RC=1; done
 chmod -R g+rwX "$RUNTIME" 2>/dev/null || true
 echo "done rc=$RC $(date)"; exit $RC
