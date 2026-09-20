@@ -36,6 +36,15 @@ from training.callbacks.early_stopping import (  # noqa: E402
 NAN = float("nan")
 
 
+@pytest.fixture(autouse=True)
+def _restore_torch_grad_state():
+    """The nnMIL trainers are driven here without the autobench wrapper that
+    restores torch's global grad switch after a fold; leave it as found."""
+    was_enabled = torch.is_grad_enabled()
+    yield
+    torch.set_grad_enabled(was_enabled)
+
+
 def _model():
     return torch.nn.Linear(2, 2)
 
