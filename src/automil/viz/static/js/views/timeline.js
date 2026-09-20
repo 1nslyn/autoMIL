@@ -32,10 +32,11 @@
     const domain = domainOverride || fullDomain;
     const x = d3.scaleUtc().domain(domain).range([0, innerW]);
 
-    const laneAgentH = 46;
+    const laneHead = 24; /* a header line per lane: the title sits here, never on a row or a tick */
+    const laneAgentH = laneHead + 46;
     const rowH = Math.max(8, Math.min(14, 420 / Math.max(nodes.length, 1)));
-    const laneRunsH = Math.max(40, nodes.length * rowH);
-    const laneValueH = 90;
+    const laneRunsH = laneHead + Math.max(40, nodes.length * rowH);
+    const laneValueH = laneHead + 90;
     const gap = 26;
     const height = margin.top + laneAgentH + gap + laneRunsH + gap + laneValueH + margin.bottom;
     sel.attr('height', height).attr('viewBox', `0 0 ${width} ${height}`);
@@ -55,16 +56,17 @@
 
     /* agent lane */
     let y0 = 0;
-    g.append('text').attr('class', 'lane-label').attr('x', -10).attr('y', y0 + 14).attr('text-anchor', 'end').text('agent');
+    const laneTitle = (y, text) => g.append('text').attr('class', 'lane-label').attr('x', -margin.left + 16).attr('y', y + 14).attr('text-anchor', 'start').text(text);
+    laneTitle(y0, 'agent');
     for (const s of timeline.sessions) {
       const start = parse(s.opened_at) || parse(s.first_at);
       const end = parse(s.ended_at) || (s.live ? now : null);
       if (!start) continue;
-      body.append('rect').attr('class', 'session-span').attr('x', x(start)).attr('y', y0).attr('width', Math.max(2, x(end || start) - x(start))).attr('height', 8)
+      body.append('rect').attr('class', 'session-span').attr('x', x(start)).attr('y', y0 + laneHead).attr('width', Math.max(2, x(end || start) - x(start))).attr('height', 8)
         .append('title').text(`session ${s.session_id}`);
     }
     const marks = timeline.events.filter((e) => MARK_KINDS.includes(e.kind) && parse(e.at));
-    const markY = { prompt: 14, propose: 24, submit: 24, reconcile: 34, rank: 34, notification: 14, compact: 34 };
+    const markY = { prompt: laneHead + 14, propose: laneHead + 24, submit: laneHead + 24, reconcile: laneHead + 34, rank: laneHead + 34, notification: laneHead + 14, compact: laneHead + 34 };
     body.selectAll('rect.mark').data(marks).enter().append('rect').attr('class', 'mark')
       .attr('x', (e) => x(parse(e.at)) - 3).attr('y', (e) => y0 + markY[e.kind]).attr('width', 6).attr('height', 9).attr('rx', 1)
       .attr('fill', (e) => ({ prompt: AM.cssVar('--ink'), propose: AM.cssVar('--sand'), submit: AM.cssVar('--accent'), reconcile: AM.cssVar('--cyan-light'), rank: AM.cssVar('--cyan-light'), notification: AM.cssVar('--amber-light'), compact: AM.cssVar('--faint') }[e.kind]))
@@ -77,8 +79,9 @@
 
     /* runs lane */
     y0 = laneAgentH + gap;
-    g.append('text').attr('class', 'lane-label').attr('x', -10).attr('y', y0 + 12).attr('text-anchor', 'end').text('experiments');
-    const rows = body.selectAll('g.row').data(nodes).enter().append('g').attr('class', 'row').attr('transform', (n, i) => `translate(0,${y0 + i * rowH})`);
+    laneTitle(y0, 'experiments');
+    const rowsTop = y0 + laneHead;
+    const rows = body.selectAll('g.row').data(nodes).enter().append('g').attr('class', 'row').attr('transform', (n, i) => `translate(0,${rowsTop + i * rowH})`);
     rows.filter((n) => parse(n.submitted_at) && (parse(n.launched_at) || parse(n.completed_at))).append('rect').attr('class', 'bar queued')
       .attr('x', (n) => x(parse(n.submitted_at))).attr('y', rowH * 0.3).attr('height', rowH * 0.4)
       .attr('width', (n) => Math.max(1, x(parse(n.launched_at) || parse(n.completed_at)) - x(parse(n.submitted_at))));
@@ -93,13 +96,13 @@
       .on('click', (event, n) => AM.nodeDrawer.open(run, n.node_id))
       .style('cursor', 'pointer');
     if (rowH >= 11) {
-      g.selectAll('text.rowlabel').data(nodes).enter().append('text').attr('x', -10).attr('y', (n, i) => y0 + i * rowH + rowH * 0.75).attr('text-anchor', 'end')
+      g.selectAll('text.rowlabel').data(nodes).enter().append('text').attr('x', -10).attr('y', (n, i) => rowsTop + i * rowH + rowH * 0.75).attr('text-anchor', 'end')
         .attr('font-size', 9).text((n) => n.node_id.replace('node_', ''));
     }
 
     /* value lane: best kept value at completion time */
     y0 = laneAgentH + gap + laneRunsH + gap;
-    g.append('text').attr('class', 'lane-label').attr('x', -10).attr('y', y0 + 12).attr('text-anchor', 'end').text('best value');
+    laneTitle(y0, 'best value');
     const done = nodes.filter((n) => parse(n.completed_at) && n.primary_value != null && !['crash', 'cancelled', 'partial'].includes(n.status))
       .sort((a, b) => parse(a.completed_at) - parse(b.completed_at));
     const values = done.map((n) => n.primary_value);
@@ -108,7 +111,7 @@
     if (values.length) {
       let [lo, hi] = d3.extent(values);
       if (lo === hi) { lo -= 0.01; hi += 0.01; }
-      const y = d3.scaleLinear().domain([lo, hi]).range([y0 + laneValueH, y0 + 4]).nice();
+      const y = d3.scaleLinear().domain([lo, hi]).range([y0 + laneValueH - 6, y0 + laneHead + 6]).nice();
       g.append('g').attr('class', 'axis').call(d3.axisLeft(y).ticks(3).tickFormat(d3.format('.3f')).tickSize(0)).select('.domain').remove();
       let best = baseline && baseline.primary_value != null ? baseline.primary_value : -Infinity;
       const steps = [];
