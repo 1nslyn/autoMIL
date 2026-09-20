@@ -50,8 +50,9 @@ autoMIL: F2-readiness framework refactor.
   and every policy file is smoke-run through the trainers' three call
   orders (reading `param_groups` as nnMIL does, nnMIL's order also through
   a `GradScaler`), the stopping seam exactly as the cell's arm drives it
-  (its metrics dict, its first validated epoch, on DTFD after the tiers and
-  their schedulers exist) and DTFD's wrap order (both tier optimizers, then
+  (its metrics dict, its first validated epoch, its own call order between
+  two decisions, on DTFD after the tiers and their schedulers exist) and
+  DTFD's wrap order (both tier optimizers, then
   both `MultiStepLR` schedulers, before either trains), at submit
   (`registry.policy_smoke`, `autobench.pipeline.policy_smoke --task-family
   --arm`), so a policy that would

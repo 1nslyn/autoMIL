@@ -62,15 +62,14 @@ def _cell(root: Path, arm: str = "nnmil", task_family: str = "binary", log: str 
     return root
 
 
-def _node(root: Path, node_id: str, log: str, status: str = "discard") -> None:
-    """A node archive with its run log and the framework's verdict in graph.json."""
+def _node(root: Path, node_id: str, log: str, status: str = "completed") -> None:
+    """A node archive with its run log and the daemon's completion record."""
     archive = root / "automil" / "orchestrator" / "archive" / node_id
     archive.mkdir(parents=True)
     (archive / "run.log").write_text(log)
-    graph_path = root / "automil" / "graph.json"
-    graph = json.loads(graph_path.read_text()) if graph_path.exists() else {"nodes": {}}
-    graph["nodes"][node_id] = {"status": status}
-    graph_path.write_text(json.dumps(graph))
+    completed = root / "automil" / "orchestrator" / "completed"
+    completed.mkdir(parents=True, exist_ok=True)
+    (completed / f"{node_id}.json").write_text(json.dumps({"id": node_id, "status": status}))
 
 
 def _all_rows(mod, root: Path, rule):
@@ -136,24 +135,29 @@ def test_replay_stops_where_the_v4_trainer_would_and_flags_a_later_maximum(mod, 
 
 def test_a_killed_or_crashed_candidate_never_ranks_as_winner(mod, tmp_path):
     """A discovery attempt killed after two of three fold segments, or one
-    the framework recorded as crashed (a crash in the final evaluation
-    leaves every ``[selected]`` line in the log), must not become the cell's
-    best node; the required fold count comes from the stage, never from the
-    longest log."""
+    the daemon recorded as crashed or partial (a crash or a budget kill in
+    the final evaluation leaves every ``[selected]`` line in the log, and a
+    reconciled graph maps partial to discard), or one without a completion
+    record, must not become the cell's best node; the required fold count
+    comes from the stage, never from the longest log."""
     fold = "[epoch 0] val_loss=0.5 val_auc={v}\n[selected] epoch=0 source=best\n"
     root = _cell(tmp_path / "k", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
     n = mod.FOLDS_REQUIRED["node"]
-    _node(root, "node_0002", fold.format(v=0.99) * 2)                       # killed mid-run
+    _node(root, "node_0002", fold.format(v=0.99) * 2, status="crash")      # killed mid-run
     _node(root, "node_0003", fold.format(v=0.70) * n)                       # complete
     _node(root, "node_0004", fold.format(v=0.98) * n, status="crash")       # crashed after the folds
+    _node(root, "node_0005", fold.format(v=0.97) * n, status="partial")     # budget-killed in the final eval
     cell = mod.load_cell(root)
     summary = mod.cell_summary(cell.cell_id, _all_rows(mod, root, mod.StopRule(patience=10)))
     assert summary[1] == pytest.approx(0.60)          # baseline old-rule mean
     assert summary[5] == "node_0003" and summary[8] == "node_0003"
     # a cell whose every candidate was killed or crashed has no best node at all
     orphaned = _cell(tmp_path / "o", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
-    _node(orphaned, "node_0002", fold.format(v=0.99) * 2)
+    _node(orphaned, "node_0002", fold.format(v=0.99) * 2, status="crash")
     _node(orphaned, "node_0003", fold.format(v=0.99) * n, status="crash")
+    archive = orphaned / "automil" / "orchestrator" / "archive" / "node_0006"    # no record at all
+    archive.mkdir(parents=True)
+    (archive / "run.log").write_text(fold.format(v=0.99) * n)
     cell = mod.load_cell(orphaned)
     summary = mod.cell_summary(cell.cell_id, _all_rows(mod, orphaned, mod.StopRule(patience=10)))
     assert summary[5] == "" and summary[8] == ""

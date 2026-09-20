@@ -38,6 +38,12 @@ STEPS_PER_ORDER = 3
 ROLES = ("tier1", "tier2")
 TASK_FAMILIES = ("classification", "survival")
 ARMS = ("abmil", "clam", "dtfd", "nnmil", "titan")
+#: The call order each arm's trainer uses between two stopping decisions.
+ARM_ORDER = {
+    "titan": CALL_ORDERS[0], "nnmil": CALL_ORDERS[0],
+    "abmil": CALL_ORDERS[1], "dtfd": CALL_ORDERS[1],
+    "clam": CALL_ORDERS[2],
+}
 
 
 class SmokeFailure(Exception):
@@ -98,25 +104,31 @@ def _run_order(order: str, policy_cls: type, *, scaled: bool = False) -> None:
     scaler = torch.amp.GradScaler("cpu", enabled=True) if scaled else None
     criterion = nn.CrossEntropyLoss()
     for _ in range(STEPS_PER_ORDER):
-        # nnMIL reads the learning rate off the wrapper every epoch; every
-        # scheduler the trainers attach mutates the same param_groups.
-        optimizer.param_groups[0]["lr"]
-        if order.startswith("zero_grad"):
-            optimizer.zero_grad()
-        loss = criterion(model(features), labels)
-        if order.startswith("forward -> zero_grad"):
-            optimizer.zero_grad()
-        if scaler is not None:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            optimizer.step()
-        if order.endswith("zero_grad"):
-            optimizer.zero_grad()
+        loss = _train_step(order, model, optimizer, criterion, features, labels, scaler)
         if not torch.isfinite(loss):
             raise SmokeFailure(f"loss became non-finite under {order}")
+
+
+def _train_step(order, model, optimizer, criterion, features, labels, scaler=None):
+    """One optimizer step in the given call order."""
+    # nnMIL reads the learning rate off the wrapper every epoch; every
+    # scheduler the trainers attach mutates the same param_groups.
+    optimizer.param_groups[0]["lr"]
+    if order.startswith("zero_grad"):
+        optimizer.zero_grad()
+    loss = criterion(model(features), labels)
+    if order.startswith("forward -> zero_grad"):
+        optimizer.zero_grad()
+    if scaler is not None:
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        loss.backward()
+        optimizer.step()
+    if order.endswith("zero_grad"):
+        optimizer.zero_grad()
+    return loss
 
 
 def _stop_metrics(arm: str | None, family: str, epoch: int, loss: float) -> dict[str, float]:
@@ -185,10 +197,12 @@ def _run_dtfd_tiers(policy_cls: type) -> None:
 
 
 def _run_stopping(policy_cls: type, arm: str | None, family: str) -> None:
-    """The stopping seam as the arm's trainer drives it: on DTFD after both
-    tiers and their schedulers exist on the same runtime (a policy may hold
-    its scheduler and read it here), from the arm's first validated epoch,
-    with the arm's metrics."""
+    """The stopping seam as the arm's trainer drives it: the arm's own call
+    order between two decisions (what a policy arms in ``should_stop`` and
+    performs in the next ``zero_grad`` lands where the trainer puts that
+    call), on DTFD after both tiers and their schedulers exist on the same
+    runtime (a policy may hold its scheduler and read it here), from the
+    arm's first validated epoch, with the arm's metrics."""
     import torch
     from torch import nn
 
@@ -201,16 +215,15 @@ def _run_stopping(policy_cls: type, arm: str | None, family: str) -> None:
         step = lambda: _step_dtfd_tiers(tiers, features, labels)  # noqa: E731
         loss_value = lambda: 0.7  # noqa: E731
     else:
+        order = ARM_ORDER.get(arm, CALL_ORDERS[0])
         optimizer = runtime.wrap_optimizer(torch.optim.Adam(model.parameters(), lr=1e-2))
         criterion = nn.CrossEntropyLoss()
         last = {"loss": 0.7}
 
         def step() -> None:
-            optimizer.zero_grad()
-            loss = criterion(model(features), labels)
-            loss.backward()
-            optimizer.step()
-            last["loss"] = float(loss.detach())
+            last["loss"] = float(
+                _train_step(order, model, optimizer, criterion, features, labels).detach()
+            )
 
         loss_value = lambda: last["loss"]  # noqa: E731
     first = _first_stop_epoch(arm, family)

@@ -86,9 +86,10 @@ class Cell:
     cell_id: str
     arm: str
     task_family: str
-    #: Nodes the framework recorded as completed (graph status keep or
-    #: discard); a crashed run's log may still carry every ``[selected]``
-    #: line, since the markers precede the final evaluation.
+    #: Nodes whose daemon completion record (``orchestrator/completed/<node>.json``)
+    #: says ``completed``: a crashed or budget-killed run's log may still carry
+    #: every ``[selected]`` line (the markers precede the final evaluation),
+    #: and a reconciled graph maps a partial run to ``discard``.
     completed_nodes: frozenset[str]
     baseline_completed: bool
     #: The reproduction attempt the campaign state names (each attempt is a
@@ -170,10 +171,9 @@ def load_cell(root: Path) -> Cell:
         cell_id, arm, family = str(meta["cell_id"]), str(meta["framework"]), str(meta["task_family"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise InputError(f"{meta_path}: {exc!r}") from None
-    nodes = (_read_json(root / "automil" / "graph.json", {}).get("nodes") or {})
     completed = frozenset(
-        node_id for node_id, node in nodes.items()
-        if isinstance(node, dict) and node.get("status") in ("keep", "discard")
+        record.stem for record in (root / "automil" / "orchestrator" / "completed").glob("node_*.json")
+        if (_read_json(record, {}) or {}).get("status") == "completed"
     )
     state = _read_json(root / "campaign_state.json", {})
     baseline_completed = (state.get("baseline") or {}).get("result_status") == "completed"
@@ -194,7 +194,8 @@ def cell_logs(cell: Cell) -> tuple[tuple[str, Path], ...]:
 
 def run_completed(cell: Cell, kind: str) -> bool:
     """Whether the framework recorded the run as completed: the campaign
-    state for the baseline and its reproduction, the graph for a node."""
+    state for the baseline and its reproduction, the daemon's completion
+    record for a node."""
     if kind == "baseline":
         return cell.baseline_completed
     if kind == "baseline-reproduction":

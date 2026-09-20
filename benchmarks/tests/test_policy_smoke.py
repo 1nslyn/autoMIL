@@ -284,6 +284,45 @@ STATEFUL_FROM_EPOCH_ZERO = HEADER.format(name="stateful_from_zero") + '''class S
         return bool(default) or (stalled and epoch > 50)
 '''
 
+SYNC_ARMED_BY_STOP = HEADER.format(name="sync_armed_by_stop") + '''class SyncArmedByStop(PolicyVariant):
+    """Epoch-based Lookahead: should_stop arms a slow-weight sync that the
+    next zero_grad performs in place. Legal where zero_grad precedes the
+    forward pass; on ABMIL zero_grad sits between forward and backward, so
+    the in-place sync trips autograd on the following backward."""
+
+    def wrap_optimizer(self, opt):
+        import torch
+        policy = self
+        policy.armed = False
+
+        class _Wrapped:
+            def __init__(self, inner):
+                self.inner = inner
+                self.slow = [p.detach().clone() for g in inner.param_groups for p in g["params"]]
+
+            @property
+            def param_groups(self):
+                return self.inner.param_groups
+
+            def zero_grad(self, *a, **kw):
+                if policy.armed:
+                    with torch.no_grad():
+                        params = [p for g in self.inner.param_groups for p in g["params"]]
+                        for slow, fast in zip(self.slow, params):
+                            slow.add_(0.5 * (fast - slow))
+                            fast.copy_(slow)
+                self.inner.zero_grad(*a, **kw)
+
+            def step(self, *a, **kw):
+                self.inner.step(*a, **kw)
+
+        return _Wrapped(opt)
+
+    def should_stop(self, *, default, epoch, metrics):
+        self.armed = True
+        return bool(default)
+'''
+
 FORGETS_TIER2 = HEADER.format(name="forgets_tier2") + '''class ForgetsTier2(PolicyVariant):
     def wrap_optimizer(self, opt):
         return opt
@@ -378,6 +417,13 @@ class TestTheStoppingSeamIsJudgedByTaskFamily:
         assert _main(["--arm", "dtfd", path]) == 0
         assert _main(["--arm", "abmil", path]) == 1          # no scheduler ever exists there
         assert "scheduler" in capsys.readouterr().err
+
+    def test_the_stopping_run_uses_the_arms_own_call_order(self, tmp_path, capsys):
+        path = str(_write(tmp_path, "sync_armed_by_stop", SYNC_ARMED_BY_STOP))
+        assert _main(["--arm", "titan", path]) == 0          # zero_grad before forward
+        assert _main(["--arm", "abmil", path]) == 1          # zero_grad between forward and backward
+        err = capsys.readouterr().err
+        assert "stopping seam" in err and "inplace" in err.lower() or "modified" in err.lower()
 
     def test_nnmil_survival_asks_from_epoch_two(self, tmp_path, capsys):
         path = str(_write(tmp_path, "stateful_from_zero", STATEFUL_FROM_EPOCH_ZERO))
