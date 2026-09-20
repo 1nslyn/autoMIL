@@ -69,7 +69,7 @@ def launch_host(tmp_path):
     """A fake repository with one materialized-enough cell, ready to launch."""
     repo_root = tmp_path / "repo"
     runtime_root = repo_root / "runtime"
-    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v3"
+    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v4"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
     (repo_root / "CLAUDE.md").write_text("# repo dev instructions\n")
@@ -172,6 +172,14 @@ def test_committed_policy_carries_the_load_bearing_rules():
         "only on the DTFD arm",
         "never end the session while unspent attempts remain",
         "regularization",
+        # v4: the selection rule, the fixed batches, the phasing fields and
+        # the submit-time smoke run are load-bearing instructions too.
+        "highest primary validation",
+        "8, 8, 8 and 6",
+        "--axis",
+        "--predicted-delta",
+        "--role neighbour",
+        "registry.policy_smoke",
     ):
         assert anchor in text, f"proposal policy lost its {anchor!r} rule"
 

@@ -100,7 +100,7 @@ Your 26 = 13 classification + 13 survival, where 13 = (4 aggregators × 3 tile
 encoders) + 1 TITAN arm. Cell ids look like:
 
 ```
-tcga_luad__kras__uni_v2__clam__s42__preprint-v3
+tcga_luad__kras__uni_v2__clam__s42__preprint-v4
 ```
 
 ---
@@ -219,7 +219,7 @@ Claude session and every command run after `cd` must resolve the same workspace:
 
 ```bash
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
-export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v3"
+export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v4"
 ```
 
 The day-to-day driver is the operator CLI, `campaign_operate.py`. It adds
@@ -255,7 +255,7 @@ before the formal session can start:
   `--gpu N`**. This cell's own discovery/promotion pair on one GPU is exempt
   — that is the normal finish-time state.
 - **tmux session** named from the full cell id, sanitized for tmux (e.g.
-  `tcga_luad__kras__uni_v2__clam__s42__preprint-v3`), with three windows:
+  `tcga_luad__kras__uni_v2__clam__s42__preprint-v4`), with three windows:
   `baseline`, `orch`, `agent`.
 - **`baseline` window**: the manifest-locked five-fold native baseline
   (outside the 30-attempt budget; it takes a lock, so a duplicate refuses).

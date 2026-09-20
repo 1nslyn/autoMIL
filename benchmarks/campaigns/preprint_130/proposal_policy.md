@@ -100,6 +100,8 @@ for current- and prior-year methods relevant to this arm and the current
 bottleneck. Pick 1–2 tractable drop-ins that fit the open surface — no
 rewrites, no data-format changes. Log title + arXiv id in
 `automil/learnings.md` for anything you try, so nothing is re-tried blind.
+Do this once, at the start of the session; run a second pass only when the
+diagnosis changes (a new failure mode, not a new dose of the same axis).
 
 **DIAGNOSE.** Read `automil/graph.json`, recent
 `automil/orchestrator/archive/<node>/result.json` and `run.log`, and
@@ -115,7 +117,13 @@ untried".
 **PLAN.** Rewrite `automil/plan.md`: the diagnosis, then a table of this
 batch's proposals, each with kind, parent, and *hypothesis → expected
 mechanism*. Queue each with
-`uv run --project "$REPO_ROOT" automil propose --parent <id> --kind <k> --desc "..."`.
+`uv run --project "$REPO_ROOT" automil propose --parent <id> --kind <k> --axis <label> --predicted-delta <float> --desc "..."`.
+`--axis` names the one thing the attempt varies (`lr`, `weight_decay`,
+`dropout`, `optimizer`, `schedule`, ... — the same label for the same axis
+every time; the batch checks in §3b read it) and `--predicted-delta` is your
+predicted change of the primary metric, written before launch. Both are
+required. A pre-registered robustness neighbour of the current best node is
+proposed under that node with `--role neighbour`.
 
 **EXECUTE.** `uv run --project "$REPO_ROOT" automil rank`, then submit each
 proposal:
@@ -200,13 +208,26 @@ Consequences you must design around, not discover:
   axis) or drop it. A null result is evidence only where the design could
   have detected the effect; record that detectable size next to every null
   in `automil/learnings.md`.
-- **Phase the budget.** Open with ~8 attempts spanning at least five
-  distinct axes, one change per attempt. Never spend more than three
-  consecutive attempts on one axis without a paired gain above the bar —
-  close the axis and move. Reserve the last ~4 attempts: pre-registered
-  robustness neighbours of the champion (write the predicted result in
-  `automil/plan.md` BEFORE launch) and the strongest untested distinct
-  hypothesis.
+- **The budget is spent in four fixed batches of 8, 8, 8 and 6 attempts,
+  and `automil submit` enforces the structure** (a refused submission costs
+  nothing: read the message and change the proposal). A batch starts only
+  after every attempt of the earlier batches has finished, so plan each
+  batch as a unit and wait for it. The opening batch must span at least
+  five distinct axes, one change per attempt. Never spend more than three
+  consecutive attempts on one axis without a kept result — the fourth is
+  refused unless one of the three was kept. The final batch of six must
+  hold at least two pre-registered robustness neighbours of the current
+  best node (`--role neighbour`, proposed under that node, with the
+  predicted result in `automil/plan.md` BEFORE launch); spend the rest of
+  it on the strongest untested distinct hypotheses. `automil cell status`
+  prints where the cell stands in its batches.
+- **The checkpoint is the epoch with the highest primary validation
+  metric.** Every fold restores and reports the epoch at which `val_auc`
+  (`val_c_index` on a survival cell) was highest; a tie keeps the earlier
+  epoch, and an undefined value never selects. The validation loss is
+  printed on every `[epoch k]` line beside it but does not vote. A recipe
+  therefore cannot gain by moving a loss minimum; it gains only by ranking
+  the validation slides better at some epoch.
 - **Cheapened configurations do not transfer by default.** A finding
   measured under any reduced training configuration (shorter schedule,
   truncated inputs, anything cheaper than the arm's native recipe) is
@@ -233,7 +254,17 @@ policy variant can only adapt what is handed to it:
 
 - `wrap_optimizer(opt)` — **required**; live on every arm. Single-point
   strategies work: Lookahead, gradient clipping, per-group learning rates,
-  custom schedules inside a wrapped `step()`.
+  custom schedules inside a wrapped `step()`. The trainers call the wrapped
+  optimizer in three different orders and your wrapper must survive all
+  three: TITAN, nnMIL and the non-DTFD survival trainers call `zero_grad`
+  BEFORE the forward pass; ABMIL classification and both DTFD tiers call it
+  BETWEEN the forward and the backward pass (anything that changes
+  parameters in place inside `zero_grad` trips autograd's version check on
+  the backward); CLAM calls it AFTER `step()`. `automil submit` runs every
+  policy file through all three orders, the scheduler and stopping seams,
+  and the two DTFD roles on a tiny model before accepting it
+  (`registry.policy_smoke`); a failure there is refused for free and names
+  the order that broke.
 - `wrap_scheduler(sched)` — live **only on the DTFD arm** (both tasks). On
   clam, abmil, titan, and nnmil no scheduler object is ever passed; a
   scheduler wrapper there is silently inert. Do not spend attempts
@@ -290,9 +321,13 @@ wins on `val_auc` is still discarded if its `val_bacc` fell more than that
 margin below its parent's. The margin is one quantization step of balanced
 accuracy on this cell's validation splits — the most a single WORST-CASE
 validation slide changing side can move the number — so a drop that size
-passes and anything larger is rejected. The same guard is applied again at
-the candidate freeze, there against the cell BASELINE rather than your
-parent: a balanced-accuracy collapse cannot be promoted and certified even
+passes. The margin widens with the noise of the comparison the way the
+keep-bar does: the drop is judged against `max(one slide, k × paired SE)`
+of the per-fold balanced-accuracy deltas between the child and its parent,
+so a drop smaller than its own fold-to-fold noise is not evidence of harm;
+`automil rank` prints the bar a `GUARD-FAIL` faced. The same guard is
+applied again at the candidate freeze, there against the cell BASELINE
+rather than your parent: a balanced-accuracy collapse cannot be promoted and certified even
 if it tops the val_auc leaderboard. It can reject, never promote: your
 objective is still `val_auc` alone and nothing is gained by trading
 `val_auc` for `val_bacc`. Practically, treat a discard whose `val_auc`
@@ -316,8 +351,12 @@ ends.
 - No edits to `automil/config.yaml`, `campaign_state.json`,
   `agent_session.json`, `.claude/settings.json`, `graph.json`,
   `results.tsv`, or anything under `automil/orchestrator/`.
-- No files outside this cell root; no reading sibling cell roots under
+- No writes outside this cell root, and no reading sibling cell roots under
   `runtime/` (fresh-cell isolation is a protocol rule, not a suggestion).
+  Reading the dataset root your config points at (`$AUTOBENCH_*_ROOT`) is
+  allowed for metadata only — feature dimensions, slide counts, split
+  sizes, dataset plans, manifests; never open a label, clinical or outcome
+  table there.
 - No manual training runs: every experiment goes through
   `uv run --project "$REPO_ROOT" automil submit` and runs under the
   orchestrator.

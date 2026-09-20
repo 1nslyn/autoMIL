@@ -27,16 +27,20 @@ def _discard_stale_best_checkpoint(save_dir, model_type, logger=None):
 
 
 class EarlyStopping:
-    """Early stopping with metric from plan file for classification"""
-    def __init__(self, patience=7, verbose=False, delta=0, metric='bacc', save_dir=None, model_type=None, logger=None):
+    """Checkpoint tracker on validation AUC (protocol v4), with early stopping.
+
+    The checkpoint saved is the epoch with the highest validation AUC: a
+    strictly higher AUC saves, a tie keeps the earlier epoch, a non-finite AUC
+    never saves and counts toward patience -- the same contract as autobench's
+    SelectionTracker and CLAM's callback. The trainer still computes the
+    validation loss for its epoch line; it does not vote.
+    """
+    def __init__(self, patience=7, verbose=False, save_dir=None, model_type=None, logger=None):
         """
         Args:
-            patience: Early stopping patience
-            verbose: Verbose output
-            delta: Minimum change to qualify as improvement
-            metric: Plan-file metric, REPORTED at the selected checkpoint
-                only (protocol v3 selects on continuous validation loss).
-            save_dir: Directory to save best model
+            patience: Early stopping patience (consecutive epochs without a higher val AUC)
+            verbose: Print progress when no logger is given
+            save_dir: Directory to save the best model
             model_type: Model type name for saving
             logger: Optional logger for logging messages
         """
@@ -44,134 +48,81 @@ class EarlyStopping:
         self.verbose = verbose
         self.counter = 0
         self.best_score = None
-        self.early_stop = False
-        self.delta = delta
         self.save_dir = save_dir
         self.model_type = model_type
         self.logger = logger
         # Epoch of the checkpoint currently saved (-1: none yet). Owned HERE,
         # where the checkpoint is saved, so callers read it instead of
-        # inferring "saved this epoch" from counter == 0 -- an inference any
-        # counter-semantics change would corrupt silently. Callers pass the
+        # inferring "saved this epoch" from counter == 0. Callers pass the
         # true epoch to __call__; the internal per-call counter stands in for
         # callers that do not (one __call__ per epoch).
         self.best_epoch = -1
         self._epochs_seen = 0
         _discard_stale_best_checkpoint(save_dir, model_type, logger)
+        self._log("EarlyStopping: selecting the checkpoint on VAL_AUC (protocol v4)")
 
-        # Use metric from plan file (no hardcoding)
-        metric_lower = metric.lower()
-        if 'kappa' in metric_lower:
-            self.primary_metric = "KAPPA"
-        elif 'auc' in metric_lower:
-            self.primary_metric = "AUC"
-        elif metric_lower in ['bacc', 'balanced_accuracy']:
-            self.primary_metric = "BACC"
-        elif 'f1' in metric_lower:
-            self.primary_metric = "F1"
-        else:
-            # Default to BACC for classification
-            self.primary_metric = "BACC"
-        
-        msg = (f"EarlyStopping: Using VAL_LOSS as selection metric (v3); "
-               f"plan metric {self.primary_metric} (from plan: {metric}) reported, not voting")
+    def _log(self, msg):
         if self.logger:
             self.logger.info(msg)
-        else:
+        elif self.verbose:
             print(msg)
 
-    def __call__(self, val_loss, val_bacc, val_f1, val_auc, model, val_kappa=None, epoch=None):
+    @property
+    def early_stop(self) -> bool:
+        """Patience exhausted right now. Derived from the counter, never
+        latched: a stop a policy suppressed must not stick once the metric
+        improves again (the counter resets, and so does this)."""
+        return self.counter >= self.patience
+
+    def __call__(self, val_auc, model, epoch=None):
         current_epoch = self._epochs_seen if epoch is None else epoch
         self._epochs_seen += 1
 
-        # Protocol v3: the checkpoint is selected on CONTINUOUS validation
-        # loss, never on the reported plan metric. Selecting on plan-BACC
-        # reported the max-over-epochs of a ~34-valued statistic on a
-        # 47-slide validation set, which made epochs-run the strongest
-        # predictor of the reported score (canary 2026-08-16:
-        # corr(epochs_run, primary value) = +0.77; the top-10 selected that way
-        # collapsed onto baseline on held folds, corr(disc, held) = -0.28).
-        # The plan metric is still computed and reported AT the selected
-        # checkpoint -- it just does not vote. Loss is continuous, so
-        # running longer buys no extra draws from a max.
-        score = -val_loss
-
-        # A non-finite loss must never become (or defend) the checkpoint.
+        score = val_auc
+        # A non-finite AUC must never become (or defend) the checkpoint.
         if np.isnan(score) or np.isinf(score):
             score = float("-inf")
-            
+
         if self.best_score is None and score == float("-inf"):
-            # Non-finite val loss with no checkpoint yet: nothing worth
-            # saving. Count toward patience; an all-non-finite run ends with
-            # no checkpoint at all rather than certifying epoch-0 garbage.
+            # Non-finite val AUC with no checkpoint yet: nothing worth saving.
+            # Count toward patience; an all-non-finite run ends with no
+            # checkpoint at all rather than certifying epoch-0 garbage.
             self.counter += 1
-            msg = (f'EarlyStopping: non-finite VAL_LOSS at epoch {current_epoch}; '
-                   f'no checkpoint saved ({self.counter}/{self.patience})')
-            if self.counter >= self.patience:
-                self.early_stop = True
-            if self.logger:
-                self.logger.info(msg)
-            else:
-                print(msg)
+            self._log(f'EarlyStopping: non-finite VAL_AUC at epoch {current_epoch}; '
+                      f'no checkpoint saved ({self.counter}/{self.patience})')
             return
-        elif self.best_score is None:
+        if self.best_score is None:
             self.best_score = score
             self.best_epoch = current_epoch
-            self.save_checkpoint(val_loss, val_bacc, val_f1, val_auc, model, val_kappa)
+            self.save_checkpoint(model)
             # Degenerate epochs may have accumulated patience before the first
             # valid checkpoint; a real save starts the count fresh.
             self.counter = 0
-            msg = f'EarlyStopping: Initial VAL_LOSS = {val_loss:.4f} (v3 loss-selected; plan metric {self.primary_metric} reported, not voting)'
-            if self.logger:
-                self.logger.info(msg)
-            else:
-                print(msg)
-        elif score <= self.best_score + self.delta:
-            # Score did not improve (or improved less than delta)
+            self._log(f'EarlyStopping: Initial VAL_AUC = {score:.4f}')
+        elif score <= self.best_score:
+            # Not strictly better (a tie keeps the earlier epoch).
             self.counter += 1
-            msg = f'EarlyStopping counter: {self.counter}/{self.patience} (VAL_LOSS: {val_loss:.4f} >= best {-self.best_score:.4f} - {self.delta:.4f})'
-            if self.logger:
-                self.logger.info(msg)
-            else:
-                print(msg)
+            self._log(f'EarlyStopping counter: {self.counter}/{self.patience} '
+                      f'(VAL_AUC: {score:.4f} <= best {self.best_score:.4f})')
             if self.counter >= self.patience:
-                self.early_stop = True
-                msg = f'Early stopping triggered! No improvement for {self.patience} epochs.'
-                if self.logger:
-                    self.logger.info(msg)
-                else:
-                    print(msg)
+                self._log(f'Early stopping triggered! No improvement for {self.patience} epochs.')
         else:
-            # Score improved
-            improvement = score - self.best_score
             old_score = self.best_score
             self.best_score = score
             self.best_epoch = current_epoch
-            self.save_checkpoint(val_loss, val_bacc, val_f1, val_auc, model, val_kappa)
+            self.save_checkpoint(model)
             self.counter = 0
-            msg = f'EarlyStopping: VAL_LOSS improved from {-old_score:.4f} to {val_loss:.4f}. Reset counter.'
-            if self.logger:
-                self.logger.info(msg)
-            else:
-                print(msg)
+            self._log(f'EarlyStopping: VAL_AUC improved from {old_score:.4f} to {score:.4f}. Reset counter.')
 
-    def save_checkpoint(self, val_loss, val_bacc, val_f1, val_auc, model, val_kappa=None):
-        msg = 'Checkpoint selection score improved. Saving model...'
-        if self.logger:
-            self.logger.info(msg)
-        else:
-            print(msg)
-        self.best_model_state = model.state_dict().copy()
-        
-        # Save best model to file
+    def save_checkpoint(self, model):
+        self._log('Checkpoint selection score improved. Saving model...')
+        # A true copy: state_dict() tensors alias the live parameters.
+        self.best_model_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
         if self.save_dir and self.model_type:
             best_model_path = os.path.join(self.save_dir, f"best_{self.model_type}.pth")
             torch.save(model.state_dict(), best_model_path)
-            msg = f'Saved best model to {best_model_path}'
-            if self.logger:
-                self.logger.info(msg)
-            else:
-                print(msg)
+            self._log(f'Saved best model to {best_model_path}')
 
 
 class RegressionEarlyStopping:
@@ -292,143 +243,95 @@ class RegressionEarlyStopping:
 
 
 class EarlyStoppingSurvival:
-    """Early stopping for survival analysis using metric from plan file"""
-    def __init__(self, patience=10, verbose=False, delta=0, metric='c_index', save_dir=None, model_type=None, logger=None, mode='max'):
+    """Checkpoint tracker on the validation C-index (protocol v4), with early stopping.
+
+    Same contract as EarlyStopping above: a strictly higher C-index saves, a
+    tie keeps the earlier epoch, a non-finite C-index never saves and counts
+    toward patience. A finite C-index of exactly 0.0 is a (terrible) real score.
+    The trainer still computes the validation loss for its epoch line.
+    """
+    def __init__(self, patience=10, verbose=False, save_dir=None, model_type=None, logger=None):
         """
         Args:
-            patience: Early stopping patience
-            verbose: Verbose output
-            delta: Minimum change to qualify as improvement
-            metric: Primary metric from plan file ('c_index', 'cindex', etc.)
-            save_dir: Directory to save best model
+            patience: Early stopping patience (consecutive epochs without a higher val C-index)
+            verbose: Print progress when no logger is given
+            save_dir: Directory to save the best model
             model_type: Model type name for saving
             logger: Optional logger
-            mode: 'max' selects on val c-index (higher is better); 'min' selects
-                on val loss (lower is better). 'min' is preferred when the val
-                set has too few events for a reliable c-index.
         """
         self.patience = patience
         self.verbose = verbose
         self.counter = 0
         self.best_score = None
-        self.early_stop = False
-        self.delta = delta
         self.save_dir = save_dir
         self.model_type = model_type
         self.logger = logger
-        self.mode = mode
         # Epoch of the checkpoint currently saved (-1: none yet); same
         # contract as EarlyStopping.best_epoch above -- owned where the
         # checkpoint is saved, never inferred from counter == 0.
         self.best_epoch = -1
         self._epochs_seen = 0
+        self.best_model_state = None
         _discard_stale_best_checkpoint(save_dir, model_type, logger)
+        self._log("EarlyStopping: selecting the checkpoint on the validation C-index (protocol v4)")
 
-        # Monitored quantity depends on mode: val loss (min) or c-index (max).
-        self.primary_metric = "val_loss" if mode == 'min' else "C-index"
-
-        msg = f"EarlyStopping: Using {self.primary_metric} ({mode}) as selection metric for survival (from plan: {metric})"
-        if self.logger:
-            self.logger.info(msg)
-        else:
-            print(msg)
-
-    def __call__(self, val_loss, val_c_index, model, epoch=None):
-        current_epoch = self._epochs_seen if epoch is None else epoch
-        self._epochs_seen += 1
-
-        raw = val_loss if self.mode == 'min' else val_c_index
-        # Degeneracy is a property of the RAW observation; a legitimate finite
-        # C-index of exactly 0.0 is a (terrible) real score, not a NaN.
-        degenerate = np.isnan(raw) or np.isinf(raw)
-        # Map non-finite to the worst possible value so it never wins a
-        # comparison against an existing checkpoint either.
-        score = raw
-        if degenerate:
-            score = float('inf') if self.mode == 'min' else -float('inf')
-        if self.best_score is None and degenerate:
-            # Non-finite first observation: nothing worth saving; count toward
-            # patience so an all-degenerate run ends with no checkpoint.
-            self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
-            msg = (f'EarlyStopping: degenerate {self.primary_metric} at epoch '
-                   f'{current_epoch}; no checkpoint saved ({self.counter}/{self.patience})')
-            if self.logger:
-                self.logger.info(msg)
-            elif self.verbose:
-                print(msg)
-            return
-
-        if self.best_score is None:
-            self.best_score = score
-            self.best_epoch = current_epoch
-            self.save_checkpoint(val_loss, val_c_index, model)
-            self.counter = 0  # degenerate epochs before the first save don't linger
-            msg = f'EarlyStopping: Initial {self.primary_metric} = {score:.4f} ({self.mode}-selected)'
-            if self.logger:
-                self.logger.info(msg)
-            elif self.verbose:
-                print(msg)
-            return
-
-        if self.mode == 'min':
-            improved = score < self.best_score - self.delta
-        else:
-            improved = score > self.best_score + self.delta
-
-        if not improved:
-            self.counter += 1
-            msg = f'EarlyStopping counter: {self.counter}/{self.patience} ({self.primary_metric}: {score:.4f} vs best {self.best_score:.4f})'
-            if self.logger:
-                self.logger.info(msg)
-            elif self.verbose:
-                print(msg)
-            if self.counter >= self.patience:
-                self.early_stop = True
-                msg = f'Early stopping triggered! No improvement for {self.patience} epochs.'
-                if self.logger:
-                    self.logger.info(msg)
-                elif self.verbose:
-                    print(msg)
-        else:
-            improvement = abs(score - self.best_score)
-            old_score = self.best_score
-            self.best_score = score
-            self.best_epoch = current_epoch
-            self.save_checkpoint(val_loss, val_c_index, model)
-            self.counter = 0
-            msg = f'EarlyStopping: {self.primary_metric} improved from {old_score:.4f} to {self.best_score:.4f} ({improvement:+.4f}). Reset counter.'
-            if self.logger:
-                self.logger.info(msg)
-            elif self.verbose:
-                print(msg)
-
-    def save_checkpoint(self, val_loss, val_c_index, model):
-        monitored = val_loss if self.mode == 'min' else val_c_index
-        msg = f'Validation {self.primary_metric} improved ({monitored:.4f}). Saving model...'
+    def _log(self, msg):
         if self.logger:
             self.logger.info(msg)
         elif self.verbose:
             print(msg)
-        self.best_model_state = model.state_dict().copy()
-        
-        # Save best model to file
+
+    @property
+    def early_stop(self) -> bool:
+        """Patience exhausted right now. Derived from the counter, never
+        latched: a stop a policy suppressed must not stick once the metric
+        improves again (the counter resets, and so does this)."""
+        return self.counter >= self.patience
+
+    def __call__(self, val_c_index, model, epoch=None):
+        current_epoch = self._epochs_seen if epoch is None else epoch
+        self._epochs_seen += 1
+
+        score = val_c_index
+        # Degeneracy is a property of the RAW observation; a legitimate finite
+        # C-index of exactly 0.0 is a (terrible) real score, not a NaN.
+        if np.isnan(score) or np.isinf(score):
+            score = float("-inf")
+
+        if self.best_score is None and score == float("-inf"):
+            # Non-finite first observation: nothing worth saving; count toward
+            # patience so an all-degenerate run ends with no checkpoint.
+            self.counter += 1
+            self._log(f'EarlyStopping: degenerate C-index at epoch {current_epoch}; '
+                      f'no checkpoint saved ({self.counter}/{self.patience})')
+            return
+        if self.best_score is None:
+            self.best_score = score
+            self.best_epoch = current_epoch
+            self.save_checkpoint(model)
+            self.counter = 0  # degenerate epochs before the first save don't linger
+            self._log(f'EarlyStopping: Initial C-index = {score:.4f}')
+        elif score <= self.best_score:
+            # Not strictly better (a tie keeps the earlier epoch).
+            self.counter += 1
+            self._log(f'EarlyStopping counter: {self.counter}/{self.patience} '
+                      f'(C-index: {score:.4f} <= best {self.best_score:.4f})')
+            if self.counter >= self.patience:
+                self._log(f'Early stopping triggered! No improvement for {self.patience} epochs.')
+        else:
+            old_score = self.best_score
+            self.best_score = score
+            self.best_epoch = current_epoch
+            self.save_checkpoint(model)
+            self.counter = 0
+            self._log(f'EarlyStopping: C-index improved from {old_score:.4f} to {score:.4f}. Reset counter.')
+
+    def save_checkpoint(self, model):
+        self._log(f'Validation C-index improved ({self.best_score:.4f}). Saving model...')
+        # A true copy: state_dict() tensors alias the live parameters.
+        self.best_model_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
         if self.save_dir and self.model_type:
             best_model_path = os.path.join(self.save_dir, f"best_{self.model_type}.pth")
             torch.save(model.state_dict(), best_model_path)
-            msg = f'Saved best model to {best_model_path}'
-            if self.logger:
-                self.logger.info(msg)
-            elif self.verbose:
-                print(msg)
-    
-    def load_best_model(self, model):
-        """Load the best model weights"""
-        if hasattr(self, 'best_model_state'):
-            model.load_state_dict(self.best_model_state)
-            return True
-        return False
-
-
-
+            self._log(f'Saved best model to {best_model_path}')

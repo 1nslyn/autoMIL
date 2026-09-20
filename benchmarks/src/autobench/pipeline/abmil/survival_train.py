@@ -6,6 +6,7 @@ loop.
 
 from __future__ import annotations
 
+import copy
 import os
 import random
 import sys
@@ -23,6 +24,7 @@ from autobench.pipeline.evaluate import (
     write_survival_predictions_csv,
 )
 from autobench.pipeline.policy_dispatch import PolicyRuntime
+from autobench.pipeline.selection import SelectionTracker
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -30,7 +32,6 @@ if str(LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(LIB_ROOT))
 from nnMIL.training.losses.survival_loss import SurvivalLoss, survival_c_index  # noqa: E402
 from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss  # noqa: E402
-from nnMIL.training.callbacks.early_stopping import EarlyStoppingSurvival  # noqa: E402
 
 # Slides per optimizer step. For cox this is the risk set; each slide is a
 # full bag held in the graph until backward, so keep it modest (same as CLAM).
@@ -156,10 +157,10 @@ def train_abmil_survival_fold(
         optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
         policy_runtime = policy_runtime or PolicyRuntime()
         optimizer = policy_runtime.wrap_optimizer(optimizer)
-        early_stopping = EarlyStoppingSurvival(
-            patience=cfg.patience, verbose=True, metric="c_index",
-            save_dir=fold_dir, model_type=model_type, mode="min",
-        )
+        # Protocol v4: the checkpoint is selected on the primary validation
+        # metric, the in-fold C-index; the val loss is reported beside it.
+        tracker = SelectionTracker(cfg.patience)
+        best_snap: dict | None = None  # None: nothing selected; final weights kept
 
         def _batch_loss(batch: list[ABMILSurvivalSlide]) -> torch.Tensor:
             logits_list = [_bag_logits(model, _read_bag(s.h5_path), device) for s in batch]
@@ -226,10 +227,11 @@ def train_abmil_survival_fold(
                     f"    [ABMIL-surv fold] epoch {epoch + 1}: "
                     f"val_loss={v_loss:.4f} val_c_index={v_cidx:.4f}"
                 )
-                # Always save the best (val-loss) checkpoint; cfg.early_stopping
-                # only gates stopping early (matches classification/DTFD).
-                early_stopping(v_loss, v_cidx, model, epoch=epoch)
-                default_stop = cfg.early_stopping and early_stopping.early_stop
+                # The tracker always runs; cfg.early_stopping only gates
+                # stopping early (matches classification/DTFD).
+                if tracker.observe(epoch, v_cidx):
+                    best_snap = copy.deepcopy(model.state_dict())
+                default_stop = cfg.early_stopping and tracker.early_stop
                 if policy_runtime.should_stop(
                     default_stop,
                     epoch=epoch,
@@ -237,21 +239,12 @@ def train_abmil_survival_fold(
                 ):
                     break
 
-        # Restore the best (val-loss) checkpoint from disk before scoring: the
-        # in-memory best_model_state is a shallow copy aliasing the live params,
-        # so it decays to the last epoch's weights. Mirrors CLAM.
-        restored = False
-        best_path = os.path.join(fold_dir, f"best_{model_type}.pth")
-        if os.path.exists(best_path):
-            model.load_state_dict(torch.load(best_path, map_location=device))
-            restored = True
-        elif getattr(early_stopping, "best_model_state", None) is not None:
-            model.load_state_dict(early_stopping.best_model_state)
-            restored = True
-        # A3: source=best when a val-selected checkpoint was restored above,
+        if best_snap is not None:
+            model.load_state_dict(best_snap)
+        # A3: source=best when a val-selected snapshot was restored above,
         # source=final when the final weights were kept (no restore).
-        print(f"[selected] epoch={early_stopping.best_epoch} "
-              f"source={'best' if restored else 'final'}", flush=True)
+        print(f"[selected] epoch={tracker.best_epoch} "
+              f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
         # across folds instead of averaging five ~2-event c-indices.

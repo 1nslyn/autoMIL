@@ -99,7 +99,8 @@ def test_fold_entries_recompute_under_a_selector():
          "primary_value": 0.7},   # stale mean — the selector value must win
     ]}
     assert fold_primary_value_entries(res, "val_auc") == [
-        {"fold_index": 0, "primary_value": 0.9},
+        {"fold_index": 0, "primary_value": 0.9,
+         "metrics": {"val_auc": 0.9, "val_bacc": 0.5}},
     ]
 
 
@@ -111,7 +112,23 @@ def test_fold_entry_that_cannot_support_the_formula_is_dropped():
          "primary_value": 0.99},   # fabricated value must NOT survive
     ]}
     assert fold_primary_value_entries(res, "val_auc") == [
-        {"fold_index": 0, "primary_value": 0.9},
+        {"fold_index": 0, "primary_value": 0.9,
+         "metrics": {"val_auc": 0.9, "val_bacc": 0.5}},
+    ]
+
+
+def test_a_malformed_fold_entry_is_skipped_not_fatal():
+    """An entry without a fold index (or with a junk one) is dropped by the
+    map; the metrics projection must skip it the same way instead of raising
+    inside the terminal writer."""
+    res = {"validation_folds": [
+        {"fold_index": 0, "metrics": {"val_auc": 0.7}, "primary_value": 0.7},
+        {"metrics": {"val_auc": 0.9}},
+        {"fold_index": None, "metrics": {"val_auc": 0.9}},
+        {"fold_index": True, "metrics": {"val_auc": 0.9}},
+    ]}
+    assert fold_primary_value_entries(res, "val_auc") == [
+        {"fold_index": 0, "primary_value": 0.7, "metrics": {"val_auc": 0.7}},
     ]
 
 
@@ -192,8 +209,10 @@ def test_companion_lossy_fold_is_not_resurrected_by_a_selector():
          "primary_value": 0.68},
     ]}
     assert fold_primary_value_entries(res, "val_auc") == [
-        {"fold_index": 0, "primary_value": 0.70},
-        {"fold_index": 2, "primary_value": 0.68},
+        {"fold_index": 0, "primary_value": 0.70,
+         "metrics": {"val_auc": 0.70, "val_bacc": 0.60}},
+        {"fold_index": 2, "primary_value": 0.68,
+         "metrics": {"val_auc": 0.68, "val_bacc": 0.60}},
     ]
     # And the marginal SE agrees with the trainer's two-fold measurement.
     assert recompute_primary_se(res, "val_auc") == pytest.approx(

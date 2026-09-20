@@ -48,6 +48,12 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
         raise
 
 
+#: Node metadata keys a result.json may not supply: the fold evidence the
+#: framework derives itself (read as evidence by the fold readers) and the
+#: declarations `automil propose` pre-registers (read by the phasing).
+_PROTECTED_NODE_METADATA = frozenset({"validation_folds", "axis", "role", "predicted_delta"})
+
+
 def _canonicalize(result: dict, termination_reason: str | None = None) -> dict:
     """Return a copy of result with status canonicalized and termination_reason injected."""
     result = dict(result)
@@ -410,8 +416,17 @@ def write_terminal_state(
                 # update/assign would mutate node["metadata"] in place, and that
                 # dict object can be aliased with another node's (gate/evaluate.py
                 # creates gate-eval children via a shallow dict(node) copy).
+                # `validation_folds` is framework evidence, recomputed above
+                # from the result's top-level block (the fold readers accept
+                # the metadata form only for the baseline root the campaign
+                # controller writes); axis, role and predicted_delta are the
+                # proposal's pre-registration. Neither may come from
+                # agent-editable training output.
                 if isinstance(result.get("metadata"), Mapping):
-                    gnode["metadata"] = merged_metadata(gnode, result["metadata"])
+                    gnode["metadata"] = merged_metadata(gnode, {
+                        k: v for k, v in result["metadata"].items()
+                        if k not in _PROTECTED_NODE_METADATA
+                    })
                 # CR-1b: durable audit trail when the reported scalar could not be
                 # explained by the node's own validation metrics.
                 if primary_value_disagreement is not None:

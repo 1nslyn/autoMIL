@@ -8,6 +8,73 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Protocol `preprint-v4`: the checkpoint is selected on the primary
+  validation metric.** Every arm restores and reports the epoch with the
+  highest validation AUC (classification, ordinal included) or the highest
+  in-fold validation C-index (survival), the same rule for the native
+  baseline and every candidate. The v3 loss rule sat at epochs 0-3 on every
+  rehearsal arm while the objective kept rising for 7-20 epochs, so each
+  arm reported a near-untrained model and the five rehearsal agents spent
+  their budgets moving the loss minimum later (every KRAS "winner" was such
+  a workaround). One primitive, `autobench.pipeline.selection.SelectionTracker`,
+  drives the abmil/dtfd/titan classification loops and the four survival
+  adapters; CLAM's and nnMIL's vendored callbacks implement the same
+  contract in place (strictly greater improves, a tie keeps the earlier
+  epoch, a non-finite value never selects and counts toward patience), and a
+  contract test drives identical trajectories through all three. The
+  validation loss is still computed for the `[epoch k]` line and the
+  stopping policies; it no longer votes. nnMIL defaults a missing `auroc` or
+  C-index to NaN (a finite 0.0 would have become the epoch-0 checkpoint),
+  and the survival adapters drop the vendored callback's on-disk
+  `best_<model>.pth` round trip for an in-memory deep copy. Replayed offline
+  over the 160 finished v3 rehearsal runs, the v4 rule moves the selected
+  epoch by a median of 7 to 12 epochs and raises every baseline's reported
+  validation metric by 0.04 to 0.10 (`benchmarks/scripts/replay_checkpoint_selection.py`).
+  Three further protocol changes ride the same version bump: the companion
+  balanced-accuracy guard is judged against `max(one-slide quantum,
+  se_multiplier x paired SE)` at the discovery gate and at the freeze (one
+  rule with the primary keep-bar; KRAS ABMIL had lost its rank-1 recipe by
+  0.002 against the bare quantum; a result's own `metadata.validation_folds`
+  is never merged onto the node, so both stages pair only on the fold
+  evidence the framework recomputed); the 30 attempts are spent in fixed
+  batches of 8/8/8/6 that `automil submit` enforces from `cap.phasing`
+  (opening batch on five axes, at most three consecutive attempts per axis
+  without a keep, two robustness neighbours in the final batch; `automil
+  propose` records `--axis`, `--predicted-delta` and `--role`, which submit
+  stamps into the spec at admission so no result can rewrite them; the
+  census is the specs on disk, queue read before archive, in the admission
+  order submit mints under its lock (`metadata.attempt_seq`, which the
+  freeze records and the exported history follows), an attempt is in flight until
+  a terminal record exists (the daemon's completion record or the running
+  spec `automil cancel` archived; an overlay may not carry a file named like
+  either), and a fully submitted cell takes no more);
+  and every policy file is smoke-run through the trainers' three call
+  orders (reading `param_groups` as nnMIL does, nnMIL's order also through
+  a `GradScaler`), the stopping seam exactly as the cell's arm drives it
+  (its metrics dict, its first validated epoch, its own call order between
+  two decisions for the task family, on DTFD after the tiers and their
+  schedulers exist) and
+  DTFD's wrap order (both tier optimizers, then
+  both `MultiStepLR` schedulers, before either trains), at submit
+  (`registry.policy_smoke`, `autobench.pipeline.policy_smoke --task-family
+  --arm`), so a policy that would
+  crash the trainer is refused for free; the overlay is staged per submit
+  process and moved into `archive/<node>/` under the submission lock after
+  the hold check runs again there, so a refused file never lingers into
+  the next overlay and a concurrent launch of the same id is never erased;
+  `submit --parent` cannot re-parent a proposal, and `propose` refuses a
+  non-finite predicted delta. The daemon writes archived specs atomically,
+  on restart finalizes a billed launch that never reached its running intent
+  (an attempt nothing else could finish), and refuses at launch a queued spec
+  whose VRAM request exceeds the largest GPU on the host (it would otherwise
+  sit in the queue forever, holding every later batch). The
+  materialization audit locks `cap.phasing` and `registry.policy_smoke`;
+  the promotion stage carries no `cap.phasing`. The vendored CLAM and nnMIL
+  stoppers derive `early_stop` from their counter instead of latching it,
+  so a stop a policy suppressed clears once the metric improves again, as
+  the shared tracker's does; the tracker accepts a `patience` of zero (a
+  one-epoch run, as the vendored stoppers already allowed) because a
+  `--hparams` override lands after the attempt is charged.
 - **The dashboard is the project site, and the agent's record is on it.**
   `automil viz start` serves a static site that reads one record layout
   (`record/index.json`, per-run `graph.json`, `timeline.json`,

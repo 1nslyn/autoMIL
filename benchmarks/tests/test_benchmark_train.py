@@ -144,27 +144,27 @@ class TestEarlyStopping:
     def test_no_stop_if_improving(self, tmp_path):
         es = EarlyStopping(patience=3, stop_epoch=0)
         model = self._make_dummy_model()
-        for i in range(10):
-            es(i, 1.0 - i * 0.1, model, ckpt_name=str(tmp_path / "ckpt.pt"))
+        for i in range(10):  # rising validation AUC
+            es(i, 0.5 + i * 0.04, model, ckpt_name=str(tmp_path / "ckpt.pt"))
             assert not es.early_stop
 
     def test_stops_after_patience(self, tmp_path):
         es = EarlyStopping(patience=3, stop_epoch=0)
         model = self._make_dummy_model()
         ckpt = str(tmp_path / "ckpt.pt")
-        es(0, 0.5, model, ckpt)  # best
-        es(1, 0.6, model, ckpt)
-        es(2, 0.7, model, ckpt)
-        es(3, 0.8, model, ckpt)  # 3rd non-improvement
+        es(0, 0.8, model, ckpt)  # best
+        es(1, 0.7, model, ckpt)
+        es(2, 0.6, model, ckpt)
+        es(3, 0.5, model, ckpt)  # 3rd non-improvement
         assert es.early_stop
 
     def test_respects_stop_epoch(self, tmp_path):
         es = EarlyStopping(patience=2, stop_epoch=10)
         model = self._make_dummy_model()
         ckpt = str(tmp_path / "ckpt.pt")
-        es(0, 0.5, model, ckpt)
+        es(0, 0.7, model, ckpt)
         es(1, 0.6, model, ckpt)
-        es(2, 0.7, model, ckpt)  # patience exhausted but epoch < stop_epoch
+        es(2, 0.5, model, ckpt)  # patience exhausted but epoch < stop_epoch
         assert not es.early_stop
 
     def test_saves_checkpoint_on_improvement(self, tmp_path):
@@ -178,11 +178,11 @@ class TestEarlyStopping:
         es = EarlyStopping(patience=3, stop_epoch=0)
         model = self._make_dummy_model()
         ckpt = str(tmp_path / "ckpt.pt")
-        es(0, 0.5, model, ckpt)
+        es(0, 0.7, model, ckpt)
         es(1, 0.6, model, ckpt)
-        es(2, 0.7, model, ckpt)
+        es(2, 0.5, model, ckpt)
         assert es.counter == 2
-        es(3, 0.4, model, ckpt)  # new best
+        es(3, 0.8, model, ckpt)  # new best
         assert es.counter == 0
 
 

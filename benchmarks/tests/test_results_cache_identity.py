@@ -159,3 +159,14 @@ class TestExplicitResultsDirStillWins:
         explicit = str(tmp_path / "node-archive" / "results")
         resolve_results_dir(_exp(), str(tmp_path), results_dir=explicit)
         assert os.path.exists(os.path.join(explicit, FINGERPRINT_FILENAME))
+
+
+class TestProtocolVersionIsPartOfTheFingerprint:
+    def test_protocol_bump_changes_the_fingerprint(self, monkeypatch):
+        """A checkpoint-selection rule change ships as a PROTOCOL_VERSION bump;
+        cached fold results from the previous rule must not resume under it."""
+        import autobench.campaign as campaign
+
+        before = config_fingerprint(_exp())
+        monkeypatch.setattr(campaign, "PROTOCOL_VERSION", campaign.PROTOCOL_VERSION + "-next")
+        assert config_fingerprint(_exp()) != before

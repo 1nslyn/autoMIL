@@ -322,9 +322,10 @@ def fold_primary_value_entries(
     result: Mapping[str, object] | None,
     formula: str | None,
 ) -> list[dict] | None:
-    """The minimal ``[{fold_index, primary_value}]`` projection of a result's
+    """The ``[{fold_index, primary_value, metrics}]`` projection of a result's
     ``validation_folds`` — what the graph stores per node so the paired
-    keep-margin can pair a child with its parent without re-reading archives.
+    keep-margin can pair a child with its parent without re-reading archives,
+    and so the companion guard can pair the per-fold companion the same way.
     Validation-only by construction; ``None`` when no usable folds remain.
 
     Each entry's primary_value is RECOMPUTED from its own val ``metrics`` with the
@@ -385,7 +386,17 @@ def fold_primary_value_entries(
     folds = fold_primary_value_map(raw)
     if folds is None:
         return None
-    return [{"fold_index": i, "primary_value": folds[i]} for i in sorted(folds)]
+    metrics_by_fold = {
+        entry["fold_index"]: {k: float(v) for k, v in entry["metrics"].items()}
+        for entry in raw
+        if isinstance(entry, Mapping) and isinstance(entry.get("metrics"), Mapping)
+        and isinstance(entry.get("fold_index"), int) and not isinstance(entry["fold_index"], bool)
+    } if isinstance(raw, list) else {}
+    return [
+        {"fold_index": i, "primary_value": folds[i],
+         **({"metrics": metrics_by_fold[i]} if i in metrics_by_fold else {})}
+        for i in sorted(folds)
+    ]
 
 
 def ingest_signal(

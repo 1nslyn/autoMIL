@@ -11,6 +11,7 @@ each training minibatch IS the risk set; no manual per-slide loop is needed
 from __future__ import annotations
 
 import json
+import copy
 import os
 import sys
 import time
@@ -27,6 +28,7 @@ from autobench.pipeline.titan.config import TitanHeadConfig, resolve_head_config
 from autobench.pipeline.titan.dataset import TitanSurvivalDataset
 from autobench.pipeline.titan.model import TitanLinearProbe
 from autobench.pipeline.policy_dispatch import PolicyRuntime
+from autobench.pipeline.selection import SelectionTracker
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -34,7 +36,6 @@ if str(LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(LIB_ROOT))
 from nnMIL.training.losses.survival_loss import SurvivalLoss, survival_c_index  # noqa: E402
 from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss  # noqa: E402
-from nnMIL.training.callbacks.early_stopping import EarlyStoppingSurvival  # noqa: E402
 
 
 def _event_time_bin_edges(times, statuses, n_bins: int) -> np.ndarray:
@@ -159,10 +160,10 @@ def train_titan_survival_fold(
     val_loader = DataLoader(val_ds, batch_size=max(1, len(val_ds)), shuffle=False)
     test_loader = DataLoader(test_ds, batch_size=max(1, len(test_ds)), shuffle=False)
 
-    early_stopping = EarlyStoppingSurvival(
-        patience=head_cfg.patience, verbose=True, metric="c_index",
-        save_dir=fold_dir, model_type="titan", mode="min",
-    )
+    # Protocol v4: the checkpoint is selected on the primary validation
+    # metric, the in-fold C-index; the val loss is reported beside it.
+    tracker = SelectionTracker(head_cfg.patience)
+    best_snap: dict | None = None  # None: nothing selected; final weights kept
 
     def _batch_loss(embeddings: torch.Tensor, status: torch.Tensor, time_: torch.Tensor) -> torch.Tensor:
         embeddings = embeddings.to(torch_device)
@@ -223,10 +224,11 @@ def train_titan_survival_fold(
             f"    [TITAN-surv fold {fold}] epoch {epoch + 1}: "
             f"val_loss={v_loss:.4f} val_c_index={v_cidx:.4f}"
         )
-        # Always save the best (val-loss) checkpoint; early_stopping only gates
-        # stopping early (matches classification/DTFD).
-        early_stopping(v_loss, v_cidx, model, epoch=epoch)
-        default_stop = exp_cfg.train.early_stopping and early_stopping.early_stop
+        # The tracker always runs; early_stopping only gates stopping early
+        # (matches classification/DTFD).
+        if tracker.observe(epoch, v_cidx):
+            best_snap = copy.deepcopy(model.state_dict())
+        default_stop = exp_cfg.train.early_stopping and tracker.early_stop
         if policy_runtime.should_stop(
             default_stop,
             epoch=epoch,
@@ -234,21 +236,12 @@ def train_titan_survival_fold(
         ):
             break
 
-    # Restore the best (val-loss) checkpoint from disk before scoring: the
-    # in-memory best_model_state is a shallow copy aliasing the live params,
-    # so it decays to the last epoch's weights. Mirrors CLAM.
-    restored = False
-    best_path = os.path.join(fold_dir, "best_titan.pth")
-    if os.path.exists(best_path):
-        model.load_state_dict(torch.load(best_path, map_location=torch_device))
-        restored = True
-    elif getattr(early_stopping, "best_model_state", None) is not None:
-        model.load_state_dict(early_stopping.best_model_state)
-        restored = True
-    # A3: source=best when a val-selected checkpoint was restored above,
+    if best_snap is not None:
+        model.load_state_dict(best_snap)
+    # A3: source=best when a val-selected snapshot was restored above,
     # source=final when the final weights were kept (no restore).
-    print(f"[selected] epoch={early_stopping.best_epoch} "
-          f"source={'best' if restored else 'final'}", flush=True)
+    print(f"[selected] epoch={tracker.best_epoch} "
+          f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
     test_metrics = {"c_index": _c_index(test_loader)}
     val_metrics = {"c_index": _c_index(val_loader)}

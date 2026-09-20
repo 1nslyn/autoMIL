@@ -14,6 +14,19 @@ protocol independently for every cell:
 - paired baseline-and-winner reveal of the already sealed five-fold held-out
   results.
 
+Protocol `preprint-v4` (2026-09-20) adds, from the LUAD rehearsal: every arm
+restores the epoch with the highest primary validation metric (ties keep
+the earlier epoch; the validation loss no longer votes); the companion
+balanced-accuracy guard is judged against `max(one slide, k x paired SE)`
+at both stages; the 30 attempts are spent in fixed batches of 8, 8, 8 and 6
+that `automil submit` enforces from `cap.phasing` (opening batch on five
+axes, at most three consecutive attempts per axis without a keep, two
+robustness neighbours in the final batch); and every policy file is
+smoke-run through the trainers' seams at submit (`registry.policy_smoke`)
+before an attempt can be charged for it. The offline replay of the v3
+rehearsal runs under the v4 rule (`replay_checkpoint_selection.py`) is
+recorded in the changelog entry.
+
 There is no final retraining. Crashes, partial runs, and launch failures
 consume discovery attempts — an attempt is billed exactly once, when its spec
 is archived. An incomplete promotion candidate is ineligible. The native
@@ -359,9 +372,12 @@ re-materialized and re-run from a fresh baseline.)
 its own cell-root directory beside `runtime/`, built from the same manifest
 and protocol (row indices and exporter ports unchanged) with its own committed
 roster, `<name>.roster.json` (cohorts, cells census, `cell_ids`). The
-committed set is `runtime-rehearsal` (two cells per MIL model on TCGA-LUAD with
-the H-optimus-1 encoder). Each materialized root is about 1,000 files, so only
-the set's cells are built:
+committed set is `runtime-rehearsal`: round 2 under protocol v4 holds the
+four TCGA-LUAD overall-survival cells (one per MIL model, H-optimus-1) plus
+the KRAS ABMIL cell as the check of the new selection rule; round 1 (v3)
+ran the four KRAS cells and its roots are parked under
+`logs/discovery_cells/rehearsal-archive/`. Each materialized root is about
+1,000 files, so only the set's cells are built:
 
 ```bash
 uv run python benchmarks/scripts/campaign_manifest.py materialize \

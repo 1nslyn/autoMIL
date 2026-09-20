@@ -253,18 +253,18 @@ class TestCallbackOwnsBestEpoch:
 
     def test_starts_at_minus_one(self):
         EarlyStopping, EarlyStoppingSurvival = self._callbacks()
-        assert EarlyStopping(patience=5, metric="bacc").best_epoch == -1
-        assert EarlyStoppingSurvival(patience=5, mode="min").best_epoch == -1
+        assert EarlyStopping(patience=5).best_epoch == -1
+        assert EarlyStoppingSurvival(patience=5).best_epoch == -1
 
     def test_classification_tracks_the_saving_epoch(self):
         EarlyStopping, _ = self._callbacks()
-        es = EarlyStopping(patience=5, metric="bacc")
+        es = EarlyStopping(patience=5)
         model = self._linear()
-        es(0.50, 0.6, 0.6, 0.6, model, epoch=0)  # initial save
+        es(0.50, model, epoch=0)  # initial save
         assert es.best_epoch == 0
-        es(0.60, 0.5, 0.5, 0.5, model, epoch=1)  # worse loss: no save
+        es(0.40, model, epoch=1)  # lower AUC: no save
         assert es.best_epoch == 0
-        es(0.40, 0.9, 0.9, 0.9, model, epoch=2)  # better loss: save
+        es(0.60, model, epoch=2)  # higher AUC: save
         assert es.best_epoch == 2
 
     def test_survival_records_the_true_epoch_across_warmup_skips(self):
@@ -272,19 +272,19 @@ class TestCallbackOwnsBestEpoch:
         # so the callback must record the epoch the CALLER names, not its
         # own call index.
         _, EarlyStoppingSurvival = self._callbacks()
-        es = EarlyStoppingSurvival(patience=5, mode="min")
+        es = EarlyStoppingSurvival(patience=5)
         model = self._linear()
-        es(1.0, 0.5, model, epoch=2)
+        es(0.5, model, epoch=2)
         assert es.best_epoch == 2
-        es(0.4, 0.5, model, epoch=3)
+        es(0.7, model, epoch=3)
         assert es.best_epoch == 3
-        es(0.9, 0.5, model, epoch=4)  # worse: best stays
+        es(0.6, model, epoch=4)  # lower: best stays
         assert es.best_epoch == 3
 
     def test_internal_counter_stands_in_when_no_epoch_is_passed(self):
         EarlyStopping, _ = self._callbacks()
-        es = EarlyStopping(patience=5, metric="bacc")
+        es = EarlyStopping(patience=5)
         model = self._linear()
-        es(0.50, 0.6, 0.6, 0.6, model)
-        es(0.40, 0.9, 0.9, 0.9, model)
+        es(0.50, model)
+        es(0.90, model)
         assert es.best_epoch == 1

@@ -32,7 +32,7 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 #: value is being frozen before certification.
 SCHEMA_VERSION = 7
 CAMPAIGN_ID = "automil-preprint-130-v6"
-PROTOCOL_VERSION = "preprint-v3"
+PROTOCOL_VERSION = "preprint-v4"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 #: Per-dataset+task companion-guard margins, derived from the frozen validation
 #: splits by derive_guard_margins.py and checked in so the number in the paper
@@ -243,11 +243,28 @@ EXPECTED_IDENTITY_LOCKED_HPARAMS = (
     "mDim", "numLayer_Res",           # dtfd width + residual depth
     "hidden_dim",                     # nnmil model width
 )
+# The discovery budget is spent in fixed, non-overlapping batches; the
+# framework enforces the structure at submit (src/automil/cells/phasing.py).
+DISCOVERY_PHASING = {
+    "batches": [8, 8, 8, 6],
+    "opening_axes_min": 5,
+    "max_consecutive_per_axis": 3,
+    "reserve_neighbours_min": 2,
+}
+assert sum(DISCOVERY_PHASING["batches"]) == DISCOVERY_ATTEMPTS
+
 PROTOCOL = {
     "protocol_version": PROTOCOL_VERSION,
     "seed": 42,
     "split_folds": 5,
     "discovery_attempts": DISCOVERY_ATTEMPTS,
+    "discovery_phasing": DISCOVERY_PHASING,
+    # v4: every arm restores the epoch with the highest primary validation
+    # metric (ties keep the earlier epoch); the validation loss no longer votes.
+    "checkpoint_selection": {
+        "rule": "argmax-primary-validation-metric",
+        "ties": "earliest-epoch",
+    },
     "discovery_agent_active_budget": DISCOVERY_AGENT_ACTIVE_BUDGET,
     "agent_time_accounting": AGENT_TIME_ACCOUNTING,
     "promotion_candidates": PROMOTION_CANDIDATES,
@@ -965,6 +982,19 @@ def _task_block(cell: Mapping[str, Any], dataset_raw: Mapping[str, Any]) -> dict
     }
 
 
+def _policy_smoke_for_cell(
+    registry: Mapping[str, Any] | None, task_family: str, framework: str,
+) -> dict | None:
+    """The cohort template's ``registry.policy_smoke`` with the cell's task
+    family and arm appended, so the harness drives the stopping seam exactly
+    as the cell's trainer does; ``None`` when the template declares none."""
+    smoke = (registry or {}).get("policy_smoke")
+    if not isinstance(smoke, dict) or not isinstance(smoke.get("command"), list):
+        return None
+    family = "survival" if task_family == "survival" else "classification"
+    return {**smoke, "command": [*smoke["command"], "--task-family", family, "--arm", framework]}
+
+
 def materialize_discovery_cells(
     manifest_path: Path,
     output_root: Path,
@@ -1153,6 +1183,13 @@ def materialize_discovery_cells(
         ]
         config["cap"]["mode"] = "agent_active"
         config["cap"]["eval_budget"] = PROTOCOL["discovery_attempts"]
+        config["cap"]["phasing"] = copy.deepcopy(PROTOCOL["discovery_phasing"])
+        # The policy smoke judges the stopping seam by the metrics the cell's
+        # trainers pass, so the harness learns the task family here (the
+        # template is per cohort; a cohort carries both families).
+        smoke = _policy_smoke_for_cell(config.get("registry"), cell["task_family"], cell["framework"])
+        if smoke is not None:
+            config["registry"]["policy_smoke"] = smoke
         config["activity"] = {"exporter_port": exporter_port}
         config["training"] = {"fold_count": len(STAGE_FOLDS["discovery"])}
         config.setdefault("orchestrator", {})["default_timeout_min"] = (
@@ -1339,6 +1376,20 @@ def audit_materialized_campaign(
             raise CampaignManifestError(f"{cell_id}: activity exporter port drift")
         if (config.get("cap") or {}).get("eval_budget") != DISCOVERY_ATTEMPTS:
             raise CampaignManifestError(f"{cell_id}: discovery attempt cap drift")
+        if (config.get("cap") or {}).get("phasing") != PROTOCOL["discovery_phasing"]:
+            raise CampaignManifestError(f"{cell_id}: discovery phasing drift")
+        try:
+            _template = yaml.safe_load(
+                (repo_root / cell["policy_template"]).read_text()
+            ) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise CampaignManifestError(
+                f"{cell_id}: cannot read policy template: {exc}"
+            ) from exc
+        if (config.get("registry") or {}).get("policy_smoke") != _policy_smoke_for_cell(
+            _template.get("registry"), cell["task_family"], cell["framework"],
+        ):
+            raise CampaignManifestError(f"{cell_id}: policy smoke drift")
         if (config.get("cap") or {}).get(
             "budget"
         ) != DISCOVERY_AGENT_ACTIVE_BUDGET:

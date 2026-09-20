@@ -10,6 +10,7 @@ per call, so cox's risk set is formed over a mini-batch of slides.
 from __future__ import annotations
 
 import json
+import copy
 import os
 import random
 import sys
@@ -25,6 +26,7 @@ from autobench.pipeline.clam.dataset import load_survival_fold_splits
 from autobench.pipeline.config import ExperimentConfig, TrainConfig
 from autobench.pipeline.evaluate import file_sha256_or_none, write_survival_predictions_csv
 from autobench.pipeline.policy_dispatch import PolicyRuntime
+from autobench.pipeline.selection import SelectionTracker
 
 # The framework-agnostic survival core lives under the vendored nnMIL tree;
 # import it adapter -> lib (the normal autobench direction).
@@ -32,7 +34,6 @@ if str(LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(LIB_ROOT))
 from nnMIL.training.losses.survival_loss import SurvivalLoss, survival_c_index  # noqa: E402
 from nnMIL.training.losses.survival_loss_nll import NLLSurvLoss  # noqa: E402
-from nnMIL.training.callbacks.early_stopping import EarlyStoppingSurvival  # noqa: E402
 
 # Slides per optimizer step. For cox this is the risk set; each slide is a
 # full-patch CLAM forward held in the graph until backward, so keep it modest.
@@ -191,12 +192,10 @@ def train_survival_fold(
     optimizer = _build_optimizer(model, exp_cfg.train)
     policy_runtime = policy_runtime or PolicyRuntime()
     optimizer = policy_runtime.wrap_optimizer(optimizer)
-    # mode="min": select the checkpoint on val LOSS. With ~2 events per val fold
-    # the val c-index is near-random, so maximizing it would overfit to noise.
-    early_stopping = EarlyStoppingSurvival(
-        patience=exp_cfg.train.patience, verbose=True, metric="c_index",
-        save_dir=fold_dir, model_type=model_type, mode="min",
-    )
+    # Protocol v4: the checkpoint is selected on the primary validation
+    # metric, the in-fold C-index; the val loss is reported beside it.
+    tracker = SelectionTracker(exp_cfg.train.patience)
+    best_snap: dict | None = None  # None: nothing selected; final weights kept
 
     def _batch_loss(batch: list[dict]) -> torch.Tensor:
         # Forward each slide separately (CLAM = one bag per call) and stack the
@@ -267,8 +266,9 @@ def train_survival_fold(
             f"    [CLAM-surv fold {fold}] epoch {epoch + 1}: "
             f"val_loss={v_loss:.4f} val_c_index={v_cidx:.4f}"
         )
-        early_stopping(v_loss, v_cidx, model, epoch=epoch)
-        default_stop = _should_stop(exp_cfg.train, early_stopping)
+        if tracker.observe(epoch, v_cidx):
+            best_snap = copy.deepcopy(model.state_dict())
+        default_stop = _should_stop(exp_cfg.train, tracker)
         if policy_runtime.should_stop(
             default_stop,
             epoch=epoch,
@@ -276,19 +276,12 @@ def train_survival_fold(
         ):
             break
 
-    # Restore the val-loss-selected best checkpoint before final scoring.
-    restored = False
-    best_path = os.path.join(fold_dir, f"best_{model_type}.pth")
-    if os.path.exists(best_path):
-        model.load_state_dict(torch.load(best_path, map_location=device))
-        restored = True
-    elif getattr(early_stopping, "best_model_state", None) is not None:
-        model.load_state_dict(early_stopping.best_model_state)
-        restored = True
-    # A3: source=best when a val-selected checkpoint was restored above,
+    if best_snap is not None:
+        model.load_state_dict(best_snap)
+    # A3: source=best when a val-selected snapshot was restored above,
     # source=final when the final weights were kept (no restore).
-    print(f"[selected] epoch={early_stopping.best_epoch} "
-          f"source={'best' if restored else 'final'}", flush=True)
+    print(f"[selected] epoch={tracker.best_epoch} "
+          f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
     # CR-3: export the val risk records so the runner can score concordance over
     # the POOLED cross-fold validation set. The per-fold c-index below stays for

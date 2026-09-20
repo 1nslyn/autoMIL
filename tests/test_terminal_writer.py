@@ -334,3 +334,47 @@ def test_val_only_metrics_pass_the_key_guard(tmp_path: Path) -> None:
     assert "held_out" not in archived
     sealed = json.loads((archive_dir / "certify" / "certify.json").read_text())
     assert sealed["held_out"] == {"test_auc": 0.84}
+
+
+def test_result_metadata_cannot_supply_the_fold_evidence(tmp_path: Path) -> None:
+    """``validation_folds`` is framework evidence, recomputed at ingest from
+    the result's top-level block. A result whose ``metadata`` carries its own
+    copy (with no top-level block, so nothing is recomputed) must not have it
+    merged onto the node: the fold readers accept the metadata form only for
+    the baseline root the campaign controller writes, and a child that pairs
+    on self-declared folds could turn a companion-guard rejection into a keep
+    at the next ``reconcile --refresh``."""
+    from automil.graph import (
+        ExperimentGraph, node_fold_metric_values, node_fold_primary_values,
+    )
+    from automil.terminal_writer import write_terminal_state
+
+    graph, node_id = _make_graph(tmp_path)
+    graph.nodes[node_id]["metadata"] = {"axis": "lr", "predicted_delta": 0.01}   # pre-registered
+    graph.save()
+    completed_dir, archive_dir = _make_dirs(tmp_path, node_id)
+    claimed = [
+        {"fold_index": i, "primary_value": 0.85,
+         "metrics": {"val_auc": 0.85, "val_bacc": 0.60}}
+        for i in range(3)
+    ]
+    result = {
+        "status": "completed",
+        "primary_value": 0.85,
+        "metrics": {"val_auc": 0.85, "val_bacc": 0.40},
+        "metadata": {"validation_folds": claimed, "budget_killed": False,
+                     "axis": "scheduler", "role": "neighbour", "predicted_delta": 0.3},
+    }
+    write_terminal_state(
+        node_id=node_id, result=result, graph=graph,
+        completed_dir=completed_dir, archive_dir=archive_dir,
+        results_tsv_writer=lambda *_args, **_kwargs: None,
+        spec={"description": "t", "graph_metadata": {}}, elapsed_s=1.0, gpu_id=0,
+    )
+    node = ExperimentGraph(path=str(tmp_path / "graph.json")).get_node(node_id)
+    assert "validation_folds" not in node["metadata"]
+    assert node["metadata"]["budget_killed"] is False        # the rest still propagates
+    assert node["metadata"]["axis"] == "lr" and "role" not in node["metadata"]
+    assert node["metadata"]["predicted_delta"] == 0.01       # the pre-registration stands
+    assert node_fold_metric_values(node, "val_bacc") is None
+    assert node_fold_primary_values(node) is None

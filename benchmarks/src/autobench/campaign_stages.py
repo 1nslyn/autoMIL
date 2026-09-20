@@ -1417,6 +1417,22 @@ def _candidate_identity(
     return content_sha256(payload), payload
 
 
+def _spec_attempt_seq(spec: Mapping[str, Any], name: str) -> int:
+    """The admission sequence ``automil submit`` minted for the spec under
+    its submission lock: the order the attempts were judged in, which no
+    clock and no node id can reorder."""
+    seq = (spec.get("metadata") or {}).get("attempt_seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+        raise CampaignStageError(
+            f"discovery spec {name} carries no admission sequence (metadata.attempt_seq)"
+        )
+    return seq
+
+
+def _attempt_order(row: Mapping[str, Any]) -> tuple[int, str, str]:
+    return (row["attempt_seq"], row["submitted_at"], row["node_id"])
+
+
 def _pending_stage_work(adir: Path) -> list[str]:
     pending: list[str] = []
     queue = adir / "orchestrator" / "queue"
@@ -1616,6 +1632,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
             "node_id": archive.name,
             "source_spec_sha256": file_sha256(archive / "spec.json"),
             "submitted_at": submitted_at,
+            "attempt_seq": _spec_attempt_seq(spec, archive.name),
             "agent_session_id": expected_session["session_id"],
             "agent_session_binding_sha256": expected_session["binding_sha256"],
             "candidate_class": "inadmissible",
@@ -1691,12 +1708,12 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                     "validation_mean": candidate["discovery_mean"],
                 })
                 if guard_drop is not None:
+                    drop, margin = guard_drop
                     audit.update({
                         "eligible": False,
                         "reason": (
                             f"companion guard: {guard_floor['metric']} fell "
-                            f"{guard_drop:.4f} below the baseline (margin "
-                            f"{guard_floor['margin']})"
+                            f"{drop:.4f} below the baseline (margin {margin:.4f})"
                         ),
                     })
                 else:
@@ -1762,7 +1779,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         "unique_complete_candidates": len(unique_eligible),
         "frozen": True,
         "frozen_at": frozen_at,
-        "attempt_audit": attempt_audit,
+        "attempt_audit": sorted(attempt_audit, key=_attempt_order),
         "promoted_candidates": promoted,
     })
     state["revision"] += 1
@@ -1794,8 +1811,14 @@ def _companion_guard_floor(
     certified winner is that it is not worse than the native baseline by more
     than one validation slide.
 
-    Both sides come from :func:`_recorded_fold_aggregates`, so the comparison
-    happens on the same recorded grid the margin is aligned to.
+    The drop and the margin are judged as the gate judges them, from the same
+    per-fold evidence: the drop is the difference of per-fold means
+    (:func:`automil.graph.companion_delta`) and the margin is
+    ``max(one-slide quantum, se_multiplier x paired SE)`` of the per-fold
+    companion deltas (:func:`automil.graph.companion_margin`), so a drop
+    smaller than its own fold-to-fold noise does not decide a cell at either
+    stage, and no recovered or hand-rounded aggregate can make the two stages
+    disagree about one candidate.
 
     The declaration is read from the FROZEN ``graph.json`` meta, not from
     ``config.yaml``. The config is editable by anything with a shell in the
@@ -1805,7 +1828,7 @@ def _companion_guard_floor(
     parent-relative gate — which reads the frozen value — went on stamping
     candidates ``discard``. One declaration, one authority.
     """
-    from automil.graph import _guard_declaration
+    from automil.graph import _guard_declaration, _se_multiplier
 
     try:
         frozen = (
@@ -1838,13 +1861,29 @@ def _companion_guard_floor(
     # one-slide step and its own margin — derived from the same published
     # counts, over the folds this stage actually averages.
     margin = _stage_guard_margin(adir, stage_folds, margin)
-    floor = _recorded_fold_aggregates(stage_baseline).get(metric)
-    if floor is None:
+    baseline_folds = _fold_metric_values(stage_baseline, metric)
+    if len(baseline_folds) != len(stage_folds):
         raise CampaignStageError(
             f"cannot apply the companion guard at freeze: the baseline records "
             f"no {metric}"
         )
-    return {"metric": metric, "margin": float(margin), "baseline": floor}
+    return {
+        "metric": metric,
+        "margin": float(margin),
+        "baseline": sum(baseline_folds.values()) / len(baseline_folds),
+        "baseline_folds": baseline_folds,
+        "se_multiplier": _se_multiplier({"scoring": frozen}),
+    }
+
+
+def _fold_metric_values(folds: list[Mapping[str, Any]], metric: str) -> dict[int, float]:
+    """``fold_index -> metric`` over normalized fold entries (every fold
+    carries the full recorded metrics block, see :func:`_validation_folds`)."""
+    return {
+        int(fold["fold_index"]): float(fold["metrics"][metric])
+        for fold in folds
+        if metric in (fold.get("metrics") or {})
+    }
 
 
 def _stage_guard_margin(adir: Path, folds, declared: float) -> float:
@@ -1873,19 +1912,28 @@ def _stage_guard_margin(adir: Path, folds, declared: float) -> float:
 
 def _companion_guard_shortfall(
     floor: Mapping[str, Any] | None, folds: list[Mapping[str, Any]],
-) -> float | None:
-    """How far a candidate fell below the companion floor, or ``None`` if it
-    cleared it. Fails CLOSED on a candidate that does not record the metric —
-    the same rule the gate applies, for the same reason."""
+) -> tuple[float, float] | None:
+    """``(drop, margin)`` when a candidate fell below the companion floor by
+    more than the margin it was judged against, or ``None`` if it cleared it.
+    Fails CLOSED on a candidate that does not record the metric — the same
+    rule the gate applies, for the same reason."""
+    from automil.graph import companion_delta, companion_margin
+
     if floor is None:
         return None
-    value = _recorded_fold_aggregates(folds).get(floor["metric"])
-    if value is None:
-        return float("inf")
-    drop = float(floor["baseline"]) - value
+    metric = floor["metric"]
+    candidate_folds = _fold_metric_values(folds, metric)
+    if len(candidate_folds) != len(folds):
+        return float("inf"), float(floor["margin"])
+    value = sum(candidate_folds.values()) / len(candidate_folds)
+    drop = -companion_delta(value, float(floor["baseline"]), candidate_folds, floor["baseline_folds"])
+    margin = companion_margin(
+        float(floor["margin"]), float(floor["se_multiplier"]),
+        candidate_folds, floor["baseline_folds"],
+    )
     # Same ulp slack as the gate: a drop of exactly the margin is a drop of one
     # validation slide, which is not evidence of harm.
-    return drop if drop - floor["margin"] > 1e-9 else None
+    return (drop, margin) if drop - margin > 1e-9 else None
 
 
 def _map_overlay_path(path: str, source_adir_rel: str, target_adir_rel: str) -> str:
@@ -2062,6 +2110,9 @@ def _materialize_promotion_unlocked(
         # kill switch mid-evaluation. Containment-size the time wall instead.
         config["cap"]["budget"] = PROMOTION_WALL_CLOCK_CONTAINMENT
         config["cap"]["mode"] = "wall_clock"
+        # The batches and the phasing rule belong to the agent's discovery;
+        # the controller submits the shortlist in one go.
+        config["cap"].pop("phasing", None)
         config["training"] = {"fold_count": len(STAGE_FOLDS["promotion"])}
         config.setdefault("campaign", {})["stage"] = "promotion"
         temporary_adir.mkdir(parents=True)
@@ -2534,12 +2585,13 @@ def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
         }
         guard_drop = _companion_guard_shortfall(promotion_floor, five_folds)
         if guard_drop is not None:
+            drop, margin = guard_drop
             job.update({
                 "status": "ineligible",
                 "reason": (
                     f"companion guard: {promotion_floor['metric']} fell "
-                    f"{guard_drop:.4f} below the baseline over five folds "
-                    f"(margin {promotion_floor['margin']})"
+                    f"{drop:.4f} below the baseline over five folds "
+                    f"(margin {margin:.4f})"
                 ),
                 "validation_mean": selection_candidate["validation_mean"],
             })
@@ -3589,10 +3641,10 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
             f"process evidence requires exactly {DISCOVERY_ATTEMPTS} discovery attempts"
         )
     audit_fields = {
-        "node_id", "source_spec_sha256", "submitted_at", "agent_session_id",
-        "agent_session_binding_sha256", "candidate_class", "policy_hash",
-        "result_status", "termination_reason", "budget_killed", "outcome_class",
-        "elapsed_seconds", "peak_vram_mb", "eligible", "reason",
+        "node_id", "source_spec_sha256", "submitted_at", "attempt_seq",
+        "agent_session_id", "agent_session_binding_sha256", "candidate_class",
+        "policy_hash", "result_status", "termination_reason", "budget_killed",
+        "outcome_class", "elapsed_seconds", "peak_vram_mb", "eligible", "reason",
         "candidate_sha256", "validation_mean",
     }
     classes = ("config-only", "train-only-source", "inadmissible")
@@ -3625,6 +3677,9 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
             raise CampaignStageError("discovery process timestamp is invalid") from exc
         if submitted.tzinfo is None:
             raise CampaignStageError("discovery process timestamp lacks timezone")
+        seq = row.get("attempt_seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+            raise CampaignStageError("discovery process attempt_seq is invalid")
         for key in ("elapsed_seconds", "peak_vram_mb"):
             value = row.get(key)
             if value is not None and (
@@ -3649,7 +3704,9 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise CampaignStageError("eligible discovery process row is incomplete")
         ordered.append(json.loads(json.dumps(row)))
-    ordered.sort(key=lambda row: (row["submitted_at"], row["node_id"]))
+    if len({row["attempt_seq"] for row in ordered}) != len(ordered):
+        raise CampaignStageError("discovery process attempt_seq is not unique")
+    ordered.sort(key=_attempt_order)
     discovery_baseline_folds = [
         fold for fold in baseline.get("validation_folds", [])
         if fold.get("fold_index") in STAGE_FOLDS["discovery"]
@@ -3947,9 +4004,9 @@ def validate_process_evidence_artifact(
     ):
         raise CampaignStageError(f"{cell_id}: discovery census is not exact")
     audit_fields = {
-        "node_id", "source_spec_sha256", "submitted_at", "agent_session_id",
-        "agent_session_binding_sha256", "candidate_class", "policy_hash",
-        "result_status", "termination_reason", "budget_killed",
+        "node_id", "source_spec_sha256", "submitted_at", "attempt_seq",
+        "agent_session_id", "agent_session_binding_sha256", "candidate_class",
+        "policy_hash", "result_status", "termination_reason", "budget_killed",
         "outcome_class", "elapsed_seconds", "peak_vram_mb", "eligible",
         "reason", "candidate_sha256", "validation_mean",
     }
@@ -3957,6 +4014,9 @@ def validate_process_evidence_artifact(
     for row in attempts:
         if not isinstance(row, dict) or set(row) != audit_fields:
             raise CampaignStageError(f"{cell_id}: discovery attempt schema drift")
+        seq = row.get("attempt_seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+            raise CampaignStageError(f"{cell_id}: discovery attempt_seq is invalid")
         for key in (
             "node_id", "submitted_at", "agent_session_id", "result_status",
             "termination_reason", "reason",
@@ -4019,9 +4079,9 @@ def validate_process_evidence_artifact(
             raise CampaignStageError(
                 f"{cell_id}: eligible discovery attempt is incomplete"
             )
-    if attempts != sorted(
-        attempts, key=lambda row: (row["submitted_at"], row["node_id"]),
-    ):
+    if len({row["attempt_seq"] for row in attempts}) != len(attempts):
+        raise CampaignStageError(f"{cell_id}: discovery attempt_seq is not unique")
+    if attempts != sorted(attempts, key=_attempt_order):
         raise CampaignStageError(f"{cell_id}: discovery attempt order drift")
     if (
         len({row["node_id"] for row in attempts}) != DISCOVERY_ATTEMPTS

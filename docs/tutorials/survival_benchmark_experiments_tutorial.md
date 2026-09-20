@@ -27,7 +27,7 @@ Replace `{dataset}` with your dataset config name (e.g., `cptac_ccrcc`, `tcga_lu
 
 > **Methodology note (survival ≠ classification).** Survival experiments deliberately differ from the classification pipeline:
 > - **5-fold CV**, not 10. With few events, 10-fold leaves only a couple of events per test fold and the c-index becomes near-random; 5-fold doubles the per-fold events and matches nnMIL's native survival convention.
-> - **Model selection on validation loss**, not the validation c-index. With few val events the val c-index is a coin flip, so maximizing it overfits to noise; the survival loss uses every sample and is stable.
+> - **Model selection on the validation c-index** (protocol v4): the epoch restored is the one with the highest in-fold validation c-index; a tie keeps the earlier epoch and an undefined c-index (no comparable pairs) never selects. The validation loss is still printed on every epoch line. Keep the 5-fold standard: with too few validation events the per-epoch c-index gets noisy.
 > - **`nllsurv` time bins from event (uncensored) times only** (the PORPOISE/MCAT convention), so censored outliers — including any corrupted negative follow-up times — do not shift the bin boundaries.
 > - **Patient-level c-index** via `scikit-survival`'s `concordance_index_censored`, NaN-safe (undefined folds are dropped from the cross-fold mean, never counted as 0.0).
 
@@ -188,7 +188,7 @@ Phase 2: Experiment Grid Generation
 
 Phase 3: Training (per experiment, per fold)
   → train survival head on the train split (cox risk set / nllsurv NLL)
-  → select the best checkpoint on validation LOSS
+  → select the best checkpoint on the validation c-index (protocol v4)
   → score test + val concordance index (patient-level)
 
 Phase 4: Aggregation

@@ -395,6 +395,7 @@ def _attempts(
                 bound_at + timedelta(seconds=index + 1)
             ).isoformat(),
             "metadata": {
+                "attempt_seq": index + 1,
                 "cell_id": yaml.safe_load(
                     (adir / "config.yaml").read_text()
                 )["campaign"]["budget_cell_id"],
@@ -857,6 +858,56 @@ def test_freeze_promotes_normally_when_the_companion_holds(staged_cell):
     ]
 
 
+def _set_companion_folds(adir, per_fold):
+    """Set every completed attempt's companion metric per discovery fold (in
+    fold order); the aggregate becomes their mean, rounded the way the
+    trainer records it."""
+    mean = round(sum(per_fold) / len(per_fold), 4)
+    for archive in (adir / "orchestrator" / "archive").iterdir():
+        path = archive / "result.json"
+        result = json.loads(path.read_text())
+        if result.get("status") != "completed":
+            continue
+        result["metrics"]["val_bacc"] = mean
+        for fold, value in zip(sorted(result["validation_folds"], key=lambda f: f["fold_index"]), per_fold):
+            fold["metrics"]["val_bacc"] = value
+        path.write_text(json.dumps(result))
+
+
+def test_freeze_guard_margin_widens_with_the_paired_fold_noise(staged_cell):
+    """The companion is judged like the primary: against max(one-slide
+    quantum, k x paired SE of the per-fold deltas). A mean drop past the
+    quantum whose per-fold deltas are noisier than the drop itself is not
+    evidence of harm and must not decide the cell."""
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))   # baseline val_bacc 0.60 on every fold
+    _attempts(adir, cell["cell_id"], completed=12)
+    # deltas +0.02, 0.00, -0.08: mean -0.02 (past the 0.0099 quantum), paired SE 0.0306
+    _set_companion_folds(adir, [0.62, 0.60, 0.52])
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    assert state["discovery"]["complete_candidates"] == 12
+    assert len(state["discovery"]["promoted_candidates"]) == 10
+
+
+def test_freeze_guard_uniform_drop_past_the_quantum_still_rejects(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    _declare_guard(adir)
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _set_companion_folds(adir, [0.58, 0.58, 0.58])       # deltas -0.02 x3: paired SE 0
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+
+    state = freeze_discovery(cell_root)
+    audit = state["discovery"]["attempt_audit"]
+    rejected = [row for row in audit if "companion guard" in (row.get("reason") or "")]
+    assert len(rejected) == 12
+    assert "(margin 0.0099)" in rejected[0]["reason"]
+    assert state["discovery"]["complete_candidates"] == 0
+
+
 def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
@@ -1157,6 +1208,7 @@ def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell
     config = yaml.safe_load((promotion / "config.yaml").read_text())
     assert config["cap"]["budget"] == "7d"
     assert config["cap"]["mode"] == "wall_clock"
+    assert "phasing" not in config["cap"]          # discovery's batches stay behind
     assert config["run"]["command"] == cell["commands"]["promotion"]
     assert config["training"]["fold_count"] == 2
     assert config["campaign"]["stage"] == "promotion"
@@ -1509,6 +1561,43 @@ def test_stage_process_evidence_rejects_inconsistent_eligible_promotion(
     })
     with pytest.raises(CampaignStageError, match="eligible promotion"):
         _process_evidence(drifted)
+
+
+def test_process_evidence_follows_the_admission_sequence_not_the_clock(staged_cell):
+    """The freeze records the sequence submit minted under its lock and the
+    exported history follows it: a submit stamped by a clock that ran
+    behind keeps the position it was judged at."""
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+    frozen = freeze_discovery(cell_root)
+    audit = frozen["discovery"]["attempt_audit"]
+    assert [row["attempt_seq"] for row in audit] == list(range(1, DISCOVERY_ATTEMPTS + 1))
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
+    state = freeze_promotion(cell_root)
+    skewed = json.loads(json.dumps(state))
+    rows = skewed["discovery"]["attempt_audit"]
+    rows[0]["submitted_at"], rows[1]["submitted_at"] = rows[1]["submitted_at"], rows[0]["submitted_at"]
+    anytime = _process_evidence(skewed)["discovery"]["validation_anytime"]
+    assert [step["node_id"] for step in anytime[:2]] == [rows[0]["node_id"], rows[1]["node_id"]]
+    rows[1]["attempt_seq"] = rows[0]["attempt_seq"]
+    with pytest.raises(CampaignStageError, match="attempt_seq"):
+        _process_evidence(skewed)
+
+
+def test_a_spec_without_an_admission_sequence_cannot_freeze(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
+    spec_path = adir / "orchestrator" / "archive" / "node_0002" / "spec.json"
+    spec = json.loads(spec_path.read_text())
+    del spec["metadata"]["attempt_seq"]
+    spec_path.write_text(json.dumps(spec))
+    with pytest.raises(CampaignStageError, match="attempt_seq"):
+        freeze_discovery(cell_root)
 
 
 def test_exact_validation_tie_prefers_native_baseline(staged_cell):

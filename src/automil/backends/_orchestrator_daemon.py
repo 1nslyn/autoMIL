@@ -981,8 +981,6 @@ class ExperimentOrchestrator:
             for name in ("local", "slurm", "ray")
             if (self.running_root / name).exists()
         ]
-        if not _backend_subdirs:
-            return
         import itertools
         for f in itertools.chain.from_iterable(d.glob("*.json") for d in _backend_subdirs):
             try:
@@ -1031,6 +1029,44 @@ class ExperimentOrchestrator:
                     self.runner.cleanup_worktree(wt)
             except Exception:
                 continue
+        self._finalize_launches_without_intent()
+
+    def _finalize_launches_without_intent(self) -> None:
+        """Mark crashed every billed launch the previous daemon never carried
+        to a running intent: ``_launch`` archives (and bills) the spec and
+        unlinks the queue file before it creates the worktree, applies the
+        overlay and writes the intent, so a daemon that died in that window
+        leaves an archived spec with no running record and no terminal
+        record. Nothing else ever finalizes it: recovery only reads running
+        specs, ``cancel`` needs one, a resubmit of the id is refused, and a
+        phased cell counts it in flight forever.
+        """
+        for spec_path in sorted(self.archive_dir.glob("*/spec.json")):
+            node_dir = spec_path.parent
+            node_id = node_dir.name
+            if (node_dir / "result.json").exists() or \
+                    (node_dir / f"{node_id}_running_spec.json").exists():
+                continue
+            try:
+                spec = json.loads(spec_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                logger.exception("Unreadable archived spec for %s; not finalized", node_id)
+                continue
+            if (spec.get("metadata") or {}).get("cap_refused"):
+                continue
+            if (self.queue_dir / f"{node_id}.json").exists() or any(
+                (self.running_root / name / f"{node_id}.json").exists()
+                for name in ("local", "slurm", "ray")
+            ):
+                continue
+            logger.warning(
+                "Billed launch %s has neither a running nor a terminal record: the "
+                "previous daemon died before its running intent; marking it crashed",
+                node_id,
+            )
+            self._mark_crashed(
+                node_id, spec, "Orchestrator restarted during launch, before the running intent",
+            )
 
     def _sigkill_orphan_pg(self, node_id: str, spec: dict) -> None:
         """SIGKILL an orphaned process group recorded in the running spec.
@@ -1625,6 +1661,15 @@ class ExperimentOrchestrator:
             cell.eval_budget if cell.eval_budget is not None else "-",
         )
 
+        self._refuse_queued_spec(spec, cell_id=str(cell_id), cancel_reason="cap")
+        return True
+
+    def _refuse_queued_spec(self, spec: dict, *, cell_id: str, cancel_reason: str) -> None:
+        """Drop a queued spec that must never launch: unlink ``queue/<node>.json``,
+        archive the spec with ``metadata.cap_refused`` (the one flag every
+        census reads as "refused at launch, never charged") and the reason,
+        and cancel the node the way ``automil dequeue`` would."""
+        node_id = spec.get("id", "?")
         src_file = spec.get("_file")
         if src_file and Path(src_file).exists():
             try:
@@ -1639,14 +1684,42 @@ class ExperimentOrchestrator:
             spec_clean = {k: v for k, v in spec.items() if k != "_file"}
             spec_clean["metadata"] = {
                 **(spec_clean.get("metadata") or {}),
-                "cancel_reason": "cap",
+                "cancel_reason": cancel_reason,
                 "cap_refused": True,
             }
-            (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2))
+            _atomic_write_lines(archive / "spec.json", [json.dumps(spec_clean, indent=2)])
         except OSError:
             logger.exception("Could not archive refused spec for %s", node_id)
 
-        self._cancel_node_for_cap_refusal(node_id, str(cell_id))
+        self._cancel_node_for_cap_refusal(node_id, cell_id)
+
+    def _largest_gpu_gb(self) -> float | None:
+        """Total memory of the largest visible CUDA GPU, or ``None`` when the
+        host is CPU-only, on another accelerator, or shows no GPU right now."""
+        if getattr(self, "_cpu_only", False) or getattr(self, "_accelerator", "") not in ("", "cuda"):
+            return None
+        totals = [g.total_mb / 1024 for g in query_gpus()]
+        return max(totals) if totals else None
+
+    def _refuse_if_unplaceable(self, spec: dict, needed_gb: float) -> bool:
+        """Refuse a queued spec that no GPU on this host can ever hold (its
+        estimated VRAM exceeds the largest GPU minus the safety margin). Left
+        queued it would sit through every tick forever: nothing else archives
+        it, its node stays ``running`` in the graph, and a phased cell holds
+        every later batch on it. True iff refused."""
+        largest = self._largest_gpu_gb()
+        if largest is None or needed_gb <= largest - self.safety_margin_gb:
+            return False
+        logger.warning(
+            "Refusing to launch %s: it asks for %.1f GB of VRAM and the largest GPU "
+            "here has %.1f GB (%.1f GB after the safety margin). Dequeuing the spec "
+            "and cancelling the node; resubmit with a smaller --vram.",
+            spec.get("id", "?"), needed_gb, largest, largest - self.safety_margin_gb,
+        )
+        self._refuse_queued_spec(
+            spec, cell_id=str((spec.get("metadata") or {}).get("cell_id") or "-"),
+            cancel_reason="unplaceable",
+        )
         return True
 
     def _cancel_node_for_cap_refusal(self, node_id: str, cell_id: str) -> None:
@@ -1854,9 +1927,11 @@ class ExperimentOrchestrator:
         archive = self.archive_dir / node_id
         archive.mkdir(parents=True, exist_ok=True)
 
-        # Save spec (without internal keys)
+        # Save spec (without internal keys). Atomic: `automil submit` reads
+        # archived specs for the phasing census while the daemon runs, and a
+        # half-written file would read as a missing attempt.
         spec_clean = {k: v for k, v in spec.items() if k not in ("_file",)}
-        (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2))
+        _atomic_write_lines(archive / "spec.json", [json.dumps(spec_clean, indent=2)])
 
         # A9 (claims-alignment): bill at archive time, not after Popen. The
         # freeze census counts archived non-cap-refused specs and requires it
@@ -2893,7 +2968,7 @@ class ExperimentOrchestrator:
 
         (archive / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         spec_clean = {k: v for k, v in spec.items() if k not in ("_file",)}
-        (archive / "spec.json").write_text(json.dumps(spec_clean, indent=2) + "\n")
+        _atomic_write_lines(archive / "spec.json", [json.dumps(spec_clean, indent=2) + "\n"])
         (self.completed_dir / f"{node_id}.json").write_text(
             json.dumps(result, indent=2) + "\n"
         )
@@ -3116,6 +3191,8 @@ class ExperimentOrchestrator:
                     continue
 
                 needed_gb = spec.get("estimated_vram_gb", self.default_vram)
+                if self._refuse_if_unplaceable(spec, needed_gb):
+                    continue
                 gpu = self._find_best_gpu(needed_gb)
 
                 if gpu is not None and self._pre_launch_check(gpu, needed_gb):

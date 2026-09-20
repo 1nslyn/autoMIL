@@ -47,14 +47,20 @@ class Accuracy_Logger(object):
         return acc, correct, count
 
 class EarlyStopping:
-    """Early stops the training if validation loss doesn't improve after a given patience."""
+    """Checkpoint tracker on validation AUC (protocol v4), with early stopping.
+
+    The checkpoint saved is the epoch with the highest validation AUC: a
+    strictly higher AUC saves, a tie keeps the earlier epoch, a non-finite AUC
+    never saves and counts toward patience — the same contract as
+    autobench's SelectionTracker and nnMIL's callbacks.
+    """
     def __init__(self, patience=20, stop_epoch=50, verbose=False):
         """
         Args:
-            patience (int): How long to wait after last time validation loss improved.
+            patience (int): How long to wait after last time validation AUC improved.
                             Default: 20
             stop_epoch (int): Earliest epoch possible for stopping
-            verbose (bool): If True, prints a message for each validation loss improvement. 
+            verbose (bool): If True, prints a message for each validation AUC improvement.
                             Default: False
         """
         self.patience = patience
@@ -62,49 +68,55 @@ class EarlyStopping:
         self.verbose = verbose
         self.counter = 0
         self.best_score = None
-        self.early_stop = False
-        self.val_loss_min = np.inf
         self.best_epoch = -1  # epoch of the checkpoint currently saved
+        self._epoch = -1      # last epoch observed (the stop_epoch floor reads it)
 
-    def __call__(self, epoch, val_loss, model, ckpt_name = 'checkpoint.pt'):
+    @property
+    def early_stop(self) -> bool:
+        """Patience exhausted right now, past the stop_epoch floor. Derived,
+        never latched: a stop a policy suppressed must not stick once the
+        AUC improves again (the counter resets, and so does this)."""
+        return self.counter >= self.patience and self._epoch > self.stop_epoch
 
-        score = -val_loss
+    def __call__(self, epoch, val_auc, model, ckpt_name = 'checkpoint.pt'):
 
-        # A non-finite val loss must never become (or defend) the checkpoint:
-        # with a finite best, NaN fails `score < best` and the upstream else
-        # branch would SAVE the non-finite epoch as the new best. Map it to
-        # -inf (always a regression) and never save on a degenerate first
-        # epoch — same contract as the nnMIL callbacks.
+        score = val_auc
+        self._epoch = epoch
+
+        # A non-finite val AUC must never become (or defend) the checkpoint:
+        # with a finite best, NaN fails `score <= best` and the else branch
+        # would SAVE the non-finite epoch as the new best. Map it to -inf
+        # (always a regression) and never save on a degenerate first epoch.
         if np.isnan(score) or np.isinf(score):
             score = float('-inf')
 
         if self.best_score is None and score == float('-inf'):
             self.counter += 1
-            print(f'EarlyStopping: non-finite val loss at epoch {epoch}; no checkpoint saved ({self.counter}/{self.patience})')
-            if self.counter >= self.patience and epoch > self.stop_epoch:
-                self.early_stop = True
+            print(f'EarlyStopping: non-finite val AUC at epoch {epoch}; no checkpoint saved ({self.counter}/{self.patience})')
         elif self.best_score is None:
             self.best_score = score
             self.best_epoch = epoch
-            self.save_checkpoint(val_loss, model, ckpt_name)
+            self.save_checkpoint(val_auc, model, ckpt_name)
             self.counter = 0
-        elif score < self.best_score:
+        elif score <= self.best_score:
+            # Not strictly better (a tie keeps the earlier epoch).
             self.counter += 1
             print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
-            if self.counter >= self.patience and epoch > self.stop_epoch:
-                self.early_stop = True
         else:
+            previous = self.best_score
             self.best_score = score
             self.best_epoch = epoch
-            self.save_checkpoint(val_loss, model, ckpt_name)
+            self.save_checkpoint(val_auc, model, ckpt_name, previous)
             self.counter = 0
 
-    def save_checkpoint(self, val_loss, model, ckpt_name):
-        '''Saves model when validation loss decrease.'''
+    def save_checkpoint(self, val_auc, model, ckpt_name, previous=None):
+        '''Saves model when validation AUC increases.'''
         if self.verbose:
-            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
+            if previous is None:
+                print(f'Validation AUC {val_auc:.6f}.  Saving model ...')
+            else:
+                print(f'Validation AUC increased ({previous:.6f} --> {val_auc:.6f}).  Saving model ...')
         torch.save(model.state_dict(), ckpt_name)
-        self.val_loss_min = val_loss
 
 def train(datasets, cur, args):
     """   
@@ -194,7 +206,7 @@ def train(datasets, cur, args):
     print('Done!')
 
     print('\nSetup EarlyStopping...', end=' ')
-    # Protocol v3: the val-loss checkpoint tracker runs UNCONDITIONALLY;
+    # The val-AUC checkpoint tracker runs UNCONDITIONALLY (protocol v4);
     # `args.early_stopping` (a legal tunable knob) only decides whether the
     # patience signal may END TRAINING early — the same split every other
     # arm uses. Upstream coupled the two: flag off meant no per-epoch
@@ -236,14 +248,14 @@ def train(datasets, cur, args):
         model.load_state_dict(torch.load(ckpt_path))
         selected_epoch, selected_source = early_stopping.best_epoch, 'best'
     elif last_epoch >= 0:
-        # Epochs ran but none ever checkpointed: every validation loss was
+        # Epochs ran but none ever checkpointed: every validation AUC was
         # non-finite. Publishing the final weights would certify garbage
         # under honest-looking metrics — fail the fold instead (same
         # contract as the nnMIL callbacks: an all-degenerate run ends with
         # no checkpoint, not a fallback selection).
         raise RuntimeError(
-            'CLAM: every epoch had a non-finite validation loss; no '
-            'loss-selected checkpoint exists to certify'
+            'CLAM: every epoch had a non-finite validation AUC; no '
+            'AUC-selected checkpoint exists to certify'
         )
     else:
         # No epoch ever ran (max_epochs == 0): score the current weights so
@@ -252,7 +264,7 @@ def train(datasets, cur, args):
         selected_epoch, selected_source = last_epoch, 'final'
 
     # A3: the epoch whose weights are scored below — EarlyStopping's best
-    # val-loss checkpoint whenever one was saved (source=best), else the
+    # val-AUC checkpoint whenever one was saved (source=best), else the
     # current weights, no restore (source=final; epoch=-1 when max_epochs == 0).
     print('[selected] epoch={} source={}'.format(selected_epoch, selected_source), flush=True)
 
@@ -443,7 +455,7 @@ def validate(cur, epoch, model, loader, n_classes, early_stopping = None, writer
 
     if early_stopping:
         assert results_dir
-        early_stopping(epoch, val_loss, model, ckpt_name = os.path.join(results_dir, "s_{}_checkpoint.pt".format(cur)))
+        early_stopping(epoch, auc, model, ckpt_name = os.path.join(results_dir, "s_{}_checkpoint.pt".format(cur)))
         
         if early_stopping.early_stop:
             print("Early stopping")
@@ -533,7 +545,7 @@ def validate_clam(cur, epoch, model, loader, n_classes, early_stopping = None, w
 
     if early_stopping:
         assert results_dir
-        early_stopping(epoch, val_loss, model, ckpt_name = os.path.join(results_dir, "s_{}_checkpoint.pt".format(cur)))
+        early_stopping(epoch, auc, model, ckpt_name = os.path.join(results_dir, "s_{}_checkpoint.pt".format(cur)))
         
         if early_stopping.early_stop:
             print("Early stopping")

@@ -12,10 +12,11 @@ Fidelity notes:
 - ``distill='AFS'`` is locked, so the pseudo-bag feature is the attention-feature
   sum (``af_inst_feat``, Main:337/343-344). The CAM-based top-k ranking
   (Main:326-335) is only consumed by MaxS/MaxMinS and is intentionally omitted.
-- Early stopping is on val CE loss (protocol v3; AUC reported, not voting)
-  with best-state restore — a clean,
-  fair replacement for the reference's best-after-80%-epochs bookkeeping. The
-  optimization math per step is unchanged.
+- The checkpoint is selected on the primary validation metric, val AUC
+  (protocol v4; the val CE loss is reported beside it), with best-state
+  restore — a clean, fair replacement for the reference's
+  best-after-80%-epochs bookkeeping. The optimization math per step is
+  unchanged.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from autobench.pipeline.dtfd.dataset import DTFDSlide, _read_bag, min_bag_size
 from autobench.pipeline.dtfd.eval import evaluate_dtfd, val_scores
 from autobench.pipeline.dtfd.model import DTFDBundle, build_dtfd_bundle
 from autobench.pipeline.evaluate import file_sha256_or_none
+from autobench.pipeline.selection import SelectionTracker
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
@@ -216,10 +218,8 @@ def train_dtfd_fold(
         sched0 = policy_runtime.wrap_scheduler(sched0, role="tier1")
         sched1 = policy_runtime.wrap_scheduler(sched1, role="tier2")
 
-        best_loss = float("inf")
-        best_snap: dict | None = None
-        best_epoch = -1  # -1: no val-selected checkpoint; final weights kept
-        epochs_no_improve = 0
+        tracker = SelectionTracker(cfg.patience)
+        best_snap: dict | None = None  # None: nothing selected; final weights kept
         history: list[float] = []
 
         for epoch in range(cfg.max_epochs):
@@ -232,15 +232,11 @@ def train_dtfd_fold(
 
             if val_slides:
                 cur_auc, cur = val_scores(bundle, val_slides, cfg, num_classes, device, seed)
-                # Protocol v3: select on continuous val CE loss; AUC reports.
-                if cur < best_loss:
-                    best_loss = cur
+                # Protocol v4: select on the primary validation metric (AUC);
+                # the CE loss is reported beside it for policies.
+                if tracker.observe(epoch, cur_auc):
                     best_snap = _snapshot(bundle)
-                    best_epoch = epoch
-                    epochs_no_improve = 0
-                else:
-                    epochs_no_improve += 1
-                default_stop = cfg.early_stopping and epochs_no_improve >= cfg.patience
+                default_stop = cfg.early_stopping and tracker.early_stop
                 if policy_runtime.should_stop(
                     default_stop, epoch=epoch,
                     metrics={"val_auc": cur_auc, "val_loss": cur},
@@ -251,7 +247,7 @@ def train_dtfd_fold(
             _restore(bundle, best_snap)
         # A3: source=best when a val-selected snapshot was restored above,
         # source=final when the final weights were kept (no restore).
-        print(f"[selected] epoch={best_epoch} "
+        print(f"[selected] epoch={tracker.best_epoch} "
               f"source={'best' if best_snap is not None else 'final'}", flush=True)
 
         test_metrics = (

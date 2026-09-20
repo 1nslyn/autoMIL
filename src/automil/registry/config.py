@@ -20,6 +20,17 @@ _VALID_MODES: tuple[str, ...] = ("free", "architecture-preserving")
 
 
 @dataclass(frozen=True)
+class PolicySmoke:
+    """``registry.policy_smoke``: a consumer-owned command run on every variant
+    module at submit (``{python}`` -> the running interpreter, ``{module}`` ->
+    the module path, appended when absent); a non-zero exit or a timeout
+    refuses the submission."""
+
+    command: tuple[str, ...]
+    timeout_s: int
+
+
+@dataclass(frozen=True)
 class RegistryConfig:
     """Typed view onto automil/config.yaml registry section.
 
@@ -44,6 +55,7 @@ class RegistryConfig:
     identity_locked_hparams: tuple[str, ...] = ()
     repro_tolerance: float = 0.005               # D-39: default ±0.005
     identity_constraints: tuple[str, ...] = ()   # D-31: per-project identity rules
+    policy_smoke: PolicySmoke | None = None      # submit-time smoke run of variant modules
 
 
 def _coerce_str_tuple(raw: object, key: str) -> tuple[str, ...]:
@@ -153,4 +165,25 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
         identity_locked_hparams=identity_locked_hparams,
         repro_tolerance=repro_tolerance,
         identity_constraints=identity_constraints,
+        policy_smoke=_policy_smoke(registry_section.get("policy_smoke")),
     )
+
+
+def _policy_smoke(raw: object) -> PolicySmoke | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("automil/config.yaml: registry.policy_smoke must be a mapping")
+    command = raw.get("command")
+    if not isinstance(command, list) or not command \
+            or not all(isinstance(token, str) and token for token in command):
+        raise ValueError(
+            "automil/config.yaml: registry.policy_smoke.command must be a non-empty "
+            "list of strings"
+        )
+    timeout = raw.get("timeout_s")
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
+        raise ValueError(
+            "automil/config.yaml: registry.policy_smoke.timeout_s must be a positive integer"
+        )
+    return PolicySmoke(command=tuple(command), timeout_s=timeout)

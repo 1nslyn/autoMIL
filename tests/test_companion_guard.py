@@ -45,7 +45,7 @@ class TestGuardSemantics:
         parent = _node(0.70, bacc=0.70)
         child = _node(0.75, bacc=0.40)
         assert keep_or_discard(meta, parent, child) == "keep"
-        assert guard_basis(meta, parent, child) == ("none", None, None)
+        assert guard_basis(meta, parent, child) == ("none", None, None, None)
 
     def test_companion_gain_keeps(self):
         assert keep_or_discard(META, _node(0.70, 0.70), _node(0.75, 0.72)) == "keep"
@@ -65,7 +65,8 @@ class TestGuardSemantics:
         """The whole point: a big AUC gain does not buy a bACC collapse."""
         parent = _node(0.70, 0.70)
         child = _node(0.85, 0.70 - 2 * QUANTUM)   # +0.15 val_auc, -2 slides
-        verdict, delta, metric = guard_basis(META, parent, child)
+        verdict, delta, metric, margin = guard_basis(META, parent, child)
+        assert margin == pytest.approx(QUANTUM)
         assert verdict == "fail"
         assert delta == pytest.approx(-2 * QUANTUM)
         assert keep_or_discard(META, parent, child) == "discard"
@@ -98,7 +99,7 @@ class TestGuardSemantics:
 
     def test_root_has_no_guard(self):
         assert keep_or_discard(META, None, _node(0.75, 0.10)) == "keep"
-        assert guard_basis(META, None, _node(0.75, 0.10)) == ("none", None, None)
+        assert guard_basis(META, None, _node(0.75, 0.10)) == ("none", None, None, None)
 
 
 class TestGuardFailsClosed:
@@ -109,7 +110,7 @@ class TestGuardFailsClosed:
         would be the dominant strategy for every candidate that hurt it.
         """
         parent, child = _node(0.70, 0.70), _node(0.85)   # child reports no bacc
-        assert guard_basis(META, parent, child) == ("fail", None, "val_bacc")
+        assert guard_basis(META, parent, child) == ("fail", None, "val_bacc", None)
         assert keep_or_discard(META, parent, child) == "discard"
 
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"), "0.7", True, None])
@@ -124,7 +125,7 @@ class TestGuardFailsClosed:
         first), so this exempts ONE comparison, never a lineage.
         """
         parent, child = _node(0.70), _node(0.75, 0.10)
-        assert guard_basis(META, parent, child) == ("none", None, "val_bacc")
+        assert guard_basis(META, parent, child) == ("none", None, "val_bacc", None)
         assert keep_or_discard(META, parent, child) == "keep"
 
     def test_the_parent_exemption_is_not_hereditary(self):
@@ -137,7 +138,7 @@ class TestGuardFailsClosed:
         exactly the dominant strategy the child-side rule exists to prevent.
         """
         parent, child = _node(0.70), _node(0.80)     # neither reports val_bacc
-        assert guard_basis(META, parent, child) == ("fail", None, "val_bacc")
+        assert guard_basis(META, parent, child) == ("fail", None, "val_bacc", None)
         assert keep_or_discard(META, parent, child) == "discard"
         # ...so omitting the key cannot propagate down a lineage either: the
         # grandchild is judged on its OWN evidence, not on what its parent
@@ -164,7 +165,7 @@ class TestGuardFailsClosed:
                 for i in range(3)
             ]},
         }
-        assert guard_basis(META, root, _node(0.80, 0.40)) == ("none", None, "val_bacc")
+        assert guard_basis(META, root, _node(0.80, 0.40)) == ("none", None, "val_bacc", None)
 
     def test_stale_fold_metadata_cannot_resurrect_a_cleared_companion(self):
         """`metadata` is merged from the AGENT-AUTHORED result payload.
@@ -182,7 +183,7 @@ class TestGuardFailsClosed:
                 for i in range(3)
             ]},
         }
-        assert guard_basis(META, _node(0.70, 0.70), child) == ("fail", None, "val_bacc")
+        assert guard_basis(META, _node(0.70, 0.70), child) == ("fail", None, "val_bacc", None)
         assert keep_or_discard(META, _node(0.70, 0.70), child) == "discard"
 
     @pytest.mark.parametrize("bad", [
@@ -201,7 +202,7 @@ class TestGuardFailsClosed:
                             "se_multiplier": 0.0, "guard": bad}}
         with pytest.raises(ValueError):
             _guard_declaration(meta)
-        assert guard_basis(meta, _node(0.70, 0.70), _node(0.99, 0.99)) == ("fail", None, None)
+        assert guard_basis(meta, _node(0.70, 0.70), _node(0.99, 0.99)) == ("fail", None, None, None)
         assert keep_or_discard(meta, _node(0.70, 0.70), _node(0.99, 0.99)) == "discard"
 
 
@@ -480,3 +481,130 @@ class TestCheckCatchesGuardConfigErrors:
             track=["val_auc", "val_bacc"],
         )
         assert "scoring.guard" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# The margin scales with the paired noise of the companion, like the primary's
+# ---------------------------------------------------------------------------
+
+META_SE = {
+    "scoring": {
+        "formula": "val_auc",
+        "accept_margin": 0.0,
+        "se_multiplier": 1.0,
+        "guard": {"metric": "val_bacc", "margin": QUANTUM},
+    }
+}
+
+
+def _fold_node(aucs: list[float], baccs: list[float], *, as_root=False) -> dict:
+    """A node carrying per-fold validated metrics: an executed child through
+    the projection (``fold_primary_values``) or the campaign baseline root
+    (``metadata.validation_folds``)."""
+    entries = [
+        {"fold_index": i, "primary_value": a, "metrics": {"val_auc": a, "val_bacc": b}}
+        for i, (a, b) in enumerate(zip(aucs, baccs))
+    ]
+    node = {
+        "primary_value": sum(aucs) / len(aucs),
+        "metrics": {"val_auc": sum(aucs) / len(aucs), "val_bacc": sum(baccs) / len(baccs)},
+    }
+    if as_root:
+        node["metadata"] = {"validation_folds": entries}
+    else:
+        node["fold_primary_values"] = entries
+    return node
+
+
+PARENT_BACC = [0.60, 0.70, 0.50]
+NOISY_CHILD_BACC = [0.58, 0.72, 0.42]     # deltas -0.02, +0.02, -0.08: mean -0.027, paired SE 0.029
+UNIFORM_CHILD_BACC = [0.58, 0.68, 0.48]   # deltas -0.02 x3: mean -0.02, paired SE 0
+CHILD_AUC = [0.85, 0.85, 0.85]
+PARENT_AUC = [0.70, 0.70, 0.70]
+
+
+class TestGuardMarginScalesWithPairedNoise:
+    """The primary metric is judged against max(floor, k x paired SE); the
+    companion was judged against the bare one-slide floor, so a drop smaller
+    than its own fold-to-fold noise decided cells (KRAS ABMIL lost its rank-1
+    recipe by 0.002). Same rule for both now: one invariant, one multiplier."""
+
+    def test_a_noisy_drop_within_one_paired_se_passes(self):
+        parent = _fold_node(PARENT_AUC, PARENT_BACC)
+        child = _fold_node(CHILD_AUC, NOISY_CHILD_BACC)
+        verdict, delta, metric, margin = guard_basis(META_SE, parent, child)
+        assert delta == pytest.approx(-0.0267, abs=1e-4)
+        assert margin == pytest.approx(0.0291, abs=1e-3)     # k x paired SE > quantum
+        assert verdict == "pass"
+        assert keep_or_discard(META_SE, parent, child) == "keep"
+
+    def test_the_delta_is_the_difference_of_fold_means_when_paired(self):
+        """The recorded aggregate can differ from its folds (a recovered run
+        writes an unrounded mean); both stages judge the same per-fold means."""
+        parent = _fold_node(PARENT_AUC, PARENT_BACC)
+        child = _fold_node(CHILD_AUC, UNIFORM_CHILD_BACC)        # folds mean 0.58
+        child["metrics"]["val_bacc"] = 0.61                       # a stale aggregate
+        verdict, delta, _, _ = guard_basis(META_SE, parent, child)
+        assert delta == pytest.approx(-0.02)
+        assert verdict == "fail"
+
+    def test_a_uniform_drop_past_the_quantum_still_fails(self):
+        parent = _fold_node(PARENT_AUC, PARENT_BACC)
+        child = _fold_node(CHILD_AUC, UNIFORM_CHILD_BACC)
+        verdict, delta, metric, margin = guard_basis(META_SE, parent, child)
+        assert margin == pytest.approx(QUANTUM)               # paired SE 0: the floor rules
+        assert verdict == "fail"
+        assert keep_or_discard(META_SE, parent, child) == "discard"
+
+    def test_without_fold_evidence_the_quantum_rules(self):
+        parent, child = _node(0.70, 0.60), _node(0.85, 0.60 - 0.02)
+        verdict, delta, metric, margin = guard_basis(META_SE, parent, child)
+        assert margin == pytest.approx(QUANTUM)
+        assert verdict == "fail"
+
+    def test_the_baseline_root_pairs_through_its_metadata_folds(self):
+        root = _fold_node(PARENT_AUC, PARENT_BACC, as_root=True)
+        child = _fold_node(CHILD_AUC, NOISY_CHILD_BACC)
+        assert guard_basis(META_SE, root, child)[0] == "pass"
+
+    def test_a_zero_multiplier_keeps_the_bare_quantum(self):
+        parent = _fold_node(PARENT_AUC, PARENT_BACC)
+        child = _fold_node(CHILD_AUC, NOISY_CHILD_BACC)
+        verdict, _, _, margin = guard_basis(META, parent, child)   # META: se_multiplier 0
+        assert margin == pytest.approx(QUANTUM)
+        assert verdict == "fail"
+
+    def test_mismatched_fold_sets_fall_back_to_the_quantum(self):
+        parent = _fold_node(PARENT_AUC, PARENT_BACC)
+        child = _fold_node(CHILD_AUC[:2], NOISY_CHILD_BACC[:2])
+        child["fold_primary_values"][1]["fold_index"] = 4     # folds {0, 4} vs {0, 1, 2}
+        verdict, _, _, margin = guard_basis(META_SE, parent, child)
+        assert margin == pytest.approx(QUANTUM)
+
+    def test_rank_prints_the_bar_the_guard_used(self, tmp_path, capsys):
+        from automil.cli.propose import _print_leaderboard
+        from automil.graph import ExperimentGraph
+
+        graph = ExperimentGraph(path=str(tmp_path / "graph.json"))
+        graph.meta.setdefault("scoring", {}).update(META["scoring"])
+        root_id = graph.add_executed(
+            parent_id=None, description="native baseline", techniques=[],
+            metrics={"primary_value": 0.70, "val_auc": 0.70, "val_bacc": 0.60},
+            status="keep",
+        )
+        root = graph.get_node(root_id)
+        root["primary_value"] = 0.70
+        root["metadata"] = {"validation_folds": _fold_node(PARENT_AUC, PARENT_BACC, as_root=True)["metadata"]["validation_folds"]}
+        child_id = graph.add_executed(
+            parent_id=root_id, description="a bacc collapse", techniques=[],
+            metrics={"primary_value": 0.85, "val_auc": 0.85, "val_bacc": 0.40},
+            status="discard",
+        )
+        child = graph.get_node(child_id)
+        child["primary_value"] = 0.85
+        child["fold_primary_values"] = _fold_node(CHILD_AUC, [0.40, 0.40, 0.40])["fold_primary_values"]
+        graph.save()
+
+        _print_leaderboard(ExperimentGraph(path=str(tmp_path / "graph.json")))
+        out = capsys.readouterr().out
+        assert "GUARD-FAIL val_bacc -0.2000 (bar 0.0098)" in out
