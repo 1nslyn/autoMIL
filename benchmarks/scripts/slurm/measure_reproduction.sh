@@ -4,7 +4,9 @@
 # (`campaign_stage.py run-baseline-reproduction --measure`; no verdict is
 # recorded, and the discovery job supersedes a measurement-mode record with
 # --force on its own). The summary at the end is the basis for the epsilon
-# in reproduction_policy.json. One 3g.40gb slice of an H100, two workers.
+# in reproduction_policy.json. One full H100, two workers: a re-run is only
+# comparable on the GPU type reproduction_policy.json declares, and
+# campaign_stage.py refuses any other.
 #
 # Submit from the campaign checkout root, after the set's baselines job:
 #   sbatch --account=def-jma-ab --dependency=afterok:<baselines job> \
@@ -15,7 +17,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gpus=nvidia_h100_80gb_hbm3_3g.40gb:1
+#SBATCH --gpus=h100:1
 #SBATCH --mem=96G
 #SBATCH --output=logs/measure_reproduction_%j.out
 #SBATCH --error=logs/measure_reproduction_%j.err

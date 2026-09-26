@@ -24,6 +24,7 @@ from autobench.campaign_stages import (
     run_baseline_reproduction,
 )
 
+from _helpers import full_h100_nvidia_smi, write_reproduction_policy
 from test_campaign_stages import (  # noqa: F401  (staged_cell is a fixture)
     _baseline,
     _folds,
@@ -35,10 +36,7 @@ DISCOVERY_FOLDS = list(STAGE_FOLDS["discovery"])
 
 
 def _declare_policy(repo_root: Path, epsilon=0.005) -> Path:
-    path = repo_root / REPRODUCTION_POLICY_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"epsilon": epsilon}))
-    return path
+    return write_reproduction_policy(repo_root, epsilon=epsilon)
 
 
 def _fake_execution(
@@ -53,6 +51,8 @@ def _fake_execution(
     observed = observed if observed is not None else {}
 
     def fake_run(command, **kwargs):
+        if (gpu := full_h100_nvidia_smi(command)) is not None:
+            return gpu
         if command[:2] == ["git", "rev-parse"]:
             return SimpleNamespace(returncode=0, stdout=head + "\n", stderr="")
         if command[:3] == ["git", "diff", "--quiet"]:
@@ -219,6 +219,8 @@ def test_wrong_fold_set_fails_closed(staged_cell, monkeypatch):
         observed = {}
 
         def fake_run(command, **kwargs):
+            if (gpu := full_h100_nvidia_smi(command)) is not None:
+                return gpu
             if command[:2] == ["git", "rev-parse"]:
                 return SimpleNamespace(
                     returncode=0, stdout="c" * 40 + "\n", stderr="",
@@ -324,6 +326,7 @@ def test_measurement_mode_records_spread_but_never_satisfies_the_gate(
 ):
     cell_root, adir, _, _, repo_root = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
+    _declare_policy(repo_root)
     base = _baseline_fold_values(cell_root)
     _fake_execution(
         monkeypatch,
@@ -426,3 +429,36 @@ def test_pass_at_another_head_does_not_short_circuit(staged_cell, monkeypatch):
     assert run_baseline_reproduction(
         cell_root, repo_root=repo_root,
     )["baseline_reproduction"]["commit"] == "d" * 40
+
+
+@pytest.mark.parametrize("measure", [False, True])
+def test_reproduction_on_a_mig_slice_is_refused_before_training(
+    staged_cell, monkeypatch, measure,
+):
+    """Forged violation: the gate re-run handed a MIG slice. A slice and a
+    full H100 disagree by up to 0.045 per fold, so the run never starts and
+    nothing is recorded."""
+    cell_root, _, _, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _declare_policy(repo_root)
+    commands: list[list[str]] = []
+
+    def slice_node(command, **kwargs):
+        commands.append(list(command))
+        if command[0] == "nvidia-smi":
+            return SimpleNamespace(
+                returncode=0,
+                stdout="0, NVIDIA H100 80GB HBM3, Enabled\n",
+                stderr="",
+            )
+        if command[:2] == ["git", "rev-parse"]:
+            return SimpleNamespace(returncode=0, stdout="c" * 40 + "\n", stderr="")
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"nothing may run on a slice, got {command[:3]}")
+
+    monkeypatch.setattr("autobench.campaign_stages.subprocess.run", slice_node)
+    with pytest.raises(CampaignStageError, match="MIG enabled"):
+        run_baseline_reproduction(cell_root, repo_root=repo_root, measure=measure)
+    assert not any(command[:3] == ["git", "worktree", "add"] for command in commands)
+    assert load_stage_state(cell_root).get("baseline_reproduction") is None

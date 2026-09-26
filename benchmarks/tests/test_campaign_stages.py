@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 import autobench.campaign_stages as campaign_stages
+from _helpers import full_h100_nvidia_smi, write_reproduction_policy
 from automil.admissibility import load_candidate_policy
 from automil.cells.activity import (
     ACTIVITY_SAMPLES_FILENAME,
@@ -533,6 +534,8 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
     observed: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
+        if (gpu := full_h100_nvidia_smi(command)) is not None:
+            return gpu
         if command[:2] == ["git", "rev-parse"]:
             observed["head"] = True
             return SimpleNamespace(returncode=0, stdout="c" * 40 + "\n", stderr="")
@@ -573,6 +576,7 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
             }))
         return SimpleNamespace(returncode=0)
 
+    write_reproduction_policy(repo_root)
     monkeypatch.setattr("autobench.campaign_stages.subprocess.run", fake_run)
     state = run_native_baseline(cell_root, repo_root=repo_root, gpu_id=3)
 
@@ -583,6 +587,36 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
     assert state["baseline"]["candidate_id"] == "baseline"
     assert (cell_root / "baseline/archive/result.json").is_file()
     assert (adir / "graph.json").is_file()
+
+
+def test_native_baseline_on_a_mig_slice_is_refused_before_training(
+    staged_cell, monkeypatch,
+):
+    """Forged violation: a baseline handed a MIG slice never starts, so no
+    baseline from another GPU type can anchor the cell."""
+    cell_root, _, _, _, repo_root = staged_cell
+    write_reproduction_policy(repo_root)
+    commands: list[list[str]] = []
+
+    def slice_node(command, **kwargs):
+        commands.append(list(command))
+        if command[0] == "nvidia-smi":
+            return SimpleNamespace(
+                returncode=0,
+                stdout="0, NVIDIA H100 80GB HBM3, Enabled\n",
+                stderr="",
+            )
+        if command[:2] == ["git", "rev-parse"]:
+            return SimpleNamespace(returncode=0, stdout="c" * 40 + "\n", stderr="")
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"nothing may run on a slice, got {command[:3]}")
+
+    monkeypatch.setattr("autobench.campaign_stages.subprocess.run", slice_node)
+    with pytest.raises(CampaignStageError, match="MIG enabled"):
+        run_native_baseline(cell_root, repo_root=repo_root)
+    assert not any(command[:3] == ["git", "worktree", "add"] for command in commands)
+    assert load_stage_state(cell_root).get("baseline") is None
 
 
 def test_native_baseline_cached_registration_revalidates_local_artifacts(

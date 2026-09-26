@@ -136,3 +136,33 @@ def write_ledger_summary(benchmark_dir: str, exp, **extra) -> str:
     with open(path, "w") as f:
         json.dump({"experiment_id": exp.experiment_id, **extra}, f)
     return path
+
+
+#: The campaign's declared GPU (reproduction_policy.json "gpu").
+DECLARED_GPU = {"name": "NVIDIA H100 80GB HBM3", "mig": False}
+
+
+def write_reproduction_policy(repo_root, *, epsilon=0.025):
+    """Declare the reproduction policy (tolerance + GPU) in a fixture repo."""
+    import json
+    from pathlib import Path
+
+    from autobench.campaign import REPRODUCTION_POLICY_PATH
+
+    path = Path(repo_root) / REPRODUCTION_POLICY_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"epsilon": epsilon, "gpu": DECLARED_GPU}))
+    return path
+
+
+def full_h100_nvidia_smi(command):
+    """nvidia-smi's answer on a node of four full H100s; None for any other
+    command, so a fake ``subprocess.run`` can delegate to it first."""
+    from types import SimpleNamespace
+
+    if not command or command[0] != "nvidia-smi":
+        return None
+    listing = "".join(
+        f"{index}, {DECLARED_GPU['name']}, Disabled\n" for index in range(4)
+    )
+    return SimpleNamespace(returncode=0, stdout=listing, stderr="")

@@ -160,8 +160,19 @@ a few registered cells (a measurement records the spread but never satisfies
 the session gate), then commit the epsilon. A failed verdict blocks
 `open-agent-session` and stays recorded; superseding it requires an explicit
 `--force`, which keeps the prior verdict in state history. Per-fold
-`val_predictions_sha256` agreement is recorded as diagnosis only — most arms
-are not bit-deterministic, so hash inequality is expected and never gates.
+`val_predictions_sha256` agreement is recorded as diagnosis only and never
+gates.
+
+Every campaign run trains on one GPU type, declared as `gpu` in
+`reproduction_policy.json` (a full NVIDIA H100 80GB HBM3, no MIG). On the
+same GPU type a re-run reproduces its baseline bit for bit; a full H100 and
+a 3g.40gb MIG slice disagree by up to 0.045 validation AUC per fold (fir jobs
+61495558 / 61495560). `campaign_stage.py run-baseline` and
+`run-baseline-reproduction`, and `campaign_operate.py up` and `finish` before
+they start an orchestrator, refuse any GPU that `nvidia-smi` does not report
+as the declared name with MIG disabled. Request full GPUs (`--gpus=h100:N`),
+never a slice. A completed run's `result.json` records the device it trained
+on.
 
 `run-baseline` also records the executing commit as the baseline's execution
 identity, and the launcher preflight refuses to start a session when the

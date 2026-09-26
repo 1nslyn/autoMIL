@@ -1,9 +1,11 @@
 #!/bin/bash
 # Native five-fold baselines for a rehearsal set (a cell-root directory beside
-# the final grid, see runtime-rehearsal.roster.json). One job on one
-# 3g.40gb slice of an H100 with two workers on it (a baseline training is
-# feature-I/O bound: a tenth of a GPU's compute, ~16 GB of VRAM and ~50 GB
-# of RAM per worker; BL_WORKERS_PER_GPU overrides the packing); each
+# the final grid, see runtime-rehearsal.roster.json). One job on one full
+# H100 with two workers on it (a baseline training is feature-I/O bound: a
+# tenth of a GPU's compute, ~16 GB of VRAM and ~50 GB of RAM per worker;
+# BL_WORKERS_PER_GPU overrides the packing). Never a MIG slice: every
+# campaign run trains on the GPU type reproduction_policy.json declares, and
+# campaign_stage.py refuses any other; each
 # worker runs `campaign_stage.py run-baseline` for its share of the set's
 # unregistered cells in roster order. Idempotent: registered cells are
 # skipped. Nothing is mirrored to the export root: a rehearsal never enters
@@ -17,7 +19,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gpus=nvidia_h100_80gb_hbm3_3g.40gb:1
+#SBATCH --gpus=h100:1
 #SBATCH --mem=96G
 #SBATCH --output=logs/rehearsal_baselines_%j.out
 #SBATCH --error=logs/rehearsal_baselines_%j.err

@@ -1,16 +1,32 @@
 {
   "epsilon": 0.025,
-  "declared": "2026-08-31",
+  "gpu": {
+    "name": "NVIDIA H100 80GB HBM3",
+    "mig": false
+  },
+  "declared": "2026-09-26",
   "signed_off_by": "Leo",
   "basis": {
-    "measurement_job": "fir:57534278",
-    "mode": "run-baseline-reproduction --measure",
-    "cells": [
-      "tcga_luad__kras__titan__titan__s42__preprint-v3",
-      "tcga_luad__kras__uni_v2__nnmil__s42__preprint-v3",
-      "tcga_luad__kras__uni_v2__clam__s42__preprint-v3"
-    ],
-    "observed_max_abs_delta": 0.021569,
-    "note": "Max benign per-fold delta 0.0216 (nnmil, weakest fold) measured on a 2g.20gb MIG slice against full-H100 baselines; cross-device algorithm selection likely inflates the spread, so 0.025 is conservative-loose relative to matched-hardware gate runs. Real substrate drift (wrong splits/features/labels) manifests at >=0.05. Prediction hashes differed on all nine folds while metrics landed on or near the AUC lattice; hashes stay diagnosis-only by design."
+    "epsilon": {
+      "measurement_job": "fir:57534278",
+      "mode": "run-baseline-reproduction --measure",
+      "cells": [
+        "tcga_luad__kras__titan__titan__s42__preprint-v3",
+        "tcga_luad__kras__uni_v2__nnmil__s42__preprint-v3",
+        "tcga_luad__kras__uni_v2__clam__s42__preprint-v3"
+      ],
+      "observed_max_abs_delta": 0.021569,
+      "note": "Declared 2026-08-31 from a preprint-v3 measurement on a 2g.20gb MIG slice against full-H100 baselines. Kept at 0.025 on 2026-09-26 for re-runs on the declared GPU, where a re-run of the same code reproduces the baseline exactly; a delta inside epsilon therefore means code or data drift that stays small. Real substrate drift (wrong splits/features/labels) manifests at >=0.05."
+    },
+    "gpu": {
+      "jobs": ["fir:61495558", "fir:61495560"],
+      "commit": "16c41ab0f3f8a8aceaf5f4ac2fdd0513acb3147a",
+      "cells": [
+        "tcga_luad__kras__hoptimus1__abmil__s42__preprint-v4",
+        "tcga_luad__kras__hoptimus1__clam__s42__preprint-v4",
+        "tcga_luad__kras__hoptimus1__dtfd__s42__preprint-v4"
+      ],
+      "note": "Discovery folds 0-2 re-run at one commit on a full H100 and on a 3g.40gb MIG slice. The same GPU type gave identical predictions in every check, across nodes and jobs. The two GPU types gave different predictions on every fold; the largest per-fold gap was 0.045 (ABMIL), 0.033 (CLAM) and 0.018 (DTFD-MIL). Every run of a cell is compared against its baseline, so every campaign run trains on this GPU type."
+    }
   }
 }

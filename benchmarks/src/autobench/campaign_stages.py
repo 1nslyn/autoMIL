@@ -73,6 +73,7 @@ from autobench.campaign import (
     load_manifest,
     validate_agent_protocol,
 )
+from autobench.campaign_gpu import CampaignGpuError, require_declared_gpu
 
 STATE_SCHEMA_VERSION = 3
 STATE_FILE = "campaign_state.json"
@@ -965,6 +966,10 @@ def _execute_frozen_command(
     tokens = shlex.split(str(command_string))
     if len(tokens) < 2 or tokens[1] != "benchmarks/scripts/run_experiment.py":
         raise CampaignStageError("manifest command has an invalid entrypoint")
+    try:
+        require_declared_gpu(repo_root, [gpu_id])
+    except CampaignGpuError as exc:
+        raise CampaignStageError(f"cannot execute {node_id}: {exc}") from exc
     commit = _head_commit(repo_root)
     worktree_parent = Path(group_mkdtemp(dir=str(cell_root), prefix=worktree_prefix))
     worktree = worktree_parent / "repo"

@@ -8,6 +8,18 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Every campaign run trains on the declared GPU type.** The round-2 KRAS
+  chain stopped at the reproduction gate because the ABMIL baseline trained
+  on an H100 3g.40gb MIG slice and the gate re-ran it on a full H100 (fold 1
+  moved +0.045). At one commit, the same GPU type reproduced every baseline
+  bit for bit, and the two types disagreed on every fold, by up to 0.045
+  (ABMIL), 0.033 (CLAM) and 0.018 (DTFD-MIL). `reproduction_policy.json` now
+  declares `gpu` (NVIDIA H100 80GB HBM3, no MIG). One check,
+  `autobench.campaign_gpu.require_declared_gpu`, refuses any other GPU before
+  a baseline, a gate re-run, or a discovery or promotion orchestrator starts.
+  A completed run's `result.json` records the device it trained on. The rehearsal
+  baseline and reproduction measurement launchers request a full H100.
+
 - **Protocol `preprint-v4`: the checkpoint is selected on the primary
   validation metric.** Every arm restores and reports the epoch with the
   highest validation AUC (classification, ordinal included) or the highest

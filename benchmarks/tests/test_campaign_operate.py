@@ -20,10 +20,40 @@ import pytest
 
 from automil.cells.state import Cell, CellStatus, write_cell
 
+from _helpers import full_h100_nvidia_smi, write_reproduction_policy
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_operate.py"
 CELL_NAME = "tcga_luad__kras__uni_v2__clam__s42__preprint-v4"
 BUDGET_CELL_ID = "deadbeefdeadbeef"
+
+
+@pytest.fixture(autouse=True)
+def _full_h100_node(monkeypatch):
+    """Every test runs on a node of full H100s unless it forges another GPU."""
+    real_run = subprocess.run
+
+    def run(command, *args, **kwargs):
+        answer = full_h100_nvidia_smi(command)
+        return answer if answer is not None else real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr("autobench.campaign_gpu.subprocess.run", run)
+
+
+def _forge_mig_slice(monkeypatch):
+    real_run = subprocess.run
+
+    def run(command, *args, **kwargs):
+        if command and command[0] == "nvidia-smi":
+            return subprocess.CompletedProcess(
+                command, 0, stdout="".join(
+                    f"{index}, NVIDIA H100 80GB HBM3, Enabled\n"
+                    for index in range(4)
+                ), stderr="",
+            )
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr("autobench.campaign_gpu.subprocess.run", run)
 
 
 @pytest.fixture()
@@ -709,14 +739,56 @@ def test_nvidia_smi_report_passes_when_every_requested_index_present(
     assert "GPU 1" in out
 
 
-def test_nvidia_smi_report_fails_when_any_requested_index_missing(
-    operate, monkeypatch, capsys,
-):
+def _pass_preflight_probes(operate, monkeypatch, tmp_path) -> None:
+    """Everything _preflight checks before the GPU passes."""
+    repo = tmp_path / "repo"
+    (repo / "benchmarks").mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("")
+    (repo / "benchmarks" / ".env").write_text("")
+    write_reproduction_policy(repo)
+    monkeypatch.setattr(operate, "REPO_ROOT", repo)
+    monkeypatch.setattr(operate, "_protocol_runtime_version", lambda cell: "2.1.226")
+    monkeypatch.setattr(operate, "_claude_version_first_token", lambda: "2.1.226")
+    monkeypatch.setattr(operate, "project_exporter_port", lambda adir: 9581)
+    monkeypatch.setattr(operate, "_exporter_twin_conflicts", lambda cell, port: [])
+    monkeypatch.setattr(operate, "_port_in_use", lambda port: False)
+    monkeypatch.setattr(operate, "_gpu_claim_conflicts", lambda cell, gpus: [])
     monkeypatch.setattr(operate, "_capture", _fake_nvidia_smi_capture)
+
+
+def test_preflight_passes_on_full_h100s(operate, tmp_path, monkeypatch, capsys):
+    _pass_preflight_probes(operate, monkeypatch, tmp_path)
+    operate._preflight(make_cell(tmp_path), [0, 1])
+    assert "declared campaign GPU" in capsys.readouterr().out
+
+
+def test_preflight_refuses_a_mig_slice(operate, tmp_path, monkeypatch, capsys):
+    """Forged violation: a discovery daemon handed MIG slices never starts."""
+    _pass_preflight_probes(operate, monkeypatch, tmp_path)
+    _forge_mig_slice(monkeypatch)
     with pytest.raises(SystemExit):
-        operate._nvidia_smi_report([1, 3])
-    err = capsys.readouterr().err
-    assert "3" in err
+        operate._preflight(make_cell(tmp_path), [0])
+    assert "MIG enabled" in capsys.readouterr().err
+
+
+def test_finish_refuses_to_start_promotion_on_a_mig_slice(
+    operate, tmp_path, monkeypatch, capsys,
+):
+    """Forged violation: promotion runs compare against the same baseline,
+    so their daemon never starts on a slice either."""
+    cell = make_cell(tmp_path)
+    append_journal(cell, session_open_event())
+    append_journal(cell, session_end_event())
+    write_agent_session(cell, status="finalized")
+    make_promotion_project(cell, queued=("0001",), consumed=0, budget=1)
+    _forge_mig_slice(monkeypatch)
+
+    boundary = FakeBoundary(operate, statuses=[{"phase": "promotion"}])
+    boundary.install(monkeypatch)
+    with pytest.raises(SystemExit):
+        operate.main(["finish", str(cell), "--gpu", "3"])
+    assert "MIG enabled" in capsys.readouterr().err
+    assert boundary.popens == []
 
 
 # ---------------------------------------------------------------------------

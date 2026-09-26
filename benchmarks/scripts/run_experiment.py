@@ -338,6 +338,27 @@ def _validation_fold_evidence(summary: dict, ordinal: bool = False) -> list[dict
     return evidence
 
 
+def _device_identity() -> dict | None:
+    """The accelerator this run trained on, recorded as evidence.
+
+    Every campaign run must train on the GPU type reproduction_policy.json
+    declares: a full H100 and an H100 MIG slice disagree by up to 0.045
+    validation AUC per fold. None for a CPU run.
+    """
+    if not torch.cuda.is_available():
+        return None
+    index = torch.cuda.current_device()
+    props = torch.cuda.get_device_properties(index)
+    return {
+        "name": torch.cuda.get_device_name(index),
+        "multiprocessors": props.multi_processor_count,
+        "memory_mb": props.total_memory // (1024 * 1024),
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "cudnn": torch.backends.cudnn.version(),
+    }
+
+
 def summary_to_result_json(
     summary: dict, elapsed: float, ordinal: bool = False,
 ) -> dict:
@@ -608,6 +629,7 @@ def summary_to_result_json(
         "primary_se": primary_se,
         "elapsed_seconds": round(elapsed, 1),
         "peak_vram_mb": round(peak_vram_mb),
+        "device": _device_identity(),
         "n_valid_folds": n_valid_folds,
         "n_folds": n_folds_total,
         "validation_folds": validation_folds,

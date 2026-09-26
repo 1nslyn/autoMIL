@@ -50,6 +50,7 @@ from autobench.campaign_launch import (
     claude_cli_version,
     port_in_use as _port_in_use,
 )
+from autobench.campaign_gpu import CampaignGpuError, require_declared_gpu
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STAGE_SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_stage.py"
@@ -541,9 +542,21 @@ def _exporter_twin_conflicts(cell_root: Path, port: int) -> list[Path]:
     return twins
 
 
+def _require_campaign_gpu(gpus: list[int]) -> None:
+    """Refuse unless every requested GPU is the campaign's declared GPU type
+    (reproduction_policy.json): each run is compared against a baseline
+    trained on that type, and a MIG slice gives different numbers."""
+    try:
+        require_declared_gpu(REPO_ROOT, gpus)
+    except CampaignGpuError as exc:
+        _fail(str(exc))
+    print(f"preflight: GPU {_gpu_list_env_value(gpus)} is the declared "
+          "campaign GPU")
+
+
 def _nvidia_smi_report(gpus: list[int]) -> None:
-    """Free-VRAM report; refuses if ANY requested index is absent from this
-    host's nvidia-smi listing (a cell's partition may span several GPUs)."""
+    """Free-VRAM report for the operator; presence and GPU type are already
+    enforced by _require_campaign_gpu."""
     completed = _capture([
         "nvidia-smi",
         "--query-gpu=index,memory.total,memory.free,utilization.gpu",
@@ -551,25 +564,18 @@ def _nvidia_smi_report(gpus: list[int]) -> None:
     ])
     if completed.returncode != 0:
         print("preflight: nvidia-smi unavailable "
-              f"({(completed.stderr or completed.stdout).strip()}) — "
-              "the orchestrator will refuse if no schedulable GPU exists")
+              f"({(completed.stderr or completed.stdout).strip()})")
         return
     requested = set(gpus)
-    indexes: set[int] = set()
     print("preflight: GPU free-VRAM report")
     for line in completed.stdout.strip().splitlines():
         parts = [part.strip() for part in line.split(",")]
         if len(parts) >= 3 and parts[0].isdecimal():
-            indexes.add(int(parts[0]))
             marker = "  <- requested" if int(parts[0]) in requested else ""
             print(
                 f"  GPU {parts[0]}: {parts[2]} MiB free of {parts[1]} MiB"
                 f"{marker}"
             )
-    missing = sorted(requested - indexes)
-    if indexes and missing:
-        _fail(f"--gpu {','.join(str(index) for index in missing)} not "
-              f"present on this host (nvidia-smi reports {sorted(indexes)})")
 
 
 def _preflight(cell_root: Path, gpus: list[int]) -> None:
@@ -632,6 +638,7 @@ def _preflight(cell_root: Path, gpus: list[int]) -> None:
         )
     print(f"preflight: no other cell's live daemon claims GPU "
           f"{_gpu_list_env_value(gpus)}")
+    _require_campaign_gpu(gpus)
     _nvidia_smi_report(gpus)
 
 
@@ -1089,6 +1096,7 @@ def _drive_promotion(
                 "GPU of this shared host (the daemon refuses malformed "
                 "values, not absent ones) — re-run with an explicit --gpu N."
             )
+        _require_campaign_gpu(gpus)
         orch_dir.mkdir(parents=True, exist_ok=True)
         log_handle = log_path.open("ab")
         gpu_value = _gpu_list_env_value(gpus)
