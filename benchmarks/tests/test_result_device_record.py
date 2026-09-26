@@ -52,6 +52,8 @@ def _fake_cuda(monkeypatch, module, *, available: bool) -> None:
             multi_processor_count=132, total_memory=81559 * 1024 * 1024,
         ),
     )
+    # The real call loads cuDNN, which a CUDA wheel on a GPU-less runner lacks.
+    monkeypatch.setattr(module.torch.backends.cudnn, "version", lambda: 91002)
 
 
 def test_result_names_the_gpu_it_trained_on(run_experiment, monkeypatch):
@@ -62,6 +64,7 @@ def test_result_names_the_gpu_it_trained_on(run_experiment, monkeypatch):
     assert device["multiprocessors"] == 132
     assert device["memory_mb"] == 81559
     assert device["torch"] == run_experiment.torch.__version__
+    assert device["cudnn"] == 91002
     assert set(device) == {
         "name", "multiprocessors", "memory_mb", "torch", "cuda", "cudnn",
     }
