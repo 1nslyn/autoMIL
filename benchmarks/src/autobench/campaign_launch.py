@@ -131,11 +131,17 @@ def parse_toolset(protocol: Mapping[str, Any]) -> dict[str, Any]:
     return toolset
 
 
+# A fresh compute node reads the ~300 MB claude binary cold from shared /home,
+# which took over 30 s on fir (job 61857795). The limit only catches a hung
+# binary; the version comparison is the gate.
+CLAUDE_VERSION_TIMEOUT_SECONDS = 600
+
+
 def _claude_cli_version(claude_bin: str) -> str:
     try:
         output = subprocess.run(
             [claude_bin, "--version"], capture_output=True, text=True,
-            timeout=30, check=True,
+            timeout=CLAUDE_VERSION_TIMEOUT_SECONDS, check=True,
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         raise CampaignLaunchError(

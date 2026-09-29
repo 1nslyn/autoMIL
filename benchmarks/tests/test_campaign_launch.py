@@ -230,6 +230,33 @@ def test_preflight_rejects_runtime_version_drift(launch_host, tmp_path):
         _preflight(launch_host, claude_bin=drifted)
 
 
+def _claude_start_taking(seconds: float):
+    """subprocess.run where `claude --version` needs `seconds` to answer."""
+    real_run = subprocess.run
+
+    def run(command, *args, **kwargs):
+        if list(command[1:]) == ["--version"]:
+            timeout = kwargs.get("timeout")
+            if timeout is not None and timeout < seconds:
+                raise subprocess.TimeoutExpired(command, timeout)
+        return real_run(command, *args, **kwargs)
+
+    return run
+
+
+def test_preflight_waits_out_a_cold_claude_start(launch_host, monkeypatch):
+    # A fresh compute node reads the claude binary cold from shared /home:
+    # over 30 s on fir (job 61857795).
+    monkeypatch.setattr(subprocess, "run", _claude_start_taking(120))
+    _preflight(launch_host)
+
+
+def test_preflight_refuses_a_hung_claude(launch_host, monkeypatch):
+    monkeypatch.setattr(subprocess, "run", _claude_start_taking(float("inf")))
+    with pytest.raises(CampaignLaunchError, match="cannot run"):
+        _preflight(launch_host)
+
+
 def test_preflight_rejects_settings_drift(launch_host):
     settings = launch_host["cell_root"] / ".claude" / "settings.json"
     payload = json.loads(settings.read_text())

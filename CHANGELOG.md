@@ -8,6 +8,13 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **The launch waits up to 10 minutes for `claude --version`.** The round-2
+  CLAM cell passed its reproduction gate and was then refused because the
+  version probe timed out after 30 s: a fresh compute node reads the ~300 MB
+  claude binary cold from shared `/home`. The limit now only catches a hung
+  binary; a version that differs from the locked runtime still refuses the
+  launch.
+
 - **Every campaign run trains on the declared GPU type.** The round-2 KRAS
   chain stopped at the reproduction gate because the ABMIL baseline trained
   on an H100 3g.40gb MIG slice and the gate re-ran it on a full H100 (fold 1
