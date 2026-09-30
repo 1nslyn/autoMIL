@@ -311,7 +311,9 @@ disc_usage_probe() {
     tmx send-keys -t "usage_probe:0.0" -l "claude --setting-sources project --strict-mcp-config"
     tmx send-keys -t "usage_probe:0.0" Enter
     sleep 20
-    tmx send-keys -t "usage_probe:0.0" -l "/usage"; tmx send-keys -t "usage_probe:0.0" Enter
+    # Separate bursts, as in type_line: 2.1.286 drops an Enter sent in the
+    # same burst as "/usage" (the command menu stays open, nothing runs).
+    tmx send-keys -t "usage_probe:0.0" -l "/usage"; sleep 1; tmx send-keys -t "usage_probe:0.0" Enter
     sleep 12
     tmx capture-pane -p -t "usage_probe:0.0" -S -80 > "$out" 2>/dev/null
     tmx kill-session -t "usage_probe" 2>/dev/null || true
