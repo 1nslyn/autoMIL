@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from automil.activity_hooks import claude_activity_settings
 from automil.cells.state import make_cell_id, normalize_mil_model
 from autobench.campaign import (
     ACTIVITY_METRICS_PORT,
@@ -326,8 +327,10 @@ def test_materializer_creates_roster_count_independent_discovery_states(tmp_path
         # even though off-roster rows are skipped in between.
         expected_port = 9464 + manifest_row[cell["cell_id"]]
         assert config["activity"] == {"exporter_port": expected_port}
+        # The port reaches the runtime through the launch environment; the
+        # settings carry only the session hooks.
         settings = json.loads((root.parent / ".claude/settings.json").read_text())
-        assert settings["env"]["OTEL_EXPORTER_PROMETHEUS_PORT"] == str(expected_port)
+        assert settings == claude_activity_settings()
 
     # Every cell exports on its own deterministic port, so any number of
     # cells can meter concurrently on one host. Off-roster manifest rows are

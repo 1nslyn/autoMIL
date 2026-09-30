@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> None:
         help="Protocol file to write (build) or check (verify).",
     )
     parser.add_argument(
-        "--model", default="Claude Opus 5",
+        "--model", default="Claude Opus 5.5",
         help="Human-readable model name recorded in the protocol.",
     )
     parser.add_argument(

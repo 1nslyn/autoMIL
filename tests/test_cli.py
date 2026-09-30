@@ -137,7 +137,7 @@ class TestInit:
         """init registers the exact Claude active-time observer contract."""
         _init_git_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
-        cli_runner.invoke(main, ["init"])
+        result = cli_runner.invoke(main, ["init"])
 
         hook = tmp_path / ".claude" / "hooks" / "on_tool.sh"
         assert not hook.exists(), "the lossy timestamp hook must not be installed"
@@ -151,7 +151,9 @@ class TestInit:
         }
         assert hooks["SessionStart"] == [{"matcher": "startup", "hooks": [command]}]
         assert hooks["SessionEnd"] == [{"hooks": [command]}]
-        assert settings["env"]["OTEL_METRICS_EXPORTER"] == "prometheus"
+        # Claude Code reads telemetry only from the environment it starts in.
+        assert "env" not in settings
+        assert "OTEL_EXPORTER_PROMETHEUS_PORT=9464" in result.output
         assert "UserPromptSubmit" not in hooks
         assert "async" not in str(hooks)
         # Existing Stop hook preserved

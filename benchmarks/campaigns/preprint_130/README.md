@@ -317,7 +317,7 @@ from the runtime root up to `/` (the runtime reads memory from every
 ancestor). Exports to `version3` stay Leo-only (`sealed/` is owner-only by
 design).
 
-**Per-member setup, once.** `uv` and `claude 2.1.228` on `PATH`
+**Per-member setup, once.** `uv` and `claude 2.1.286` on `PATH`
 (`DISABLE_AUTOUPDATER=1`); `claude login` on a login node with your Team
 seat; no `~/.claude/CLAUDE.md`; an empty `~/.claude/plugins`; membership of
 `rrg-jma`. The submit script checks all of it before touching a cell.

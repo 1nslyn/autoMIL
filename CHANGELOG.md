@@ -8,6 +8,19 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **The campaign agent runs Opus 5.5 at max effort on Claude Code 2.1.286.**
+  Leo chose Opus 5.5 before the official loop started; only rehearsals had
+  run. `agent_protocol.json` is re-frozen on `claude-opus-5-5[1m]` / 2.1.286
+  (sha `248af3f9…`); the manifest and every baseline are unchanged, and every
+  materialized root must be re-materialized. 2.1.286 ignores telemetry
+  variables in a project's `.claude/settings.json` (a project's settings can
+  only turn telemetry off), so the active-time exporter never started. The
+  settings now carry only the session hooks: the campaign launcher exports
+  the telemetry variables for the cell's exporter port, and `automil init`
+  prints them for users who start Claude themselves. The driver's wake
+  keystroke, typed-line submission,
+  busy-spinner match and `/usage` parser were re-verified on 2.1.286.
+
 - **The launch waits up to 10 minutes for `claude --version`.** The round-2
   CLAM cell passed its reproduction gate and was then refused because the
   version probe timed out after 30 s: a fresh compute node reads the ~300 MB

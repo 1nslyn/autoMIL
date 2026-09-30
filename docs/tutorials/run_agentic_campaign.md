@@ -157,7 +157,7 @@ condition — never bypass it.
   (SHA-256 over the decoded text, so newline style is normalised first). Do not
   edit it during the campaign.
 - The **first token** of `claude --version` equals the protocol's
-  `runtime_version` — the pin is the bare version, `2.1.228`, not the whole
+  `runtime_version` — the pin is the bare version, `2.1.286`, not the whole
   line the CLI prints. Pin that
   version and **turn the CLI autoupdater off on the host** — the launcher sets
   `DISABLE_AUTOUPDATER=1` for the session it starts, which cannot protect you

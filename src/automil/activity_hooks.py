@@ -66,6 +66,10 @@ def claude_activity_environment(
     current cumulative value on a localhost Prometheus endpoint; the port is
     declared explicitly so concurrent sessions on one host never contend for
     one endpoint.
+
+    Whoever starts Claude exports these: the runtime reads telemetry only
+    from the environment it starts in. A project's settings file can only
+    turn telemetry off (measured on Claude Code 2.1.286).
     """
     return {
         "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
@@ -102,39 +106,26 @@ def claude_activity_hooks(
     }
 
 
-def claude_activity_settings(
-    port: int = ACTIVITY_METRICS_PORT,
-) -> dict[str, object]:
-    """Return the complete project-local Claude accounting contract."""
-    return {
-        "env": claude_activity_environment(port),
-        "hooks": claude_activity_hooks(),
-    }
+def claude_activity_settings() -> dict[str, object]:
+    """Return the complete project-local Claude accounting contract.
+
+    The settings carry only the session hooks; the export variables come
+    from the environment Claude starts in (``claude_activity_environment``).
+    """
+    return {"hooks": claude_activity_hooks()}
 
 
-def missing_claude_activity_hooks(
-    settings: object, *, port: int = ACTIVITY_METRICS_PORT,
-) -> tuple[str, ...]:
-    """Return canonical activity settings absent from Claude settings."""
-    if not isinstance(settings, Mapping):
-        return ("env", *claude_activity_hooks())
-    env = settings.get("env")
-    missing: list[str] = []
-    if not isinstance(env, Mapping) or any(
-        env.get(key) != value
-        for key, value in claude_activity_environment(port).items()
-    ):
-        missing.append("env")
-    hooks = settings.get("hooks")
+def missing_claude_activity_hooks(settings: object) -> tuple[str, ...]:
+    """Return canonical activity hooks absent from Claude settings."""
+    hooks = settings.get("hooks") if isinstance(settings, Mapping) else None
     if not isinstance(hooks, Mapping):
-        return (*missing, *claude_activity_hooks())
-    for event, expected_entries in claude_activity_hooks().items():
-        actual_entries = hooks.get(event)
-        if not isinstance(actual_entries, list) or any(
-            expected not in actual_entries for expected in expected_entries
-        ):
-            missing.append(event)
-    return tuple(missing)
+        return tuple(claude_activity_hooks())
+    return tuple(
+        event
+        for event, expected_entries in claude_activity_hooks().items()
+        if not isinstance(hooks.get(event), list)
+        or any(expected not in hooks[event] for expected in expected_entries)
+    )
 
 
 __all__ = [

@@ -17,7 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from automil.activity_hooks import claude_activity_settings
+from automil.activity_hooks import (
+    claude_activity_environment,
+    claude_activity_settings,
+)
 
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
@@ -208,6 +211,8 @@ def test_preflight_derives_the_plan_from_the_locked_protocol(launch_host):
     )
     assert plan.env["DISABLE_AUTOUPDATER"] == "1"
     assert plan.env["REPO_ROOT"] == str(launch_host["repo_root"])
+    # The runtime reads telemetry only from the environment it starts in.
+    assert claude_activity_environment(9464).items() <= plan.env.items()
     assert plan.cwd == launch_host["cell_root"]
     assert plan.agent_protocol_sha256 == content_sha256(protocol)
     assert plan.instruction_content == protocol["proposal_policy_content"]
@@ -398,13 +403,6 @@ def test_preflight_resolves_the_cell_declared_exporter_port(
     (adir / "config.yaml").write_text(
         "project:\n  name: dataset\nactivity:\n  exporter_port: 9581\n"
     )
-    with pytest.raises(CampaignLaunchError, match="declared exporter port 9581"):
-        _preflight(launch_host)
-    settings = launch_host["cell_root"] / ".claude" / "settings.json"
-    settings.write_text(
-        json.dumps(claude_activity_settings(9581), indent=2, sort_keys=True)
-        + "\n"
-    )
     probed: list[int] = []
 
     def fake_in_use(port):
@@ -412,8 +410,20 @@ def test_preflight_resolves_the_cell_declared_exporter_port(
         return False
 
     monkeypatch.setattr("autobench.campaign_launch._port_in_use", fake_in_use)
-    assert _preflight(launch_host, probe_port=True)
+    plan = _preflight(launch_host, probe_port=True)
     assert probed == [9581]
+    assert plan.env["OTEL_EXPORTER_PROMETHEUS_PORT"] == "9581"
+
+
+def test_preflight_refuses_telemetry_in_the_cell_settings(launch_host):
+    # Claude Code 2.1.286 ignores telemetry variables in a project's
+    # settings (they can only turn telemetry off), so a root that still
+    # carries them was materialized under the old contract.
+    settings = launch_host["cell_root"] / ".claude" / "settings.json"
+    stale = {**claude_activity_settings(), "env": claude_activity_environment()}
+    settings.write_text(json.dumps(stale, indent=2, sort_keys=True) + "\n")
+    with pytest.raises(CampaignLaunchError, match="drifted"):
+        _preflight(launch_host)
 
 
 def test_preflight_rejects_an_invalid_activity_declaration(launch_host):

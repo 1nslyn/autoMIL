@@ -1091,10 +1091,10 @@ def materialize_discovery_cells(
             continue
         # One deterministic exporter port per manifest row, so any number of
         # cells can meter concurrently on one host without contending for a
-        # single endpoint. The port is part of the audited cell config and
-        # of the settings the runtime is started with.
+        # single endpoint. The port is part of the audited cell config, and
+        # the launcher exports it into the runtime's environment.
         exporter_port = ACTIVITY_METRICS_PORT + cell_index
-        activity_settings = claude_activity_settings(exporter_port)
+        activity_settings = claude_activity_settings()
         cell_root = output_root / cell["cell_id"]
         adir = cell_root / "automil"
         template_path = repo_root / cell["policy_template"]
@@ -1377,7 +1377,7 @@ def audit_materialized_campaign(
             raise CampaignManifestError(f"{cell_id}: initial root is not discovery")
         if campaign.get("agent_protocol_sha256") != agent_protocol_sha256:
             raise CampaignManifestError(f"{cell_id}: agent protocol binding drift")
-        if settings != claude_activity_settings(port_by_id[cell_id]):
+        if settings != claude_activity_settings():
             raise CampaignManifestError(f"{cell_id}: activity observer contract drift")
         if (config.get("activity") or {}).get("exporter_port") != port_by_id[cell_id]:
             raise CampaignManifestError(f"{cell_id}: activity exporter port drift")

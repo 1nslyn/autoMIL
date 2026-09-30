@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from automil.activity_hooks import (
+    claude_activity_environment,
     claude_activity_settings,
     project_exporter_port,
 )
@@ -395,11 +396,10 @@ def preflight(
         raise CampaignLaunchError(
             f"cannot read {settings_path}: {exc}"
         ) from exc
-    if settings != claude_activity_settings(exporter_port):
+    if settings != claude_activity_settings():
         raise CampaignLaunchError(
-            f"{settings_path} drifted from the activity observer contract "
-            f"(declared exporter port {exporter_port}); re-materialize the "
-            "cell instead of editing settings"
+            f"{settings_path} drifted from the activity observer contract; "
+            "re-materialize the cell instead of editing settings"
         )
 
     observed_version = _claude_cli_version(claude_bin)
@@ -445,7 +445,11 @@ def preflight(
     )
     return LaunchPlan(
         argv=argv,
-        env={**toolset["launcher_env"], "REPO_ROOT": str(repo_root)},
+        env={
+            **toolset["launcher_env"],
+            **claude_activity_environment(exporter_port),
+            "REPO_ROOT": str(repo_root),
+        },
         cwd=cell_root,
         agent_protocol_sha256=protocol_sha,
         instruction_path=instruction_path,

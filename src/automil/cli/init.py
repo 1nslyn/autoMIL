@@ -72,35 +72,16 @@ def _register_claude_hooks(
     hooks = settings.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         raise click.ClickException(f"{settings_path}: hooks must be an object")
-    env = settings.setdefault("env", {})
-    if not isinstance(env, dict):
-        raise click.ClickException(f"{settings_path}: env must be an object")
-    required_env = claude_activity_environment(exporter_port)
-    # The exporter port is autoMIL-owned and derived from config.yaml, so
-    # --update normalizes it (otherwise a port change could never be
-    # repaired by the very command `automil check` prescribes). The other
-    # telemetry keys may be genuinely user-owned and are only defaulted.
-    _OWNED_ENV = ("OTEL_EXPORTER_PROMETHEUS_PORT",)
-    preserved = {
-        key: env[key]
-        for key in required_env
-        if key in env and env[key] != required_env[key]
-        and key not in _OWNED_ENV
-    }
-    for key, value in required_env.items():
-        if key in _OWNED_ENV:
-            env[key] = value
-        else:
-            env.setdefault(key, value)
-    if preserved:
-        click.echo(
-            "warning: keeping existing telemetry env "
-            + ", ".join(f"{k}={v!r}" for k, v in sorted(preserved.items()))
-            + "; native active-time metering requires "
-            + ", ".join(f"{k}={v}" for k, v in sorted(required_env.items()))
-            + " — agent_active cells hold admission until the exporter matches",
-            err=True,
+    # Claude Code reads telemetry only from the environment it starts in (a
+    # project's settings can only turn it off), so the settings get no env.
+    click.echo(
+        "Claude Code reads telemetry only from the environment it starts in. "
+        "For agent_active metering, start Claude with: "
+        + " ".join(
+            f"{key}={value}"
+            for key, value in claude_activity_environment(exporter_port).items()
         )
+    )
 
     # Remove every obsolete on_tool.sh registration and normalize any prior
     # activity-ingest registration to the exact event/matcher matrix below.

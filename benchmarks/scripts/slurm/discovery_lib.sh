@@ -86,8 +86,8 @@ operate() { pyrun benchmarks/scripts/campaign_operate.py "$@"; }
 # and bind requires one recorded sample before it can complete. A typed and
 # deleted character in the input line makes the runtime report activity
 # (about one second) without submitting anything: no message reaches the
-# model and nothing enters the transcript. Verified on 2.1.228 (fir login
-# node): idle for minutes = no metric; "x" + Backspace = metric within 20 s.
+# model and nothing enters the transcript. Verified on 2.1.286 (fir login
+# node): idle for 30 s = no metric; "x" + Backspace = metric within 10 s.
 wake_runtime() {  # tmux-session-name
     tmx send-keys -t "=$1:agent" -l "x"; sleep 1; tmx send-keys -t "=$1:agent" BSpace
 }
@@ -96,7 +96,8 @@ wake_runtime() {  # tmux-session-name
 # keystroke bursts: a long line followed immediately by Enter is taken for a
 # paste and the Enter becomes a newline (observed with the 121-character
 # nudge on 2.1.228: three notes stacked unsent in the box until a later
-# Enter submitted them as one message).
+# Enter submitted them as one message). The split form submits a
+# 150-character line exactly once on 2.1.286.
 type_line() {  # tmux-session-name text
     tmx send-keys -t "=$1:agent" -l "$2"; sleep 1; tmx send-keys -t "=$1:agent" Enter
 }
@@ -291,7 +292,7 @@ PYEOF
 }
 
 # The /usage panel prints "Current week (all models)" and, on the next line,
-# "<N>% used" (verified on 2.1.228).
+# "<N>% used" (verified on 2.1.286).
 usage_weekly_pct() {  # capture-file
     awk '/Current week/ {flag=1; next} flag && /% used/ {match($0, /[0-9]+%/); print substr($0, RSTART, RLENGTH-1); exit}' "$1"
 }
