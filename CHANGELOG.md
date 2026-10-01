@@ -8,6 +8,22 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **A workstation without SLURM runs a rehearsal set end to end.** Leo
+  decided on 2026-10-01 that aihub (three RTX 6000 Ada, no scheduler) runs
+  the full trial and official cells run on fir only. An RTX re-run of the
+  H100 baselines differed by up to 0.043 per fold, beyond the 0.025 gate, so
+  `reproduction_policy.json` now declares the GPU type per runtime set: full
+  H100 for `runtime` and `runtime-rehearsal`, RTX 6000 Ada for the new
+  `runtime-aihub` (the four KRAS H-optimus-1 cells plus the KRAS TITAN cell,
+  on baselines trained there). `require_declared_gpu` reads the set from the
+  cell root's parent directory and refuses an undeclared set before it lists
+  any GPU. The per-cell job takes its allocation from SLURM or from the new
+  driver `benchmarks/scripts/run_discovery_chain.sh`, which runs one cell
+  after another under a lock per set, checks the weekly usage window before
+  each cell, sets each cell's wall itself and stops at the first failure.
+  The SLURM path is unchanged except that the reproduction gate runs on the
+  first GPU of the job's list, which on fir is GPU 0.
+
 - **The campaign agent runs Opus 5.5 at max effort on Claude Code 2.1.286.**
   Leo chose Opus 5.5 before the official loop started; only rehearsals had
   run. `agent_protocol.json` is re-frozen on `claude-opus-5-5[1m]` / 2.1.286

@@ -10,10 +10,12 @@ waited. Here you drive a staged, fail-closed controller one cell at a time, and
 a coding agent does the research inside a budget you are responsible for not
 breaking.
 
-The campaign is host-agnostic: a cell's identity is
-`dataset + task + encoder + arm + seed + protocol_version`, never a machine or a
-git commit. It runs anywhere §3 passes — a single multi-GPU workstation is the
-common case, and no scheduler is required.
+A cell's identity is `dataset + task + encoder + arm + seed + protocol_version`,
+never a machine or a git commit, but every run of a cell trains on one GPU
+type: the type `reproduction_policy.json` declares for the cell's runtime set.
+The official cells (`runtime/`) run on fir's full H100s. Another host runs only
+a set of its own, with its own roster, its GPU type declared for that set and
+baselines trained on that host (campaign README, Section 4c).
 
 > **Read §1 before you touch anything.** The protocol rules are not style
 > preferences — if you break one, that cell's data cannot go in the paper.
@@ -493,10 +495,13 @@ Two standing rules:
   `--output-root`, and what stops a rehearsal from ever producing a publication
   artifact is the census — the selection freeze requires exactly 130 manifest
   cells and fails closed below that.
-- **Timing anchors in this repository are H100-based.** On any other
-  accelerator, re-derive attempt wall-clock from your own canary before
-  planning a schedule — the 600-minute attempt timeout is the constraint that
-  bites first on slower cards.
+- **A new host needs its own set.** A baseline trained on one GPU type does
+  not reproduce on another: an RTX 6000 Ada and a full H100 differ by up to
+  0.043 validation AUC per fold, beyond the 0.025 gate. Such a host runs a set
+  of its own, with its own roster, its GPU type declared for that set in
+  `reproduction_policy.json`, and fresh baselines. Timing anchors in this
+  repository are H100-based; re-derive attempt wall-clock there from the set's
+  baselines, since the 600-minute attempt timeout bites first on slower cards.
 
 ---
 

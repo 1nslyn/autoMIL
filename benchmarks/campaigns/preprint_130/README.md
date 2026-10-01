@@ -163,16 +163,20 @@ the session gate), then commit the epsilon. A failed verdict blocks
 `val_predictions_sha256` agreement is recorded as diagnosis only and never
 gates.
 
-Every campaign run trains on one GPU type, declared as `gpu` in
-`reproduction_policy.json` (a full NVIDIA H100 80GB HBM3, no MIG). On the
-same GPU type a re-run reproduces its baseline bit for bit; a full H100 and
-a 3g.40gb MIG slice disagree by up to 0.045 validation AUC per fold (fir jobs
-61495558 / 61495560). `campaign_stage.py run-baseline` and
-`run-baseline-reproduction`, and `campaign_operate.py up` and `finish` before
-they start an orchestrator, refuse any GPU that `nvidia-smi` does not report
-as the declared name with MIG disabled. Request full GPUs (`--gpus=h100:N`),
-never a slice. A completed run's `result.json` records the device it trained
-on.
+Every run of a runtime set (the cell-root directory a cell sits in) trains
+on one GPU type, declared for that set under `gpu` in
+`reproduction_policy.json`: a full NVIDIA H100 80GB HBM3 without MIG for
+`runtime` and `runtime-rehearsal`, an NVIDIA RTX 6000 Ada for
+`runtime-aihub`. On the same GPU type a re-run reproduces its baseline bit
+for bit. Two types disagree: a full H100 and a 3g.40gb MIG slice by up to
+0.045 validation AUC per fold (fir jobs 61495558 / 61495560), an RTX 6000
+Ada and a full H100 by up to 0.043 (aihub, 2026-09-30). `campaign_stage.py
+run-baseline` and `run-baseline-reproduction`, and `campaign_operate.py up`
+and `finish` before they start an orchestrator, refuse a GPU that
+`nvidia-smi` does not report as the type declared for the cell's set, and
+refuse a set with no declaration. On fir request full GPUs
+(`--gpus=h100:N`), never a slice. A completed run's `result.json` records
+the device it trained on.
 
 `run-baseline` also records the executing commit as the baseline's execution
 identity, and the launcher preflight refuses to start a session when the
@@ -382,13 +386,14 @@ re-materialized and re-run from a fresh baseline.)
 **Rehearsal sets.** A run set that must stay out of the final grid lives in
 its own cell-root directory beside `runtime/`, built from the same manifest
 and protocol (row indices and exporter ports unchanged) with its own committed
-roster, `<name>.roster.json` (cohorts, cells census, `cell_ids`). The
-committed set is `runtime-rehearsal`: round 2 under protocol v4 holds the
-four TCGA-LUAD overall-survival cells (one per MIL model, H-optimus-1) plus
-the KRAS ABMIL cell as the check of the new selection rule; round 1 (v3)
-ran the four KRAS cells and its roots are parked under
-`logs/discovery_cells/rehearsal-archive/`. Each materialized root is about
-1,000 files, so only the set's cells are built:
+roster, `<name>.roster.json` (cohorts, cells census, `cell_ids`), and its
+GPU type declared in `reproduction_policy.json`. The committed sets are
+`runtime-rehearsal`, the four TCGA-LUAD KRAS cells with H-optimus-1 (one per
+MIL model) on fir, and `runtime-aihub`, the same four plus the KRAS TITAN
+cell on aihub's RTX 6000 Ada GPUs, trained there from its own baselines and
+run by the workstation driver (Section 4c). Round 1 (v3) roots are parked
+under `logs/discovery_cells/rehearsal-archive/`. Each materialized root is
+about 1,000 files, so only the set's cells are built:
 
 ```bash
 uv run python benchmarks/scripts/campaign_manifest.py materialize \
@@ -432,6 +437,59 @@ line (`DISC_NUDGE_LINE` in `discovery_lib.sh`), at most once an hour and
 three times per cell, and records it in the cell's
 `operator_events.jsonl`. An empty queue alone never triggers it: the agent
 diagnoses and plans between batches with nothing queued.
+
+## 4c. Run a set on a workstation without SLURM
+
+A host without a scheduler runs a rehearsal set end to end with
+`benchmarks/scripts/run_discovery_chain.sh`. Official cells run on fir only.
+The driver takes the place of SLURM's chaining: for each cell it runs the job
+of Section 4b (`submit_discovery_campaign.sh`) with the allocation passed in
+(`DISC_RUN_ID`, `DISC_GPUS`, `DISC_WALL_END`, `DISC_CELL`), and after a clean
+cell it checks the weekly usage window, scans the set and starts the next
+one. Such a job writes no claim and never submits anything.
+
+The set needs its own roster and its own GPU declaration (above), and its
+baselines are trained on the host, because a baseline from another GPU type
+does not reproduce there. On the host, as the account that runs the agent:
+
+1. Check the host: `claude --version` prints the protocol's
+   `runtime_version` with `DISABLE_AUTOUPDATER=1`; the account is logged in
+   (`~/.claude/.credentials.json`); `~/.claude/CLAUDE.md` is absent; `uv`,
+   `tmux`, `flock`, `setsid` and `curl` are on `PATH`; the exporter ports of
+   the set's cells are free; `benchmarks/.env` names the venv
+   (`UV_PROJECT_ENVIRONMENT`) and the dataset roots.
+2. Materialize the set (Rehearsal sets, above) and train each baseline on
+   one GPU, in a tmux server of your own:
+   `uv run python benchmarks/scripts/campaign_stage.py run-baseline --cell-root <cell root> --gpu <N>`.
+3. Preview, then start the chain in a tmux server of its own, so it
+   survives SSH drops:
+
+```bash
+benchmarks/scripts/run_discovery_chain.sh --runtime runtime-aihub --gpus 0,1,2 --dry-run
+tmux -L disc_chain new -s chain
+benchmarks/scripts/run_discovery_chain.sh --runtime runtime-aihub --gpus 0,1,2
+```
+
+Each cell gets a run id `ws<timestamp>`, a log at
+`logs/disc_cell_<run id>.out` and a wall of `--wall-hours` (default 48, at
+least 12) that the driver sets itself; the session ends early enough to
+finish inside it, as on fir. The chain stops at the first failed cell (see
+`logs/discovery_cells/<set>/FAILED.tsv`), when the weekly window reaches
+85% (run the driver again after the reset; it resumes at the next cell), or
+when no cell is left. A full cell starts only if `campaign_shape.py`
+predicts it fits 85% of its wall, from its own baseline time; otherwise the
+job records the refusal and the chain stops. Each job runs in a session of
+its own, so stopping the driver never interrupts a cell: after Ctrl-C the
+driver waits for the running cell to end, then exits without starting
+another. One chain per set: the driver and its job hold
+`logs/discovery_cells/<set>/.chain.lock`.
+
+Every launch clears `$HOME/.claude/plugins` and adds trust entries to
+`$HOME/.claude.json`, and the session records are copied from
+`$HOME/.claude/projects/`. On a shared account, give the chain a home of its
+own: log in there once (`HOME=<dir> claude`, then `/login`) and start the
+driver with the same `HOME`, so none of that touches the account's own
+settings. Every login on one plan draws on the same weekly window.
 
 ## 5. Run exact promotion
 

@@ -4,6 +4,10 @@
 # submit_discovery_cell.sh, which fits the shape to the cell and claims the
 # cell with this job's id; a bare `sbatch` of this file (defaults below:
 # 1 GPU, 12 h) is also valid and then picks a cell that fits its own wall.
+# On a workstation without SLURM, run_discovery_chain.sh runs this file for
+# each cell and passes the allocation in DISC_RUN_ID, DISC_GPUS (physical
+# indexes), DISC_WALL_END (epoch second) and DISC_CELL; such a run writes no
+# claim (the driver's lock keeps the set to one chain) and never chains.
 #
 # The whole cell runs on this node: reproduction gate -> up (orchestrator
 # daemon on this job's GPUs) -> launch (pinned claude, interactive in a
@@ -36,7 +40,13 @@
 #SBATCH --mail-type=FAIL
 
 set -uo pipefail
-[ -n "${SLURM_JOB_ID:-}" ] || { echo "ERROR: this script runs only as a SLURM job (submit through submit_discovery_cell.sh)"; exit 1; }
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+    RUN_ID="$SLURM_JOB_ID"
+elif [ -n "${DISC_RUN_ID:-}" ] && [ -n "${DISC_GPUS:-}" ] && [ -n "${DISC_WALL_END:-}" ] && [ -n "${DISC_CELL:-}" ]; then
+    RUN_ID="$DISC_RUN_ID"; WORKSTATION_GPUS="$DISC_GPUS"
+else
+    echo "ERROR: this script runs as a SLURM job (submit through submit_discovery_cell.sh) or under run_discovery_chain.sh"; exit 1
+fi
 # A spooled batch script no longer knows where it came from: the tree is
 # named explicitly by the wrapper, or by the submit directory. Never a
 # user-path fallback.
@@ -49,22 +59,27 @@ export DISC_PROJECT_DIR="${DISC_PROJECT_DIR:-${SLURM_SUBMIT_DIR:-}}"
 # wrapper; both are read here, before any sourced file (benchmarks/.env via
 # disc_env) can redefine them.
 NO_CHAIN="${DISC_NO_CHAIN:-0}"
+[ -n "${SLURM_JOB_ID:-}" ] || NO_CHAIN=1   # a workstation driver chains itself
 RUNTIME_NAME="${DISC_RUNTIME:-runtime}"
 source "$DISC_PROJECT_DIR/benchmarks/scripts/slurm/discovery_lib.sh"
 disc_paths || exit 1
 disc_env
 module load cuda/12.2 2>/dev/null || true
 disc_static_preflight || exit 1
-export AUTOMIL_TMUX_SOCKET="disc_${SLURM_JOB_ID:-manual}"
+export AUTOMIL_TMUX_SOCKET="disc_${RUN_ID}"
 FAILED_TSV="$LOG_DIR/FAILED.tsv"; mkdir -p "$LOG_DIR"
 
-N_GPUS="${SLURM_GPUS_ON_NODE:-1}"
-GPU_LIST=$(seq -s, 0 $((N_GPUS - 1)))
-SEEN_GPUS=$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')
-[ "$SEEN_GPUS" = "$N_GPUS" ] || { echo "ERROR: SLURM granted $N_GPUS GPUs but nvidia-smi shows $SEEN_GPUS"; exit 1; }
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+    N_GPUS="${SLURM_GPUS_ON_NODE:-1}"
+    GPU_LIST=$(seq -s, 0 $((N_GPUS - 1)))
+    SEEN_GPUS=$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')
+    [ "$SEEN_GPUS" = "$N_GPUS" ] || { echo "ERROR: SLURM granted $N_GPUS GPUs but nvidia-smi shows $SEEN_GPUS"; exit 1; }
+else
+    GPU_LIST="$WORKSTATION_GPUS"
+fi
 
 record_failure() {  # cell reason
-    printf '%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "${SLURM_JOB_ID:-manual}" "$USER" "$1" "$2" >> "$FAILED_TSV"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "$RUN_ID" "$USER" "$1" "$2" >> "$FAILED_TSV"
     echo "FAIL $1: $2"
 }
 
@@ -75,17 +90,24 @@ trap _usr1_report USR1
 
 # ---------------------------------------------------------------- cell pick
 CELL="${DISC_CELL:-}"; MODE="${DISC_MODE:-full}"
-if [ -n "$CELL" ]; then
+if [ -z "${SLURM_JOB_ID:-}" ]; then
+    # Workstation run: the driver picked the cell and holds the set's lock;
+    # the wall it set must still fit the cell (the one rule above).
+    if [ "$MODE" = full ]; then
+        FIT=$(disc_fits_wall "$CELL" "$GPU_LIST") || { record_failure "$CELL" "wall too short: $FIT — nothing started"; exit 1; }
+        echo "fit: $FIT"
+    fi
+elif [ -n "$CELL" ]; then
     # The wrapper claims the cell with this job's id right AFTER sbatch
     # returns; a job that lands on a free node can start inside that window,
     # so give the claim up to two minutes to appear before refusing.
     for _ in $(seq 1 24); do
         holder=$(claim_holder "$CELL")
-        [ "$holder" = "${SLURM_JOB_ID:-manual}" ] && break
+        [ "$holder" = "$RUN_ID" ] && break
         sleep 5
     done
     holder=$(claim_holder "$CELL")   # a claim written during the last sleep is still valid
-    if [ "$holder" != "${SLURM_JOB_ID:-manual}" ]; then
+    if [ "$holder" != "$RUN_ID" ]; then
         echo "ERROR: claim for $CELL is held by '${holder:-nobody}', not this job — refusing"; exit 4
     fi
 else
@@ -126,7 +148,7 @@ store_session_record() {  # cell
 }
 trap 'store_session_record "$CELL"; normalize_cell_modes "$CELL"' EXIT
 echo "================================================"
-echo "preprint DISCOVERY cell $CELL (mode=$MODE, set $RUNTIME_NAME) | job ${SLURM_JOB_ID:-manual} | $(hostname) | $USER | $(date)"
+echo "preprint DISCOVERY cell $CELL (mode=$MODE, set $RUNTIME_NAME) | run $RUN_ID | $(hostname) | $USER | $(date)"
 echo "GPUs $GPU_LIST | wall left $(remaining_hours)h | tmux socket $AUTOMIL_TMUX_SOCKET | chain $([ "$NO_CHAIN" = 1 ] && echo off || echo on)"
 echo "================================================"
 
@@ -294,7 +316,7 @@ run_cell() {
         record_failure "$cell" "wall end unknown (squeue gave no end time) — nothing started"; return 1
     fi
 
-    # 1. Reproduction gate (gate mode) on the first GPU. Measurement-mode
+    # 1. Reproduction gate (gate mode) on the first GPU of this run. Measurement-mode
     #    blocks from the epsilon derivation are superseded exactly once.
     # --force supersedes, auditably, a measurement-mode block or a verdict
     # recorded at a commit other than this tree's HEAD (the tree moved; the
@@ -309,7 +331,7 @@ PYEOF
     then
         force_flag="--force"
     fi
-    if ! stage run-baseline-reproduction --cell-root "$RUNTIME/$cell" --gpu 0 $force_flag >> "$LOG" 2>&1; then
+    if ! stage run-baseline-reproduction --cell-root "$RUNTIME/$cell" --gpu "${GPU_LIST%%,*}" $force_flag >> "$LOG" 2>&1; then
         if grep -q "reproduction FAILED" "$LOG"; then
             record_failure "$cell" "gate-FAILED (drift recorded; discovery blocked until --force after review)"
         else

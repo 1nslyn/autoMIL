@@ -85,22 +85,7 @@ if [ "$DRY_RUN" = 0 ]; then
 fi
 
 SCAN=$(disc_scan) || { echo "ERROR: cell scan failed"; exit 1; }
-summary=$(echo "$SCAN" | pyrun -c \
-    "import json,sys;d=json.load(sys.stdin);print(', '.join(f'{k}={len(d[k])}' for k in ('pending','finishable','claimed','done','stranded','blocked')), '| squeue_ok=%s'%d['squeue_ok'])")
-[ "$CHAIN" = 1 ] || echo "scan ($RUNTIME_NAME, roster $(basename "$ROSTER")): $summary"
-echo "$SCAN" | pyrun -c "import json,sys;d=json.load(sys.stdin);[print('  note:',c,'-',n) for c,n in sorted(d['notes'].items())]"
-
-# A heredoc replaces stdin, so JSON produced upstream travels in a variable.
-candidates() {
-    SCAN_JSON="$SCAN" pyrun - "$ONLY_CELL" <<'PYEOF'
-import json, os, sys
-d = json.loads(os.environ["SCAN_JSON"]); only = sys.argv[1]
-rows = [("finish", c) for c in d["finishable"]] + [("full", c) for c in d["pending"]]
-if only:
-    rows = [r for r in rows if r[1] == only] or sys.exit(f"{only} is not finishable or pending")
-print("\n".join(f"{m}:{c}" for m, c in rows))
-PYEOF
-}
+disc_scan_report "$SCAN"
 
 # One predictor call per cell: "gpus wall cpus mem whole_node predicted e5".
 # A finish-only recovery takes the predictor's finish lane (one GPU, short
@@ -174,7 +159,7 @@ PYEOF
     return 0
 }
 
-ROWS=$(candidates) || { echo "$ROWS"; exit 1; }
+ROWS=$(disc_candidates "$SCAN" "$ONLY_CELL") || { echo "$ROWS"; exit 1; }
 if [ -z "$ROWS" ]; then
     [ "$CHAIN" = 1 ] || echo "Nothing to submit: no finishable or pending cells."
     exit 0

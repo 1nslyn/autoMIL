@@ -1,7 +1,8 @@
 #!/bin/bash
 # Shared library for the preprint discovery campaign launchers
 # (submit_discovery_cell.sh = member entry point / chain step,
-#  submit_discovery_campaign.sh = the per-cell SLURM job).
+#  submit_discovery_campaign.sh = the per-cell job, under SLURM or under
+#  run_discovery_chain.sh = the chain driver of a workstation without SLURM).
 #
 # One definition point for: campaign paths, the shared-tree environment
 # (umask, uv/git/tmux isolation), the pinned-runtime and memory-surface
@@ -161,6 +162,32 @@ disc_scan() {
         --job-id "${SLURM_JOB_ID:-manual}" "$@"
 }
 
+# The scan's class counts on one line, then each cell's note.
+disc_scan_report() {  # scan-json
+    SCAN_JSON="$1" pyrun - "$RUNTIME_NAME" "$(basename "$ROSTER")" <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["SCAN_JSON"])
+counts = ", ".join(f"{k}={len(d[k])}" for k in ("pending", "finishable", "claimed", "done", "stranded", "blocked"))
+print(f"scan ({sys.argv[1]}, roster {sys.argv[2]}): {counts} | squeue_ok={d['squeue_ok']}")
+for cell, note in sorted(d["notes"].items()):
+    print("  note:", cell, "-", note)
+PYEOF
+}
+
+# The cells a chain step can drive, one "mode:cell" per line: finish-only
+# recoveries first, then pending cells in roster order. A cell id narrows
+# the list to that cell and refuses one that is neither.
+disc_candidates() {  # scan-json [cell]
+    SCAN_JSON="$1" pyrun - "${2:-}" <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["SCAN_JSON"]); only = sys.argv[1]
+rows = [("finish", c) for c in d["finishable"]] + [("full", c) for c in d["pending"]]
+if only:
+    rows = [r for r in rows if r[1] == only] or sys.exit(f"{only} is not finishable or pending")
+print("\n".join(f"{m}:{c}" for m, c in rows))
+PYEOF
+}
+
 # Preflight that needs no GPU and no session: pinned runtime on PATH, a login
 # on this account, a clean instruction surface on every path the runtime
 # reads memory from (its own home, and the shared path from the runtime root
@@ -243,10 +270,16 @@ take_claim() {
 
 claim_holder() { cat "$RUNTIME/$1/.discovery_claim" 2>/dev/null; }
 
-# Epoch second at which this job's wall ends; 0 when squeue cannot say.
+# Epoch second at which this run's wall ends; 0 when it cannot be known. A
+# SLURM job asks squeue; a workstation run carries the end its driver chose
+# (DISC_WALL_END), refused unless it is a plain epoch second.
 wall_end_epoch() {
     local end
-    end=$(squeue -h -j "${SLURM_JOB_ID:-0}" -o %e 2>/dev/null | head -1)
+    if [ -z "${SLURM_JOB_ID:-}" ]; then
+        case "${DISC_WALL_END:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$DISC_WALL_END" ;; esac
+        return
+    fi
+    end=$(squeue -h -j "$SLURM_JOB_ID" -o %e 2>/dev/null | head -1)
     if [ -z "$end" ] || [ "$end" = "N/A" ]; then echo 0; return; fi
     date -d "$end" +%s
 }
@@ -258,6 +291,29 @@ remaining_hours() {
     end=$(wall_end_epoch)
     [ "$end" -gt 0 ] || { echo 0; return; }
     awk -v end="$end" -v now="$(date +%s)" 'BEGIN { printf "%.2f", (end - now) / 3600 }'
+}
+
+# The job's one rule for a full cell: start only when campaign_shape predicts
+# the cell's discovery stage fits FIT_FRACTION of the wall left, from the
+# cell's own baseline time on the GPUs it is given. Prints the verdict and
+# fails when the cell does not fit or has no baseline time.
+disc_fits_wall() {  # cell gpu-list
+    pyrun - "$RUNTIME" "$1" "$2" "$(remaining_hours)" 2>&1 <<'PYEOF'
+import importlib.util, sys
+from pathlib import Path
+runtime, cell, gpus, hours = Path(sys.argv[1]), sys.argv[2], len(sys.argv[3].split(",")), float(sys.argv[4])
+spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
+shape = importlib.util.module_from_spec(spec); sys.modules["shape"] = shape; spec.loader.exec_module(shape)
+state, reason = shape._read_campaign_state(runtime, cell)
+e5, _, reason = (None, 0, reason) if reason else shape._prediction_input(runtime, cell, state)
+if e5 is None:
+    sys.exit(f"no baseline time to predict from ({reason})")
+predicted = shape.predict_hours(e5, gpus)
+verdict = f"predicted {predicted:.1f} h on {gpus} GPU, {hours:.1f} h of wall left"
+if predicted > shape.FIT_FRACTION * hours:
+    sys.exit(f"{verdict}: exceeds {shape.FIT_FRACTION:.0%} of the wall")
+print(verdict)
+PYEOF
 }
 
 # Read the plan's remaining allocation from a throwaway runtime in $HOME
