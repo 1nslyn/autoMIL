@@ -40,20 +40,31 @@ def _full_h100_node(monkeypatch):
     monkeypatch.setattr("autobench.campaign_gpu.subprocess.run", run)
 
 
-def _forge_mig_slice(monkeypatch):
+RTX_GPU = {"name": "NVIDIA RTX 6000 Ada Generation", "mig": False}
+
+
+def _forge_node(monkeypatch, name: str, mig_mode: str):
+    """nvidia-smi lists four GPUs of one type and MIG mode."""
     real_run = subprocess.run
 
     def run(command, *args, **kwargs):
         if command and command[0] == "nvidia-smi":
             return subprocess.CompletedProcess(
                 command, 0, stdout="".join(
-                    f"{index}, NVIDIA H100 80GB HBM3, Enabled\n"
-                    for index in range(4)
+                    f"{index}, {name}, {mig_mode}\n" for index in range(4)
                 ), stderr="",
             )
         return real_run(command, *args, **kwargs)
 
     monkeypatch.setattr("autobench.campaign_gpu.subprocess.run", run)
+
+
+def _forge_mig_slice(monkeypatch):
+    _forge_node(monkeypatch, "NVIDIA H100 80GB HBM3", "Enabled")
+
+
+def _forge_rtx_workstation(monkeypatch):
+    _forge_node(monkeypatch, RTX_GPU["name"], "[N/A]")
 
 
 @pytest.fixture()
@@ -762,6 +773,18 @@ def test_preflight_passes_on_full_h100s(operate, tmp_path, monkeypatch, capsys):
     assert "declared campaign GPU" in capsys.readouterr().out
 
 
+def test_preflight_passes_a_workstation_cell_on_its_declared_rtx(
+    operate, tmp_path, monkeypatch, capsys,
+):
+    _pass_preflight_probes(operate, monkeypatch, tmp_path)
+    write_reproduction_policy(
+        operate.REPO_ROOT, runtimes=("runtime-aihub",), gpu=RTX_GPU,
+    )
+    _forge_rtx_workstation(monkeypatch)
+    operate._preflight(make_cell(tmp_path, runtime="runtime-aihub"), [0, 1, 2])
+    assert "declared campaign GPU" in capsys.readouterr().out
+
+
 def test_preflight_refuses_a_mig_slice(operate, tmp_path, monkeypatch, capsys):
     """Forged violation: a discovery daemon handed MIG slices never starts."""
     _pass_preflight_probes(operate, monkeypatch, tmp_path)
@@ -1111,10 +1134,9 @@ def test_finish_starting_promotion_daemon_requires_explicit_gpu(
     assert boundary.popens == []
 
 
-def test_finish_starts_supervised_promotion_child_with_gpu_partition(
-    operate, tmp_path, monkeypatch,
-):
-    cell = make_cell(tmp_path)
+def _finish_one_queued_promotion(operate, monkeypatch, cell: Path, gpu: str):
+    """Run ``finish --gpu`` on a finalized cell whose promotion queue holds
+    one node that drains on the first poll; returns (boundary, padir)."""
     append_journal(cell, session_open_event())
     append_journal(cell, session_end_event())
     write_agent_session(cell, status="finalized")
@@ -1146,7 +1168,15 @@ def test_finish_starts_supervised_promotion_child_with_gpu_partition(
     monkeypatch.setattr(operate, "_now", clock.now)
     monkeypatch.setattr(operate, "_sleep", clock.sleep)
 
-    operate.main(["finish", str(cell), "--gpu", "3"])
+    operate.main(["finish", str(cell), "--gpu", gpu])
+    return boundary, padir
+
+
+def test_finish_starts_supervised_promotion_child_with_gpu_partition(
+    operate, tmp_path, monkeypatch,
+):
+    cell = make_cell(tmp_path)
+    boundary, padir = _finish_one_queued_promotion(operate, monkeypatch, cell, "3")
 
     assert len(boundary.popens) == 1
     argv, env, stdout = boundary.popens[0]
@@ -1163,43 +1193,29 @@ def test_finish_starts_supervised_promotion_child_with_multi_gpu_partition(
 ):
     """--gpu 0,1 must reach the promotion daemon's env as the normalized
     comma string, not a Python list repr."""
-    cell = make_cell(tmp_path)
-    append_journal(cell, session_open_event())
-    append_journal(cell, session_end_event())
-    write_agent_session(cell, status="finalized")
-    padir = make_promotion_project(cell, queued=("0001",), consumed=0, budget=1)
-    queue = padir / "orchestrator" / "queue"
-    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
-
-    boundary = FakeBoundary(operate, statuses=[
-        {"phase": "promotion"},
-        {"phase": "selection-ready"},
-        {"phase": "winner-frozen"},
-    ])
-
-    def drain():
-        if (queue / "0001.json").exists():
-            (queue / "0001.json").unlink()
-            complete_promotion_node(padir, "0001")
-            write_budget_cell(padir, 1, 1)
-
-    def stop_promotion(argv):
-        pid_file = padir / "orchestrator" / "orchestrator.pid"
-        if pid_file.exists():
-            pid_file.unlink()
-
-    boundary.behaviors[("automil", ("orchestrator", "stop"))] = stop_promotion
-    boundary.install(monkeypatch)
-    clock = FakeClock()
-    clock.on_sleep = drain
-    monkeypatch.setattr(operate, "_now", clock.now)
-    monkeypatch.setattr(operate, "_sleep", clock.sleep)
-
-    operate.main(["finish", str(cell), "--gpu", "0,1"])
+    boundary, _ = _finish_one_queued_promotion(
+        operate, monkeypatch, make_cell(tmp_path), "0,1",
+    )
 
     assert len(boundary.popens) == 1
     _, env, _ = boundary.popens[0]
     assert env["AUTOMIL_VISIBLE_GPUS"] == "0,1"
+
+
+def test_finish_starts_a_workstation_promotion_on_its_declared_rtx(
+    operate, tmp_path, monkeypatch,
+):
+    """The committed policy declares the RTX for runtime-aihub. The check
+    reads the discovery cell's set: the promotion root's parent is the cell
+    itself, which declares no GPU."""
+    _forge_rtx_workstation(monkeypatch)
+    boundary, _ = _finish_one_queued_promotion(
+        operate, monkeypatch, make_cell(tmp_path, runtime="runtime-aihub"), "0",
+    )
+
+    assert len(boundary.popens) == 1
+    _, env, _ = boundary.popens[0]
+    assert env["AUTOMIL_VISIBLE_GPUS"] == "0"
 
 
 def test_finish_reentry_skips_completed_transitions(operate, tmp_path, monkeypatch):

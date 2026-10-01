@@ -949,7 +949,7 @@ def _execute_frozen_command(
     if len(tokens) < 2 or tokens[1] != "benchmarks/scripts/run_experiment.py":
         raise CampaignStageError("manifest command has an invalid entrypoint")
     try:
-        require_declared_gpu(repo_root, [gpu_id])
+        require_declared_gpu(repo_root, cell_root=cell_root, gpu_ids=[gpu_id])
     except CampaignGpuError as exc:
         raise CampaignStageError(f"cannot execute {node_id}: {exc}") from exc
     commit = _head_commit(repo_root)

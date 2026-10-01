@@ -1,8 +1,18 @@
 {
   "epsilon": 0.025,
   "gpu": {
-    "name": "NVIDIA H100 80GB HBM3",
-    "mig": false
+    "runtime": {
+      "name": "NVIDIA H100 80GB HBM3",
+      "mig": false
+    },
+    "runtime-rehearsal": {
+      "name": "NVIDIA H100 80GB HBM3",
+      "mig": false
+    },
+    "runtime-aihub": {
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "mig": false
+    }
   },
   "declared": "2026-09-26",
   "signed_off_by": "Leo",
@@ -19,14 +29,29 @@
       "note": "Declared 2026-08-31 from a preprint-v3 measurement on a 2g.20gb MIG slice against full-H100 baselines. Kept at 0.025 on 2026-09-26 for re-runs on the declared GPU, where a re-run of the same code reproduces the baseline exactly; a delta inside epsilon therefore means code or data drift that stays small. Real substrate drift (wrong splits/features/labels) manifests at >=0.05."
     },
     "gpu": {
-      "jobs": ["fir:61495558", "fir:61495560"],
+      "jobs": [
+        "fir:61495558",
+        "fir:61495560"
+      ],
       "commit": "16c41ab0f3f8a8aceaf5f4ac2fdd0513acb3147a",
       "cells": [
         "tcga_luad__kras__hoptimus1__abmil__s42__preprint-v4",
         "tcga_luad__kras__hoptimus1__clam__s42__preprint-v4",
         "tcga_luad__kras__hoptimus1__dtfd__s42__preprint-v4"
       ],
-      "note": "Discovery folds 0-2 re-run at one commit on a full H100 and on a 3g.40gb MIG slice. The same GPU type gave identical predictions in every check, across nodes and jobs. The two GPU types gave different predictions on every fold; the largest per-fold gap was 0.045 (ABMIL), 0.033 (CLAM) and 0.018 (DTFD-MIL). Every run of a cell is compared against its baseline, so every campaign run trains on this GPU type."
+      "note": "Discovery folds 0-2 re-run at one commit on a full H100 and on a 3g.40gb MIG slice. The same GPU type gave identical predictions in every check, across nodes and jobs. The two GPU types gave different predictions on every fold; the largest per-fold gap was 0.045 (ABMIL), 0.033 (CLAM) and 0.018 (DTFD-MIL). Every run of a cell is compared against its baseline, so every run of a runtime set trains on the GPU type declared for it."
+    },
+    "gpu_rtx_6000_ada": {
+      "host": "aihub (3x RTX 6000 Ada, no scheduler)",
+      "date": "2026-09-30",
+      "commit": "16c41ab0f3f8a8aceaf5f4ac2fdd0513acb3147a",
+      "cells": [
+        "tcga_luad__kras__hoptimus1__abmil__s42__preprint-v4",
+        "tcga_luad__kras__hoptimus1__clam__s42__preprint-v4",
+        "tcga_luad__kras__hoptimus1__dtfd__s42__preprint-v4",
+        "tcga_luad__kras__hoptimus1__nnmil__s42__preprint-v4"
+      ],
+      "note": "Discovery folds 0-2 re-run on an RTX 6000 Ada and compared with the full-H100 baselines of fir. Predictions differed on all 12 folds; the largest per-fold gap was 0.043 (ABMIL), above epsilon, while an RTX repeat of ABMIL reproduced the first RTX run bit for bit. H100 baselines therefore cannot anchor RTX runs: runtime-aihub trains its own baselines on the RTX. It is a rehearsal set; official cells run on fir."
     }
   }
 }

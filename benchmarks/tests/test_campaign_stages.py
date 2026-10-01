@@ -575,7 +575,7 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
             }))
         return SimpleNamespace(returncode=0)
 
-    write_reproduction_policy(repo_root)
+    write_reproduction_policy(repo_root, runtimes=(cell_root.parent.name,))
     monkeypatch.setattr("autobench.campaign_stages.subprocess.run", fake_run)
     state = run_native_baseline(cell_root, repo_root=repo_root, gpu_id=3)
 
@@ -594,7 +594,7 @@ def test_native_baseline_on_a_mig_slice_is_refused_before_training(
     """Forged violation: a baseline handed a MIG slice never starts, so no
     baseline from another GPU type can anchor the cell."""
     cell_root, _, _, _, repo_root = staged_cell
-    write_reproduction_policy(repo_root)
+    write_reproduction_policy(repo_root, runtimes=(cell_root.parent.name,))
     commands: list[list[str]] = []
 
     def slice_node(command, **kwargs):

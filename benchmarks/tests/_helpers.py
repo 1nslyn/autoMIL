@@ -138,12 +138,15 @@ def write_ledger_summary(benchmark_dir: str, exp, **extra) -> str:
     return path
 
 
-#: The campaign's declared GPU (reproduction_policy.json "gpu").
+#: The GPU type a fixture runtime set declares (reproduction_policy.json "gpu").
 DECLARED_GPU = {"name": "NVIDIA H100 80GB HBM3", "mig": False}
 
 
-def write_reproduction_policy(repo_root, *, epsilon=0.025):
-    """Declare the reproduction policy (tolerance + GPU) in a fixture repo."""
+def write_reproduction_policy(
+    repo_root, *, epsilon=0.025, runtimes=("runtime",), gpu=DECLARED_GPU,
+):
+    """Declare the reproduction policy in a fixture repo: the tolerance, and
+    ``gpu`` as the GPU type of each named runtime set."""
     import json
     from pathlib import Path
 
@@ -151,7 +154,10 @@ def write_reproduction_policy(repo_root, *, epsilon=0.025):
 
     path = Path(repo_root) / REPRODUCTION_POLICY_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"epsilon": epsilon, "gpu": DECLARED_GPU}))
+    path.write_text(json.dumps({
+        "epsilon": epsilon,
+        "gpu": {runtime: gpu for runtime in runtimes},
+    }))
     return path
 
 

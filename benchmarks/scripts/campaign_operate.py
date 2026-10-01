@@ -542,12 +542,13 @@ def _exporter_twin_conflicts(cell_root: Path, port: int) -> list[Path]:
     return twins
 
 
-def _require_campaign_gpu(gpus: list[int]) -> None:
-    """Refuse unless every requested GPU is the campaign's declared GPU type
-    (reproduction_policy.json): each run is compared against a baseline
-    trained on that type, and a MIG slice gives different numbers."""
+def _require_campaign_gpu(cell_root: Path, gpus: list[int]) -> None:
+    """Refuse unless every requested GPU is the GPU type reproduction_policy.json
+    declares for this discovery cell's runtime set: each run is compared
+    against a baseline trained on that type, and another type (a MIG slice
+    included) gives different numbers."""
     try:
-        require_declared_gpu(REPO_ROOT, gpus)
+        require_declared_gpu(REPO_ROOT, cell_root=cell_root, gpu_ids=gpus)
     except CampaignGpuError as exc:
         _fail(str(exc))
     print(f"preflight: GPU {_gpu_list_env_value(gpus)} is the declared "
@@ -638,7 +639,7 @@ def _preflight(cell_root: Path, gpus: list[int]) -> None:
         )
     print(f"preflight: no other cell's live daemon claims GPU "
           f"{_gpu_list_env_value(gpus)}")
-    _require_campaign_gpu(gpus)
+    _require_campaign_gpu(cell_root, gpus)
     _nvidia_smi_report(gpus)
 
 
@@ -1096,7 +1097,7 @@ def _drive_promotion(
                 "GPU of this shared host (the daemon refuses malformed "
                 "values, not absent ones) — re-run with an explicit --gpu N."
             )
-        _require_campaign_gpu(gpus)
+        _require_campaign_gpu(cell_root, gpus)
         orch_dir.mkdir(parents=True, exist_ok=True)
         log_handle = log_path.open("ab")
         gpu_value = _gpu_list_env_value(gpus)

@@ -36,7 +36,11 @@ DISCOVERY_FOLDS = list(STAGE_FOLDS["discovery"])
 
 
 def _declare_policy(repo_root: Path, epsilon=0.005) -> Path:
-    return write_reproduction_policy(repo_root, epsilon=epsilon)
+    """A staged cell sits directly in the fixture repo root, so that
+    directory is the runtime set whose GPU the policy declares."""
+    return write_reproduction_policy(
+        repo_root, epsilon=epsilon, runtimes=(repo_root.name,),
+    )
 
 
 def _fake_execution(
