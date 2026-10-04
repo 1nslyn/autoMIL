@@ -90,9 +90,9 @@ def test_the_copied_constants_match_the_frozen_protocol():
     assert cs.ATTEMPT_TIMEOUT_H * 60 == campaign.ATTEMPT_TIMEOUT_MIN
 
 
-# Measured on aihub (three RTX 6000 Ada, 2026-10): each trial cell's time
-# from the job's start to the discovery freeze, with its registered baseline
-# time. A session that has not finished discovery by the wall less the
+# Measured on the 2026-10 trial cells (aihub: three RTX 6000 Ada; fir: two
+# H100): each cell's time from the job's start to the discovery freeze, with
+# its registered baseline time. A session that has not finished discovery by the wall less the
 # finish reserve is cut and the cell is stranded, so this is the time the
 # prediction must hold. DTFD's third batch ran into the 10 h attempt
 # timeout; its anchor fails for any dilation below 1.72.
@@ -100,6 +100,8 @@ TRIAL_DISCOVERY = (
     # (cell, e5 seconds, GPUs, hours from job start to discovery frozen)
     ("aihub kras hoptimus1 dtfd", 10496.3, 3, 22.795),
     ("aihub kras hoptimus1 abmil", 5500.9, 3, 8.918),
+    ("aihub kras hoptimus1 clam", 16573.9, 3, 16.135),
+    ("fir kras hoptimus1 abmil", 10672.6, 2, 11.049),
 )
 
 

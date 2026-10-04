@@ -49,8 +49,8 @@ OVERHEAD_H = 2.0
 # A batch lasts as long as its slowest attempt, and the agent's candidates
 # train longer than the baseline (later early stopping, heavier settings).
 # Slowest attempt of each batch over the baseline's per-fold time, measured
-# on the 2026-10 trial cells: fir H100 ABMIL 0.84; aihub RTX CLAM 1.08-1.14,
-# DTFD 1.85-2.18, ABMIL 1.30-2.24. TITAN (2026-09-04) set the floor: 16 min
+# on the 2026-10 trial cells: fir H100 ABMIL 0.84-1.43; aihub RTX CLAM
+# 1.08-1.26, DTFD 1.85-2.18, ABMIL 1.30-2.24. TITAN (2026-09-04) set the floor: 16 min
 # attempts against a 2 min per-fold time, the process start-up and feature
 # loading that no baseline time predicts. The serial gate attempt re-runs
 # the baseline's own configuration alone, so only the floor applies to it.
