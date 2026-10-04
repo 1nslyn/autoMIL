@@ -36,16 +36,28 @@ cs = _load_module()
 
 
 def test_predict_hours_known_value_one_gpu():
-    # e5 = 3600s = 1h -> gate=0.6 (undilated), attempt=2*0.6=1.2,
-    # promo=2*0.4=0.8, capacity=8*1*0.8=6.4
-    # predicted = 0.6 + 30*1.2/6.4 + 10*0.8/6.4 + 2.0 = 9.475
-    predicted = cs.predict_hours(3600.0, 1)
-    assert predicted == pytest.approx(9.475, abs=1e-9)
+    # e5 = 1 h -> gate 0.6 (undilated), slowest attempt 2*0.6 = 1.2, four
+    # batches 4.8, one batch at the 10 h timeout adds 8.8, promotion two
+    # rounds of 2*0.4 = 1.6, overhead 2.0
+    assert cs.predict_hours(3600.0, 1) == pytest.approx(17.8, abs=1e-9)
 
 
-def test_packed_attempts_cost_the_dilated_per_fold_time():
-    # The 2026-09-06 CLAM rehearsal cell: e5 = 0.71 h, candidates averaged
-    # 52 min, not the 25 min per-fold time.
+def test_predict_hours_known_value_three_gpus():
+    # The workstation's three GPUs run promotion in one round: 1.6 -> 0.8.
+    assert cs.predict_hours(3600.0, 3) == pytest.approx(17.0, abs=1e-9)
+
+
+def test_more_gpus_shorten_only_promotion():
+    """A batch of 8 fits one GPU, so a second GPU saves one promotion round
+    and a third saves nothing."""
+    e5_seconds = 2.5 * 3600
+    one, two, three = (cs.predict_hours(e5_seconds, gpus) for gpus in (1, 2, 3))
+    assert one - two == pytest.approx(cs.attempt_hours(e5_seconds, cs.PROMOTION_FOLDS))
+    assert two == pytest.approx(three)
+    assert cs.discovery_hours(e5_seconds, 1) == pytest.approx(cs.discovery_hours(e5_seconds, 3))
+
+
+def test_the_slowest_attempt_costs_the_dilated_per_fold_time():
     assert cs.attempt_hours(0.71 * 3600, cs.DISCOVERY_FOLDS) == pytest.approx(2 * 0.71 * 0.6)
     assert cs.fold_hours(0.71 * 3600, cs.DISCOVERY_FOLDS) == pytest.approx(0.71 * 0.6)
 
@@ -54,86 +66,82 @@ def test_tiny_baselines_pay_the_per_attempt_floor():
     # The TITAN rehearsal cell: e5 = 194 s, attempts still took ~16 min.
     assert cs.attempt_hours(194.0, cs.DISCOVERY_FOLDS) == cs.ATTEMPT_FLOOR_H
     assert cs.fold_hours(194.0, cs.DISCOVERY_FOLDS) == cs.ATTEMPT_FLOOR_H
-    # e5 = 180 s: every term sits on the floor -> 0.25 + 30*0.25/6.4 + 10*0.25/6.4 + 2
-    assert cs.predict_hours(180.0, 1) == pytest.approx(3.8125, abs=1e-9)
+    # e5 = 180 s: 0.25 gate + 4*0.25 + (10 - 0.25) + 2*0.25 + 2
+    assert cs.predict_hours(180.0, 1) == pytest.approx(13.5, abs=1e-9)
 
 
-def test_predict_hours_more_gpus_predicts_less_time():
-    e5_seconds = 6.2 * 3600
-    one_gpu = cs.predict_hours(e5_seconds, 1)
-    four_gpu = cs.predict_hours(e5_seconds, 4)
-    assert four_gpu < one_gpu
+def test_an_attempt_as_long_as_the_timeout_adds_no_timeout_batch():
+    e5_seconds = 9.0 * 3600  # slowest attempt 10.8 h, past the 10 h timeout
+    attempt = cs.attempt_hours(e5_seconds, cs.DISCOVERY_FOLDS)
+    assert attempt > cs.ATTEMPT_TIMEOUT_H
+    assert cs.discovery_hours(e5_seconds, 1) == pytest.approx(
+        cs.fold_hours(e5_seconds, cs.DISCOVERY_FOLDS) + len(cs.DISCOVERY_BATCHES) * attempt
+    )
+
+
+def test_the_copied_constants_match_the_frozen_protocol():
+    from autobench import campaign
+
+    assert list(cs.DISCOVERY_BATCHES) == campaign.DISCOVERY_PHASING["batches"]
+    assert cs.PROMOTION_CANDIDATES == campaign.PROMOTION_CANDIDATES
+    assert cs.DISCOVERY_FOLDS == len(campaign.STAGE_FOLDS["discovery"])
+    assert cs.PROMOTION_FOLDS == len(campaign.STAGE_FOLDS["promotion"])
+    assert cs.TOTAL_FOLDS == len(campaign.BASELINE_FOLDS)
+    assert cs.ATTEMPT_TIMEOUT_H * 60 == campaign.ATTEMPT_TIMEOUT_MIN
+
+
+# Measured on aihub (three RTX 6000 Ada, 2026-10): each trial cell's time
+# from the job's start to the discovery freeze, with its registered baseline
+# time. A session that has not finished discovery by the wall less the
+# finish reserve is cut and the cell is stranded, so this is the time the
+# prediction must hold. DTFD's third batch ran into the 10 h attempt
+# timeout; its anchor fails for any dilation below 1.72.
+TRIAL_DISCOVERY = (
+    # (cell, e5 seconds, GPUs, hours from job start to discovery frozen)
+    ("aihub kras hoptimus1 dtfd", 10496.3, 3, 22.795),
+    ("aihub kras hoptimus1 abmil", 5500.9, 3, 8.918),
+)
+
+
+@pytest.mark.parametrize("cell, e5_seconds, gpus, measured", TRIAL_DISCOVERY,
+                         ids=[row[0] for row in TRIAL_DISCOVERY])
+def test_the_prediction_holds_each_trial_cells_discovery(cell, e5_seconds, gpus, measured):
+    assert cs.discovery_hours(e5_seconds, gpus) + cs.OVERHEAD_H >= measured
 
 
 # ---------------------------------------------------------------------------
 # choose_shape
 
 
-def test_choose_shape_small_baseline_gets_smallest_shape():
-    e5_seconds = 0.05 * 3600
-    shape = cs.choose_shape(e5_seconds)
-    assert shape is not None
-    assert (shape.gpus, shape.wall_hours) == (1, 12)
-    assert shape.cpus == 12
-    assert shape.mem_gb == 128
-    assert shape.whole_node is False
-    assert shape.predicted_hours == pytest.approx(cs.predict_hours(e5_seconds, 1))
+def test_every_shape_is_one_gpu_with_a_quarter_node():
+    shape = cs.choose_shape(0.05 * 3600)
+    assert (shape.gpus, shape.wall_hours, shape.cpus, shape.mem_gb) == (1, 24, 12, 128)
+    assert shape.predicted_hours == pytest.approx(cs.predict_hours(0.05 * 3600, 1))
 
 
-def test_choose_shape_medium_baseline_needs_two_gpus_and_24h():
-    e5_seconds = 3.0 * 3600  # the LUAD KRAS nnMIL / CLAM class on fir
-
-    # 1 GPU cannot fit even the 24h wall.
-    assert cs.predict_hours(e5_seconds, 1) > cs.FIT_FRACTION * 24
-    # 2 GPUs fit the 24h wall but not the 12h wall -> (2, 24) is the first
-    # candidate that fits under the cheap preference.
-    assert cs.predict_hours(e5_seconds, 2) > cs.FIT_FRACTION * 12
-    assert cs.predict_hours(e5_seconds, 2) <= cs.FIT_FRACTION * 24
-
-    shape = cs.choose_shape(e5_seconds)
-    assert shape is not None
-    assert (shape.gpus, shape.wall_hours) == (2, 24)
-    assert shape.cpus == 24
-    assert shape.mem_gb == 256
-    assert shape.whole_node is False
-    assert shape.predicted_hours == pytest.approx(cs.predict_hours(e5_seconds, 2))
-
-
-def test_choose_shape_slow_baseline_takes_the_whole_node():
-    e5_seconds = 7.0 * 3600  # above every 2-GPU shape, inside (4, 24)
-    assert cs.predict_hours(e5_seconds, 2) > cs.FIT_FRACTION * 24
-    shape = cs.choose_shape(e5_seconds)
-    assert (shape.gpus, shape.wall_hours) == (4, 24)
-    assert shape.cpus == 48
-    assert shape.mem_gb == 512
-    assert shape.whole_node is True
+def test_the_wall_moves_to_72_hours_past_the_24_hour_fit():
+    # 1.4 h predicts 20.12 h (fits 0.85 * 24 = 20.4); 1.5 h predicts 20.7 h.
+    assert cs.choose_shape(1.4 * 3600).wall_hours == 24
+    slow = cs.choose_shape(1.5 * 3600)
+    assert (slow.gpus, slow.wall_hours) == (1, 72)
+    assert slow.predicted_hours == pytest.approx(20.7)
 
 
 def test_choose_shape_returns_none_when_nothing_fits():
-    e5_seconds = 1000 * 3600  # absurdly slow baseline: no candidate fits
+    e5_seconds = 1000 * 3600  # absurdly slow baseline: no wall holds it
     assert cs.choose_shape(e5_seconds) is None
 
 
-def test_candidate_order_cheap_minimizes_gpus_then_wall():
-    assert cs.candidate_shapes("cheap") == ((1, 12), (1, 24), (2, 12), (2, 24), (4, 12), (4, 24))
-
-
-def test_candidate_order_fast_minimizes_wall_then_gpus():
-    assert cs.candidate_shapes("fast") == ((1, 12), (2, 12), (4, 12), (1, 24), (2, 24), (4, 24))
-
-
-def test_unknown_preference_is_refused():
-    with pytest.raises(ValueError, match="unknown preference"):
-        cs.candidate_shapes("greedy")
-
-
-def test_preference_changes_the_shape_for_a_ninety_minute_cell():
-    e5_seconds = 1.5 * 3600  # one GPU fits only the 24 h wall, two fit 12 h
-    cheap = cs.choose_shape(e5_seconds)              # default
-    fast = cs.choose_shape(e5_seconds, prefer="fast")
-    assert (cheap.gpus, cheap.wall_hours) == (1, 24)
-    assert (fast.gpus, fast.wall_hours) == (2, 12)
-    assert cheap.gpus * cheap.predicted_hours < fast.gpus * fast.predicted_hours  # fewer GPU-hours
+def test_the_finish_lane_holds_every_cell_that_fits_a_discovery_shape():
+    """The finish-only lane needs no baseline time: it holds the promotion of
+    the slowest baseline that still fits a discovery shape."""
+    lo, hi = 0.0, 1000 * 3600.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if cs.choose_shape(mid) else (lo, mid)
+    lane = cs.finish_shape()
+    assert (lane.gpus, lane.wall_hours) == (1, 24)
+    assert cs.promotion_hours(lo, lane.gpus) + cs.OVERHEAD_H <= cs.FIT_FRACTION * lane.wall_hours
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +184,8 @@ def test_shape_cells_reports_two_shapes_and_one_unshaped(fabricated_runtime):
     assert len(unshaped) == 1
     assert unshaped[0].cell_id == "cell_c"
     assert unshaped[0].reason  # non-empty explanation
-    assert reports["cell_a"].shape.gpus == 1
-    assert reports["cell_b"].shape.gpus == 2
+    assert reports["cell_a"].shape.wall_hours == 24
+    assert reports["cell_b"].shape.wall_hours == 72
 
 
 def _write_baseline_log(runtime, cell_id, cached_folds):
@@ -281,9 +289,9 @@ def test_cli_json_round_trips(fabricated_runtime, capsys):
 
     assert set(payload) == {"cell_a", "cell_b", "cell_c"}
     assert payload["cell_a"]["gpus"] == 1
-    assert payload["cell_a"]["wall_hours"] == 12
-    assert payload["cell_b"]["gpus"] == 2
-    assert payload["cell_b"]["wall_hours"] == 24
+    assert payload["cell_a"]["wall_hours"] == 24
+    assert payload["cell_b"]["gpus"] == 1
+    assert payload["cell_b"]["wall_hours"] == 72
     assert isinstance(payload["cell_c"]["unshaped"], str)
     assert payload["cell_c"]["unshaped"]
 
@@ -296,6 +304,15 @@ def test_cli_cell_field_prints_a_bare_int(fabricated_runtime, capsys):
     assert rc == 0
     out = capsys.readouterr().out.strip()
     assert int(out) == 1
+
+
+def test_cli_field_prints_every_shape_field_and_nothing_else(fabricated_runtime, capsys):
+    from dataclasses import fields
+
+    for field in fields(cs.Shape):
+        assert cs.main(["--runtime", str(fabricated_runtime), "--cell", "cell_a", "--field", field.name]) == 0
+    with pytest.raises(SystemExit):
+        cs.main(["--runtime", str(fabricated_runtime), "--cell", "cell_a", "--field", "whole_node"])
 
 
 def test_cli_unknown_cell_via_dash_dash_cell_exits_2(fabricated_runtime, capsys):
@@ -332,15 +349,11 @@ def test_cli_default_table_lists_all_cells(fabricated_runtime, capsys):
     assert "cell_c" in out
 
 
-def test_finish_lane_shape_is_one_gpu_short_wall():
-    shape = cs.finish_shape()
-    assert (shape.gpus, shape.wall_hours, shape.cpus, shape.mem_gb) == (1, 12, 12, 128)
-
-
 def test_cli_finish_prints_the_finish_shape(capsys):
     assert cs.main(["--finish"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["gpus"] == 1 and payload["wall_hours"] == 12
+    assert (payload["gpus"], payload["wall_hours"], payload["cpus"], payload["mem_gb"]) == (1, 24, 12, 128)
+    assert "whole_node" not in payload
 
 
 def test_json_report_carries_the_prediction_input(fabricated_runtime, capsys):

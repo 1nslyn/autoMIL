@@ -334,30 +334,34 @@ seat; no `~/.claude/CLAUDE.md`; an empty `~/.claude/plugins`; membership of
 
 It classifies every roster cell (`campaign_scan.py`: pending / claimed /
 finishable / stranded / blocked / done), takes the first drivable one
-(finish-only recoveries first), fits the job to the cell
-(`campaign_shape.py`: predicted wall from the cell's baseline elapsed time,
-each packed attempt costing twice the baseline's per-fold time and never
-under 15 minutes, as measured on the rehearsal cells: the CLAM survival
-cell's candidates averaged 52 min against a 25 min per-fold time on
-2026-09-06, the TITAN cell's 16 min against 2 min on 2026-09-04; 30
-attempts packed 8 per GPU, 1, 2 or 4 GPUs, 12 h or 24 h wall, 12 cores and
-128 GB per GPU, a 4-GPU shape takes the whole node's memory; the cheapest
-fitting shape by default, `--prefer fast` for the shortest wall), submits
-it, and only then claims the cell with the new job id. The packing width is
-the launcher's, not the frozen cell config's: `campaign_operate.py` starts
-every daemon with `AUTOMIL_MAX_CONCURRENT_PER_GPU` set to the predictor's
-cap, so the job runs as wide as it was sized. The cap was raised from 4 to
-8 on 2026-09-15 from the four LUAD KRAS rehearsal cells: packed 4 per GPU
-they used 18-21 % of their cores (nnMIL 54 %), 4-5 GB of RAM and 1-1.5 GB
-of VRAM per attempt, and each attempt ran only 1.1-1.2x its serial time.
-Against the registered 78 cells (2026-09-15) cheap gives 33 cells
-1 GPU/12 h, 21 cells 1 GPU/24 h, 20 cells 2 GPU/24 h, 4 cells 4 GPU/24 h
-(about 1,300 GPU-hours predicted, 2,250 allocated), and every cell fits a
-shape. Claims are once-only tombstones:
+(finish-only recoveries first), fits the job to the cell, submits it, and
+only then claims the cell with the new job id. Every job takes one H100,
+12 cores and 128 GB, a quarter of a node. The agent spends its 30 attempts
+in batches of 8, 8, 8 and 6, each started after the one before has ended,
+and the daemon packs a whole batch onto one GPU: `campaign_operate.py`
+starts it with `AUTOMIL_MAX_CONCURRENT_PER_GPU` set to the predictor's cap
+of 8, in place of the frozen cell config's own cap. A second GPU would only
+shorten promotion by one round. The cap was raised from 4 to 8 on
+2026-09-15 from the four LUAD KRAS rehearsal cells: packed 4 per GPU they
+used 18-21 % of their cores (nnMIL 54 %), 4-5 GB of RAM and 1-1.5 GB of
+VRAM per attempt, and each attempt ran only 1.1-1.2x its serial time; on
+fir, eight packed ABMIL attempts used 5.2 cores on average and 56 GB at
+peak (2026-10-03). The wall is the shorter of 24 h and 72 h whose 85 %
+holds the predicted job time (`campaign_shape.py`, from the cell's baseline
+elapsed time): the serial gate, then the four batches one after another,
+each as long as its slowest attempt (twice the baseline's per-fold time and
+never under 15 minutes; measured 0.84-2.24 times on the 2026-10 trial
+cells), one of them running into the 10 h attempt timeout (aihub's DTFD
+cell did in its third batch on 2026-10-02), the ten promotion candidates in
+two rounds, and 2 h for setup and the agent's planning. A finish-only
+recovery takes one GPU for 24 h, which holds the promotion of every cell
+that fits a discovery wall. Against the registered 78 cells (2026-10-03)
+this gives 35 cells a 24 h wall and 43 cells a 72 h wall, and every cell
+fits. Claims are once-only tombstones:
 a queued job holds its claim; a dead job's claim is replaced only after a
 successful cluster-wide `squeue` shows it gone. `--dry-run` prints the
 classification and every cell's shape without submitting; `--cell` picks a
-cell; `--max-gpus` caps the shape.
+cell.
 
 **The job** (`submit_discovery_campaign.sh`) refuses to run a cell whose
 claim does not carry its own id, records the plan's remaining allocation

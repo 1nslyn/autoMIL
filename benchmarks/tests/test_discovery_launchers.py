@@ -188,8 +188,9 @@ def _fits_wall(tmp_path: Path, hours_left: int, elapsed_total: float | None):
 
 
 def test_a_cell_that_would_outlast_its_wall_is_refused(tmp_path):
-    """A KRAS CLAM baseline of 4.3 h on the RTX predicts 14.5 h on three
-    GPUs: a 12 h wall would end the session mid-discovery and strand it."""
+    """A KRAS CLAM baseline of 4.3 h on the RTX predicts 33.7 h on three
+    GPUs (four batches one after another, one of them at the 10 h attempt
+    timeout): a 12 h wall would end the session mid-discovery and strand it."""
     refused = _fits_wall(tmp_path, 12, 15600.0)
     assert refused.returncode != 0
     assert "exceeds 85% of the wall" in refused.stdout
@@ -198,7 +199,7 @@ def test_a_cell_that_would_outlast_its_wall_is_refused(tmp_path):
 def test_a_cell_that_fits_its_wall_starts(tmp_path):
     result = _fits_wall(tmp_path, 48, 15600.0)
     assert result.returncode == 0, result.stdout
-    assert "predicted 14.5 h on 3 GPU" in result.stdout
+    assert "predicted 33.7 h on 3 GPU" in result.stdout
 
 
 def test_a_cell_without_a_baseline_time_is_refused(tmp_path):

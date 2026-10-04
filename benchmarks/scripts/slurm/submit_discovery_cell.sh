@@ -13,10 +13,9 @@
 #   2. scan the roster (campaign_scan.py) and take the first cell that can
 #      be driven: finish-only recoveries first, then pending cells in roster
 #      order;
-#   3. fit the job to the cell (campaign_shape.py: 1, 2 or 4 GPUs; 12 h or
-#      24 h wall; 12 cores + 128 GB per GPU; cheapest fitting shape by
-#      default, --prefer fast for the shortest wall) — a cell that fits no
-#      shape is reported, never submitted;
+#   3. fit the job to the cell (campaign_shape.py: one GPU, 12 cores and
+#      128 GB; the shorter of a 24 h and a 72 h wall that holds the cell) —
+#      a cell that fits no wall is reported, never submitted;
 #   4. sbatch the job, then claim the cell with the NEW job id (O_EXCL). If a
 #      concurrent submitter won the claim first, the fresh job is cancelled
 #      (it has no queue age to lose) and the next cell is tried.
@@ -28,8 +27,6 @@
 #   --dry-run       classify + shape every cell; submit nothing
 #   --cell ID       submit exactly this cell (must be pending/finishable)
 #   --account NAME  SLURM account (default: def-jma-ab)
-#   --max-gpus N    never request more than N GPUs for this submission
-#   --prefer MODE   cheap (default: fewest GPU-hours) | fast (shortest wall)
 #   --runtime NAME  cell-root directory under the campaign dir (default:
 #                   runtime, the final grid); a rehearsal set such as
 #                   runtime-rehearsal has its own roster NAME.roster.json
@@ -50,14 +47,12 @@ DISC_PROJECT_DIR=$(cd "$SELF_DIR/../../.." && pwd)
 source "$SELF_DIR/discovery_lib.sh"
 JOB_SCRIPT="$SELF_DIR/submit_discovery_campaign.sh"
 
-DRY_RUN=0; ONLY_CELL=""; ACCOUNT="$DISC_ACCOUNT_DEFAULT"; MAX_GPUS=4; CHAIN=0; NO_CHAIN=0; RUNTIME_NAME="runtime"; E5_HOURS=""; E5_SECONDS=""
+DRY_RUN=0; ONLY_CELL=""; ACCOUNT="$DISC_ACCOUNT_DEFAULT"; CHAIN=0; NO_CHAIN=0; RUNTIME_NAME="runtime"; E5_HOURS=""; E5_SECONDS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --cell) ONLY_CELL="$2"; shift ;;
         --account) ACCOUNT="$2"; shift ;;
-        --max-gpus) MAX_GPUS="$2"; shift ;;
-        --prefer) export DISC_PREFER="$2"; shift ;;
         --no-chain) NO_CHAIN=1 ;;
         --runtime) RUNTIME_NAME="$2"; shift ;;
         --e5-hours) E5_HOURS="$2"; shift ;;
@@ -68,7 +63,6 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-case "$MAX_GPUS" in 1|2|4) ;; *) echo "--max-gpus must be 1, 2 or 4"; exit 2 ;; esac
 disc_paths || exit 1
 disc_env
 if [ -n "$E5_HOURS" ]; then
@@ -87,12 +81,12 @@ fi
 SCAN=$(disc_scan) || { echo "ERROR: cell scan failed"; exit 1; }
 disc_scan_report "$SCAN"
 
-# One predictor call per cell: "gpus wall cpus mem whole_node predicted e5".
-# A finish-only recovery takes the predictor's finish lane (one GPU, short
-# wall: promotion of ten candidates fits it for every roster cell).
+# One predictor call per cell: "gpus wall cpus mem predicted e5 source".
+# A finish-only recovery takes the predictor's finish lane (one GPU, the
+# shorter wall: it holds the promotion of every cell that fits a shape).
 shape_for() {
     local mode="$1" cell="$2" args shape_json
-    if [ "$mode" = "finish" ]; then args="--finish"; else args="--runtime $RUNTIME --prefer $DISC_PREFER --cells $cell --json${E5_SECONDS:+ --e5-seconds $E5_SECONDS}"; fi
+    if [ "$mode" = "finish" ]; then args="--finish"; else args="--runtime $RUNTIME --cells $cell --json${E5_SECONDS:+ --e5-seconds $E5_SECONDS}"; fi
     shape_json=$(pyrun benchmarks/scripts/campaign_shape.py $args) || return 1
     SHAPE_JSON="$shape_json" pyrun - "$cell" "$mode" <<'PYEOF'
 import json, os, sys
@@ -101,32 +95,27 @@ shape = payload if mode == "finish" else payload[cell]
 if "unshaped" in shape:
     sys.exit(f"{cell}: {shape['unshaped']}")
 print(shape["gpus"], shape["wall_hours"], shape["cpus"], shape["mem_gb"],
-      int(bool(shape["whole_node"])), shape["predicted_hours"], shape.get("baseline_elapsed_seconds", 0),
+      shape["predicted_hours"], shape.get("baseline_elapsed_seconds", 0),
       shape.get("baseline_elapsed_source") or "finish-lane")
 PYEOF
 }
 
 submit_one() {
-    local mode="$1" cell="$2" shape gpus wall cpus mem whole pred e5 e5_source jobid mem_flag name
+    local mode="$1" cell="$2" shape gpus wall cpus mem pred e5 e5_source jobid name
     shape=$(shape_for "$mode" "$cell") || { echo "  $cell: no shape fits (see campaign_shape.py) — skipped"; return 1; }
-    read -r gpus wall cpus mem whole pred e5 e5_source <<< "$shape"
-    if [ "$gpus" -gt "$MAX_GPUS" ]; then
-        echo "  $cell: needs $gpus GPUs > --max-gpus $MAX_GPUS — skipped"; return 1
-    fi
-    # A whole-node shape takes the node's memory like the baseline launcher did.
-    if [ "$whole" = 1 ]; then mem_flag="--mem=0"; else mem_flag="--mem=${mem}G"; fi
+    read -r gpus wall cpus mem pred e5 e5_source <<< "$shape"
     name="disc_$(echo "$cell" | awk -F__ '{print $1"__"$2"__"$3"__"$4}')"
     printf '  %-58s mode=%-6s gpus=%s wall=%sh cpus=%s mem=%s predicted=%sh\n' \
-        "$cell" "$mode" "$gpus" "$wall" "$cpus" "${mem_flag#--mem=}" "$pred"
+        "$cell" "$mode" "$gpus" "$wall" "$cpus" "${mem}G" "$pred"
     [ "$DRY_RUN" = 1 ] && return 1
     # The decision is bound to this one sbatch call, after every sourced file
     # (benchmarks/.env via disc_env) has had its say, so the job sees one
     # value however sbatch merges --export=ALL with explicit assignments.
     jobid=$(DISC_NO_CHAIN="$NO_CHAIN" DISC_RUNTIME="$RUNTIME_NAME" sbatch --parsable --account="$ACCOUNT" --time="${wall}:00:00" \
-        --nodes=1 --ntasks-per-node=1 --cpus-per-task="$cpus" "$mem_flag" \
+        --nodes=1 --ntasks-per-node=1 --cpus-per-task="$cpus" --mem="${mem}G" \
         --gpus-per-node="h100:$gpus" --job-name="$name" \
         --output="logs/disc_cell_%j.out" --error="logs/disc_cell_%j.err" \
-        --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_PREFER=$DISC_PREFER,DISC_NO_CHAIN=$NO_CHAIN,DISC_RUNTIME=$RUNTIME_NAME" \
+        --export="ALL,DISC_PROJECT_DIR=$PROJECT_DIR,DISC_CELL=$cell,DISC_MODE=$mode,DISC_ACCOUNT=$ACCOUNT,DISC_NO_CHAIN=$NO_CHAIN,DISC_RUNTIME=$RUNTIME_NAME" \
         "$JOB_SCRIPT") || { echo "  sbatch failed for $cell"; return 1; }
     jobid="${jobid%%;*}"
     if ! take_claim "$cell" "$jobid"; then
@@ -135,22 +124,21 @@ submit_one() {
         return 1
     fi
     mkdir -p "$RUNTIME/$cell/operator"
-    pyrun - "$RUNTIME/$cell/operator/plan.json" "$cell" "$mode" "$jobid" "$gpus" "$wall" "$cpus" "$mem" "$whole" "$pred" "$e5" "$ACCOUNT" "$RUNTIME_NAME" "$e5_source" <<'PYEOF'
+    pyrun - "$RUNTIME/$cell/operator/plan.json" "$cell" "$mode" "$jobid" "$gpus" "$wall" "$cpus" "$mem" "$pred" "$e5" "$ACCOUNT" "$RUNTIME_NAME" "$e5_source" <<'PYEOF'
 import importlib.util, json, os, sys, datetime as dt
-path, cell, mode, jobid, gpus, wall, cpus, mem, whole, pred, e5, account, runtime_name, e5_source = sys.argv[1:]
+path, cell, mode, jobid, gpus, wall, cpus, mem, pred, e5, account, runtime_name, e5_source = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("shape", "benchmarks/scripts/campaign_shape.py")
 shape = importlib.util.module_from_spec(spec); sys.modules["shape"] = shape; spec.loader.exec_module(shape)
 payload = {
     "cell_id": cell, "mode": mode, "job_id": jobid, "account": account, "runtime": runtime_name,
     "submitted_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     "submitted_by": os.environ.get("USER"),
-    "shape": {"gpus": int(gpus), "wall_hours": int(wall), "cpus": int(cpus), "mem_gb": int(mem),
-              "whole_node": whole == "1"},
+    "shape": {"gpus": int(gpus), "wall_hours": int(wall), "cpus": int(cpus), "mem_gb": int(mem)},
     "predicted_hours": float(pred),
     "baseline_elapsed_seconds": float(e5), "baseline_elapsed_source": e5_source,
-    "predictor": {"cap_per_gpu": shape.CAP_PER_GPU, "efficiency": shape.EFFICIENCY,
-                  "fit_fraction": shape.FIT_FRACTION, "overhead_h": shape.OVERHEAD_H,
-                  "prefer": os.environ.get("DISC_PREFER", "cheap")},
+    "predictor": {"cap_per_gpu": shape.CAP_PER_GPU, "attempt_dilation": shape.ATTEMPT_DILATION,
+                  "attempt_timeout_h": shape.ATTEMPT_TIMEOUT_H,
+                  "fit_fraction": shape.FIT_FRACTION, "overhead_h": shape.OVERHEAD_H},
 }
 with open(path, "w") as fh:
     json.dump(payload, fh, indent=2, sort_keys=True); fh.write("\n")

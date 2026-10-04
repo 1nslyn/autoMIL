@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""Predict discovery wall time and pick a SLURM job shape per campaign cell.
+"""Predict a campaign cell's job wall time and pick its SLURM job shape.
 
 For each cell root under a campaign runtime directory, this script reads the
 registered baseline's five-fold elapsed time from ``campaign_state.json`` and
-predicts how long the discovery stage will take under a candidate SLURM
-allocation (see ``predict_hours`` for the formula: one serial gate attempt,
-30 packed discovery attempts, 10 packed promotion candidates, plus a fixed
-setup/teardown overhead; a packed attempt costs ``ATTEMPT_DILATION`` times
-the baseline's per-fold time and never less than ``ATTEMPT_FLOOR_H``). It then picks the first candidate shape — tried
-wall-clock first, then GPU count — whose predicted time fits inside
-``FIT_FRACTION`` of that wall clock.
+predicts how long the cell's job takes (see ``predict_hours``: the serial
+gate attempt, the discovery batches one after another with one of them
+running into the attempt timeout, the promotion candidates, plus a fixed
+overhead). Every job takes one GPU, because a whole batch runs on one; the
+wall is the shorter of ``WALL_OPTIONS_H`` whose ``FIT_FRACTION`` holds the
+prediction.
 
 Cells without a registered baseline (``baseline`` is ``None``), with
-malformed or missing state, or whose predicted time exceeds every candidate
-shape are reported as unshaped with a reason; a bad cell never crashes the
-sweep over the rest.
+malformed or missing state, or whose predicted time exceeds every wall are
+reported as unshaped with a reason; a bad cell never crashes the sweep over
+the rest.
 
 This file is deliberately standalone (stdlib only): it is delivered to the
 cluster mid-campaign, alongside campaign_export.py, and must never import
@@ -28,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -41,35 +41,47 @@ from pathlib import Path
 # (2026-09-13/14): packed 4 per GPU they used 18-21% of their cores (nnMIL
 # 54%), 4-5 GB of RAM and 1-1.5 GB of VRAM per attempt against 12 cores,
 # 128 GB and 80 GB per GPU, and each attempt ran only 1.1-1.2x its serial
-# time; 8 per GPU stays inside every one of those budgets. Efficiency is the
-# derated packing factor observed in the aihub canary logs (GPU-attached
-# job hours vs actual wall-clock hours for a packed batch of attempts).
+# time; 8 per GPU stays inside every one of those budgets.
 FIT_FRACTION = 0.85
 CAP_PER_GPU = 8
-EFFICIENCY = 0.8
 OVERHEAD_H = 2.0
 
-# A packed attempt costs more than the baseline's per-fold time: the agent's
-# candidates train longer than the baseline (later early stopping) and share
-# the GPU with three others. Measured on the LUAD rehearsal cells: CLAM
-# survival with H-optimus-1 (2026-09-06), 25 completed candidates averaged
-# 52 min against the 25 min per-fold prediction (2.1x); TITAN (2026-09-04),
-# 16 min against 2 min, a per-attempt floor of process start-up and feature
+# A batch lasts as long as its slowest attempt, and the agent's candidates
+# train longer than the baseline (later early stopping, heavier settings).
+# Slowest attempt of each batch over the baseline's per-fold time, measured
+# on the 2026-10 trial cells: fir H100 ABMIL 0.84; aihub RTX CLAM 1.08-1.14,
+# DTFD 1.85-2.18, ABMIL 1.30-2.24. TITAN (2026-09-04) set the floor: 16 min
+# attempts against a 2 min per-fold time, the process start-up and feature
 # loading that no baseline time predicts. The serial gate attempt re-runs
 # the baseline's own configuration alone, so only the floor applies to it.
 ATTEMPT_DILATION = 2.0
 ATTEMPT_FLOOR_H = 0.25
-CORES_PER_GPU = 12
-MEM_GB_PER_GPU = 128
-GPU_OPTIONS = (1, 2, 4)
-WALL_OPTIONS_H = (12, 24)
+# One batch may run into the attempt timeout (autobench.campaign.
+# ATTEMPT_TIMEOUT_MIN): aihub DTFD's third batch tried heavier settings and
+# lasted the full 10 h (2026-10-02). A cell starts only on a wall that
+# survives one such batch (Leo, 2026-10-03).
+ATTEMPT_TIMEOUT_H = 10.0
 
-# Stage-fold split (autobench.campaign.STAGE_FOLDS): 3 of the 5 baseline
-# folds are re-run per discovery attempt, 2 per promotion candidate.
+# Every job takes one GPU and a quarter of a fir node's cores and memory: a
+# whole batch runs on one GPU, so a second one would only shorten promotion
+# by one round. Eight packed ABMIL attempts used 5.2 cores on average and
+# 56 GB at peak on fir (2026-10-03). The walls are fir's 24 h and 3-day GPU
+# tiers; 12 h never holds a full cell once one batch may last 10 h.
+JOB_GPUS = 1
+JOB_CORES = 12
+JOB_MEM_GB = 128
+WALL_OPTIONS_H = (24, 72)
+
+# The frozen protocol's stage structure (autobench.campaign STAGE_FOLDS,
+# DISCOVERY_PHASING, PROMOTION_CANDIDATES; a test pins these copies): 3 of
+# the 5 baseline folds are re-run per discovery attempt and 2 per promotion
+# candidate; the discovery attempts are spent in fixed batches, each started
+# only after the earlier ones have finished; the promotion candidates are
+# submitted together.
 DISCOVERY_FOLDS = 3
 PROMOTION_FOLDS = 2
 TOTAL_FOLDS = 5
-DISCOVERY_ATTEMPTS = 30
+DISCOVERY_BATCHES = (8, 8, 8, 6)
 PROMOTION_CANDIDATES = 10
 
 SECONDS_PER_HOUR = 3600.0
@@ -77,13 +89,12 @@ SECONDS_PER_HOUR = 3600.0
 
 @dataclass(frozen=True)
 class Shape:
-    """A concrete SLURM job shape and its predicted discovery wall time."""
+    """A concrete SLURM job shape and its predicted job wall time."""
 
     gpus: int
     wall_hours: int
     cpus: int
     mem_gb: int
-    whole_node: bool
     predicted_hours: float
 
 
@@ -117,78 +128,68 @@ def fold_hours(e5_seconds: float, folds: int) -> float:
 
 
 def attempt_hours(e5_seconds: float, folds: int) -> float:
-    """One packed agent attempt over ``folds`` folds: the baseline's
-    per-fold time dilated by ``ATTEMPT_DILATION``, never below the floor."""
+    """The slowest agent attempt of a batch over ``folds`` folds: the
+    baseline's per-fold time dilated by ``ATTEMPT_DILATION``, never below
+    the floor."""
     e5_hours = e5_seconds / SECONDS_PER_HOUR
     return max(ATTEMPT_FLOOR_H, ATTEMPT_DILATION * e5_hours * (folds / TOTAL_FOLDS))
 
 
-def predict_hours(e5_seconds: float, gpus: int) -> float:
-    """Predict discovery-stage wall time (hours) for a ``gpus``-wide job.
+def rounds(attempts: int, gpus: int) -> int:
+    """The rounds the daemon runs ``attempts`` submitted together in, on
+    ``gpus`` GPUs at ``CAP_PER_GPU`` each."""
+    return math.ceil(attempts / (CAP_PER_GPU * gpus))
 
-    ``e5_seconds`` is the 5-fold baseline's total elapsed time, as recorded
-    in ``baseline.resources.elapsed_seconds.total``. One serial gate attempt
-    (``fold_hours`` over the discovery folds) is followed by 30 discovery
-    attempts and 10 promotion candidates (``attempt_hours``), each packed
-    ``CAP_PER_GPU * gpus`` wide at ``EFFICIENCY`` derating, plus a fixed
-    overhead for setup/teardown.
-    """
-    gate = fold_hours(e5_seconds, DISCOVERY_FOLDS)
+
+def discovery_hours(e5_seconds: float, gpus: int) -> float:
+    """The serial gate attempt, then the discovery batches one after another,
+    each as long as its slowest attempt, with one of them running into the
+    attempt timeout. A batch fits one GPU, so more GPUs do not shorten it."""
     attempt = attempt_hours(e5_seconds, DISCOVERY_FOLDS)
-    promotion = attempt_hours(e5_seconds, PROMOTION_FOLDS)
-    capacity = CAP_PER_GPU * gpus * EFFICIENCY
+    batches = sum(rounds(size, gpus) for size in DISCOVERY_BATCHES)
     return (
-        gate
-        + DISCOVERY_ATTEMPTS * attempt / capacity
-        + PROMOTION_CANDIDATES * promotion / capacity
-        + OVERHEAD_H
+        fold_hours(e5_seconds, DISCOVERY_FOLDS)
+        + batches * attempt
+        + max(0.0, ATTEMPT_TIMEOUT_H - attempt)
     )
 
 
-PREFERENCES = ("cheap", "fast")
+def promotion_hours(e5_seconds: float, gpus: int) -> float:
+    """The promotion candidates, submitted together: two rounds on one GPU,
+    one on two or more."""
+    return rounds(PROMOTION_CANDIDATES, gpus) * attempt_hours(e5_seconds, PROMOTION_FOLDS)
 
 
-def candidate_shapes(prefer: str = "cheap") -> tuple[tuple[int, int], ...]:
-    """Ordered ``(gpus, wall_hours)`` candidates for a preference.
+def predict_hours(e5_seconds: float, gpus: int) -> float:
+    """Predict a cell's job wall time (hours) on ``gpus`` GPUs.
 
-    ``cheap`` (default) minimizes GPU-hours: the smallest GPU count that fits
-    either wall wins, so (1,12), (1,24), (2,12), (2,24), (4,12), (4,24).
-    ``fast`` minimizes wall time: (1,12), (2,12), (4,12), (1,24), (2,24),
-    (4,24). Fair-share bills allocated GPU-minutes, which is why cheap is the
-    default; fast trades GPU-hours for the shorter-queue 12 h tier.
+    ``e5_seconds`` is the 5-fold baseline's total elapsed time, as recorded
+    in ``baseline.resources.elapsed_seconds.total``.
     """
-    if prefer not in PREFERENCES:
-        raise ValueError(f"unknown preference {prefer!r}; expected one of {PREFERENCES}")
-    if prefer == "cheap":
-        return tuple((g, w) for g in GPU_OPTIONS for w in WALL_OPTIONS_H)
-    return tuple((g, w) for w in WALL_OPTIONS_H for g in GPU_OPTIONS)
+    return discovery_hours(e5_seconds, gpus) + promotion_hours(e5_seconds, gpus) + OVERHEAD_H
+
+
+def _job_shape(wall_hours: int, predicted_hours: float) -> Shape:
+    return Shape(
+        gpus=JOB_GPUS, wall_hours=wall_hours, cpus=JOB_CORES, mem_gb=JOB_MEM_GB,
+        predicted_hours=predicted_hours,
+    )
 
 
 def finish_shape() -> Shape:
-    """The finish-only recovery lane: promotion of at most ten candidates on
-    one GPU fits the shorter wall for every roster cell (worst ~9 h)."""
-    gpus, wall_hours = GPU_OPTIONS[0], WALL_OPTIONS_H[0]
-    return Shape(
-        gpus=gpus, wall_hours=wall_hours, cpus=CORES_PER_GPU * gpus,
-        mem_gb=MEM_GB_PER_GPU * gpus, whole_node=False, predicted_hours=0.0,
-    )
+    """The finish-only recovery lane: promotion alone, on the shorter wall.
+    It holds every cell that fits a discovery shape (a test pins this), so it
+    needs no baseline time."""
+    return _job_shape(WALL_OPTIONS_H[0], 0.0)
 
 
-def choose_shape(e5_seconds: float, prefer: str = "cheap") -> Shape | None:
-    """Pick the first candidate shape (see ``candidate_shapes``) whose
-    predicted time fits ``FIT_FRACTION`` of its wall clock; ``None`` if none.
-    """
-    for gpus, wall_hours in candidate_shapes(prefer):
-        predicted = predict_hours(e5_seconds, gpus)
+def choose_shape(e5_seconds: float) -> Shape | None:
+    """The shorter wall whose ``FIT_FRACTION`` holds the predicted job time;
+    ``None`` if neither does."""
+    predicted = predict_hours(e5_seconds, JOB_GPUS)
+    for wall_hours in WALL_OPTIONS_H:
         if predicted <= FIT_FRACTION * wall_hours:
-            return Shape(
-                gpus=gpus,
-                wall_hours=wall_hours,
-                cpus=CORES_PER_GPU * gpus,
-                mem_gb=MEM_GB_PER_GPU * gpus,
-                whole_node=(gpus == max(GPU_OPTIONS)),
-                predicted_hours=predicted,
-            )
+            return _job_shape(wall_hours, predicted)
     return None
 
 
@@ -272,7 +273,7 @@ def _prediction_input(
 
 
 def _shape_one_cell(
-    runtime: Path, cell_id: str, prefer: str = "cheap", e5_override: float | None = None,
+    runtime: Path, cell_id: str, e5_override: float | None = None,
 ) -> ShapeReport:
     state, reason = _read_campaign_state(runtime, cell_id)
     if reason is not None:
@@ -292,11 +293,11 @@ def _shape_one_cell(
     if reason is not None:
         return ShapeReport(cell_id=cell_id, shape=None, reason=reason, cached_folds=cached)
 
-    shape = choose_shape(e5_seconds, prefer)
+    shape = choose_shape(e5_seconds)
     if shape is None:
         return ShapeReport(
             cell_id=cell_id, shape=None,
-            reason="predicted discovery wall time exceeds every candidate shape",
+            reason="predicted job wall time exceeds every wall",
             baseline_elapsed_seconds=e5_seconds, cached_folds=cached,
             baseline_elapsed_source=source,
         )
@@ -308,8 +309,7 @@ def _shape_one_cell(
 
 
 def shape_cells(
-    runtime: Path, cell_ids: Sequence[str], prefer: str = "cheap",
-    e5_override: float | None = None,
+    runtime: Path, cell_ids: Sequence[str], e5_override: float | None = None,
 ) -> Mapping[str, ShapeReport]:
     """Predict a SLURM shape for each cell root under ``runtime``.
 
@@ -320,7 +320,7 @@ def shape_cells(
     its own timing.
     """
     return {
-        cell_id: _shape_one_cell(runtime, cell_id, prefer, e5_override) for cell_id in cell_ids
+        cell_id: _shape_one_cell(runtime, cell_id, e5_override) for cell_id in cell_ids
     }
 
 
@@ -383,10 +383,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print the finish-only recovery lane shape as JSON and exit",
     )
     parser.add_argument(
-        "--prefer", default="cheap", choices=PREFERENCES,
-        help="cheap = fewest GPU-hours (default); fast = shortest wall first",
-    )
-    parser.add_argument(
         "--e5-seconds", type=float, default=None,
         help="operator-supplied five-fold baseline time for a baseline whose retry "
              "loaded every fold from cache (refused when the ledger carries a timing)",
@@ -394,14 +390,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cell", default=None, help="one cell id, used together with --field")
     parser.add_argument(
         "--field", default=None,
-        choices=("gpus", "wall_hours", "cpus", "mem_gb", "whole_node", "predicted_hours"),
+        choices=("gpus", "wall_hours", "cpus", "mem_gb", "predicted_hours"),
         help="single Shape field to print for --cell, for shell consumption",
     )
     return parser
 
 
 def _run_cell_field(
-    runtime: Path, cell_id: str, field: str | None, prefer: str, e5_override: float | None,
+    runtime: Path, cell_id: str, field: str | None, e5_override: float | None,
 ) -> int:
     if not field:
         print("campaign_shape: --field is required with --cell", file=sys.stderr)
@@ -409,7 +405,7 @@ def _run_cell_field(
     if not (runtime / cell_id).is_dir():
         print(f"campaign_shape: unknown cell id: {cell_id}", file=sys.stderr)
         return 2
-    report = _shape_one_cell(runtime, cell_id, prefer, e5_override)
+    report = _shape_one_cell(runtime, cell_id, e5_override)
     if report.shape is None:
         print(
             f"campaign_shape: cell {cell_id} is unshaped: {report.reason}",
@@ -421,7 +417,7 @@ def _run_cell_field(
 
 
 def _run_sweep(
-    runtime: Path, cells_arg: str | None, as_json: bool, prefer: str, e5_override: float | None,
+    runtime: Path, cells_arg: str | None, as_json: bool, e5_override: float | None,
 ) -> int:
     cell_ids = _resolve_cell_ids(runtime, cells_arg)
     unknown = _first_unknown_cell(runtime, cell_ids)
@@ -429,7 +425,7 @@ def _run_sweep(
         print(f"campaign_shape: unknown cell id: {unknown}", file=sys.stderr)
         return 2
 
-    reports = shape_cells(runtime, cell_ids, prefer, e5_override)
+    reports = shape_cells(runtime, cell_ids, e5_override)
     if as_json:
         payload = {cell_id: _report_to_json(reports[cell_id]) for cell_id in reports}
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -458,8 +454,8 @@ def main(argv: list[str] | None = None) -> int:
         print("campaign_shape: --e5-seconds needs --cell or --cells", file=sys.stderr)
         return 2
     if args.cell is not None:
-        return _run_cell_field(runtime, args.cell, args.field, args.prefer, args.e5_seconds)
-    return _run_sweep(runtime, args.cells, args.json, args.prefer, args.e5_seconds)
+        return _run_cell_field(runtime, args.cell, args.field, args.e5_seconds)
+    return _run_sweep(runtime, args.cells, args.json, args.e5_seconds)
 
 
 if __name__ == "__main__":

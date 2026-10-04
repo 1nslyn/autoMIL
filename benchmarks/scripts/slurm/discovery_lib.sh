@@ -151,12 +151,6 @@ PYEOF
     done
     echo "orchestrator daemon did not come up within ${limit}s"; return 1
 }
-# Shape preference: "cheap" = fewest GPU-hours (smallest GPU count that fits
-# either wall), "fast" = shortest wall first. Fair-share bills GPU-minutes,
-# so cheap is the default; DISC_PREFER=fast trades GPU-hours for queue time.
-DISC_PREFER="${DISC_PREFER:-cheap}"
-shape_field() { pyrun benchmarks/scripts/campaign_shape.py --runtime "$RUNTIME" --prefer "$DISC_PREFER" --cell "$1" --field "$2"; }
-
 disc_scan() {
     pyrun benchmarks/scripts/campaign_scan.py --runtime "$RUNTIME" --roster "$ROSTER" \
         --job-id "${SLURM_JOB_ID:-manual}" "$@"

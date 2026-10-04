@@ -1,9 +1,9 @@
 #!/bin/bash
-# SLURM: preprint campaign DISCOVERY — ONE cell per job, on the GPUs this job
-# was shaped for (1, 2 or 4 x H100; 12 h or 24 h wall). Submit through
-# submit_discovery_cell.sh, which fits the shape to the cell and claims the
+# SLURM: preprint campaign DISCOVERY — ONE cell per job, on one H100 with the
+# wall this job was shaped for (24 h or 72 h). Submit through
+# submit_discovery_cell.sh, which fits the wall to the cell and claims the
 # cell with this job's id; a bare `sbatch` of this file (defaults below:
-# 1 GPU, 12 h) is also valid and then picks a cell that fits its own wall.
+# 1 GPU, 24 h) is also valid and then picks a cell that fits its own wall.
 # On a workstation without SLURM, run_discovery_chain.sh runs this file for
 # each cell and passes the allocation in DISC_RUN_ID, DISC_GPUS (physical
 # indexes), DISC_WALL_END (epoch second) and DISC_CELL; such a run writes no
@@ -28,7 +28,7 @@
 
 #SBATCH --job-name=disc_cell
 #SBATCH --account=def-jma-ab
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
@@ -124,7 +124,7 @@ for cell in d["finishable"]:
     print(f"finish:{cell}"); sys.exit(0)
 for cell in d["pending"]:
     state, reason = shape._read_campaign_state(runtime, cell)
-    e5, reason = shape._baseline_elapsed_seconds(state) if reason is None else (None, reason)
+    e5, _, reason = shape._prediction_input(runtime, cell, state) if reason is None else (None, 0, reason)
     if e5 is None:
         continue
     if shape.predict_hours(e5, gpus) <= shape.FIT_FRACTION * hours:

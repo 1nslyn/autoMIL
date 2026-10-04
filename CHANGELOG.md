@@ -8,6 +8,25 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Discovery jobs take one GPU, and their wall survives a slow batch.**
+  The agent runs its 30 attempts in batches of 8, 8, 8 and 6, one after
+  another, and the daemon packs each batch onto one GPU, so a job's second
+  GPU sat idle: fir's ABMIL rehearsal ran all 16 attempts of its first two
+  batches on GPU 0 of 2. `campaign_shape.py` spread the attempts over every
+  GPU of the job, so each extra GPU cut the prediction; aihub's DTFD cell
+  was predicted at 10.4 h and took 25.2 h, and 16 of the 28 fir cells
+  shaped onto 2 or 4 GPUs for 24 h would have hit the session deadline and
+  been stranded. The predictor now runs the four batches one after another,
+  each as long as its slowest attempt, with one of them running into the
+  10 h attempt timeout (aihub DTFD's third batch did; Leo decided on
+  2026-10-03 that a cell starts only on a wall that survives one such
+  batch). Every job takes one GPU, 12 cores and 128 GB with a 24 h or 72 h
+  wall (35 and 43 of fir's 78 cells). The cheap/fast preference,
+  `--max-gpus` and the whole-node shape are removed; the finish-only lane
+  moves from 12 h to 24 h; a bare `sbatch` of the job defaults to 24 h; and
+  the job's own cell pick scales a cached-fold baseline time as every other
+  caller does.
+
 - **A workstation without SLURM runs a rehearsal set end to end.** Leo
   decided on 2026-10-01 that aihub (three RTX 6000 Ada, no scheduler) runs
   the full trial and official cells run on fir only. An RTX re-run of the
