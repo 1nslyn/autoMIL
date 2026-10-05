@@ -50,6 +50,8 @@ def main(argv: list[str] | None = None) -> None:
         output_root.relative_to(repo_root)
     except ValueError:
         parser.error("--output-root must live inside the git repository")
+    if args.action in {"freeze-selections", "certify-all", "report"} and not output_root.is_dir():
+        parser.error(f"--output-root {args.output_root} is not a materialized set")
     if args.action == "generate":
         # Live-daemon guard: daemons anchored at this checkout re-hash
         # manifest.json at every launch revalidation against the sha pinned in
@@ -127,14 +129,14 @@ def main(argv: list[str] | None = None) -> None:
     elif args.action == "freeze-selections":
         artifact = freeze_campaign_selections(output_root, manifest_path)
         print(
-            "froze "
-            f"{artifact['cell_count']} selections ({artifact['freeze_sha256']})"
+            f"froze {artifact['cell_count']} selections in {output_root.name} "
+            f"({artifact['freeze_sha256']})"
         )
     elif args.action == "certify-all":
         index = certify_campaign(output_root, manifest_path)
         print(
-            "certified "
-            f"{index['cell_count']} cells ({index['certification_sha256']})"
+            f"certified {index['cell_count']} cells in {output_root.name} "
+            f"({index['certification_sha256']})"
         )
     else:
         report = write_publication_report(

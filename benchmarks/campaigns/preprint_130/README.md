@@ -9,8 +9,8 @@ protocol independently for every cell:
   12-hour agent-active safety cap per cell;
 - promotion of at most 10 unique complete candidates on folds `3,4`;
 - winner selection by the equal-weight mean of validation folds `0` through `4`;
-- one campaign-wide freeze of all 130 validation winners before any held-out
-  read;
+- one freeze of the final grid's 78 validation winners before any held-out
+  read (a rehearsal set is frozen and certified on its own, Section 6);
 - paired baseline-and-winner reveal of the already sealed five-fold held-out
   results.
 
@@ -412,8 +412,16 @@ The launchers take `--runtime <name>`; logs go to
 `logs/discovery_cells/<name>/`. The shape predictor scales a baseline's time
 back when its retry loaded folds from cache (the ledger total then covers
 only the fresh folds); a baseline whose retry cached every fold has no timing
-and is submitted with `--cell <id> --e5-hours <five-fold hours>`. Nothing from a rehearsal set is mirrored,
-frozen into the campaign selections, or certified.
+and is submitted with `--cell <id> --e5-hours <five-fold hours>`. Nothing from a rehearsal set is mirrored
+or enters the final grid's freeze, certification or report. A complete
+rehearsal set may be frozen and certified on its own (Section 6); its
+`selection_freeze.json` and `campaign_certification.json` stay in its own
+directory, and `report` refuses it. Its cells use the same splits and test
+folds as the final-grid cells with the same ids, so certifying it opens those
+cells' held-out folds before the final grid is frozen. For `runtime-aihub`
+this was decided on 2026-10-05 and is recorded in `PROGRESS.md`. Held-out
+values of a rehearsal set never go into a tracked file, and the trajectory
+audit of Section 6 applies to it as to the grid.
 
 **Session record.** The runtime's own transcript of the cell's session,
 `~/.claude/projects/<cwd>/<session-id>.jsonl` (every user, assistant and
@@ -549,17 +557,33 @@ No cell may be certified early.
 
 ## 6. Freeze all selections, then certify
 
-After all 130 cells report `winner-frozen`, atomically bind their validation
-selections into one campaign artifact:
+After every cell of a set reports `winner-frozen`, atomically bind their
+validation selections into one artifact for the set. For the final grid,
+`runtime/`:
 
 ```bash
 uv run python benchmarks/scripts/campaign_manifest.py freeze-selections
 uv run python benchmarks/scripts/campaign_manifest.py certify-all
 ```
 
-Before `selection_freeze.json` exists and contains the exact 130-cell roster,
-one `protocol_version`, 130 immutable session attestations, and the complete
-failure-inclusive search-process evidence, every per-cell
+For a rehearsal set, name it:
+
+```bash
+uv run python benchmarks/scripts/campaign_manifest.py freeze-selections \
+    --output-root benchmarks/campaigns/preprint_130/runtime-aihub
+uv run python benchmarks/scripts/campaign_manifest.py certify-all \
+    --output-root benchmarks/campaigns/preprint_130/runtime-aihub
+```
+
+A set's cells follow the launchers' rule: a set with `<name>.roster.json`
+beside it holds exactly the roster's cells (fewer than 78, and the set may not
+be named `runtime`); any other set holds all 78 grid cells. Both commands
+refuse a set directory that does not exist. Run `freeze-selections` once per
+set: after certification, a second freeze refuses with winner drift.
+
+Before `selection_freeze.json` exists and contains the set's exact roster,
+one `protocol_version`, one immutable session attestation per cell, and the
+complete failure-inclusive search-process evidence, every per-cell
 certification entry point fails closed. `certify-all` is
 restart-safe: it verifies and reveals each frozen winner together with its
 native baseline, emits paired fold deltas, and writes a hashed
@@ -587,9 +611,10 @@ Generate the complete publication artifact only after certification:
 uv run python benchmarks/scripts/campaign_manifest.py report
 ```
 
-This command requires all 130 baseline/winner bundles, derives 30 four-arm tile
-ranking blocks, reports TITAN separately, and fails without writing a report if
-any hash, fold, metric, or cell is missing or inconsistent. It aggregates
+This command runs on the final grid only. It requires all 78 baseline/winner
+bundles, derives 18 four-arm tile ranking blocks, reports TITAN separately, and
+fails without writing a report if any hash, fold, metric, or cell is missing or
+inconsistent; a rehearsal set is refused. It aggregates
 survival c-index within folds and never pools raw risks from independently
 trained fold models.
 

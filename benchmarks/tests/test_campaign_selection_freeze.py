@@ -1,8 +1,11 @@
 """Campaign-wide validation freeze gates every held-out certification."""
 from __future__ import annotations
 
-import json
 import hashlib
+import importlib.util
+import json
+import shutil
+import uuid
 from pathlib import Path
 
 import pytest
@@ -542,3 +545,252 @@ def test_campaign_freeze_refuses_an_extra_off_roster_cell_even_with_valid_state(
         freeze_campaign_selections(runtime_root, MANIFEST)
     assert "unexpected=" in str(exc_info.value)
     assert off_roster_cell["cell_id"] in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Rehearsal sets: a set with <set>.roster.json beside it freezes and certifies
+# exactly the cells its roster names, never the publication grid.
+
+CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
+AIHUB_ROSTER = json.loads((CAMPAIGN_DIR / "runtime-aihub.roster.json").read_text())
+AIHUB_IDS = sorted(AIHUB_ROSTER["cell_ids"])
+
+
+def _manifest_rows() -> dict[str, dict]:
+    return {cell["cell_id"]: cell for cell in load_manifest(MANIFEST)["cells"]}
+
+
+def _materialize_rehearsal_set(
+    tmp_path: Path, roster: object = None, name: str = "runtime-aihub",
+    cell_ids: list[str] | None = None,
+) -> Path:
+    """The agent protocol, the manifest, ``<name>.roster.json`` beside the set
+    (a copy of the committed aihub roster unless given; a string is written
+    verbatim), and one freeze-ready root per cell (default: the aihub cells)."""
+    runtime_root = tmp_path / name
+    runtime_root.mkdir(parents=True)
+    (runtime_root / AGENT_PROTOCOL_FILE).write_text(json.dumps(AGENT_PROTOCOL))
+    (runtime_root / "manifest.json").write_bytes(MANIFEST.read_bytes())
+    roster = AIHUB_ROSTER if roster is None else roster
+    (tmp_path / f"{name}.roster.json").write_text(
+        roster if isinstance(roster, str) else json.dumps(roster)
+    )
+    rows = _manifest_rows()
+    manifest_hash = file_sha256(MANIFEST)
+    for cell_id in AIHUB_IDS if cell_ids is None else cell_ids:
+        _freeze_ready_state(runtime_root, rows[cell_id], manifest_hash)
+    return runtime_root
+
+
+def _certification_untouched(cell_root: Path) -> bool:
+    state = json.loads((cell_root / "campaign_state.json").read_text())
+    return state["phase"] == "winner-frozen" and not (
+        cell_root / "certification"
+    ).exists()
+
+
+@pytest.mark.parametrize(
+    "roster_path", sorted(CAMPAIGN_DIR.glob("*.roster.json")),
+    ids=lambda path: path.name,
+)
+def test_every_committed_rehearsal_roster_resolves_to_its_own_cells(roster_path):
+    roster = json.loads(roster_path.read_text())
+    set_root = CAMPAIGN_DIR / roster_path.name.removesuffix(".roster.json")
+
+    rows = campaign_stages._set_census(set_root, load_manifest(MANIFEST)["cells"])
+
+    assert sorted(row["cell_id"] for row in rows) == sorted(roster["cell_ids"])
+
+
+def test_a_rehearsal_set_freezes_and_certifies_exactly_its_roster(tmp_path):
+    runtime_root = _materialize_rehearsal_set(tmp_path)
+
+    freeze = freeze_campaign_selections(runtime_root, MANIFEST)
+    rows = _manifest_rows()
+    assert freeze["cell_count"] == len(AIHUB_IDS) == 5
+    assert sorted(row["cell_id"] for row in freeze["cells"]) == AIHUB_IDS
+    assert freeze["roster_sha256"] == content_sha256(
+        campaign_stages._roster_payload([rows[cell_id] for cell_id in AIHUB_IDS])
+    )
+
+    index = certify_campaign(runtime_root, MANIFEST)
+    index_path = runtime_root / "campaign_certification.json"
+    first_bytes = index_path.read_bytes()
+    assert index["cell_count"] == 5
+    assert sorted(row["cell_id"] for row in index["cells"]) == AIHUB_IDS
+    for cell_id in AIHUB_IDS:
+        state = json.loads((runtime_root / cell_id / "campaign_state.json").read_text())
+        bundle = json.loads(
+            (runtime_root / cell_id / "certification/certify.json").read_text()
+        )
+        assert state["phase"] == "certified"
+        assert bundle["retrained"] is False
+    assert certify_campaign(runtime_root, MANIFEST) == index
+    assert index_path.read_bytes() == first_bytes
+
+
+_DROP = object()
+
+
+def _roster_with(**changes: object) -> dict:
+    roster = json.loads(json.dumps(AIHUB_ROSTER))
+    for key, value in changes.items():
+        if value is _DROP:
+            roster.pop(key)
+        else:
+            roster[key] = value
+    return roster
+
+
+def _off_roster_id() -> str:
+    return next(
+        cell["cell_id"] for cell in load_manifest(MANIFEST)["cells"]
+        if cell["dataset"] not in ACTIVE_ROSTER["cohorts"]
+    )
+
+
+def _active_ids() -> list[str]:
+    return [
+        cell["cell_id"] for cell in load_manifest(MANIFEST)["cells"]
+        if cell["dataset"] in ACTIVE_ROSTER["cohorts"]
+    ]
+
+
+BAD_ROSTERS = {
+    "unknown-id": lambda: _roster_with(
+        cell_ids=AIHUB_IDS[:-1] + ["tcga_luad__kras__nope__abmil__s42__preprint-v4"],
+    ),
+    "off-roster-id": lambda: _roster_with(cell_ids=AIHUB_IDS[:-1] + [_off_roster_id()]),
+    "duplicate-id": lambda: _roster_with(cell_ids=AIHUB_IDS[:-1] + [AIHUB_IDS[0]]),
+    "empty": lambda: _roster_with(cell_ids=[], cells=0, cohorts=[]),
+    "wrong-purpose": lambda: _roster_with(purpose="publication"),
+    "missing-purpose": lambda: _roster_with(purpose=_DROP),
+    "extra-key": lambda: _roster_with(extra=1),
+    "cells-mismatch": lambda: _roster_with(cells=4),
+    "cells-bool": lambda: _roster_with(cell_ids=AIHUB_IDS[:1], cells=True),
+    "cohorts-missing": lambda: _roster_with(cohorts=[]),
+    "cohorts-extra": lambda: _roster_with(cohorts=["tcga_luad", "tcga_hnsc"]),
+    "whole-grid": lambda: _roster_with(
+        cell_ids=_active_ids(), cells=len(_active_ids()),
+        cohorts=sorted(ACTIVE_ROSTER["cohorts"]),
+    ),
+    "unreadable": lambda: "{not json",
+}
+
+
+@pytest.mark.parametrize("case", sorted(BAD_ROSTERS))
+def test_a_malformed_rehearsal_roster_is_refused_before_any_freeze(tmp_path, case):
+    runtime_root = _materialize_rehearsal_set(tmp_path, roster=BAD_ROSTERS[case]())
+
+    with pytest.raises(CampaignStageError, match="rehearsal roster"):
+        freeze_campaign_selections(runtime_root, MANIFEST)
+    assert not (runtime_root / "selection_freeze.json").exists()
+
+
+def test_a_rehearsal_set_refuses_a_cell_directory_its_roster_does_not_name(tmp_path):
+    extra = next(cell_id for cell_id in _active_ids() if cell_id not in AIHUB_IDS)
+    runtime_root = _materialize_rehearsal_set(tmp_path, cell_ids=AIHUB_IDS + [extra])
+
+    with pytest.raises(CampaignStageError, match="runtime roster differs") as exc_info:
+        freeze_campaign_selections(runtime_root, MANIFEST)
+    assert "unexpected=" in str(exc_info.value) and extra in str(exc_info.value)
+
+
+def test_a_rehearsal_set_refuses_a_missing_roster_cell(tmp_path):
+    runtime_root = _materialize_rehearsal_set(tmp_path, cell_ids=AIHUB_IDS[:-1])
+
+    with pytest.raises(CampaignStageError, match="runtime roster differs") as exc_info:
+        freeze_campaign_selections(runtime_root, MANIFEST)
+    assert "missing=" in str(exc_info.value) and AIHUB_IDS[-1] in str(exc_info.value)
+
+
+@pytest.mark.parametrize("name", ["runtime", "runtime-aihub"])
+def test_a_set_without_a_roster_file_is_the_whole_publication_grid(tmp_path, name):
+    runtime_root = _materialize_rehearsal_set(tmp_path, name=name)
+    (tmp_path / f"{name}.roster.json").unlink()
+
+    with pytest.raises(CampaignStageError, match="runtime roster differs") as exc_info:
+        freeze_campaign_selections(runtime_root, MANIFEST)
+    assert "missing=" in str(exc_info.value)
+
+
+def test_the_publication_set_cannot_carry_a_rehearsal_roster(tmp_path):
+    runtime_root = _materialize_rehearsal_set(tmp_path, name="runtime", cell_ids=[])
+
+    with pytest.raises(CampaignStageError, match="rehearsal roster"):
+        freeze_campaign_selections(runtime_root, MANIFEST)
+
+
+def test_a_rehearsal_freeze_never_certifies_a_publication_cell(tmp_path):
+    rehearsal_root = _materialize_rehearsal_set(tmp_path)
+    freeze_campaign_selections(rehearsal_root, MANIFEST)
+    publication_root = _materialize_rehearsal_set(
+        tmp_path / "grid", name="runtime", cell_ids=AIHUB_IDS[:1],
+    )
+    (tmp_path / "grid" / "runtime.roster.json").unlink()
+    (publication_root / "selection_freeze.json").write_bytes(
+        (rehearsal_root / "selection_freeze.json").read_bytes()
+    )
+    shared = publication_root / AIHUB_IDS[0]
+
+    with pytest.raises(CampaignStageError, match="roster mismatch"):
+        freeze_campaign_selections(publication_root, MANIFEST)
+    with pytest.raises(CampaignStageError, match="freeze roster mismatch"):
+        certify_campaign(publication_root, MANIFEST)
+    with pytest.raises(CampaignStageError, match="locked manifest"):
+        certify_winner(shared)
+    assert _certification_untouched(shared)
+    assert not (publication_root / "campaign_certification.json").exists()
+
+
+def test_a_roster_edited_after_the_freeze_certifies_nothing(tmp_path):
+    runtime_root = _materialize_rehearsal_set(tmp_path)
+    freeze_campaign_selections(runtime_root, MANIFEST)
+    dropped = AIHUB_IDS[-1]
+    (runtime_root / dropped).rename(tmp_path / "parked-cell")
+    (tmp_path / "runtime-aihub.roster.json").write_text(json.dumps(_roster_with(
+        cell_ids=AIHUB_IDS[:-1], cells=len(AIHUB_IDS) - 1,
+    )))
+
+    with pytest.raises(CampaignStageError, match="freeze roster mismatch"):
+        certify_campaign(runtime_root, MANIFEST)
+    assert all(_certification_untouched(runtime_root / cell_id) for cell_id in AIHUB_IDS[:-1])
+    assert not (runtime_root / "campaign_certification.json").exists()
+
+
+def test_a_freeze_whose_count_disagrees_with_its_cells_is_invalid(tmp_path):
+    runtime_root = _materialize_rehearsal_set(tmp_path)
+    artifact = freeze_campaign_selections(runtime_root, MANIFEST)
+    artifact["cell_count"] = artifact["cell_count"] + 1
+    artifact["freeze_sha256"] = content_sha256({
+        key: value for key, value in artifact.items() if key != "freeze_sha256"
+    })
+
+    with pytest.raises(CampaignStageError, match="integrity mismatch"):
+        validate_selection_freeze_artifact(artifact)
+
+
+def _load_manifest_script():
+    path = REPO_ROOT / "benchmarks/scripts/campaign_manifest.py"
+    spec = importlib.util.spec_from_file_location("campaign_manifest_cli", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("action", ["freeze-selections", "certify-all", "report"])
+def test_the_set_commands_refuse_a_set_that_was_never_materialized(action, capsys):
+    """Without the guard, the set lock would create the missing directory,
+    and the launchers read an existing set directory as materialized."""
+    missing = CAMPAIGN_DIR / f"runtime-unmaterialized-{uuid.uuid4().hex}"
+    try:
+        with pytest.raises(SystemExit) as exc:
+            _load_manifest_script().main(
+                [action, "--output-root", str(missing.relative_to(REPO_ROOT))]
+            )
+        assert exc.value.code == 2
+        assert "is not a materialized set" in capsys.readouterr().err
+        assert not missing.exists()
+    finally:
+        if missing.exists():
+            shutil.rmtree(missing)

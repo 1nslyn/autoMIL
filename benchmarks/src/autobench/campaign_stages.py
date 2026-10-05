@@ -84,10 +84,13 @@ CAMPAIGN_CERTIFICATION_FILE = "campaign_certification.json"
 AGENT_SESSION_FILE = "agent_session.json"
 # The manifest stays the frozen 130-cell superset (exporter ports and
 # manifest_sha256 bindings are row-indexed and cannot move); the active
-# roster is the census authority every campaign-wide count answers to. The
-# name stays CAMPAIGN_CELL_COUNT — its many consumers below follow the
-# roster automatically.
+# roster is the publication grid. Every freeze and certification count
+# answers to the census of the set it runs on (_set_census): the whole grid
+# for the publication set, or a rehearsal set's own roster.
 CAMPAIGN_CELL_COUNT = ACTIVE_CELL_COUNT
+#: The grid's set directory; a rehearsal set beside it carries <set>.roster.json.
+PUBLICATION_SET = "runtime"
+SET_ROSTER_FIELDS = frozenset({"purpose", "note", "cohorts", "cells", "cell_ids"})
 SELECTION_FREEZE_SCHEMA_VERSION = 4
 #: The legal held-out fold shapes, derived from the one schema authority.
 #: Context-free validators check membership here; the FAMILY-exact lock is
@@ -4318,11 +4321,68 @@ def _roster_cells(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Manifest cells restricted to the active roster's cohorts.
 
     The manifest stays the frozen 130-cell superset; the roster in
-    ``ACTIVE_ROSTER`` is the census authority for every campaign-wide count
-    and set-equality this module enforces, so every direct read of a raw
-    manifest's ``cells`` list must be filtered through this before use.
+    ``ACTIVE_ROSTER`` is the publication grid, the pool every set's census
+    (``_set_census``) is drawn from.
     """
     return [cell for cell in cells if cell.get("dataset") in ACTIVE_ROSTER["cohorts"]]
+
+
+def _set_census(
+    runtime_root: Path, cells: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The manifest rows the campaign set at ``runtime_root`` must hold.
+
+    The rule ``disc_paths`` in discovery_lib.sh applies: a set with
+    ``<set>.roster.json`` beside it is a rehearsal and holds exactly the
+    active-roster cells that file names, fewer than the whole grid; any
+    other set is the publication grid. Every freeze and certification binds
+    to this census, so a rehearsal artifact never stands in for the grid's.
+    """
+    grid = _roster_cells(cells)
+    if len(grid) != CAMPAIGN_CELL_COUNT:
+        raise CampaignStageError(
+            f"the publication grid requires exactly {CAMPAIGN_CELL_COUNT} manifest cells"
+        )
+    root = runtime_root.resolve()
+    roster_path = root.parent / f"{root.name}.roster.json"
+    if not os.path.lexists(roster_path):
+        return grid
+    label = f"rehearsal roster {roster_path.name}"
+    if root.name == PUBLICATION_SET:
+        raise CampaignStageError(f"{label}: the publication set takes no roster")
+    try:
+        roster = json.loads(roster_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignStageError(f"{label} is unreadable") from exc
+    if not isinstance(roster, dict) or set(roster) != SET_ROSTER_FIELDS:
+        raise CampaignStageError(f"{label} must hold exactly {sorted(SET_ROSTER_FIELDS)}")
+    if roster["purpose"] != "rehearsal":
+        raise CampaignStageError(f"{label} purpose must be 'rehearsal'")
+    rows = {cell["cell_id"]: cell for cell in grid}
+    cell_ids = roster["cell_ids"]
+    if (
+        not isinstance(cell_ids, list) or not cell_ids
+        or any(not isinstance(cell_id, str) or cell_id not in rows for cell_id in cell_ids)
+        or len(set(cell_ids)) != len(cell_ids)
+    ):
+        raise CampaignStageError(f"{label} cell_ids must be distinct grid cells")
+    if len(cell_ids) >= CAMPAIGN_CELL_COUNT:
+        raise CampaignStageError(
+            f"{label} must name fewer cells than the {CAMPAIGN_CELL_COUNT}-cell grid"
+        )
+    count = roster["cells"]
+    if isinstance(count, bool) or not isinstance(count, int) or count != len(cell_ids):
+        raise CampaignStageError(f"{label} cells must count its cell_ids")
+    cohorts = roster["cohorts"]
+    if (
+        not isinstance(cohorts, list)
+        or any(not isinstance(cohort, str) for cohort in cohorts)
+        or len(set(cohorts)) != len(cohorts)
+        or set(cohorts) != {rows[cell_id]["dataset"] for cell_id in cell_ids}
+    ):
+        raise CampaignStageError(f"{label} cohorts must be its cells' datasets")
+    named = set(cell_ids)
+    return [cell for cell in grid if cell["cell_id"] in named]
 
 
 def _roster_payload(cells: object) -> dict[str, str]:
@@ -4372,10 +4432,7 @@ def _locked_manifest_roster(
     cells = manifest.get("cells")
     if manifest.get("campaign_id") != CAMPAIGN_ID or not isinstance(cells, list):
         raise CampaignStageError("locked campaign manifest roster is incomplete")
-    roster_cells = _roster_cells(cells)
-    if len(roster_cells) != CAMPAIGN_CELL_COUNT:
-        raise CampaignStageError("locked campaign manifest roster is incomplete")
-    return _roster_payload(roster_cells)
+    return _roster_payload(_set_census(cell_root.parent, cells))
 
 
 def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
@@ -4511,16 +4568,19 @@ def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
         ))
         or frozen_at is None
         or frozen_at.tzinfo is None
-        or artifact.get("cell_count") != CAMPAIGN_CELL_COUNT
+        # The set's size; each caller binds the cells to its set's census.
+        or isinstance(artifact.get("cell_count"), bool)
+        or not isinstance(artifact.get("cell_count"), int)
+        or not 1 <= artifact["cell_count"] <= CAMPAIGN_CELL_COUNT
         or not isinstance(cells, list)
-        or len(cells) != CAMPAIGN_CELL_COUNT
+        or len(cells) != artifact["cell_count"]
         or any(not valid_entry(row) for row in cells)
         or len({row.get("cell_id") for row in cells if isinstance(row, dict)})
-        != CAMPAIGN_CELL_COUNT
+        != artifact["cell_count"]
         or len({
             row.get("agent_session_id") for row in cells
             if isinstance(row, dict)
-        }) != CAMPAIGN_CELL_COUNT
+        }) != artifact["cell_count"]
         or artifact.get("roster_sha256") != content_sha256(roster)
         or not isinstance(recorded, str)
         or recorded != content_sha256(payload)
@@ -4535,8 +4595,8 @@ def _validated_selection_freeze(runtime_root: Path) -> dict[str, Any]:
         artifact = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise CampaignStageError(
-            "held-out certification requires the campaign-wide "
-            f"{CAMPAIGN_CELL_COUNT}-cell selection freeze"
+            "held-out certification requires the set's selection freeze "
+            f"({runtime_root.name}/{SELECTION_FREEZE_FILE})"
         ) from exc
     return validate_selection_freeze_artifact(artifact)
 
@@ -5106,20 +5166,16 @@ def _verify_selection_freeze_for_cell(
 def freeze_campaign_selections(
     runtime_root: Path, manifest_path: Path,
 ) -> dict[str, Any]:
-    """Freeze the active roster's validation winners before any held-out value is opened."""
+    """Freeze every validation winner of the set's census before any held-out value is opened."""
     runtime_root = runtime_root.resolve()
     manifest_path = manifest_path.resolve()
     manifest = load_manifest(manifest_path)
     manifest_sha256 = file_sha256(manifest_path)
     _, agent_protocol_sha256 = _locked_agent_protocol(runtime_root)
-    roster_cells = _roster_cells(manifest["cells"])
+    roster_cells = _set_census(runtime_root, manifest["cells"])
     expected = {cell["cell_id"]: cell for cell in roster_cells}
     expected_roster = _roster_payload(roster_cells)
     roster_sha256 = content_sha256(expected_roster)
-    if len(expected) != CAMPAIGN_CELL_COUNT:
-        raise CampaignStageError(
-            f"selection freeze requires exactly {CAMPAIGN_CELL_COUNT} manifest cells"
-        )
     with _campaign_lock(runtime_root):
         path = runtime_root / SELECTION_FREEZE_FILE
         if path.exists():
@@ -5191,7 +5247,7 @@ def freeze_campaign_selections(
             session_ids = [entries[cell_id].get("agent_session_id") for cell_id in expected]
             if (
                 any(not isinstance(session_id, str) or not session_id for session_id in session_ids)
-                or len(set(session_ids)) != CAMPAIGN_CELL_COUNT
+                or len(set(session_ids)) != len(expected)
             ):
                 raise CampaignStageError("campaign cells do not use distinct agent sessions")
             return artifact
@@ -5262,7 +5318,7 @@ def freeze_campaign_selections(
                 "process_evidence": process_evidence,
             })
         session_ids = [entry["agent_session_id"] for entry in entries]
-        if len(set(session_ids)) != CAMPAIGN_CELL_COUNT:
+        if len(set(session_ids)) != len(expected):
             raise CampaignStageError("campaign cells do not use distinct agent sessions")
         artifact: dict[str, Any] = {
             "schema_version": SELECTION_FREEZE_SCHEMA_VERSION,
@@ -5320,9 +5376,9 @@ def _validated_campaign_certification_index(
         or index.get("manifest_sha256") != manifest_sha256
         or index.get("selection_freeze_sha256")
         != selection_freeze.get("freeze_sha256")
-        or index.get("cell_count") != CAMPAIGN_CELL_COUNT
+        or index.get("cell_count") != len(expected_ids)
         or not isinstance(cells, list)
-        or len(cells) != CAMPAIGN_CELL_COUNT
+        or len(cells) != len(expected_ids)
         or certified_at is None
         or certified_at.tzinfo is None
         or recorded != content_sha256(payload)
@@ -5382,16 +5438,12 @@ def _validated_campaign_certification_index(
 def certify_campaign(
     runtime_root: Path, manifest_path: Path,
 ) -> dict[str, Any]:
-    """Certify every frozen cell and publish one complete, hashed bundle index."""
+    """Certify every frozen cell of the set and publish one complete, hashed bundle index."""
     runtime_root = runtime_root.resolve()
     manifest_path = manifest_path.resolve()
     manifest = load_manifest(manifest_path)
-    roster_cells = _roster_cells(manifest["cells"])
+    roster_cells = _set_census(runtime_root, manifest["cells"])
     expected_ids = sorted(cell["cell_id"] for cell in roster_cells)
-    if len(expected_ids) != CAMPAIGN_CELL_COUNT:
-        raise CampaignStageError(
-            f"campaign certification requires {CAMPAIGN_CELL_COUNT} cells"
-        )
     with _campaign_lock(runtime_root):
         manifest_sha256 = file_sha256(manifest_path)
         freeze = _validated_selection_freeze(runtime_root)

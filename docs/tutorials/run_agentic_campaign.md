@@ -428,7 +428,7 @@ launcher acting as the operator of 4a–4f: see
 `benchmarks/scripts/slurm/submit_discovery_cell.sh`. Nothing in the framework
 requires it, and nothing in the protocol changes for it.
 
-## 5. Certification — Leo only, once, after all 130
+## 5. Certification — Leo only, once, after all 78
 
 ```bash
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_manifest.py" freeze-selections
@@ -437,7 +437,9 @@ uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/
 ```
 
 This is the only point in the entire project where held-out data is opened. It
-fails closed unless all 130 cells are frozen and consistent. Do not run these.
+fails closed unless all 78 cells are frozen and consistent. Do not run these.
+A rehearsal set is certified the same way with `--output-root` (campaign
+README §6); its held-out values never go into a tracked file.
 
 ---
 
@@ -492,9 +494,10 @@ Two standing rules:
   rehearsal has to be something like `benchmarks/campaigns/preprint_130/runtime-canary/`;
   an external path is rejected. A throwaway root is safe to rehearse in: every
   command including `freeze-selections`, `certify-all` and `report` honours
-  `--output-root`, and what stops a rehearsal from ever producing a publication
-  artifact is the census — the selection freeze requires exactly 130 manifest
-  cells and fails closed below that.
+  `--output-root`. A set with a committed `<name>.roster.json` freezes and
+  certifies exactly its roster's cells; any other set must hold all 78 grid
+  cells and fails closed below that. `report` runs on the full grid only, so a
+  rehearsal never produces a publication artifact.
 - **A new host needs its own set.** A baseline trained on one GPU type does
   not reproduce on another: an RTX 6000 Ada and a full H100 differ by up to
   0.043 validation AUC per fold, beyond the 0.025 gate. Such a host runs a set

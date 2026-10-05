@@ -8,6 +8,24 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **A rehearsal set is frozen and certified on its own.** Leo asked on
+  2026-10-05 for the aihub trial's full life cycle, certification included.
+  Every freeze and certify path required the 78-cell grid, so a rehearsal set
+  could not be certified. `_set_census` now gives one rule, the one the
+  launchers already use: a set with `<name>.roster.json` beside it holds
+  exactly the roster's cells (fewer than 78, never in a set named `runtime`),
+  and any other set holds the whole grid. `freeze_campaign_selections`,
+  `certify_campaign` and the per-cell certification check bind to that census
+  and write the set's own `selection_freeze.json` and
+  `campaign_certification.json`. The freeze validator checks that its count
+  agrees with its cells and sessions. The publication report still requires
+  the 78-cell grid and refuses a rehearsal set. `campaign_manifest.py`
+  `freeze-selections`, `certify-all` and `report` refuse a set directory that
+  does not exist (the set lock would otherwise create it) and name the set in
+  their output. The rehearsal cells share test folds with the final-grid cells
+  of the same ids; certifying them is disclosed in `PROGRESS.md`, and their
+  held-out values stay out of tracked files.
+
 - **Discovery jobs take one GPU, and their wall survives a slow batch.**
   The agent runs its 30 attempts in batches of 8, 8, 8 and 6, one after
   another, and the daemon packs each batch onto one GPU, so a job's second

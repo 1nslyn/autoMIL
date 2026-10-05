@@ -32,6 +32,7 @@ from autobench.campaign_stages import (
     CampaignStageError,
     SELECTION_FREEZE_SCHEMA_VERSION,
     certify_campaign,
+    freeze_campaign_selections,
     initialize_stage_state,
     validate_certification_bundle_artifact,
 )
@@ -1206,3 +1207,17 @@ def test_report_rejects_pooled_survival_substitutes(tmp_path):
             manifest_path=MANIFEST,
             repo_root=REPO_ROOT,
         )
+
+
+def test_a_certified_rehearsal_set_never_becomes_a_publication_report(tmp_path):
+    from tests.test_campaign_selection_freeze import _materialize_rehearsal_set
+
+    runtime_root = _materialize_rehearsal_set(tmp_path)
+    freeze_campaign_selections(runtime_root, MANIFEST)
+    certify_campaign(runtime_root, MANIFEST)
+
+    with pytest.raises(CampaignAnalysisError, match="integrity mismatch"):
+        write_publication_report(
+            runtime_root=runtime_root, manifest_path=MANIFEST, repo_root=REPO_ROOT,
+        )
+    assert not (runtime_root / "publication_report.json").exists()

@@ -2203,7 +2203,7 @@ def test_cell_certification_requires_global_campaign_freeze(staged_cell):
 
     with pytest.raises(
         CampaignStageError,
-        match=f"campaign-wide {CAMPAIGN_CELL_COUNT}-cell selection freeze",
+        match="requires the set's selection freeze",
     ):
         certify_winner(cell_root)
 
