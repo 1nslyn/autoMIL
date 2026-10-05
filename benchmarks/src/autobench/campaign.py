@@ -183,21 +183,32 @@ def classify_attempt_outcome(
     return "unknown"
 
 
-def expected_promotion_sources(
+def unique_complete_sources(
     attempts: list[Mapping[str, Any]],
 ) -> list[dict[str, str]]:
-    """Recompute the stable top-10 unique discovery roster from its census."""
+    """The distinct complete discovery candidates, best validation mean first.
+
+    The first ``PROMOTION_CANDIDATES`` are the promotion roster. An eligible
+    attempt is skipped when an earlier kept one has the same candidate
+    identity or the same ``outcome_sha256``: a run that reproduced another's
+    validation predictions is the same measurement, and re-running it on the
+    promotion folds would buy no information. Ties on the mean keep the
+    earlier node id.
+    """
     eligible = sorted(
         (row for row in attempts if row.get("eligible") is True),
         key=lambda row: (-float(row["validation_mean"]), str(row["node_id"])),
     )
     selected: list[dict[str, str]] = []
-    seen: set[str] = set()
+    seen_candidates: set[str] = set()
+    seen_outcomes: set[str] = set()
     for row in eligible:
         candidate_sha256 = str(row["candidate_sha256"])
-        if candidate_sha256 in seen:
+        outcome_sha256 = str(row["outcome_sha256"])
+        if candidate_sha256 in seen_candidates or outcome_sha256 in seen_outcomes:
             continue
-        seen.add(candidate_sha256)
+        seen_candidates.add(candidate_sha256)
+        seen_outcomes.add(outcome_sha256)
         selected.append({
             "source_node_id": str(row["node_id"]),
             "source_candidate_sha256": candidate_sha256,
@@ -205,8 +216,6 @@ def expected_promotion_sources(
             "candidate_class": str(row["candidate_class"]),
             "policy_hash": str(row["policy_hash"]),
         })
-        if len(selected) == PROMOTION_CANDIDATES:
-            break
     return selected
 # This is a failure-containment wall clock for one submitted multi-fold attempt,
 # not an optimization budget.  Three CLAM classification folds take about

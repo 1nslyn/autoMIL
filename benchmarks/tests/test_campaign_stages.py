@@ -1242,6 +1242,50 @@ def test_discovery_mixed_hash_presence_never_primary_value_dedups(staged_cell):
     )
 
 
+@pytest.mark.parametrize(
+    ("donor_seed", "unique", "same_outcome"),
+    [("identical-run", 11, True), (None, 12, False)],
+    ids=["identical-predictions", "hashed-vs-hashless-tie"],
+)
+def test_process_evidence_reconciles_a_discovery_that_repeated_a_run(
+    staged_cell, donor_seed, unique, same_outcome,
+):
+    """The selection freeze re-derives the promotion roster from the census
+    with the discovery freeze's own rule: a config that reproduced another's
+    validation predictions byte for byte is the same measurement and gives
+    up its slot, while a hashed run never matches a hashless one."""
+    cell_root, adir, cell, _, repo_root = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    twin_path = _twin_fold_evidence(
+        archive_root, donor="node_0012", twin="node_0011",
+    )
+    _set_fold_prediction_hashes(twin_path, seed="identical-run")
+    if donor_seed is not None:
+        _set_fold_prediction_hashes(
+            archive_root / "node_0012" / "result.json", seed=donor_seed,
+        )
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+    materialize_promotion(cell_root, repo_root=repo_root)
+    _finish_promotion(cell_root, completed=8)
+    state = freeze_promotion(cell_root)
+
+    process = _process_evidence(cell_root, state)
+
+    rows = {row["node_id"]: row for row in process["discovery"]["attempts"]}
+    promoted = {job["source_node_id"] for job in process["promotion"]["jobs"]}
+    assert process["discovery"]["unique_complete_candidates"] == unique
+    assert (
+        rows["node_0011"]["outcome_sha256"] == rows["node_0012"]["outcome_sha256"]
+    ) is same_outcome
+    assert "node_0011" in promoted
+    assert ("node_0012" in promoted) is not same_outcome
+
+
 def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
@@ -1627,7 +1671,7 @@ def test_stage_process_evidence_rejects_inconsistent_eligible_promotion(
     materialize_promotion(cell_root, repo_root=repo_root)
     _finish_promotion(cell_root, completed=10, promotion_base=0.75)
     state = freeze_promotion(cell_root)
-    assert _process_evidence(state)["promotion"]["status_counts"]["eligible"] == 10
+    assert _process_evidence(cell_root, state)["promotion"]["status_counts"]["eligible"] == 10
 
     drifted = json.loads(json.dumps(state))
     drifted["promotion"]["jobs"][0].update({
@@ -1636,7 +1680,7 @@ def test_stage_process_evidence_rejects_inconsistent_eligible_promotion(
         "validation_mean": None,
     })
     with pytest.raises(CampaignStageError, match="eligible promotion"):
-        _process_evidence(drifted)
+        _process_evidence(cell_root, drifted)
 
 
 def test_process_evidence_follows_the_admission_sequence_not_the_clock(staged_cell):
@@ -1656,11 +1700,11 @@ def test_process_evidence_follows_the_admission_sequence_not_the_clock(staged_ce
     skewed = json.loads(json.dumps(state))
     rows = skewed["discovery"]["attempt_audit"]
     rows[0]["submitted_at"], rows[1]["submitted_at"] = rows[1]["submitted_at"], rows[0]["submitted_at"]
-    anytime = _process_evidence(skewed)["discovery"]["validation_anytime"]
+    anytime = _process_evidence(cell_root, skewed)["discovery"]["validation_anytime"]
     assert [step["node_id"] for step in anytime[:2]] == [rows[0]["node_id"], rows[1]["node_id"]]
     rows[1]["attempt_seq"] = rows[0]["attempt_seq"]
     with pytest.raises(CampaignStageError, match="attempt_seq"):
-        _process_evidence(skewed)
+        _process_evidence(cell_root, skewed)
 
 
 def test_a_spec_without_an_admission_sequence_cannot_freeze(staged_cell):
@@ -1787,7 +1831,7 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         "basis": "test fixture",
     }
     session = finalize_agent_session(cell_root, _agent_session_end(cell_root))
-    process = _process_evidence(state)
+    process = _process_evidence(cell_root, state)
     winner_source_folds = _source_fold_anchors(
         cell_root.parent,
         _winner_sealed_sources(cell_root, state, winner),

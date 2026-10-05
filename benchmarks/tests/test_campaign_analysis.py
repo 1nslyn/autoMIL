@@ -15,6 +15,8 @@ from autobench.campaign import (
     CAMPAIGN_ID,
     DISCOVERY_ATTEMPTS,
     PROTOCOL_VERSION,
+    STAGE_FOLDS,
+    VALIDATION_SCHEMA_BY_FAMILY,
     content_sha256,
     file_sha256,
     load_manifest,
@@ -31,6 +33,7 @@ from autobench.campaign_analysis import (
 from autobench.campaign_stages import (
     CampaignStageError,
     SELECTION_FREEZE_SCHEMA_VERSION,
+    _outcome_sha256,
     certify_campaign,
     freeze_campaign_selections,
     initialize_stage_state,
@@ -121,11 +124,12 @@ def _search_process(cell_id: str) -> dict:
             "reason": "fixture crash",
             "candidate_sha256": None,
             "validation_mean": None,
+            "outcome_sha256": None,
         }
         for index in range(DISCOVERY_ATTEMPTS)
     ]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "baseline": {
             "folds": list(range(5)),
             "result_status": "completed",
@@ -193,11 +197,31 @@ def _search_process(cell_id: str) -> dict:
     }
 
 
-def _eligible_process(cell_id: str = "fixture-cell") -> dict:
+def _run_hashes(seed: str) -> list[str]:
+    """The per-fold validation prediction hashes of the discovery run ``seed``."""
+    return [
+        hashlib.sha256(f"{seed}:{fold}".encode()).hexdigest()
+        for fold in STAGE_FOLDS["discovery"]
+    ]
+
+
+def _eligible_process(
+    cell_id: str = "fixture-cell",
+    candidates: tuple[tuple[str, str, float], ...] | None = None,
+    promoted: tuple[int, ...] = (0, 1),
+) -> dict:
+    """The first attempts complete as ``candidates`` (candidate identity, the
+    seed of the run's predictions, validation mean); by default two distinct
+    runs seeded ``<cell>/<node>``, the archive ``_write_certified_state``
+    writes. ``promoted`` lists, in rank order, the attempts the roster holds."""
     process = _search_process(cell_id)
     attempts = process["discovery"]["attempts"]
-    candidates = (("d" * 64, 0.7), ("e" * 64, 0.6))
-    for row, (candidate_sha256, validation_mean) in zip(
+    if candidates is None:
+        candidates = (
+            ("d" * 64, f"{cell_id}/{attempts[0]['node_id']}", 0.7),
+            ("e" * 64, f"{cell_id}/{attempts[1]['node_id']}", 0.6),
+        )
+    for row, (candidate_sha256, run_seed, validation_mean) in zip(
         attempts, candidates, strict=False,
     ):
         row.update({
@@ -207,19 +231,21 @@ def _eligible_process(cell_id: str = "fixture-cell") -> dict:
             "reason": "complete",
             "candidate_sha256": candidate_sha256,
             "validation_mean": validation_mean,
+            "outcome_sha256": _outcome_sha256([], _run_hashes(run_seed)),
         })
     discovery = process["discovery"]
     discovery.update({
-        "complete_candidates": 2,
-        "unique_complete_candidates": 2,
-        "promoted_candidates": 2,
+        "complete_candidates": len(candidates),
+        "unique_complete_candidates": len(promoted),
+        "promoted_candidates": len(promoted),
         "result_status_counts": {
-            "completed": 2, "crash": DISCOVERY_ATTEMPTS - 2,
+            "completed": len(candidates),
+            "crash": DISCOVERY_ATTEMPTS - len(candidates),
         },
         "outcome_class_counts": {
             **discovery["outcome_class_counts"],
-            "completed": 2,
-            "crash": DISCOVERY_ATTEMPTS - 2,
+            "completed": len(candidates),
+            "crash": DISCOVERY_ATTEMPTS - len(candidates),
         },
     })
     best = 0.5
@@ -241,7 +267,7 @@ def _eligible_process(cell_id: str = "fixture-cell") -> dict:
         })
     discovery["validation_anytime"] = anytime
     jobs = []
-    for rank, row in enumerate(attempts[:2], 1):
+    for rank, row in enumerate((attempts[index] for index in promoted), 1):
         promotion_identity = {
             "overlay_manifest": {},
             "deletions": [],
@@ -274,10 +300,10 @@ def _eligible_process(cell_id: str = "fixture-cell") -> dict:
         })
     process["promotion"] = {
         "candidate_budget": 10,
-        "attempts_charged": 2,
-        "status_counts": {"eligible": 2, "ineligible": 0},
+        "attempts_charged": len(promoted),
+        "status_counts": {"eligible": len(promoted), "ineligible": 0},
         "outcome_class_counts": {
-            "completed": 2,
+            "completed": len(promoted),
             "budget-killed": 0,
             "timeout": 0,
             "oom": 0,
@@ -289,7 +315,7 @@ def _eligible_process(cell_id: str = "fixture-cell") -> dict:
         },
         "yield": 1.0,
         "jobs": jobs,
-        "resources": _missing_resources(2),
+        "resources": _missing_resources(len(promoted)),
     }
     return process
 
@@ -342,10 +368,40 @@ def _write_certified_state(
         "result_status": process["baseline"]["result_status"],
         "resources": process["baseline"]["resources"],
     }
+    # The census the discovery freeze wrote, and the archived validation
+    # evidence each complete run's outcome identity is re-derived from.
+    adir = runtime_root / cell["cell_id"] / "automil"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "campaign_cell.json").write_text(json.dumps(cell))
+    metrics = VALIDATION_SCHEMA_BY_FAMILY[cell["task_family"]]
+    for row in process["discovery"]["attempts"]:
+        if not row["eligible"]:
+            continue
+        archive = adir / "orchestrator" / "archive" / row["node_id"]
+        archive.mkdir(parents=True)
+        (archive / "result.json").write_text(json.dumps({
+            "status": "completed",
+            "validation_folds": [
+                {
+                    "fold_index": fold,
+                    "metrics": {key: row["validation_mean"] for key in metrics},
+                    "primary_value": row["validation_mean"],
+                    "val_predictions_sha256": digest,
+                }
+                for fold, digest in zip(
+                    STAGE_FOLDS["discovery"],
+                    _run_hashes(f"{cell['cell_id']}/{row['node_id']}"),
+                    strict=True,
+                )
+            ],
+        }))
     state["discovery"].update({
         "attempt_budget": process["discovery"]["attempt_budget"],
         "attempts_charged": process["discovery"]["attempts_charged"],
-        "attempt_audit": process["discovery"]["attempts"],
+        "attempt_audit": [
+            {key: value for key, value in row.items() if key != "outcome_sha256"}
+            for row in process["discovery"]["attempts"]
+        ],
         "complete_candidates": process["discovery"]["complete_candidates"],
         "unique_complete_candidates": process["discovery"][
             "unique_complete_candidates"
@@ -1087,6 +1143,50 @@ def test_process_evidence_rejects_incomplete_eligible_promotion():
     })
 
     with pytest.raises(CampaignAnalysisError, match="eligible promotion job"):
+        _validated_process_evidence(
+            process, content_sha256(process), "fixture-cell",
+        )
+
+
+#: The second run reproduced the first one's validation predictions under
+#: another config (same outcome, same mean); the third is distinct.
+TWIN_RUNS = (
+    ("d" * 64, "run-a", 0.7), ("f" * 64, "run-a", 0.7), ("e" * 64, "run-b", 0.6),
+)
+
+
+def test_process_evidence_accepts_a_roster_that_skips_a_repeated_run():
+    process = _eligible_process(candidates=TWIN_RUNS, promoted=(0, 2))
+
+    assert _validated_process_evidence(
+        process, content_sha256(process), "fixture-cell",
+    ) == process
+
+
+def test_process_evidence_refuses_a_roster_that_promotes_a_repeated_run():
+    process = _eligible_process(candidates=TWIN_RUNS, promoted=(0, 1))
+
+    with pytest.raises(CampaignAnalysisError, match="promotion job value drift"):
+        _validated_process_evidence(
+            process, content_sha256(process), "fixture-cell",
+        )
+
+
+def test_process_evidence_refuses_an_eligible_attempt_without_an_outcome():
+    process = _eligible_process()
+    process["discovery"]["attempts"][0]["outcome_sha256"] = None
+
+    with pytest.raises(CampaignAnalysisError, match="eligible discovery attempt"):
+        _validated_process_evidence(
+            process, content_sha256(process), "fixture-cell",
+        )
+
+
+def test_process_evidence_refuses_an_outcome_on_an_attempt_that_never_completed():
+    process = _eligible_process()
+    process["discovery"]["attempts"][-1]["outcome_sha256"] = "a" * 64
+
+    with pytest.raises(CampaignAnalysisError, match="carries an outcome"):
         _validated_process_evidence(
             process, content_sha256(process), "fixture-cell",
         )

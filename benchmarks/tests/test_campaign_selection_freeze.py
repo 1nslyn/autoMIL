@@ -257,8 +257,8 @@ def test_campaign_freeze_validates_before_atomic_publication(tmp_path, monkeypat
     _materialize_frozen_roster(runtime_root)
     original = campaign_stages._process_evidence
 
-    def duplicate_attempt_identity(state):
-        process = original(state)
+    def duplicate_attempt_identity(cell_root, state):
+        process = original(cell_root, state)
         attempts = process["discovery"]["attempts"]
         attempts[1]["node_id"] = attempts[0]["node_id"]
         process["discovery"]["validation_anytime"][1]["node_id"] = (

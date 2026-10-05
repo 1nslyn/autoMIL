@@ -8,6 +8,24 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **The selection freeze applies the discovery freeze's duplicate rule.**
+  Since 2026-08-15 the discovery freeze treats a run that reproduced another
+  run's validation predictions byte for byte as the same measurement, and the
+  repeat gives up its promotion slot. The selection freeze re-derives the
+  promotion roster from the attempt census, and that recheck deduplicated on
+  the candidate identity only, so any cell where the agent repeated a run
+  could not be frozen ("discovery process counts do not reconcile"). The
+  aihub trial hit it in two of its five cells (ABMIL and DTFD, one repeated
+  run each) before any held-out value was read. One function,
+  `unique_complete_sources`, now holds the rule for both freezes, keyed on the
+  candidate identity and on each run's outcome identity (its per-fold
+  prediction hashes, or its primary values for a run without hashes). The
+  selection freeze re-reads that identity from the archived validation
+  results and records it on each attempt of the process evidence (schema 2),
+  so the report checks the roster from the frozen artifact alone. Discovery
+  freezes write the same records as before, so cells that already froze
+  discovery are unaffected.
+
 - **A rehearsal set is frozen and certified on its own.** Leo asked on
   2026-10-05 for the aihub trial's full life cycle, certification included.
   Every freeze and certify path required the 78-cell grid, so a rehearsal set

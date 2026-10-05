@@ -68,9 +68,9 @@ from autobench.campaign import (
     TRAINING_TREE_PATHS,
     classify_attempt_outcome,
     content_sha256,
-    expected_promotion_sources,
     file_sha256,
     load_manifest,
+    unique_complete_sources,
     validate_agent_protocol,
 )
 from autobench.campaign_gpu import CampaignGpuError, require_declared_gpu
@@ -506,6 +506,46 @@ def _validation_folds(
 
 def _mean(folds: list[Mapping[str, Any]]) -> float:
     return math.fsum(float(fold["primary_value"]) for fold in folds) / len(folds)
+
+
+def _prediction_hashes(
+    result: Mapping[str, Any], folds: list[Mapping[str, Any]],
+) -> list[str | None]:
+    """Each normalized fold's ``val_predictions_sha256``, or None where absent.
+
+    They live beside, never inside, the normalized fold entries: winner
+    verification re-derives those entries from the archive and compares them
+    by content hash, so their shape must stay stable.
+    """
+    by_fold = {
+        raw["fold_index"]: raw.get("val_predictions_sha256")
+        for raw in result["validation_folds"]
+    }
+    return [
+        by_fold.get(fold["fold_index"])
+        if _is_sha256(by_fold.get(fold["fold_index"])) else None
+        for fold in folds
+    ]
+
+
+def _outcome_sha256(
+    folds: list[Mapping[str, Any]], hashes: list[str | None],
+) -> str:
+    """What a run measured, the identity ``unique_complete_sources`` dedups on.
+
+    Runs are bit-deterministic under the locked seed, so a run whose every
+    fold carries a prediction hash is identified by those hashes. Quantized
+    primary values can tie for genuinely different configs, so they identify
+    only a run with a hashless fold (an artifact from before the hashes), and
+    the tag keeps the two kinds from ever matching each other.
+    """
+    if all(value is not None for value in hashes):
+        return content_sha256({"val_predictions_sha256": list(hashes)})
+    return content_sha256({
+        "primary_values": [
+            [fold["fold_index"], fold["primary_value"]] for fold in folds
+        ],
+    })
 
 
 def _sealed_fold_hashes(
@@ -1570,6 +1610,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
     archive_root = adir / "orchestrator" / "archive"
     attempt_audit: list[dict[str, Any]] = []
     eligible: list[dict[str, Any]] = []
+    outcomes: dict[str, str] = {}
     launched = 0
     for archive in sorted(archive_root.iterdir() if archive_root.exists() else []):
         if not archive.is_dir() or not (archive / "spec.json").is_file():
@@ -1659,29 +1700,15 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                     expected_metrics=expected_metrics,
                 )
                 candidate_sha, identity = _candidate_identity(spec, verdict)
-                # Per-fold prediction hashes are the byte discriminator the
-                # outcome dedup below keys on. They live beside — never
-                # inside — the normalized fold entries: winner verification
-                # re-derives those entries from the archive and compares
-                # them by content hash, so their shape must stay stable.
-                raw_hash_by_fold = {
-                    raw_fold["fold_index"]: (
-                        raw_fold.get("val_predictions_sha256")
-                        if _is_sha256(raw_fold.get("val_predictions_sha256"))
-                        else None
-                    )
-                    for raw_fold in result["validation_folds"]
-                }
+                hashes = _prediction_hashes(result, folds)
+                outcomes[archive.name] = _outcome_sha256(folds, hashes)
                 candidate = {
                     "candidate_id": archive.name,
                     "candidate_sha256": candidate_sha,
                     "source_spec_sha256": file_sha256(archive / "spec.json"),
                     "identity": identity,
                     "validation_folds": folds,
-                    "val_predictions_sha256": [
-                        raw_hash_by_fold.get(fold["fold_index"])
-                        for fold in folds
-                    ],
+                    "val_predictions_sha256": hashes,
                     "discovery_mean": _mean(folds),
                     "sealed_fold_sha256": _sealed_fold_hashes(
                         archive, STAGE_FOLDS["discovery"],
@@ -1722,52 +1749,23 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
             f"{launched} launched discovery specs were archived"
         )
 
-    eligible.sort(key=lambda item: (-item["discovery_mean"], item["candidate_id"]))
-    unique_eligible: list[dict[str, Any]] = []
-    seen_identities: set[str] = set()
-    seen_hash_vectors: set[tuple[str, ...]] = set()
-    seen_outcomes: set[tuple] = set()
-    for candidate in eligible:
-        identity = candidate["candidate_sha256"]
-        if identity in seen_identities:
-            continue
-        # Outcome identity: runs are bit-deterministic under the locked seed,
-        # so two candidates that produced the SAME validation predictions are
-        # the same measurement wearing different configs (uni_v2 canary: a
-        # weight-decay value inside the logit-scaling invariant regime
-        # reproduced its parent to 16 digits and occupied a second promotion
-        # slot). Promotion re-runs byte-copies on folds 3/4; re-measuring an
-        # identical run twice buys zero information, so the slot goes to the
-        # next distinct config. The discriminator is the per-fold
-        # val_predictions_sha256 vector when both candidates carry a complete
-        # one — quantized primary values can tie for genuinely different configs,
-        # and dropping those would silently lose a distinct candidate. Only
-        # hashless artifacts (pre-hash cells, e.g. the live canaries) fall
-        # back to the legacy primary_value-tuple rule, and a hash-bearing
-        # candidate never dedups against a hashless one.
-        hashes = candidate["val_predictions_sha256"]
-        if hashes and all(isinstance(value, str) for value in hashes):
-            vector = tuple(hashes)
-            if vector in seen_hash_vectors:
-                continue
-            seen_hash_vectors.add(vector)
-        else:
-            outcome = tuple(
-                (fold["fold_index"], fold["primary_value"])
-                for fold in candidate["validation_folds"]
-            )
-            if outcome in seen_outcomes:
-                continue
-            seen_outcomes.add(outcome)
-        seen_identities.add(identity)
-        unique_eligible.append(candidate)
-    promoted = unique_eligible[:PROMOTION_CANDIDATES]
+    # The census rows plus each run's outcome identity: the selection freeze
+    # re-derives the same roster from the census and the same archive.
+    by_node = {candidate["candidate_id"]: candidate for candidate in eligible}
+    unique_sources = unique_complete_sources([
+        {**row, "outcome_sha256": outcomes.get(row["node_id"])}
+        for row in attempt_audit
+    ])
+    promoted = [
+        by_node[source["source_node_id"]]
+        for source in unique_sources[:PROMOTION_CANDIDATES]
+    ]
     frozen_at = _utc_now()
     state["phase"] = "promotion-ready" if promoted else "selection-ready"
     state["discovery"].update({
         "attempts_charged": DISCOVERY_ATTEMPTS,
         "complete_candidates": len(eligible),
-        "unique_complete_candidates": len(unique_eligible),
+        "unique_complete_candidates": len(unique_sources),
         "frozen": True,
         "frozen_at": frozen_at,
         "attempt_audit": sorted(attempt_audit, key=_attempt_order),
@@ -1779,7 +1777,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         "event": "discovery-frozen",
         "attempts_charged": DISCOVERY_ATTEMPTS,
         "complete_candidates": len(eligible),
-        "unique_complete_candidates": len(unique_eligible),
+        "unique_complete_candidates": len(unique_sources),
         "promoted_candidates": len(promoted),
         "at": frozen_at,
     })
@@ -3641,7 +3639,37 @@ def _is_sha256(value: object) -> bool:
     )
 
 
-def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
+def _archived_outcomes(
+    cell_root: Path, state: Mapping[str, Any], attempts: list[Mapping[str, Any]],
+) -> dict[str, str]:
+    """Each eligible discovery attempt's outcome identity, re-read from the
+    validation evidence the discovery freeze read, keyed by node id."""
+    expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
+        _cell_task_family(cell_root, state)
+    ]
+    archive_root = cell_root / "automil" / "orchestrator" / "archive"
+    outcomes: dict[str, str] = {}
+    for row in attempts:
+        if not row["eligible"]:
+            continue
+        try:
+            result = json.loads(
+                (archive_root / row["node_id"] / "result.json").read_text()
+            )
+            folds = _validation_folds(
+                result, STAGE_FOLDS["discovery"], expected_metrics=expected_metrics,
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise CampaignStageError(
+                f"archived discovery result {row['node_id']} is unreadable"
+            ) from exc
+        outcomes[row["node_id"]] = _outcome_sha256(
+            folds, _prediction_hashes(result, folds),
+        )
+    return outcomes
+
+
+def _process_evidence(cell_root: Path, state: Mapping[str, Any]) -> dict[str, Any]:
     """Return the complete validation-only search record frozen before test."""
     discovery = state.get("discovery")
     baseline = state.get("baseline")
@@ -3723,7 +3751,11 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
         ordered.append(json.loads(json.dumps(row)))
     if len({row["attempt_seq"] for row in ordered}) != len(ordered):
         raise CampaignStageError("discovery process attempt_seq is not unique")
-    ordered.sort(key=_attempt_order)
+    outcomes = _archived_outcomes(cell_root, state, ordered)
+    ordered = sorted(
+        ({**row, "outcome_sha256": outcomes.get(row["node_id"])} for row in ordered),
+        key=_attempt_order,
+    )
     discovery_baseline_folds = [
         fold for fold in baseline.get("validation_folds", [])
         if fold.get("fold_index") in STAGE_FOLDS["discovery"]
@@ -3764,10 +3796,9 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
         for outcome in ATTEMPT_OUTCOME_CLASSES
     }
     complete_candidates = sum(row["eligible"] for row in ordered)
-    unique_complete_candidates = len({
-        row["candidate_sha256"] for row in ordered if row["eligible"]
-    })
-    expected_sources = expected_promotion_sources(ordered)
+    unique_sources = unique_complete_sources(ordered)
+    unique_complete_candidates = len(unique_sources)
+    expected_sources = unique_sources[:PROMOTION_CANDIDATES]
     expected_promoted = len(expected_sources)
     promoted = discovery.get("promoted_candidates")
     actual_sources = [
@@ -3853,7 +3884,7 @@ def _process_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
         for outcome in ATTEMPT_OUTCOME_CLASSES
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "baseline": {
             "folds": list(CERTIFICATION_FOLDS),
             "result_status": baseline.get("result_status"),
@@ -3983,7 +4014,7 @@ def validate_process_evidence_artifact(
         not isinstance(raw, dict)
         or expected_sha256 != content_sha256(raw)
         or set(raw) != {"schema_version", "baseline", "discovery", "promotion"}
-        or raw.get("schema_version") != 1
+        or raw.get("schema_version") != 2
     ):
         raise CampaignStageError(f"{cell_id}: process evidence schema/hash mismatch")
 
@@ -4025,7 +4056,7 @@ def validate_process_evidence_artifact(
         "agent_session_id", "agent_session_binding_sha256", "candidate_class",
         "policy_hash", "result_status", "termination_reason", "budget_killed",
         "outcome_class", "elapsed_seconds", "peak_vram_mb", "eligible",
-        "reason", "candidate_sha256", "validation_mean",
+        "reason", "candidate_sha256", "validation_mean", "outcome_sha256",
     }
     classes = ("config-only", "train-only-source", "inadmissible")
     for row in attempts:
@@ -4091,10 +4122,15 @@ def validate_process_evidence_artifact(
             or row["reason"] != "complete"
             or not _is_sha256(row.get("policy_hash"))
             or not _is_sha256(row.get("candidate_sha256"))
+            or not _is_sha256(row.get("outcome_sha256"))
             or value is None
         ):
             raise CampaignStageError(
                 f"{cell_id}: eligible discovery attempt is incomplete"
+            )
+        if not row["eligible"] and row.get("outcome_sha256") is not None:
+            raise CampaignStageError(
+                f"{cell_id}: ineligible discovery attempt carries an outcome"
             )
     if len({row["attempt_seq"] for row in attempts}) != len(attempts):
         raise CampaignStageError(f"{cell_id}: discovery attempt_seq is not unique")
@@ -4124,10 +4160,9 @@ def validate_process_evidence_artifact(
         for outcome in ATTEMPT_OUTCOME_CLASSES
     }
     complete_candidates = sum(row["eligible"] for row in attempts)
-    unique_complete_candidates = len({
-        row["candidate_sha256"] for row in attempts if row["eligible"]
-    })
-    expected_sources = expected_promotion_sources(attempts)
+    unique_sources = unique_complete_sources(attempts)
+    unique_complete_candidates = len(unique_sources)
+    expected_sources = unique_sources[:PROMOTION_CANDIDATES]
     if (
         discovery.get("candidate_class_counts") != class_counts
         or discovery.get("result_status_counts") != result_counts
@@ -5019,7 +5054,7 @@ def validate_certified_runtime_binding(
     session = _agent_session_for_freeze(
         cell_root, state, str(selection_freeze.get("agent_protocol_sha256")),
     )
-    process = _process_evidence(state)
+    process = _process_evidence(cell_root, state)
     winner_hashes = {
         filename: record["sha256"]
         for filename, record in _validate_source_fold_anchors_artifact(
@@ -5114,7 +5149,7 @@ def _verify_selection_freeze_for_cell(
     session = _agent_session_for_freeze(
         cell_root, state, agent_protocol_sha256,
     )
-    process_evidence = _process_evidence(state)
+    process_evidence = _process_evidence(cell_root, state)
     certification = state.get("certification")
     selection_state_sha256 = (
         certification.get("selection_state_sha256")
@@ -5196,7 +5231,7 @@ def freeze_campaign_selections(
                 session = _agent_session_for_freeze(
                     runtime_root / cell_id, state, agent_protocol_sha256,
                 )
-                process_evidence = _process_evidence(state)
+                process_evidence = _process_evidence(runtime_root / cell_id, state)
                 winner_source_folds = _source_fold_anchors(
                     runtime_root,
                     _winner_sealed_sources(runtime_root / cell_id, state, winner),
@@ -5283,7 +5318,7 @@ def freeze_campaign_selections(
             session = _agent_session_for_freeze(
                 runtime_root / cell_id, state, agent_protocol_sha256,
             )
-            process_evidence = _process_evidence(state)
+            process_evidence = _process_evidence(runtime_root / cell_id, state)
             if not _process_matches_session(process_evidence, session):
                 raise CampaignStageError(
                     f"{cell_id}: process evidence belongs to another agent session"
