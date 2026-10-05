@@ -111,6 +111,22 @@ One line per week. Keeps a history the Sheet does not.
 | 2026-08-06 | 0 | Campaign not launched. Baseline reruns queued; canary and agent protocol outstanding. |
 | 2026-08-09 | 0 | Campaign not launched. Agent protocol built, verified and committed; Gate-1 canary outstanding. |
 
+## Disclosures
+
+- **2026-10-05, aihub trial certified.** Leo had the aihub trial
+  (`runtime-aihub`) frozen and certified to see the full life cycle. Its five
+  cells are TCGA-LUAD KRAS with H-optimus-1 and ABMIL, CLAM, DTFD-MIL and
+  nnMIL, plus KRAS with TITAN. They have the same ids, splits and test folds
+  as final-grid manifest rows 2, 5, 8, 11 and 12. They ran on aihub's RTX
+  6000 Ada GPUs from their own baselines; the final grid runs on fir's H100s.
+  Their held-out results were read on 2026-10-05, before the final grid's
+  selection freeze, and the protocol does not change in response. The one
+  code change made before the reading (e978c28) makes the selection freeze
+  apply the discovery freeze's existing duplicate rule. The values are not
+  recorded in this repository. The audit of the five agent sessions found
+  no held-out-label retrieval: their web calls went to papers and code, and
+  no session read a sealed result.
+
 ## Open issues
 
 | Issue | Owner | Status |
