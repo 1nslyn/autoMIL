@@ -21,9 +21,11 @@ from autobench.pipeline import policy_smoke  # noqa: E402
 from tests.test_policy_smoke import (  # noqa: E402, F401
     HEADER,
     IDENTITY,
+    TRAINERS_DEVICE,
     _isolated_registry,
     _main,
     _write,
+    needs_cuda,
 )
 
 #: Two runs of three epochs each, per bag case the harness drives.
@@ -239,7 +241,8 @@ class TestTheBagTransformDrawsFromItsOwnGenerator:
             "import torch\n"
             "fresh = torch.Generator()\n"
             "fresh.seed()                  # a seed from the OS: new on every run\n"
-            "return features + 0.01 * torch.randn(features.shape, generator=fresh)\n"
+            "noise = torch.randn(features.shape, generator=fresh)\n"
+            "return features + 0.01 * noise.to(features.device)\n"
         )
         path = _write(tmp_path, "unseeded", _transform_policy("unseeded", body))
         (failure,) = _smoke(path, arm="abmil")
@@ -248,10 +251,44 @@ class TestTheBagTransformDrawsFromItsOwnGenerator:
     def test_a_policy_using_the_generator_it_is_handed_is_reproducible(self, tmp_path):
         body = (
             "import torch\n"
-            "return features + 0.01 * torch.randn(features.shape, generator=generator)\n"
+            "noise = torch.randn(features.shape, generator=generator)\n"
+            "return features + 0.01 * noise.to(features.device)\n"
         )
         path = _write(tmp_path, "seeded", _transform_policy("seeded", body))
         assert _smoke(path, arm="abmil") == []
+
+
+class TestTheBagIsOnTheTrainersDevice:
+    def test_the_policy_sees_every_bag_on_the_trainers_device(self, tmp_path):
+        log = tmp_path / "devices.log"
+        body = (
+            f"with open({str(log)!r}, 'a') as handle:\n"
+            "    handle.write(features.device.type + '\\n')\n"
+            "return features.clone()\n"
+        )
+        assert _smoke(_write(tmp_path, "device_probe", _transform_policy("device_probe", body))) == []
+        assert set(log.read_text().splitlines()) == {TRAINERS_DEVICE}
+
+    @needs_cuda
+    def test_a_draw_on_the_bags_device_from_the_cpu_generator_is_refused(self, tmp_path):
+        body = "import torch\nreturn features + 0.01 * torch.randn_like(features, generator=generator)\n"
+        path = _write(tmp_path, "noise_like", _transform_policy("noise_like", body))
+        (failure,) = _smoke(path, arm="abmil")
+        assert failure.startswith("[transform_bag seam") and "generator" in failure
+
+    @needs_cuda
+    def test_cpu_noise_added_to_a_gpu_bag_is_refused(self, tmp_path):
+        body = "import torch\nreturn features + 0.01 * torch.randn(features.shape, generator=generator)\n"
+        path = _write(tmp_path, "cpu_noise", _transform_policy("cpu_noise", body))
+        (failure,) = _smoke(path, arm="abmil")
+        assert failure.startswith("[transform_bag seam") and "same device" in failure
+
+    @needs_cuda
+    def test_a_draw_from_the_global_cuda_rng_is_refused(self, tmp_path):
+        body = "import torch\ntorch.randn(1, device=features.device)\nreturn features.clone()\n"
+        path = _write(tmp_path, "cuda_global_draw", _transform_policy("cuda_global_draw", body))
+        (failure,) = _smoke(path, arm="abmil")
+        assert "drew from a global RNG" in failure
 
 
 class TestTheHookRunsAfterAWrappedOptimizerHasStepped:

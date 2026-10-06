@@ -393,6 +393,38 @@ FORGETS_TIER2 = HEADER.format(name="forgets_tier2") + '''class ForgetsTier2(Poli
         return None      # tier2 falls through: DTFD would crash before training
 '''
 
+#: Where every trainer puts its model and its bags.
+TRAINERS_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+needs_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="the trainers' GPU is not on this host",
+)
+
+#: Adds a CPU tensor to the parameters after each step: fine on a CPU host,
+#: a device mismatch on the GPU the trainers use.
+CPU_TENSOR_INTO_PARAMS = HEADER.format(name="cpu_tensor_into_params") + '''class CpuTensorIntoParams(PolicyVariant):
+    def wrap_optimizer(self, opt):
+        class _Wrapped:
+            def __init__(self, inner):
+                self.inner = inner
+
+            @property
+            def param_groups(self):
+                return self.inner.param_groups
+
+            def zero_grad(self, *a, **kw):
+                self.inner.zero_grad(*a, **kw)
+
+            def step(self, *a, **kw):
+                import torch
+                self.inner.step(*a, **kw)
+                with torch.no_grad():
+                    for group in self.inner.param_groups:
+                        for p in group["params"]:
+                            p.add_(torch.zeros(p.shape))
+
+        return _Wrapped(opt)
+'''
+
 
 @pytest.fixture(autouse=True)
 def _isolated_registry():
@@ -551,6 +583,30 @@ class TestTheSchedulerSeamIsDTFDs:
         assert policy_smoke.main([str(_write(tmp_path, "forgets_tier2", FORGETS_TIER2))]) == 1
         err = capsys.readouterr().err
         assert "tier2" in err and "scheduler" in err
+
+
+class TestTheSeamsRunOnTheTrainersDevice:
+    def test_every_optimizer_the_policy_wraps_holds_parameters_on_the_trainers_device(self, tmp_path):
+        log = tmp_path / "devices.log"
+        source = HEADER.format(name="device_recorder") + f'''class DeviceRecorder(PolicyVariant):
+    def wrap_optimizer_for(self, opt, *, role):
+        with open({str(log)!r}, "a") as handle:
+            for group in opt.param_groups:
+                for p in group["params"]:
+                    handle.write(role + " " + p.device.type + "\\n")
+        return opt
+
+    def wrap_optimizer(self, opt):
+        return opt
+'''
+        assert _main(["--arm", "dtfd", str(_write(tmp_path, "device_recorder", source))]) == 0
+        roles = {line.split()[0]: line.split()[1] for line in log.read_text().splitlines()}
+        assert roles == {"main": TRAINERS_DEVICE, "tier1": TRAINERS_DEVICE, "tier2": TRAINERS_DEVICE}
+
+    @needs_cuda
+    def test_a_cpu_tensor_mixed_into_gpu_parameters_is_refused(self, tmp_path, capsys):
+        assert _main([str(_write(tmp_path, "cpu_tensor_into_params", CPU_TENSOR_INTO_PARAMS))]) == 1
+        assert "same device" in capsys.readouterr().err
 
 
 class TestHarnessCoverage:

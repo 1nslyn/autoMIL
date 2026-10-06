@@ -15,6 +15,10 @@ for DTFD or an unspecified arm, the DTFD seam: both tier optimizers wrapped,
 then both ``MultiStepLR`` schedulers built on the targets the trainer
 resolves and wrapped, before either tier trains.
 
+Every check runs on the device the trainers train on (CUDA when the host has
+it), so a policy that mixes a CPU tensor into a GPU bag or parameter fails
+here as it would fail in the run.
+
 A policy that overrides ``transform_bag`` or ``before_validation`` has those
 seams driven too. The bag transform runs through the runtime the trainers use,
 seeded as a fold's is, on the bag the arm hands it (CLAM: eight instances must
@@ -102,6 +106,13 @@ def load_policy_class(path: Path) -> type:
     return classes[0]
 
 
+def _device():
+    """Where every trainer puts its model and its bags: CUDA when the host has it."""
+    import torch
+
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 def _model_and_batch():
     import torch
     from torch import nn
@@ -113,7 +124,8 @@ def _model_and_batch():
     model = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2))
     features = torch.randn(8, 4)
     labels = torch.randint(0, 2, (8,))
-    return model, features, labels
+    device = _device()
+    return model.to(device), features.to(device), labels.to(device)
 
 
 def _run_order(order: str, policy_cls: type, *, scaled: bool = False) -> None:
@@ -215,8 +227,8 @@ def _dtfd_tiers(runtime, features, labels):
     # Two layers on each tier, so a weight the backward pass needs is saved
     # on both: an in-place change between forward and backward trips
     # autograd's version check whichever role it targets.
-    tier1 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2))
-    tier2 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 3))
+    tier1 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2)).to(features.device)
+    tier2 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 3)).to(features.device)
     raws = [torch.optim.Adam(module.parameters(), lr=1e-2) for module in (tier1, tier2)]
     optimizers = [runtime.wrap_optimizer(raw, role=role) for role, raw in zip(ROLES, raws)]
     schedulers = [
@@ -298,17 +310,20 @@ def _run_stopping(policy_cls: type, arm: str | None, family: str) -> None:
 
 
 def _global_rng_state() -> tuple:
-    """The process-wide torch, numpy and Python RNG states, comparable with ``==``."""
+    """The process-wide torch (CPU and, on a GPU host, CUDA), numpy and Python
+    RNG states, comparable with ``==``."""
     import random
 
     import numpy as np
     import torch
 
     numpy_state = np.random.get_state()
+    cuda_state = (torch.cuda.get_rng_state().numpy().tobytes(),) if torch.cuda.is_available() else ()
     return (
         torch.get_rng_state().numpy().tobytes(),
         numpy_state[0], numpy_state[1].tobytes(), *numpy_state[2:],
         random.getstate(),
+        *cuda_state,
     )
 
 
@@ -318,7 +333,7 @@ def _transform_bags(policy_cls: type, rows: int, constraints: dict) -> list:
 
     from autobench.pipeline.policy_dispatch import PolicyRuntime
 
-    bag = torch.randn(rows, BAG_WIDTH, generator=torch.Generator().manual_seed(0))
+    bag = torch.randn(rows, BAG_WIDTH, generator=torch.Generator().manual_seed(0)).to(_device())
     runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold(
         seed=0, fold=0,
     )
