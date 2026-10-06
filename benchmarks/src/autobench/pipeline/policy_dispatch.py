@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import os
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
+
+from autobench.pipeline.selection import smoothed_selection_value
 
 
 def _clone_function(
@@ -125,6 +127,17 @@ def _scalar_repr(value: Any) -> str:
         return repr(value)
 
 
+def _is_real_scalar(value: Any) -> bool:
+    """A number the history can hold: numpy scalars yes, bools and strings no."""
+    if isinstance(value, bool):
+        return False
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return not isinstance(value, (str, bytes))
+
+
 def runtime_automil_dir() -> Path:
     """Return this worktree's configured autoMIL directory.
 
@@ -189,6 +202,8 @@ class PolicyRuntime:
     name: str | None = None
     policy: Any | None = None
     policy_factory: type[Any] | None = None
+    # Every evaluated epoch's scalar metrics, in call order, for this fold only.
+    history: list[tuple[int, dict[str, float]]] = field(default_factory=list)
 
     @classmethod
     def from_experiment(
@@ -220,13 +235,16 @@ class PolicyRuntime:
         return cls(name=name, policy_factory=policy_cls)
 
     def for_fold(self) -> "PolicyRuntime":
-        """Return a lazy runtime that cannot share instance state across folds."""
+        """Return a fresh runtime: no policy instance or epoch history crosses folds."""
         factory = self.policy_factory
         if factory is None and self.policy is not None:
             factory = type(self.policy)
-        if factory is None:
-            return self
         return type(self)(name=self.name, policy_factory=factory)
+
+    def smoothed(self, selected_epoch: int, key: str) -> float | None:
+        """This fold's selection score for ``key`` around ``selected_epoch``."""
+        curve = {epoch: metrics[key] for epoch, metrics in self.history if key in metrics}
+        return smoothed_selection_value(curve, selected_epoch)
 
     def _resolved_policy(self) -> Any | None:
         """Instantiate once, at first use inside an already-seeded trainer."""
@@ -318,6 +336,11 @@ class PolicyRuntime:
             f"{key}={_scalar_repr(value)}" for key, value in (metrics or {}).items()
         )
         print(f"[epoch {int(epoch)}]" + (f" {rendered}" if rendered else ""), flush=True)
+        self.history.append((int(epoch), {
+            str(key): float(value)
+            for key, value in (metrics or {}).items()
+            if _is_real_scalar(value)
+        }))
         policy = self._resolved_policy()
         if policy is None:
             return bool(default)

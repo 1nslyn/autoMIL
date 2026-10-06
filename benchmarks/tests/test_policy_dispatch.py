@@ -22,7 +22,9 @@ def test_native_runtime_is_exact_identity():
     assert runtime.wrap_scheduler(scheduler) is scheduler
     assert runtime.should_stop(False, epoch=3, metrics={"val_loss": 1.0}) is False
     assert runtime.should_stop(True, epoch=3, metrics={"val_loss": 1.0}) is True
-    assert runtime.for_fold() is runtime
+    fold = runtime.for_fold()
+    assert fold is not runtime
+    assert fold.policy is None and fold.policy_factory is None and fold.history == []
 
 
 def test_each_fold_gets_an_independent_policy_instance():
