@@ -178,7 +178,7 @@ def train_fold(
 
     _timer_start = time.perf_counter()
 
-    test_results_dict, test_auc, val_auc, test_acc, val_acc = clam_train(
+    test_results_dict, test_auc, val_auc, test_acc, val_acc, val_auc_smooth = clam_train(
         datasets, fold, args,
     )
 
@@ -248,7 +248,7 @@ def train_fold(
     # --- Save fold metrics JSON (not in CLAM) ---
     fold_result = {
         "test_metrics": test_metrics,
-        "val_metrics": val_metrics,
+        "val_metrics": {**val_metrics, "auc_roc_smooth": val_auc_smooth},
         # A4': no-op detector — hash of the persisted val predictions above.
         "val_predictions_sha256": file_sha256_or_none(val_predictions_path),
         "fold": fold,

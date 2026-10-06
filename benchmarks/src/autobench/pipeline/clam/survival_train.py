@@ -282,6 +282,11 @@ def train_survival_fold(
     # source=final when the final weights were kept (no restore).
     print(f"[selected] epoch={tracker.best_epoch} "
           f"source={'best' if best_snap is not None else 'final'}", flush=True)
+    # Protocol v5: the fold's score is the validation C-index averaged over the
+    # epochs around the restored one; None when nothing was selected.
+    val_c_index_smooth = policy_runtime.smoothed(tracker.best_epoch, "val_c_index")
+    print(f"[smoothed] epoch={tracker.best_epoch} "
+          f"val_c_index_smooth={val_c_index_smooth}", flush=True)
 
     # CR-3: export the val risk records so the runner can score concordance over
     # the POOLED cross-fold validation set. The per-fold c-index below stays for
@@ -292,7 +297,10 @@ def train_survival_fold(
     val_predictions_path = os.path.join(fold_dir, "predictions_val.csv")
     write_survival_predictions_csv(val_predictions_path, _val_records)
     test_metrics = {"c_index": _c_index(test)}
-    val_metrics = {"c_index": _c_index_from(_val_records)}
+    val_metrics = {
+        "c_index": _c_index_from(_val_records),
+        "c_index_smooth": val_c_index_smooth,
+    }
     fold_result = {
         "test_metrics": test_metrics,
         "val_metrics": val_metrics,

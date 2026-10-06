@@ -134,7 +134,14 @@ def train_nnmil_fold(
 
     # Evaluate val split
     val_raw = trainer.evaluate("val")
-    val_metrics = normalize_nnmil_metrics(val_raw, split="val", task_type=task_type)
+    # Protocol v5: the trainer scored its selected epoch on the validation curve
+    # around it. That is not a metric the trainer evaluates, so it joins the
+    # normalized block rather than passing through the key whitelist.
+    smoothed_key = "c_index_smooth" if task_type == "survival" else "auc_roc_smooth"
+    val_metrics = {
+        **normalize_nnmil_metrics(val_raw, split="val", task_type=task_type),
+        smoothed_key: trainer.smoothed_selection,
+    }
 
     fold_result = {
         "test_metrics": test_metrics,

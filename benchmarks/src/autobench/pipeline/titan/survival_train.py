@@ -242,9 +242,17 @@ def train_titan_survival_fold(
     # source=final when the final weights were kept (no restore).
     print(f"[selected] epoch={tracker.best_epoch} "
           f"source={'best' if best_snap is not None else 'final'}", flush=True)
+    # Protocol v5: the fold's score is the validation C-index averaged over the
+    # epochs around the restored one; None when nothing was selected.
+    val_c_index_smooth = policy_runtime.smoothed(tracker.best_epoch, "val_c_index")
+    print(f"[smoothed] epoch={tracker.best_epoch} "
+          f"val_c_index_smooth={val_c_index_smooth}", flush=True)
 
     test_metrics = {"c_index": _c_index(test_loader)}
-    val_metrics = {"c_index": _c_index(val_loader)}
+    val_metrics = {
+        "c_index": _c_index(val_loader),
+        "c_index_smooth": val_c_index_smooth,
+    }
     # CR-3: pooled cross-fold val concordance is computed by the runner.
     val_records = _risk_records(val_loader)
     # A4': persist the selected model's val risk scores (the arrays are already

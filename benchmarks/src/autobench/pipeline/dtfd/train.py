@@ -254,6 +254,11 @@ def train_dtfd_fold(
         # source=final when the final weights were kept (no restore).
         print(f"[selected] epoch={tracker.best_epoch} "
               f"source={'best' if best_snap is not None else 'final'}", flush=True)
+        # Protocol v5: the fold's score is the validation AUC averaged over the
+        # epochs around the restored one; None when nothing was selected.
+        val_auc_smooth = policy_runtime.smoothed(tracker.best_epoch, "val_auc")
+        print(f"[smoothed] epoch={tracker.best_epoch} "
+              f"val_auc_smooth={val_auc_smooth}", flush=True)
 
         test_metrics = (
             evaluate_dtfd(bundle, test_slides, cfg, num_classes, device, seed, ordinal=ordinal,
@@ -268,7 +273,7 @@ def train_dtfd_fold(
 
         result: dict = {
             "test_metrics": test_metrics,
-            "val_metrics": val_metrics,
+            "val_metrics": {**val_metrics, "auc_roc_smooth": val_auc_smooth},
             # A4': no-op detector — hash of the val predictions persisted just
             # above; the fold-result builder is the ONE hash home. None when
             # this fold wrote none (no fold_dir, or an empty val split).

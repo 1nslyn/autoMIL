@@ -302,6 +302,9 @@ def test_vendored_clam_is_not_modified_outside_instrumentation():
     vendored = "benchmarks/lib/CLAM"
     allowed_vendored_edits = {
         "benchmarks/lib/CLAM/utils/core_utils.py",
+        # train() also returns the fold's smoothed val AUC; its upstream
+        # caller unpacks the sixth value.
+        "benchmarks/lib/CLAM/main.py",
     }
 
     def _git(*args) -> subprocess.CompletedProcess:

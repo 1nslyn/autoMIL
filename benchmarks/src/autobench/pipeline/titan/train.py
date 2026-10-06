@@ -203,6 +203,11 @@ def train_titan_fold(
     # that print source=final.
     print(f"[selected] epoch={tracker.best_epoch} "
           f"source={'best' if tracker.best_epoch >= 0 else 'untrained'}", flush=True)
+    # Protocol v5: the fold's score is the validation AUC averaged over the
+    # epochs around the restored one; None when nothing was selected.
+    val_auc_smooth = policy_runtime.smoothed(tracker.best_epoch, "val_auc")
+    print(f"[smoothed] epoch={tracker.best_epoch} "
+          f"val_auc_smooth={val_auc_smooth}", flush=True)
     test_metrics = _evaluate(model, test_loader, torch_device, n_classes, ordinal=ordinal,
                              predictions_path=os.path.join(fold_dir, "predictions.csv"))
     val_metrics = _evaluate(model, val_loader, torch_device, n_classes, ordinal=ordinal,
@@ -210,7 +215,7 @@ def train_titan_fold(
 
     fold_result = {
         "test_metrics": test_metrics,
-        "val_metrics": val_metrics,
+        "val_metrics": {**val_metrics, "auc_roc_smooth": val_auc_smooth},
         # A4': no-op detector — hash of the persisted val predictions above.
         "val_predictions_sha256": file_sha256_or_none(
             os.path.join(fold_dir, "predictions_val.csv")

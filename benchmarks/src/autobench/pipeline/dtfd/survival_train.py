@@ -355,6 +355,11 @@ def train_dtfd_survival_fold(
         # source=final when the final weights were kept (no restore).
         print(f"[selected] epoch={tracker.best_epoch} "
               f"source={'best' if best_snap is not None else 'final'}", flush=True)
+        # Protocol v5: the fold's score is the validation C-index averaged over the
+        # epochs around the restored one; None when nothing was selected.
+        val_c_index_smooth = policy_runtime.smoothed(tracker.best_epoch, "val_c_index")
+        print(f"[smoothed] epoch={tracker.best_epoch} "
+              f"val_c_index_smooth={val_c_index_smooth}", flush=True)
 
         # CR-3: export val risk records so the runner can pool concordance
         # across folds instead of averaging five ~2-event c-indices.
@@ -372,7 +377,10 @@ def train_dtfd_survival_fold(
             "c_index": _c_index(bundle, test_samples, cfg, device, seed)
             if test_samples else float("nan"),
         }
-        val_metrics = {"c_index": _c_index_from(_val_records)}
+        val_metrics = {
+            "c_index": _c_index_from(_val_records),
+            "c_index_smooth": val_c_index_smooth,
+        }
         return {
             "test_metrics": test_metrics,
             "val_metrics": val_metrics,

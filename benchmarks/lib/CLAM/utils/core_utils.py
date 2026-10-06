@@ -120,7 +120,8 @@ class EarlyStopping:
 
 def train(datasets, cur, args):
     """   
-        train for a single fold
+        train for a single fold; returns (test results, test AUC, val AUC,
+        test accuracy, val accuracy, smoothed val AUC around the selected epoch)
     """
     print('\nTraining Fold {}!'.format(cur))
     writer_dir = os.path.join(args.results_dir, str(cur))
@@ -271,6 +272,14 @@ def train(datasets, cur, args):
     # val-AUC checkpoint whenever one was saved (source=best), else the
     # current weights, no restore (source=final; epoch=-1 when max_epochs == 0).
     print('[selected] epoch={} source={}'.format(selected_epoch, selected_source), flush=True)
+    # Protocol v5: the fold's score is the validation AUC averaged over the
+    # epochs around the selected one (None when nothing was selected, or when
+    # no policy runtime recorded the epochs).
+    val_auc_smooth = (
+        policy_runtime.smoothed(selected_epoch, 'val_auc')
+        if policy_runtime is not None else None
+    )
+    print('[smoothed] epoch={} val_auc_smooth={}'.format(selected_epoch, val_auc_smooth), flush=True)
 
     _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
     print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))
@@ -294,7 +303,7 @@ def train(datasets, cur, args):
             writer.add_scalar('final/test_error', test_error, 0)
             writer.add_scalar('final/test_auc', test_auc, 0)
         writer.close()
-    return results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
+    return results_dict, test_auc, val_auc, 1-test_error, 1-val_error, val_auc_smooth
 
 
 def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writer = None, loss_fn = None, policy_runtime = None):

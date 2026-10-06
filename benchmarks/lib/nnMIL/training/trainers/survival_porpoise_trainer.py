@@ -320,6 +320,16 @@ class SurvivalPorpoiseTrainer(BaseTrainer):
         # source=final when the final weights were kept (no restore).
         print(f"[selected] epoch={early_stopping.best_epoch} "
               f"source={'best' if restored else 'final'}", flush=True)
+        # Protocol v5: the fold's score is the validation C-index averaged over the
+        # epochs around the restored one; None when nothing was selected. The
+        # adapter (autobench nnmil/train.py) reads it from the trainer.
+        val_c_index_smooth = (
+            self.policy_runtime.smoothed(early_stopping.best_epoch, 'val_c_index')
+            if self.policy_runtime is not None else None
+        )
+        print(f"[smoothed] epoch={early_stopping.best_epoch} "
+              f"val_c_index_smooth={val_c_index_smooth}", flush=True)
+        self.smoothed_selection = val_c_index_smooth
 
         self.model.eval()
         torch.set_grad_enabled(False)

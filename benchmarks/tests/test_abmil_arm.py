@@ -495,7 +495,8 @@ class TestFoldTraining:
         )
 
         assert set(result["test_metrics"].keys()) == SHARED_KEYS
-        assert set(result["val_metrics"].keys()) == SHARED_KEYS
+        # Validation also carries the fold's smoothed selection score (protocol v5).
+        assert set(result["val_metrics"].keys()) == SHARED_KEYS | {"auc_roc_smooth"}
         assert "elapsed_seconds" in result
 
     def test_restores_pristine_grad_state(self):

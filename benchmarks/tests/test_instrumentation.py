@@ -45,13 +45,14 @@ class TestClamElapsedSeconds:
         import autobench.pipeline.clam.train as clam_train_mod
 
         def _fake_clam_train(datasets, fold, args):
-            # Shaped exactly like the real clam_train() 5-tuple return
-            # (lib/CLAM/utils/core_utils.py::train), just instantaneous.
+            # Shaped exactly like the real clam_train() 6-tuple return
+            # (lib/CLAM/utils/core_utils.py::train; the last element is the
+            # fold's smoothed val AUC), just instantaneous.
             test_results_dict = {
                 "slide_0": {"prob": np.array([0.3, 0.7]), "label": 1},
                 "slide_1": {"prob": np.array([0.6, 0.4]), "label": 0},
             }
-            return test_results_dict, 0.75, 0.70, 0.8, 0.75
+            return test_results_dict, 0.75, 0.70, 0.8, 0.75, None
 
         monkeypatch.setattr(clam_train_mod, "clam_train", _fake_clam_train)
 
@@ -115,7 +116,8 @@ class _FakeClassificationTrainer:
         pass
 
     def train(self):
-        pass
+        # The real trainer leaves its selected epoch's smoothed score here.
+        self.smoothed_selection = None
 
     def evaluate(self, split):
         # Raw nnMIL metric key format: "{split}_{split}/{suffix}".

@@ -485,7 +485,8 @@ class _FakeClassificationTrainer:
         pass
 
     def train(self):
-        pass
+        # The real trainer leaves its selected epoch's smoothed score here.
+        self.smoothed_selection = None
 
     def evaluate(self, split):
         return {

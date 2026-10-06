@@ -226,7 +226,8 @@ class TestSmokeTraining:
 
         # Metrics are the shared schema (same keys CLAM/nnMIL/ABMIL produce).
         assert set(result["test_metrics"].keys()) == SHARED_KEYS
-        assert set(result["val_metrics"].keys()) == SHARED_KEYS
+        # Validation also carries the fold's smoothed selection score (protocol v5).
+        assert set(result["val_metrics"].keys()) == SHARED_KEYS | {"auc_roc_smooth"}
 
         # And a metrics.json in that schema can be persisted/reloaded.
         metrics_path = tmp_path / "metrics.json"
@@ -537,9 +538,12 @@ class TestRunnerSurvival:
         assert summary["n_folds"] == 2
         assert len(summary["per_fold_test"]) == 2
 
-        # Survival reports concordance, never the classification key set.
-        for block in (*summary["per_fold_test"], *summary["per_fold_val"]):
+        # Survival reports concordance, never the classification key set;
+        # validation also carries the fold's smoothed selection score (protocol v5).
+        for block in summary["per_fold_test"]:
             assert set(block) == {"c_index"}
+        for block in summary["per_fold_val"]:
+            assert set(block) == {"c_index", "c_index_smooth"}
         assert "c_index" in summary["test"]
         assert "c_index" in summary["val"]
 
