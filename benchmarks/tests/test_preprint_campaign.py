@@ -503,12 +503,13 @@ def test_companion_guard_reaches_classification_cells_only(tmp_path):
         if cell["task_family"] == "survival":
             assert cell["guard"] is None
             assert "guard" not in scoring
+            assert scoring["formula"] == "val_c_index_smooth"
         else:
             expected = margins[f"{cell['dataset']}__{cell['task']}"]
             assert cell["guard"] == expected
             assert scoring["guard"] == expected
             # The guard never displaces the selection signal.
-            assert scoring["formula"] == "val_auc"
+            assert scoring["formula"] == "val_auc_smooth"
         seen[cell["task_type"]] += 1
     # Every roster dataset contributes 13 classification + 13 survival cells.
     assert seen == {
@@ -743,9 +744,10 @@ def test_audit_rejects_a_hand_edited_frozen_guard(tmp_path):
     by_id = {cell["cell_id"]: cell for cell in manifest["cells"]}
     target = next(r for r in roots if by_id[r.parent.name]["guard"] is not None)
     frozen = by_id[target.parent.name]["guard"]
+    formula = yaml.safe_load((target / "config.yaml").read_text())["scoring"]["formula"]
     (target / "graph.json").write_text(json.dumps({
         "schema_version": 3,
-        "meta": {"scoring": {"formula": "val_auc",
+        "meta": {"scoring": {"formula": formula,
                              "guard": {**frozen, "margin": 0.5}}},
         "nodes": {},
     }))

@@ -88,7 +88,8 @@ BASELINE_FOLDS = CERTIFICATION_FOLDS
 #: closed on drift). Reporting is per family, Patho-Bench style — binary and
 #: nominal multiclass on AUROC, ordinal grading on quadratic-weighted kappa,
 #: survival on the concordance index — while SELECTION everywhere stays the
-#: primary validation metric (``scoring.formula: val_auc`` / ``val_c_index``);
+#: primary validation metric (``scoring.formula: val_auc_smooth`` /
+#: ``val_c_index_smooth``);
 #: the val-firewall keeps these two axes from ever touching.
 HELD_OUT_SCHEMA_BY_FAMILY = {
     "binary": ("test_auc", "test_bacc"),
@@ -101,13 +102,16 @@ HELD_OUT_SCHEMA_BY_FAMILY = {
 #: fold-schema lock at every campaign ingest). NOTE the first-key convention
 #: differs deliberately from the held-out side: here the first key is the
 #: SELECTION primary (`scoring.formula`), which for ordinal cells is still
-#: val_auc — qwk is a recorded companion on the validation side and the
-#: REPORTING primary only on the sealed side.
+#: val_auc_smooth — qwk is a recorded companion on the validation side and
+#: the REPORTING primary only on the sealed side. The smoothed metric is the
+#: fold's validation curve averaged over the five evaluated epochs around the
+#: restored one (protocol v5); the restored model's own val_auc / val_c_index
+#: is recorded beside it and does not vote.
 VALIDATION_SCHEMA_BY_FAMILY = {
-    "binary": ("val_auc", "val_bacc"),
-    "multiclass": ("val_auc", "val_bacc"),
-    "ordinal": ("val_auc", "val_bacc", "val_qwk"),
-    "survival": ("val_c_index",),
+    "binary": ("val_auc_smooth", "val_auc", "val_bacc"),
+    "multiclass": ("val_auc_smooth", "val_auc", "val_bacc"),
+    "ordinal": ("val_auc_smooth", "val_auc", "val_bacc", "val_qwk"),
+    "survival": ("val_c_index_smooth", "val_c_index"),
 }
 #: 39 binary (kras, idh1, tp53) + 13 nominal multiclass (immune_class,
 #: deliberately non-ordinal per its dataset YAML) + 13 ordinal (grade,

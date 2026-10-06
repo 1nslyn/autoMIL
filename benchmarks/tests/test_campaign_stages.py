@@ -69,14 +69,17 @@ CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
 
 
 def _folds(indices, base=0.6, *, ordinal=False):
-    # Fold primary_value IS the primary validation metric (scoring.formula:
-    # val_auc); val_bacc (and val_qwk on ordinal cells) ride along as
-    # recorded companions that never vote.
+    # Fold primary_value IS the selection metric, the smoothed validation AUC
+    # (scoring.formula: val_auc_smooth). The restored model's own val_auc is
+    # recorded beside it, a fixed 0.02 higher, so a test can tell which one
+    # voted; val_bacc (and val_qwk on ordinal cells) ride along as recorded
+    # companions that never vote.
     return [
         {
             "fold_index": index,
             "metrics": {
-                "val_auc": base + index / 100,
+                "val_auc_smooth": base + index / 100,
+                "val_auc": base + index / 100 + 0.02,
                 "val_bacc": base,
                 **({"val_qwk": base} if ordinal else {}),
             },
@@ -255,7 +258,7 @@ def _baseline(
         "status": "completed",
         "primary_value": 0.62,
         "metrics": {
-            "val_auc": 0.62, "val_bacc": 0.60,
+            "val_auc_smooth": 0.62, "val_auc": 0.64, "val_bacc": 0.60,
             **({"val_qwk": 0.60} if ordinal_val else {}),
         },
         "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60, ordinal=ordinal_val),
@@ -421,7 +424,7 @@ def _attempts(
             result = {
                 "status": "completed",
                 "primary_value": base,
-                "metrics": {"val_auc": 0.5, "val_bacc": 0.5},
+                "metrics": {"val_auc_smooth": 0.5, "val_auc": 0.5, "val_bacc": 0.5},
                 "validation_folds": _folds(STAGE_FOLDS["discovery"], base),
             }
             sealed = archive / "certify"
@@ -452,7 +455,7 @@ def _set_fold_values(adir: Path, node_id: str, values) -> None:
     folds = sorted(result["validation_folds"], key=lambda fold: fold["fold_index"])
     for fold, value in zip(folds, values, strict=True):
         fold["primary_value"] = value
-        fold["metrics"]["val_auc"] = value
+        fold["metrics"]["val_auc_smooth"] = value
     result["primary_value"] = sum(values) / len(values)
     path.write_text(json.dumps(result))
 
@@ -592,7 +595,7 @@ def test_native_baseline_runs_at_frozen_commit_and_registers(
         public = {
             "status": "completed",
             "primary_value": 0.62,
-            "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
+            "metrics": {"val_auc_smooth": 0.62, "val_auc": 0.64, "val_bacc": 0.60},
             "validation_folds": _folds(CERTIFICATION_FOLDS, 0.60),
         }
         (worktree / "result.json").write_text(json.dumps(public))
@@ -1872,7 +1875,7 @@ def test_the_selection_freeze_rechecks_every_pool_candidate_against_the_archive(
     result = json.loads(path.read_text())
     fold = result["validation_folds"][2]
     fold["primary_value"] += 0.001
-    fold["metrics"]["val_auc"] = fold["primary_value"]
+    fold["metrics"]["val_auc_smooth"] = fold["primary_value"]
     path.write_text(json.dumps(result))
 
     with pytest.raises(
@@ -2412,6 +2415,48 @@ def test_baseline_ingest_rejects_val_evidence_that_mismatches_the_family(tmp_pat
         match="validation metric schema differs from the cell's task family",
     ):
         register_baseline(cell_root, _baseline(cell_root))
+
+
+def test_baseline_ingest_rejects_an_ordinal_fold_without_the_smoothed_metric(tmp_path):
+    """The family lock is exact per fold: one ordinal fold in the retired
+    val_auc-first shape (qwk and bacc recorded, no val_auc_smooth, its
+    primary_value the restored model's own val_auc) is refused at the first
+    ingest, although every other fold carries the full set."""
+    cell_root, _, _, _, _ = _make_staged_cell(tmp_path, task_family="ordinal")
+    archive = _baseline(cell_root, ordinal_val=True)
+    result_path = archive / "result.json"
+    result = json.loads(result_path.read_text())
+    retired = result["validation_folds"][2]
+    del retired["metrics"]["val_auc_smooth"]
+    retired["primary_value"] = retired["metrics"]["val_auc"]
+    result_path.write_text(json.dumps(result))
+
+    with pytest.raises(
+        CampaignStageError,
+        match="fold 2 validation metric schema differs from the cell's task family",
+    ):
+        register_baseline(cell_root, archive)
+    assert load_stage_state(cell_root).get("baseline") is None
+
+
+def test_baseline_ingest_rejects_a_fold_scored_on_the_restored_models_auc(staged_cell):
+    """primary_value must equal the family's first recorded metric,
+    val_auc_smooth. A fold whose primary_value is the restored model's own
+    val_auc carries the complete metric set and still disagrees with it."""
+    cell_root, _, _, _, _ = staged_cell
+    archive = _baseline(cell_root)
+    result_path = archive / "result.json"
+    result = json.loads(result_path.read_text())
+    fold = result["validation_folds"][1]
+    fold["primary_value"] = fold["metrics"]["val_auc"]
+    result_path.write_text(json.dumps(result))
+
+    with pytest.raises(
+        CampaignStageError,
+        match="fold 1 primary_value disagrees with validation metrics",
+    ):
+        register_baseline(cell_root, archive)
+    assert load_stage_state(cell_root).get("baseline") is None
 
 
 def test_certification_rejects_held_out_evidence_that_mismatches_the_family(tmp_path):

@@ -47,15 +47,25 @@ def _load_run_experiment() -> ModuleType:
     return mod
 
 
-def _summary(fold_aucs, fold_baccs=None, val_auc=0.70, val_bacc=0.60):
+def _summary(
+    fold_aucs, fold_baccs=None, val_auc=0.70, val_bacc=0.60,
+    fold_smooths=None, val_auc_smooth=0.66,
+):
     fold_baccs = fold_baccs if fold_baccs is not None else [0.60] * len(fold_aucs)
+    # The selection metric is each fold's smoothed AUC, recorded beside the
+    # restored model's own auc_roc; 0.04 below it unless a test sets it, so the
+    # two can be told apart.
+    fold_smooths = (
+        fold_smooths if fold_smooths is not None else [a - 0.04 for a in fold_aucs]
+    )
     return {
         "test": {"auc_roc": {"mean": 0.70}, "balanced_accuracy": {"mean": 0.60}},
-        "val": {"auc_roc": {"mean": val_auc},
+        "val": {"auc_roc_smooth": {"mean": val_auc_smooth},
+                "auc_roc": {"mean": val_auc},
                 "balanced_accuracy": {"mean": val_bacc}},
         "per_fold_val": [
-            {"auc_roc": a, "balanced_accuracy": b}
-            for a, b in zip(fold_aucs, fold_baccs)
+            {"auc_roc_smooth": s, "auc_roc": a, "balanced_accuracy": b}
+            for a, b, s in zip(fold_aucs, fold_baccs, fold_smooths)
         ],
         "per_fold_test": [],
         "n_folds": len(fold_aucs),
@@ -81,10 +91,27 @@ class TestValidationFoldEvidence:
         result = m.summary_to_result_json(_summary([NAN, 0.72], [0.60, 0.60]), 10.0)
 
         folds = result["validation_folds"]
+        assert folds[0]["metrics"]["val_auc_smooth"] is None
         assert folds[0]["metrics"]["val_auc"] is None
         assert folds[0]["metrics"]["val_bacc"] == 0.60   # the finite sibling survives
         assert folds[0]["primary_value"] is None             # unchanged behaviour
         assert folds[1]["metrics"]["val_auc"] == 0.72
+        assert folds[1]["metrics"]["val_auc_smooth"] == pytest.approx(0.68)
+
+    def test_a_non_finite_smoothed_value_becomes_null_and_voids_the_fold(self):
+        m = _load_run_experiment()
+        result = m.summary_to_result_json(
+            _summary([0.70, 0.72], fold_smooths=[NAN, 0.68]), 10.0,
+        )
+
+        folds = result["validation_folds"]
+        assert folds[0]["metrics"]["val_auc_smooth"] is None
+        assert folds[0]["metrics"]["val_auc"] == 0.70    # the finite sibling survives
+        assert folds[0]["primary_value"] is None
+        assert folds[1]["primary_value"] == 0.68
+        assert result["status"] == "partial"
+        owned = {k: v for k, v in result.items() if k != "summary"}
+        assert _non_finite_paths(owned) == []
 
     def test_fields_this_function_owns_are_finite(self):
         m = _load_run_experiment()
@@ -120,6 +147,7 @@ class TestValidationFoldEvidence:
             assert _non_finite_paths(loaded) == []
         sealed_payload = json.loads((sealed / "result.json").read_text())
         assert sealed_payload["summary"]["per_fold_val"][0]["auc_roc"] is None
+        assert sealed_payload["summary"]["per_fold_val"][0]["auc_roc_smooth"] is None
 
 
 # --- leak site 3: an unestimable primary_value ---------------------------------
@@ -128,7 +156,10 @@ class TestUnestimablePrimary_value:
     def test_all_folds_unestimable_is_partial_not_crash(self):
         m = _load_run_experiment()
         result = m.summary_to_result_json(
-            _summary([NAN] * 5, [NAN] * 5, val_auc=NAN, val_bacc=NAN), 10.0,
+            _summary(
+                [NAN] * 5, [NAN] * 5,
+                val_auc=NAN, val_bacc=NAN, val_auc_smooth=NAN,
+            ), 10.0,
         )
 
         assert result["status"] == "partial"
@@ -143,7 +174,10 @@ class TestUnestimablePrimary_value:
 
         m = _load_run_experiment()
         result = m.summary_to_result_json(
-            _summary([NAN] * 5, [NAN] * 5, val_auc=NAN, val_bacc=NAN), 10.0,
+            _summary(
+                [NAN] * 5, [NAN] * 5,
+                val_auc=NAN, val_bacc=NAN, val_auc_smooth=NAN,
+            ), 10.0,
         )
         validate_result(result)   # must not raise
 
@@ -160,30 +194,63 @@ class TestUnestimablePrimary_value:
         """
         m = _load_run_experiment()
         result = m.summary_to_result_json(
-            _summary([NAN] * 5, [0.60] * 5, val_auc=NAN, val_bacc=0.60), 10.0,
+            _summary(
+                [NAN] * 5, [0.60] * 5,
+                val_auc=NAN, val_bacc=0.60, val_auc_smooth=NAN,
+            ), 10.0,
         )
 
         assert result["status"] == "partial"
         assert result["metrics"] == {}
         assert result["primary_value"] == 0.0
-        assert "val_auc" in result["error"]
+        assert "val_auc_smooth" in result["error"]
+
+    @pytest.mark.parametrize("lost", ["val_auc_smooth", "val_auc", "val_bacc"])
+    def test_losing_any_one_recorded_component_voids_the_primary_value(self, lost):
+        """Only the smoothed score votes, but the recorded set is all-or-nothing:
+        a run that lost the restored model's own val_auc, or the companion, has
+        no metrics block and no primary_value either, and names what went
+        missing."""
+        m = _load_run_experiment()
+        summary = _summary([0.70] * 5)
+        key = {
+            "val_auc_smooth": "auc_roc_smooth",
+            "val_auc": "auc_roc",
+            "val_bacc": "balanced_accuracy",
+        }[lost]
+        summary["val"][key] = {"mean": NAN}
+        for fold in summary["per_fold_val"]:
+            fold[key] = NAN
+
+        result = m.summary_to_result_json(summary, 10.0)
+
+        assert result["status"] == "partial"
+        assert result["metrics"] == {}
+        assert result["primary_value"] == 0.0
+        assert f"primary_value not reported: {lost} was unestimable" in result["error"]
 
     def test_the_primary_value_is_never_a_partial_scale(self):
         """CR-1b must agree, or terminal_writer overwrites the selection signal.
 
         Recomputed under the campaign's declared selector (scoring.formula:
-        val_auc) — the reducer this trainer's primary_value is paired with.
+        val_auc_smooth) — the reducer this trainer's primary_value is paired with.
         """
         from automil.scoring import primary_value_disagrees, recompute_primary_value
 
         m = _load_run_experiment()
         for summary in (
             _summary([0.70] * 5, [0.60] * 5),                          # healthy
-            _summary([NAN] * 5, [0.60] * 5, val_auc=NAN, val_bacc=0.60),
-            _summary([NAN] * 5, [NAN] * 5, val_auc=NAN, val_bacc=NAN),
+            _summary(
+                [NAN] * 5, [0.60] * 5,
+                val_auc=NAN, val_bacc=0.60, val_auc_smooth=NAN,
+            ),
+            _summary(
+                [NAN] * 5, [NAN] * 5,
+                val_auc=NAN, val_bacc=NAN, val_auc_smooth=NAN,
+            ),
         ):
             result = m.summary_to_result_json(summary, 10.0)
-            recomputed = recompute_primary_value(result["metrics"], "val_auc")
+            recomputed = recompute_primary_value(result["metrics"], "val_auc_smooth")
             if recomputed is not None:
                 assert not primary_value_disagrees(result["primary_value"], recomputed)
 
@@ -192,8 +259,10 @@ class TestUnestimablePrimary_value:
         result = m.summary_to_result_json(_summary([0.70, 0.72, 0.68, 0.71, 0.69]), 10.0)
 
         assert result["status"] == "completed"
-        assert result["metrics"] == {"val_auc": 0.70, "val_bacc": 0.60}
-        assert result["primary_value"] == pytest.approx(0.70)
+        assert result["metrics"] == {
+            "val_auc_smooth": 0.66, "val_auc": 0.70, "val_bacc": 0.60,
+        }
+        assert result["primary_value"] == pytest.approx(0.66)
         assert "error" not in result
 
 
@@ -206,7 +275,9 @@ class TestWriteFoldResultJson:
         monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
         monkeypatch.setenv("AUTOMIL_FOLD_COUNT", "5")
         _write_fold_result_json(0, {
-            "val_metrics": {"auc_roc": NAN, "balanced_accuracy": 0.61},
+            "val_metrics": {
+                "auc_roc_smooth": 0.66, "auc_roc": NAN, "balanced_accuracy": 0.61,
+            },
             "test_metrics": {"auc_roc": 0.70, "balanced_accuracy": 0.65},
             "elapsed_seconds": 120,
             "peak_vram_mb": 4000,
@@ -215,6 +286,7 @@ class TestWriteFoldResultJson:
         text = (tmp_path / "fold_0_result.json").read_text()
         assert "NaN" not in text
         payload = json.loads(text)
+        assert payload["metrics"]["val_auc_smooth"] == pytest.approx(0.66)
         assert payload["metrics"]["val_auc"] is None
         assert payload["metrics"]["val_bacc"] == pytest.approx(0.61)
         assert payload["primary_value"] is None
@@ -222,7 +294,9 @@ class TestWriteFoldResultJson:
         # A lost COMPANION nulls the fold primary_value too — fold validity spans
         # the full recorded evidence set (matches the campaign validator).
         _write_fold_result_json(2, {
-            "val_metrics": {"auc_roc": 0.72, "balanced_accuracy": NAN},
+            "val_metrics": {
+                "auc_roc_smooth": 0.68, "auc_roc": 0.72, "balanced_accuracy": NAN,
+            },
             "test_metrics": {"auc_roc": 0.70, "balanced_accuracy": 0.65},
             "elapsed_seconds": 120,
             "peak_vram_mb": 4000,
@@ -232,22 +306,43 @@ class TestWriteFoldResultJson:
         assert payload["metrics"]["val_bacc"] is None
         assert payload["primary_value"] is None
 
+        # And so does a lost SELECTION metric: no NaN token, a null slot, a
+        # null primary_value, the finite siblings untouched.
+        _write_fold_result_json(3, {
+            "val_metrics": {
+                "auc_roc_smooth": NAN, "auc_roc": 0.72, "balanced_accuracy": 0.61,
+            },
+            "test_metrics": {"auc_roc": 0.70, "balanced_accuracy": 0.65},
+            "elapsed_seconds": 120,
+            "peak_vram_mb": 4000,
+        })
+        text = (tmp_path / "fold_3_result.json").read_text()
+        assert "NaN" not in text
+        payload = json.loads(text)
+        assert payload["metrics"]["val_auc_smooth"] is None
+        assert payload["metrics"]["val_auc"] == pytest.approx(0.72)
+        assert payload["primary_value"] is None
+
     def test_a_healthy_fold_is_untouched(self, tmp_path, monkeypatch):
         from autobench.pipeline.clam.runner import _write_fold_result_json
 
         monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
         monkeypatch.setenv("AUTOMIL_FOLD_COUNT", "5")
         _write_fold_result_json(1, {
-            "val_metrics": {"auc_roc": 0.80, "balanced_accuracy": 0.70},
+            "val_metrics": {
+                "auc_roc_smooth": 0.76, "auc_roc": 0.80, "balanced_accuracy": 0.70,
+            },
             "test_metrics": {"auc_roc": 0.78, "balanced_accuracy": 0.68},
             "elapsed_seconds": 120,
             "peak_vram_mb": 4000,
         })
 
         payload = json.loads((tmp_path / "fold_1_result.json").read_text())
-        assert payload["metrics"] == {"val_auc": 0.80, "val_bacc": 0.70}
+        assert payload["metrics"] == {
+            "val_auc_smooth": 0.76, "val_auc": 0.80, "val_bacc": 0.70,
+        }
         assert payload["held_out"] == {"test_auc": 0.78, "test_bacc": 0.68}
-        assert payload["primary_value"] == pytest.approx(0.80)
+        assert payload["primary_value"] == pytest.approx(0.76)
         assert payload["status"] == "completed"
 
 
@@ -264,8 +359,8 @@ class TestMainDoesNotCrashOnAPartialResult:
     @pytest.mark.parametrize("metrics", [
         {},                                       # nothing estimable
         {"val_bacc": 0.60},                       # historical half-metrics shape
-        {"val_auc": 0.70, "val_bacc": 0.60},      # healthy
-        {"val_c_index": 0.61},                    # survival
+        {"val_auc_smooth": 0.66, "val_auc": 0.70, "val_bacc": 0.60},   # healthy
+        {"val_c_index_smooth": 0.58, "val_c_index": 0.61},             # survival
     ])
     def test_summary_print_formats_any_metrics_shape(self, metrics, capsys):
         result = {"metrics": metrics, "primary_value": 0.65, "error": "unestimable: val_auc"}

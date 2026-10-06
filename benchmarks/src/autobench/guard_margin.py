@@ -1,6 +1,6 @@
 """Derive each cell's companion non-inferiority margin from its frozen splits.
 
-Selection is single-metric (``scoring.formula: val_auc``). Balanced accuracy is
+Selection is single-metric (``scoring.formula: val_auc_smooth``). Balanced accuracy is
 recorded but does not vote, because on a few-dozen-slide validation split it is
 a LATTICE statistic: it can only take values on a grid whose spacing is set by
 the class counts, and one slide changing side moves it by a whole grid step —

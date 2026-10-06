@@ -130,7 +130,7 @@ def _primary_values(
     # ``primary_by_task_family``: AUROC for binary and nominal multiclass,
     # quadratic-weighted kappa for ordinal grading, concordance index for
     # survival. Selection stays the primary VALIDATION metric everywhere
-    # (scoring.formula: val_auc / val_c_index); companions are recorded in
+    # (scoring.formula: val_auc_smooth / val_c_index_smooth); companions are recorded in
     # the sealed evidence but never rank the campaign.
     required = HELD_OUT_SCHEMA_BY_FAMILY.get(task_family)
     if required is None:

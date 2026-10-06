@@ -461,8 +461,8 @@ def _validation_folds(
         # LOST a component fails closed, and so does an ordinal fold whose
         # evidence degraded to the binary shape.
         # Selection is the PRIMARY validation metric alone (scoring.formula:
-        # val_auc / val_c_index): companions stay recorded in `metrics` but no
-        # longer vote — bacc's ~1/17-per-slide threshold quantization injected
+        # val_auc_smooth / val_c_index_smooth): companions stay recorded in
+        # `metrics` but do not vote — bacc's ~1/17-per-slide threshold quantization injected
         # lattice noise at exactly the accept-margin scale, and the canary
         # cells' old multi-metric composite disagreed with auc's ranking throughout.
         if set(metrics) != set(expected_metrics):

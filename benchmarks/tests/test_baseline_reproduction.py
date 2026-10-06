@@ -77,7 +77,7 @@ def _fake_execution(
         )
         folds = _folds(DISCOVERY_FOLDS, 0.60)
         for fold_entry, value in zip(folds, fold_values):
-            fold_entry["metrics"]["val_auc"] = value
+            fold_entry["metrics"]["val_auc_smooth"] = value
             fold_entry["primary_value"] = value
             if fold_hashes is not None:
                 fold_entry["val_predictions_sha256"] = fold_hashes.get(
@@ -86,7 +86,7 @@ def _fake_execution(
         result = {
             "status": "completed",
             "primary_value": sum(fold_values) / len(fold_values),
-            "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
+            "metrics": {"val_auc_smooth": 0.62, "val_auc": 0.64, "val_bacc": 0.60},
             "validation_folds": folds,
         }
         (Path(kwargs["cwd"]) / "result.json").write_text(json.dumps(result))
@@ -238,7 +238,7 @@ def test_wrong_fold_set_fails_closed(staged_cell, monkeypatch):
             result = {
                 "status": "completed",
                 "primary_value": 0.6,
-                "metrics": {"val_auc": 0.62, "val_bacc": 0.60},
+                "metrics": {"val_auc_smooth": 0.62, "val_auc": 0.64, "val_bacc": 0.60},
                 "validation_folds": _folds(DISCOVERY_FOLDS[:-1], 0.60),
             }
             (Path(kwargs["cwd"]) / "result.json").write_text(json.dumps(result))

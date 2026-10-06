@@ -187,10 +187,15 @@ def _parse_folds(raw: str | None, n_folds: int) -> tuple[int, ...] | None:
 #: companions vote (the pre-round-2 lattice noise), sharing the selection set
 #: silently drops companions from the recorded evidence (schema-lock reject).
 def _metric_components(is_survival: bool, ordinal: bool):
-    """(summary_key, public_name) pairs RECORDED in the metrics blocks."""
+    """(summary_key, public_name) pairs RECORDED in the metrics blocks; the
+    first pair is the selection metric."""
     if is_survival:
-        return (("c_index", "val_c_index"),)
-    components = (("auc_roc", "val_auc"), ("balanced_accuracy", "val_bacc"))
+        return (("c_index_smooth", "val_c_index_smooth"), ("c_index", "val_c_index"))
+    components = (
+        ("auc_roc_smooth", "val_auc_smooth"),
+        ("auc_roc", "val_auc"),
+        ("balanced_accuracy", "val_bacc"),
+    )
     if ordinal:
         components += (("qwk", "val_qwk"),)
     return components
@@ -199,21 +204,24 @@ def _metric_components(is_survival: bool, ordinal: bool):
 def _primary_components(is_survival: bool, ordinal: bool):
     """(summary_key, public_name) pairs that make up the primary_value.
 
-    Selection is the PRIMARY validation metric alone: val_auc for
-    classification (ordinal included), val_c_index for survival. Balanced
-    accuracy and qwk stay recorded in ``metrics`` — they just no longer vote:
+    Selection is the PRIMARY validation metric alone, scored on the
+    validation curve (protocol v5): val_auc_smooth for classification (ordinal
+    included), the validation AUC averaged over the five evaluated epochs
+    around the restored one, and val_c_index_smooth likewise for survival. The
+    restored model's own val_auc / val_c_index, balanced accuracy and qwk stay
+    recorded in ``metrics`` — they just do not vote:
     on a few-dozen-slide validation split bacc is threshold-quantized at
     ~1/17 per flipped minority slide (the size of the accept-margin floor),
     so averaging it in injected lattice noise at exactly the decision scale,
     and the old multi-metric composite's rankings disagreed with auc's throughout
     the canary cells.
-    Matches ``scoring.formula: val_auc`` / ``val_c_index`` in the campaign
-    cell configs (the framework recomputes and cross-checks with the same
-    selector at ingest).
+    Matches ``scoring.formula: val_auc_smooth`` / ``val_c_index_smooth`` in
+    the campaign cell configs (the framework recomputes and cross-checks with
+    the same selector at ingest).
     """
     if is_survival:
-        return (("c_index", "val_c_index"),)
-    return (("auc_roc", "val_auc"),)
+        return (("c_index_smooth", "val_c_index_smooth"),)
+    return (("auc_roc_smooth", "val_auc_smooth"),)
 
 
 def _component_value(raw, name: str):
@@ -365,9 +373,11 @@ def summary_to_result_json(
     """Convert autobench summary dict to autoMIL result.json format.
 
     The primary_value is the VALIDATION selection signal (autoMIL keep/discard and
-    UCB select on it) and equals the PRIMARY validation metric alone: the
-    validation concordance index for survival summaries (``c_index`` entry),
-    ``val_auc`` for classification (ordinal included). Companions (``val_bacc``,
+    UCB select on it) and equals the PRIMARY validation metric alone, scored on
+    the validation curve around each fold's restored epoch:
+    ``val_c_index_smooth`` for survival summaries (``c_index`` entry),
+    ``val_auc_smooth`` for classification (ordinal included). Companions
+    (``val_auc`` / ``val_c_index`` of the restored model, ``val_bacc``,
     ``val_qwk``) stay recorded in ``metrics`` but do not vote. Test metrics are
     never the selection signal.
     """
@@ -387,7 +397,7 @@ def summary_to_result_json(
     # An unestimable metric is DROPPED from its block rather than written as NaN.
     # `metrics` and `held_out` are schema-constrained to numbers, and CR-1b
     # recomputes the primary_value from `metrics` under the declared formula
-    # (`scoring.formula: val_auc` / `val_c_index` in campaign cells) — the
+    # (`scoring.formula: val_auc_smooth` / `val_c_index_smooth` in campaign cells) — the
     # primary_value below is that same selector value, keeping reported and
     # recomputed in agreement. Which names went missing is reported via
     # `unestimable`.
@@ -404,15 +414,19 @@ def summary_to_result_json(
             )
             if value is not None
         ]
-        val_ci = (
-            math.fsum(fold_values) / len(fold_values)
-            if fold_values
-            else _finite_or_none(val.get("c_index", {}).get("mean"))
-        )
-        metrics = {"val_c_index": val_ci} if val_ci is not None else {}
+        candidates = {
+            "val_c_index_smooth": (
+                math.fsum(fold_values) / len(fold_values)
+                if fold_values
+                else _finite_or_none(val.get("c_index_smooth", {}).get("mean"))
+            ),
+            "val_c_index": _finite_or_none(val.get("c_index", {}).get("mean")),
+        }
+        # All-or-nothing over the recorded set, as on the classification side.
+        unestimable = [name for name, value in candidates.items() if value is None]
+        metrics = {} if unestimable else candidates
         held_out = {"test_c_index": round(test_ci, 4)} if test_ci is not None else {}
-        unestimable = [] if val_ci is not None else ["val_c_index"]
-        primary_value = val_ci if val_ci is not None else 0.0
+        primary_value = 0.0 if unestimable else candidates["val_c_index_smooth"]
     else:
         # Keyed on the DECLARED `ordinal` flag, never on whether `qwk` happens
         # to be present. Sniffing the data silently produced a 2-term primary_value
@@ -444,7 +458,7 @@ def summary_to_result_json(
             for key, name in _metric_components(False, ordinal)
         }
         # ORDINAL tasks -- TCGA-HNSC grade (g1<g2<g3) only -- RECORD QWK as a
-        # companion (it no longer votes; selection is val_auc alone). It is
+        # companion (it does not vote; selection is val_auc_smooth alone). It is
         # still the one recorded metric that uses the ordering -- auc and bacc
         # both score a g1->g3 error exactly like a g1->g2 one -- so it stays
         # tracked for the agent's diagnostics and the campaign's evidence lock.
@@ -505,7 +519,7 @@ def summary_to_result_json(
             name for name, value in held_out_candidates.items() if value is None
         ]
         # ALL-OR-NOTHING over the RECORDED evidence set, deliberately — even
-        # though only val_auc votes now. A run that lost a declared companion
+        # though only val_auc_smooth votes. A run that lost a declared companion
         # broke the evidence contract (the campaign schema lock rejects it at
         # ingest for the same reason), and under the generic `mean` reducer a
         # partial metrics block would put CR-1b's recompute on a different
@@ -531,8 +545,10 @@ def summary_to_result_json(
             primary_value = 0.0
         else:
             # Selection = the primary metric alone; companions are recorded
-            # in `metrics` above but do not vote (scoring.formula: val_auc).
-            primary_value = candidates["val_auc"]
+            # in `metrics` above but do not vote (scoring.formula:
+            # val_auc_smooth).
+            (_, selection_name), = _primary_components(False, ordinal)
+            primary_value = candidates[selection_name]
 
     # A stage is complete only when every fold it declared has a finite
     # selection primary_value.  The old global ``>= 2`` threshold let a 2/3-fold

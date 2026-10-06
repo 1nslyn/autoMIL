@@ -442,30 +442,48 @@ class TestSurvivalNormalize:
 
 
 class TestSurvivalPrimary_value:
-    def test_fold_result_uses_c_index(self, tmp_path, monkeypatch):
+    def test_fold_result_selects_on_the_smoothed_c_index(self, tmp_path, monkeypatch):
         monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
         monkeypatch.setenv("AUTOMIL_FOLD_COUNT", "3")
         result = {
             "test_metrics": {"c_index": 0.7},
-            "val_metrics": {"c_index": 0.6},
+            "val_metrics": {"c_index_smooth": 0.55, "c_index": 0.6},
         }
         _write_fold_result_json(0, result)
         payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-        assert payload["primary_value"] == 0.6  # val_c_index (selection signal), not test's 0.7
+        # val_c_index_smooth (selection signal): neither the restored model's own
+        # val_c_index (0.6), recorded beside it, nor test's 0.7
+        assert payload["primary_value"] == 0.55
+        assert payload["metrics"] == {"val_c_index_smooth": 0.55, "val_c_index": 0.6}
         assert payload["held_out"]["test_c_index"] == 0.7  # sealed (val-firewall)
-        assert payload["metrics"]["val_c_index"] == 0.6
         assert "test_c_index" not in payload["metrics"]
+
+    def test_fold_without_a_smoothed_c_index_has_no_primary_value(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
+        monkeypatch.setenv("AUTOMIL_FOLD_COUNT", "3")
+        result = {
+            "test_metrics": {"c_index": 0.7},
+            "val_metrics": {"c_index_smooth": None, "c_index": 0.6},
+        }
+        _write_fold_result_json(0, result)
+        payload = json.loads((tmp_path / "fold_0_result.json").read_text())
+        assert payload["metrics"] == {"val_c_index_smooth": None, "val_c_index": 0.6}
+        assert payload["primary_value"] is None
 
     def test_fold_result_classification_unchanged(self, tmp_path, monkeypatch):
         monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
         monkeypatch.setenv("AUTOMIL_FOLD_COUNT", "3")
         result = {
             "test_metrics": {"auc_roc": 0.8, "balanced_accuracy": 0.7},
-            "val_metrics": {"auc_roc": 0.75, "balanced_accuracy": 0.65},
+            "val_metrics": {
+                "auc_roc_smooth": 0.72, "auc_roc": 0.75, "balanced_accuracy": 0.65,
+            },
         }
         _write_fold_result_json(0, result)
         payload = json.loads((tmp_path / "fold_0_result.json").read_text())
-        assert payload["primary_value"] == pytest.approx(0.75)  # val_auc (selection signal)
+        assert payload["primary_value"] == pytest.approx(0.72)  # val_auc_smooth (selection signal)
         assert payload["held_out"]["test_auc"] == 0.8  # sealed (val-firewall)
 
 

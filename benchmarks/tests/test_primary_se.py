@@ -45,17 +45,27 @@ def _load_run_experiment() -> ModuleType:
     return mod
 
 
-def _cls_summary(fold_aucs, fold_baccs=None):
+def _mean_of_finite(values):
+    finite = [v for v in values if isinstance(v, float) and math.isfinite(v)]
+    return sum(finite) / len(finite) if finite else 0.0
+
+
+def _cls_summary(fold_aucs, fold_baccs=None, fold_smooths=None):
     fold_baccs = fold_baccs if fold_baccs is not None else [0.60] * len(fold_aucs)
-    finite = [a for a in fold_aucs if isinstance(a, float) and math.isfinite(a)]
-    mean_auc = sum(finite) / len(finite) if finite else 0.0
+    # The selection metric is each fold's smoothed AUC, recorded beside the
+    # restored model's own auc_roc; 0.04 below it unless a test sets it, so
+    # the two can be told apart.
+    fold_smooths = (
+        fold_smooths if fold_smooths is not None else [a - 0.04 for a in fold_aucs]
+    )
     return {
         "test": {"auc_roc": {"mean": 0.70}, "balanced_accuracy": {"mean": 0.60}},
-        "val": {"auc_roc": {"mean": mean_auc},
+        "val": {"auc_roc_smooth": {"mean": _mean_of_finite(fold_smooths)},
+                "auc_roc": {"mean": _mean_of_finite(fold_aucs)},
                 "balanced_accuracy": {"mean": 0.60}},
         "per_fold_val": [
-            {"auc_roc": a, "balanced_accuracy": b}
-            for a, b in zip(fold_aucs, fold_baccs)
+            {"auc_roc_smooth": s, "auc_roc": a, "balanced_accuracy": b}
+            for a, b, s in zip(fold_aucs, fold_baccs, fold_smooths)
         ],
         "per_fold_test": [],
         "n_folds": len(fold_aucs),
@@ -66,10 +76,18 @@ def _cls_summary(fold_aucs, fold_baccs=None):
 
 def test_classification_primary_value_se_is_the_cross_fold_sem():
     m = _load_run_experiment()
-    # per-fold primary values = val_auc alone → {0.70,0.72,0.68,0.71,0.69}
-    # ddof=1 SD = 0.01581138830..., SE = SD/sqrt(5) = 0.00707106781...
-    r = m.summary_to_result_json(_cls_summary([0.70, 0.72, 0.68, 0.71, 0.69]), 10.0)
-    assert r["primary_se"] == pytest.approx(0.007071, abs=1e-6)
+    # per-fold primary values = val_auc_smooth alone → {0.60,0.64,0.56,0.62,0.58},
+    # twice the spread of the restored model's val_auc column, so that column
+    # cannot pass for them
+    # ddof=1 SD = 0.03162277660..., SE = SD/sqrt(5) = 0.01414213562...
+    r = m.summary_to_result_json(
+        _cls_summary(
+            [0.70, 0.72, 0.68, 0.71, 0.69],
+            fold_smooths=[0.60, 0.64, 0.56, 0.62, 0.58],
+        ),
+        10.0,
+    )
+    assert r["primary_se"] == pytest.approx(0.014142, abs=1e-6)
 
 
 def test_primary_se_is_top_level_not_inside_metrics():
@@ -78,17 +96,17 @@ def test_primary_se_is_top_level_not_inside_metrics():
     r = m.summary_to_result_json(_cls_summary([0.70, 0.72, 0.68, 0.71, 0.69]), 10.0)
     assert "primary_se" in r
     assert "primary_se" not in r["metrics"]
-    assert set(r["metrics"]) == {"val_auc", "val_bacc"}
+    assert set(r["metrics"]) == {"val_auc_smooth", "val_auc", "val_bacc"}
 
 
 def test_primary_se_does_not_shift_the_recomputed_primary_value():
     """The CR-1b recompute over metrics must still reproduce the primary_value
-    under the campaign's declared selector (scoring.formula: val_auc)."""
+    under the campaign's declared selector (scoring.formula: val_auc_smooth)."""
     from automil.scoring import recompute_primary_value
 
     m = _load_run_experiment()
     r = m.summary_to_result_json(_cls_summary([0.70, 0.72, 0.68, 0.71, 0.69]), 10.0)
-    assert recompute_primary_value(r["metrics"], "val_auc") == pytest.approx(
+    assert recompute_primary_value(r["metrics"], "val_auc_smooth") == pytest.approx(
         r["primary_value"], abs=1e-3)
 
 
@@ -113,23 +131,26 @@ def test_primary_se_none_when_per_fold_val_absent():
 
 
 def test_a_fold_missing_the_selection_metric_is_dropped_whole():
-    """No val_auc on a fold → no primary_value to measure on that fold."""
+    """No val_auc_smooth on a fold → no primary_value to measure on that fold."""
     m = _load_run_experiment()
-    r = m.summary_to_result_json(_cls_summary([0.70, NAN, 0.68]), 10.0)
-    # Folds 0 and 2 carry the selection metric → primary values {0.70, 0.68}
+    r = m.summary_to_result_json(
+        _cls_summary([0.70, 0.72, 0.68], fold_smooths=[0.66, NAN, 0.64]), 10.0)
+    # Folds 0 and 2 carry the selection metric → primary values {0.66, 0.64}
     # ddof=1 SD = 0.01414213562, SE = /sqrt(2) = 0.01
     assert r["primary_se"] == pytest.approx(0.01, abs=1e-6)
+    assert r["validation_folds"][1]["metrics"]["val_auc"] == pytest.approx(0.72)
+    assert r["validation_folds"][1]["primary_value"] is None
 
 
 def test_a_fold_missing_a_companion_is_dropped_whole_too():
     """Fold validity spans the full RECORDED evidence set even though only
-    val_auc votes: the campaign validator rejects a companion-lossy fold at
-    ingest, so this side must quarantine the same fold — not sail it through
+    val_auc_smooth votes: the campaign validator rejects a companion-lossy fold
+    at ingest, so this side must quarantine the same fold — not sail it through
     selection to die silently at discovery freeze."""
     m = _load_run_experiment()
     r = m.summary_to_result_json(
         _cls_summary([0.70, 0.72, 0.68], fold_baccs=[0.60, NAN, 0.60]), 10.0)
-    # Folds 0 and 2 carry full evidence → primary values {0.70, 0.68}
+    # Folds 0 and 2 carry full evidence → primary values {0.66, 0.64}
     # ddof=1 SD = 0.01414213562, SE = /sqrt(2) = 0.01
     assert r["primary_se"] == pytest.approx(0.01, abs=1e-6)
     assert r["validation_folds"][1]["metrics"]["val_bacc"] is None
@@ -143,24 +164,28 @@ def test_degenerate_identical_folds_report_zero_se_not_none():
     assert r["primary_se"] == 0.0
 
 
-def test_survival_primary_value_se_is_the_cross_fold_c_index_sem():
+def test_survival_primary_value_se_is_the_cross_fold_smoothed_c_index_sem():
     """Survival selection and its SE use the same per-fold evidence."""
     m = _load_run_experiment()
     summary = {
         "test": {"c_index": {"mean": 0.62}},
-        "val": {"c_index": {"mean": 0.60}},
+        "val": {"c_index_smooth": {"mean": 0.60}, "c_index": {"mean": 0.64}},
         "val_pooled": {"c_index": 0.61},
-        "per_fold_val": [{"c_index": c} for c in (0.58, 0.60, 0.62, 0.59, 0.61)],
+        "per_fold_val": [
+            {"c_index_smooth": smooth, "c_index": 0.64}
+            for smooth in (0.58, 0.60, 0.62, 0.59, 0.61)
+        ],
         "per_fold_test": [],
         "n_folds": 5,
     }
     r = m.summary_to_result_json(summary, 5.0)
     assert r["primary_value"] == pytest.approx(0.60)      # equal-weight fold mean
-    assert r["metrics"]["val_c_index"] == pytest.approx(r["primary_value"])
+    assert r["metrics"]["val_c_index_smooth"] == pytest.approx(r["primary_value"])
+    assert r["metrics"]["val_c_index"] == pytest.approx(0.64)    # recorded, never votes
     assert r["primary_value"] == pytest.approx(
         sum(fold["primary_value"] for fold in r["validation_folds"]) / 5
     )
-    # ddof=1 SD over the five per-fold c-indices = 0.01581138830, /sqrt(5)
+    # ddof=1 SD over the five per-fold smoothed c-indices = 0.01581138830, /sqrt(5)
     assert r["primary_se"] == pytest.approx(0.007071, abs=1e-6)
 
 

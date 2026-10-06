@@ -7,6 +7,7 @@ Covers:
   - one file per fold, fold_index in JSON
   - fold_count sourced from AUTOMIL_FOLD_COUNT env
   - missing metrics → zero fallback (no exception)
+  - selection metric: the smoothed validation score is the fold's primary_value
 """
 
 from __future__ import annotations
@@ -26,13 +27,18 @@ def _minimal_result(
     test_auc: float = 0.85,
     test_bacc: float = 0.82,
     val_auc: float = 0.90,
+    val_auc_smooth: float = 0.88,
     val_bacc: float = 0.84,
     elapsed: int = 100,
     vram: int = 4500,
 ) -> dict:
     return {
         "test_metrics": {"auc_roc": test_auc, "balanced_accuracy": test_bacc},
-        "val_metrics": {"auc_roc": val_auc, "balanced_accuracy": val_bacc},
+        "val_metrics": {
+            "auc_roc_smooth": val_auc_smooth,
+            "auc_roc": val_auc,
+            "balanced_accuracy": val_bacc,
+        },
         "elapsed_seconds": elapsed,
         "peak_vram_mb": vram,
         "fold": 0,
@@ -56,6 +62,7 @@ def test_writes_fold_file_when_results_dir_set(tmp_path, monkeypatch):
     assert payload["fold_index"] == 2
     assert payload["status"] == "completed"
     # val-firewall: metrics is val-only (agent-facing); test lives in sealed held_out
+    assert payload["metrics"]["val_auc_smooth"] == pytest.approx(0.88)
     assert payload["metrics"]["val_auc"] == pytest.approx(0.90)
     assert payload["metrics"]["val_bacc"] == pytest.approx(0.84)
     assert "test_auc" not in payload["metrics"]
@@ -63,8 +70,9 @@ def test_writes_fold_file_when_results_dir_set(tmp_path, monkeypatch):
     assert payload["held_out"]["test_auc"] == pytest.approx(0.85)
     assert payload["held_out"]["test_bacc"] == pytest.approx(0.82)
     # primary_value is the VALIDATION selection signal — the primary metric alone
-    # (scoring.formula: val_auc); val 0.90 != test 0.85 proves the val side won
-    assert payload["primary_value"] == pytest.approx(0.90)
+    # (scoring.formula: val_auc_smooth); val 0.88 != test 0.85 proves the val
+    # side won
+    assert payload["primary_value"] == pytest.approx(0.88)
     assert payload["elapsed_seconds"] == 100
     assert payload["peak_vram_mb"] == 4500
 
@@ -95,6 +103,7 @@ def test_metric_keys_mapped_correctly_from_dict_shape(tmp_path, monkeypatch):
             "balanced_accuracy": {"mean": 0.88, "std": 0.01, "ci_low": 0.86, "ci_high": 0.90},
         },
         "val_metrics": {
+            "auc_roc_smooth": {"mean": 0.87, "std": 0.03},
             "auc_roc": {"mean": 0.89, "std": 0.03},
             "balanced_accuracy": {"mean": 0.85, "std": 0.02},
         },
@@ -106,6 +115,7 @@ def test_metric_keys_mapped_correctly_from_dict_shape(tmp_path, monkeypatch):
     payload = json.loads((tmp_path / "fold_1_result.json").read_text())
     assert payload["held_out"]["test_auc"] == pytest.approx(0.91)
     assert payload["held_out"]["test_bacc"] == pytest.approx(0.88)
+    assert payload["metrics"]["val_auc_smooth"] == pytest.approx(0.87)
     assert payload["metrics"]["val_auc"] == pytest.approx(0.89)
     assert payload["metrics"]["val_bacc"] == pytest.approx(0.85)
     assert "test_auc" not in payload["metrics"]
@@ -166,6 +176,7 @@ def test_handles_missing_metrics_gracefully(tmp_path, monkeypatch):
     payload = json.loads((tmp_path / "fold_0_result.json").read_text())
     assert payload["held_out"]["test_auc"] is None
     assert payload["held_out"]["test_bacc"] is None
+    assert payload["metrics"]["val_auc_smooth"] is None
     assert payload["metrics"]["val_auc"] is None
     assert payload["metrics"]["val_bacc"] is None
     assert payload["primary_value"] is None
@@ -188,7 +199,7 @@ def test_ordinal_fold_records_clamped_qwk_on_both_sides(tmp_path, monkeypatch):
     assert payload["metrics"]["val_qwk"] == 0.0
     assert payload["held_out"]["test_qwk"] == pytest.approx(0.42)
     # qwk never votes: primary_value is still the selection metric alone.
-    assert payload["primary_value"] == pytest.approx(0.90)
+    assert payload["primary_value"] == pytest.approx(0.88)
 
 
 def test_ordinal_fold_missing_qwk_is_invalid(tmp_path, monkeypatch):
@@ -250,5 +261,50 @@ def test_missing_held_out_auc_invalidates_the_fold(tmp_path, monkeypatch):
 
     payload = json.loads((tmp_path / "fold_0_result.json").read_text())
     assert payload["held_out"]["test_auc"] is None
+    assert payload["metrics"]["val_auc"] == pytest.approx(0.90)
+    assert payload["primary_value"] is None
+
+
+# ---------------------------------------------------------------------------
+# Selection metric: the validation score smoothed around the restored epoch
+# ---------------------------------------------------------------------------
+
+def test_classification_fold_selects_on_the_smoothed_auc(tmp_path, monkeypatch):
+    """primary_value is val_auc_smooth, the validation AUC averaged over the
+    epochs around the restored one. The restored model's own val_auc stays
+    recorded beside it as a companion and does not vote."""
+    monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
+
+    _write_fold_result_json(0, _minimal_result(val_auc=0.90, val_auc_smooth=0.80))
+
+    payload = json.loads((tmp_path / "fold_0_result.json").read_text())
+    assert payload["metrics"]["val_auc_smooth"] == pytest.approx(0.80)
+    assert payload["metrics"]["val_auc"] == pytest.approx(0.90)
+    assert payload["primary_value"] == pytest.approx(0.80)
+    assert payload["primary_value"] != pytest.approx(payload["metrics"]["val_auc"])
+
+
+@pytest.mark.parametrize(
+    "smoothed", [None, float("nan"), "absent"], ids=["null", "nan", "absent"],
+)
+def test_a_fold_with_no_smoothed_auc_has_no_primary_value(
+    tmp_path, monkeypatch, smoothed,
+):
+    """No epoch was selected, or the curve is unestimable: the smoothed score is
+    recorded as null and the fold carries no primary_value, although the
+    restored model's val_auc is finite. Fold validity spans the selection
+    metric as much as the companions."""
+    monkeypatch.setenv("AUTOMIL_RESULTS_DIR", str(tmp_path))
+    result = _minimal_result()
+    if smoothed == "absent":
+        del result["val_metrics"]["auc_roc_smooth"]
+    else:
+        result["val_metrics"]["auc_roc_smooth"] = smoothed
+    _write_fold_result_json(0, result)
+
+    text = (tmp_path / "fold_0_result.json").read_text()
+    assert "NaN" not in text
+    payload = json.loads(text)
+    assert payload["metrics"]["val_auc_smooth"] is None
     assert payload["metrics"]["val_auc"] == pytest.approx(0.90)
     assert payload["primary_value"] is None

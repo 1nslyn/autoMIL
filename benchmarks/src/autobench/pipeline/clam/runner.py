@@ -80,15 +80,19 @@ def _write_fold_result_json(
         # Survival: primary_value is the VALIDATION concordance index (selection signal).
         # Test lives in a sealed ``held_out`` block — never surfaced to the agent
         # during search; read once by ``automil certify`` (val-firewall).
-        metrics = {"val_c_index": _unwrap(val_m.get("c_index"))}
+        metrics = {
+            "val_c_index_smooth": _unwrap(val_m.get("c_index_smooth")),
+            "val_c_index": _unwrap(val_m.get("c_index")),
+        }
         held_out = {"test_c_index": _unwrap(test_m.get("c_index"))}
-        primary = "val_c_index"
+        primary = "val_c_index_smooth"
     else:
         def _clamped_qwk(metric) -> float | None:
             value = _unwrap(metric)
             return None if value is None else max(0.0, value)
 
         metrics = {
+            "val_auc_smooth": _unwrap(val_m.get("auc_roc_smooth")),
             "val_auc":  _unwrap(val_m.get("auc_roc")),
             "val_bacc": _unwrap(val_m.get("balanced_accuracy")),
         }
@@ -99,9 +103,9 @@ def _write_fold_result_json(
         if ordinal:
             metrics["val_qwk"] = _clamped_qwk(val_m.get("qwk"))
             held_out["test_qwk"] = _clamped_qwk(test_m.get("qwk"))
-        primary = "val_auc"
+        primary = "val_auc_smooth"
     # Selection is the primary validation metric alone (scoring.formula:
-    # val_auc / val_c_index); companions stay recorded but no longer vote —
+    # val_auc_smooth / val_c_index_smooth); companions stay recorded but do not vote —
     # see run_experiment._primary_components, the aggregate-side authority
     # this per-fold value must mirror. A fold that lost ANY recorded
     # component (companion and held_out included) carries a null
