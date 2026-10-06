@@ -14,7 +14,7 @@
 # Usage, from anywhere, inside a tmux server of its own so it survives SSH
 # drops:
 #   tmux -L disc_chain new -s chain
-#   <checkout>/benchmarks/scripts/run_discovery_chain.sh --runtime runtime-aihub --gpus 0,1,2
+#   <checkout>/benchmarks/scripts/run_discovery_chain.sh --runtime runtime-aihub-hnsc-a --gpus 0
 #
 # Options:
 #   --runtime NAME   the cell-root set under the campaign dir (required); its

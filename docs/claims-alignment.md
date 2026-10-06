@@ -53,7 +53,7 @@ the manifest). Mapped to the figure plan and the proposal's RQs:
 | # | Claim | Pre-registered estimand | Mechanism that must carry it |
 |---|---|---|---|
 | C1 | The corrected full-pipeline benchmark exists and is complete (130 cells: 5 datasets × 2 tasks × {4 tile arms × 3 encoders + TITAN}) | `missingness` (fail-closed census) | manifest + `run-baseline`/`register-baseline` + certification chain |
-| **C2** | **Equal-effort agentic recipe search produces a real, honestly-measured lift over the native default** (fig-3 successor; RQ1 evidence base) | `agentic_lift`: frozen winner − native baseline, sealed-test, per cell; sign counts poolable, magnitudes per task family (`aggregation.primary_by_task_family`: binary/multiclass on test_auc, ordinal grade on test_qwk, survival on test_c_index) | 30-attempt discovery on folds 0–2 (12h metered agent-active, preprint-v4) → ≤10 promotion on folds 3–4 → 5-fold-val winner → campaign-wide freeze → paired reveal |
+| **C2** | **Equal-effort agentic recipe search produces a real, honestly-measured lift over the native default** (fig-3 successor; RQ1 evidence base) | `agentic_lift`: frozen winner − native baseline, sealed-test, per cell; sign counts poolable, magnitudes per task family (`aggregation.primary_by_task_family`: binary/multiclass on test_auc, ordinal grade on test_qwk, survival on test_c_index) | 30-attempt discovery, every attempt on folds 0–4 (12h metered agent-active, preprint-v5) → winner by the paired 5-fold validation lift over the baseline, against a bar set for the best of 30 → campaign-wide freeze → paired reveal |
 | C3 | Recipe search changes aggregator *rankings* (recipe-bias claim, RQ1) | `tile_ranking_response`: rank shift, Kendall τ-b, top-arm-set change per (dataset, task, encoder) block | same, aggregated across the 30 tile blocks |
 | C4 | The survival axis works; TITAN reported separately | `aggregation.primary_by_task_family.survival`, `titan_lift` | survival trainers + nllsurv pin + separate-regime rule |
 | C5 | The search is auditable and test never drives it (val-firewall, RQ4) | `search_process` census; `status: frozen-before-held-out-certification` | born-sealing, launch admissibility, process census, session attestation |
@@ -152,7 +152,7 @@ docs/claims discipline or deferred decision.
 | C-j | P2 | C1, C5 | **Freeze aborts permanently on ordinary clock skew**: `_freeze_discovery_unlocked` raises if any archived `submitted_at` precedes the controller's `bound_at` (`campaign_stages.py:986-1003`); submit host ≠ controller host + NTP-level seconds of skew around the first submit → a frozen-in artifact that can never pass freeze. | A small declared tolerance in the `PROTOCOL` dict (recorded in the audit row), accepted within it; beyond it still fails closed. Lower bound only — `ended_at` is operator-supplied at finalization and needs none. |
 | C-k | P2 | C1, C4 | **A data-determined NaN validation fold makes the *baseline* permanently unregistrable**: an undefined per-fold c-index (single event censored past all others in a ~10-patient val fold) → `status: "partial"` (`run_experiment.py:317-343`) → `register_baseline` refuses (`campaign_stages.py:365-368`) and reruns reproduce it — every cell of that (dataset, task) is dead with no protocol answer. Low probability post-stratification; 13-cell blast radius. | Pre-launch, CPU-only: compute the five per-fold val c-index definabilities from the existing split CSVs + labels once per (dataset, task). Operator-runbook preflight; no training, no new experiments. |
 | C-l | P2 | C2, C3 | **Concurrent baseline prep across encoder-cells of one (dataset, task) can race non-atomic task-CSV/split creation** (`prepare.py:258-271` documents the hazard and prescribes prep-once; `splits.py:246-248` plain `to_csv`) — the loser can silently freeze *different fold definitions*, invisible damage to exactly the cross-cell comparability pool. The campaign README never requires the prep step PRELAUNCH_REVIEW already prescribed. | Runbook: mandatory one-time `--prep_only` per dataset before any concurrent baseline launch (already the documented convention). The `flock` around `prepare_all` goes to the journal ledger. |
-| C-h | P2 | feasibility | **Compute arithmetic**: 130 cells × (30×3-fold discovery + ≤10×2-fold promotion) ≤ 110 fold-trainings/cell ≈ 14,300 fold-trainings ≈ 700–1,200 GPU-h (at the measured 3–5 min/fold-training) → ~1–1.5 weeks on 4×H100, plus ≤12h agent-active × 130 sessions. The plan's own "pilot 12–18 cells" option remains the fallback; nothing in the machinery prevents certifying a predeclared subset — but the current manifest fails closed at 130, so a scope cut means a regenerated manifest, not an exception path. | Decide scale before launch; if cut, cut by regenerating the manifest (keeps fail-closed semantics). |
+| C-h | P2 | feasibility | **Compute arithmetic**: 130 cells × 30 attempts × 5 folds = 150 fold-trainings/cell ≈ 19,500 fold-trainings ≈ 1,000–1,600 GPU-h (at the measured 3–5 min/fold-training) → ~1.5–2.5 weeks on 4×H100, plus ≤12h agent-active × 130 sessions. The plan's own "pilot 12–18 cells" option remains the fallback; nothing in the machinery prevents certifying a predeclared subset — but the current manifest fails closed at 130, so a scope cut means a regenerated manifest, not an exception path. | Decide scale before launch; if cut, cut by regenerating the manifest (keeps fail-closed semantics). |
 
 ## 4. Fix plan (what ships with this audit)
 
@@ -224,16 +224,16 @@ optimizer-wrapper route would remain live on CLAM):
   1–9 point scale in this codebase's own history (GOLDMARK exact-protocol
   deltas came from recipe knobs alone: optimizer, epochs, checkpoint policy).
 - The pre-registered C2 is **descriptive and sign-based** — it does not promise
-  anchor-sized lifts, and the campaign's design (promotion on unseen folds,
-  parent-SE margin, native-baseline-wins-ties, sealed paired reveal, no
-  p-values) makes a modest true lift honestly reportable and a null result
-  survivable (the proposal's §8 pivot: "recipe bias is modest under
-  architecture-preserving constraints among defaults-tuned arms" — still a
-  publishable audit finding).
+  anchor-sized lifts, and the campaign's design (five-fold validation of every
+  attempt, parent-SE margin, a winner bar set for the best of 30 attempts,
+  sealed paired reveal, no p-values) makes a modest true lift honestly
+  reportable and a null result survivable (the proposal's §8 pivot: "recipe
+  bias is modest under architecture-preserving constraints among
+  defaults-tuned arms" — still a publishable audit finding).
 - The residual risk is **effect size on the two small cohorts** (≈10 val
-  patients/fold): the 3-fold discovery mean + 2-fold promotion barrier is the
-  right shape; expect visible val→test shrinkage and pre-commit to showing it
-  (the census already captures the val trajectory per attempt).
+  patients/fold): the winner bar, 2.93 × the paired SE of the five folds,
+  widens with that noise; expect visible val→test shrinkage and pre-commit to
+  showing it (the census already captures the val trajectory per attempt).
 
 So: **yes, conditionally** — the condition being the P0 list, which is exactly
 what §4 ships. Under the ship-fast constraint (no protocol-surface growth at
@@ -284,11 +284,9 @@ loss-shaping families that would raise the ceiling are journal-stage items
    re-litigated): fold definitions are protocol-identical across 5/3/2-fold
    invocations (pinned `--n_folds 5 --seed 42`, per-fold reseed); per-node
    overlay snapshots make `_policies` overwrites harmless to earlier
-   candidates; promotion copies are hash-verified byte-exact; the top-10
-   ordering is deterministic and independently recomputed at freeze;
-   `resubmit` is refused in preserving mode; cap-refused specs are unbilled
-   and census-excluded; exact winner ties prefer the native baseline; the
-   `status` surfaces print validation-only values.
+   candidates; `resubmit` is refused in preserving mode; cap-refused specs are
+   unbilled and census-excluded; exact winner ties prefer the native baseline;
+   the `status` surfaces print validation-only values.
 
 ## 7. Journal-stage ledger (deferred by the ship-fast constraint)
 

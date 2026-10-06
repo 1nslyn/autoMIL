@@ -407,7 +407,7 @@ print(m.RELEASE_LINE)")
         return 1
     fi
 
-    # 6. Usage capture, session end, then the finish ladder on the same GPUs.
+    # 6. Usage capture, session end, then the finish ladder.
     scrape_usage "$cell" "$OPDIR/usage.json" 2>> "$LOG" || echo "[$cell] exporter scrape failed; finish will record usage as unavailable" >> "$LOG"
     capture_status "$name" "$OPDIR/usage_after.txt"
     if ! end_session "$cell" "$name"; then

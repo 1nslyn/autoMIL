@@ -8,6 +8,41 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Protocol `preprint-v5`: every attempt trains on all five folds, and the
+  winner clears a bar set for the best of 30.** The aihub KRAS trial showed
+  that the validation lift of three-fold attempts followed by a ten-candidate
+  promotion on folds 3 and 4 did not rank the candidates. Every discovery
+  attempt now trains and validates on folds 0-4 (150 fold trainings per cell),
+  so the promotion stage, its top-10 cut and the `materialize-promotion` and
+  `freeze-promotion` commands are removed: a cell moves through discovery,
+  selection-ready, winner-frozen and certified, and
+  `campaign_operate.py finish` takes no `--gpu` because nothing trains after
+  discovery. Each fold is scored on the validation curve around the restored
+  epoch: the primary validation metric averaged over the five evaluated epochs
+  centred on the restored one (`val_auc_smooth`, `val_c_index_smooth` for
+  survival; every trainer prints a `[smoothed]` line after `[selected]`). The
+  checkpoint is still the epoch with the highest metric, and the restored
+  model's own `val_auc` / `val_c_index` is recorded beside the score without
+  voting. The winner rule (`campaign.max_lift_winner`) takes every distinct
+  complete attempt, computes its lift as the five-fold mean minus the
+  baseline's, paired fold by fold, and lets the leader replace the baseline
+  only if its lift exceeds `max(0.01, 2.93 x paired SE)`; the SE is pooled
+  over the candidates and 2.93 is Sidak's one-sided 5% value for the best of
+  30 attempts. The selection freeze and certification re-run the rule and
+  require the identical record. The attempt timeout is 1020 minutes (the 600
+  that covered three folds, scaled by 5/3), `campaign_shape.py` predicts a
+  cell as its discovery plus overhead, and the guard margins are re-derived
+  over five folds. Train-only policies gain `transform_bag` on training bags
+  and `before_validation`, with the weight-averaging helper
+  `autobench.pipeline.ema`; both seams are off by default, native runs are
+  unchanged, and survival trainers do not run them (the policy smoke refuses a
+  survival policy that defines either). The manifest (cell ids now end in
+  `__preprint-v5`), the proposal policy and `agent_protocol.json` are
+  regenerated. The v4 rehearsal sets lose their rosters (they stay readable at
+  commit `e978c28`); three aihub sets for the TCGA-HNSC grade trial (Leo,
+  2026-10-06), `runtime-aihub-hnsc-a`, `-b` and `-c`, take their place, each
+  with its own roster and RTX 6000 Ada declaration and one chain on one GPU.
+
 - **The selection freeze applies the discovery freeze's duplicate rule.**
   Since 2026-08-15 the discovery freeze treats a run that reproduced another
   run's validation predictions byte for byte as the same measurement, and the

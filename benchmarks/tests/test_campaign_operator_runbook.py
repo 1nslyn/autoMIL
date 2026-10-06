@@ -40,16 +40,15 @@ case "$CELL" in "$REPO_ROOT"/*) ;; *) exit 1 ;; esac
     )
 
 
-def test_runbook_orders_session_end_before_promotion_and_attestation_after_winner() -> None:
+def test_runbook_orders_session_end_before_winner_selection_and_attestation_after_winner() -> None:
     text = RUNBOOK.read_text()
 
     freeze = text.index("freeze-discovery --cell-root")
     session_end = text.index("/exit\n", freeze)
-    promotion = text.index("materialize-promotion --cell-root", session_end)
-    winner = text.index("select-winner --cell-root", promotion)
+    winner = text.index("select-winner --cell-root", session_end)
     attestation = text.index("finalize-agent-session", winner)
 
-    assert freeze < session_end < promotion < winner < attestation
+    assert freeze < session_end < winner < attestation
     assert "durable final active-time sample" in text
     assert "60 CLAM/ABMIL baseline reruns" not in text
 

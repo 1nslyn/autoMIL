@@ -16,8 +16,7 @@ per-cell row here, it belongs in the Sheet.
 
 ## Stage codes (used in the Sheet)
 
-A cell moves left to right; the one legal skip is a zero-eligible-candidate
-freeze, which jumps from `F` past `P` (baseline wins by default):
+A cell moves left to right:
 
 | Code | Stage | Done when |
 |---|---|---|
@@ -25,9 +24,8 @@ freeze, which jumps from `F` past `P` (baseline wins by default):
 | `M` | materialized | the cell has its own isolated `automil/` root |
 | `B` | baseline done | native-recipe five-fold result archived |
 | `D` | discovery running | agent session open, ≤30 attempts charged, ≤12h agent-active |
-| `F` | discovery frozen | 30 attempts charged, top-10 frozen |
-| `P` | promotion done | frozen top-10 evaluated on folds 3/4 |
-| `W` | winner selected | one winner frozen on five-fold validation mean |
+| `F` | discovery frozen | 30 attempts charged, winner pool frozen |
+| `W` | winner selected | one winner frozen by the winner rule on five-fold validation lift over the baseline |
 | `C` | certified | held-out unsealed once, winner paired with its native baseline |
 | `X` | blocked | put the reason in `Blocker / notes`; includes 12h exhaustion below 30 attempts (freeze fails closed) |
 
@@ -70,7 +68,7 @@ proceeds with the rule inert — so nothing upstream catches it. The zero-GPU
 
 | Item | Status | Notes |
 |---|---|---|
-| `agent_protocol.json` generated + hash-verified | ✅ | built and committed from the two sources, pinned to `claude-opus-5-5[1m]` / Claude Code `2.1.286`; `agent_protocol_sha256` `248af3f9…`, re-verified in CI on every push. Rebuilding requires deleting the file first — it is frozen once. Re-frozen three times since the original build: once for the `ALL_IDLE` policy fix, once to repin the runtime after the host autoupdater moved it 2.1.226 → 2.1.228, and once for protocol v4 (selection rule, batches, guard margin, smoke test) before any v4 root was materialized. The host now holds the version with `chattr +i` on the CLI `versions/` directory, so the pin only moves deliberately. The pinned model ID is what `/status` reports but is not date-anchored; note that in the disclosure Re-frozen once more on 2026-09-20 after the repo-root `CLAUDE.md` lost its personal-session sections (the experiment agent read them, since the runtime loads every `CLAUDE.md` from the cell upward; pin now `9773feab…`); no v4 root had run. Re-frozen on 2026-09-30 for Opus 5.5 at max effort on Claude Code 2.1.286 (Leo's choice before the official loop; only rehearsals had run). 2.1.286 ignores telemetry variables in a project's settings, so the cell settings now carry only the session hooks and the launcher exports the telemetry variables. |
+| `agent_protocol.json` generated + hash-verified | ✅ | built and committed from the two sources, pinned to `claude-opus-5-5[1m]` / Claude Code `2.1.286`; `agent_protocol_sha256` `0e94dd28…`, re-verified in CI on every push. Rebuilding requires deleting the file first — it is frozen once. Re-frozen three times since the original build: once for the `ALL_IDLE` policy fix, once to repin the runtime after the host autoupdater moved it 2.1.226 → 2.1.228, and once for protocol v4 (selection rule, batches, guard margin, smoke test) before any v4 root was materialized. The host now holds the version with `chattr +i` on the CLI `versions/` directory, so the pin only moves deliberately. The pinned model ID is what `/status` reports but is not date-anchored; note that in the disclosure Re-frozen once more on 2026-09-20 after the repo-root `CLAUDE.md` lost its personal-session sections (the experiment agent read them, since the runtime loads every `CLAUDE.md` from the cell upward; pin now `9773feab…`); no v4 root had run. Re-frozen on 2026-09-30 for Opus 5.5 at max effort on Claude Code 2.1.286 (Leo's choice before the official loop; only rehearsals had run). 2.1.286 ignores telemetry variables in a project's settings, so the cell settings now carry only the session hooks and the launcher exports the telemetry variables. Re-frozen on 2026-10-06 for protocol v5 (five-fold attempts, the smoothed score, the winner bar and the two policy seams in the proposal policy). |
 | Per-cell agent launcher (one fresh session, locked tool surface) | ✅ | `campaign_launch.py` — protocol-derived flags + instruction render, pinned CLI/memory surface, per-cell exporter-port exclusivity, fail-closed preflight; first real-CLI exercise happens in the Gate-1 canary |
 | Allocation request (~8,000 GPU-h) | ⬜ | re-derive from canary timings first |
 
@@ -86,7 +84,6 @@ fails closed on an incomplete campaign.
 | Materialized | 0 | 130 |
 | Baseline archived | 0 | 130 |
 | Discovery frozen | 0 | 130 |
-| Promotion done | 0 | 130 |
 | Winner selected | 0 | 130 |
 | Certified | 0 | 130 |
 

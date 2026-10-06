@@ -5,10 +5,11 @@ the full `automil-preprint-130-v6` campaign. The controller enforces the frozen
 protocol independently for every cell:
 
 - native five-fold baseline on folds `0,1,2,3,4`;
-- exactly 30 charged discovery attempts on validation folds `0,1,2`, with a
-  12-hour agent-active safety cap per cell;
-- promotion of at most 10 unique complete candidates on folds `3,4`;
-- winner selection by the equal-weight mean of validation folds `0` through `4`;
+- exactly 30 charged discovery attempts, each trained and validated on all
+  five folds `0,1,2,3,4`, with a 12-hour agent-active safety cap per cell;
+- winner selection by the paired five-fold validation lift over the baseline:
+  the best attempt replaces the baseline only if its lift exceeds
+  `max(0.01, 2.93 x paired SE)` (Section 5);
 - one freeze of the final grid's 78 validation winners before any held-out
   read (a rehearsal set is frozen and certified on its own, Section 6);
 - paired baseline-and-winner reveal of the already sealed five-fold held-out
@@ -27,11 +28,30 @@ before an attempt can be charged for it. The offline replay of the v3
 rehearsal runs under the v4 rule (`replay_checkpoint_selection.py`) is
 recorded in the changelog entry.
 
+Protocol `preprint-v5` (2026-10-06) adds, from the aihub KRAS trial: every
+discovery attempt trains and validates on all five folds (150 fold trainings
+per cell), so the promotion stage and the top-10 cut are removed and a cell
+moves through the phases discovery, selection-ready, winner-frozen and
+certified; each fold is scored on the primary validation metric averaged over
+the five evaluated epochs centred on the restored epoch (`val_auc_smooth`,
+`val_c_index_smooth` for survival), while the checkpoint is still the epoch
+with the highest metric and the restored model's own `val_auc` / `val_c_index`
+is recorded beside it without voting; the winner is the distinct complete
+attempt with the largest paired five-fold lift over the baseline, and it
+replaces the baseline only if that lift exceeds `max(0.01, 2.93 x paired SE)`,
+with 2.93 Sidak's one-sided 5% value for the best of 30 attempts
+(`campaign.max_lift_winner`); the attempt timeout is 1020 minutes; train-only
+policies gain `transform_bag` on training bags and `before_validation`, with
+the weight-averaging helper `autobench.pipeline.ema` (survival trainers do not
+run the two seams); and the companion guard margins are re-derived over five
+folds (`guard_margins.json`). The trial result behind these changes is
+recorded in the changelog entry.
+
 There is no final retraining. Crashes, partial runs, and launch failures
 consume discovery attempts — an attempt is billed exactly once, when its spec
-is archived. An incomplete promotion candidate is ineligible. The native
-baseline wins an exact tie against a searched candidate; searched-candidate
-ties use the stable node ID.
+is archived. An attempt that does not complete all five folds cannot win. The
+native baseline stays unless the leader's lift exceeds the bar; ties between
+searched candidates use the stable node ID.
 
 ## 1. Preflight
 
@@ -105,8 +125,8 @@ declared campaign inputs.
 split/seed policy, or training protocol changes. Documentation, CI, Git history,
 and other execution-irrelevant repository changes do not bump it.
 
-Campaign schema v5 is a prelaunch reset: no v4 runtime was materialized, so no
-runtime-state migration is defined. Historical result archives must be
+Campaign schema 8 (protocol v5) defines no runtime-state migration: a v4 cell
+root fails to load, and every v5 cell is materialized fresh. Historical result archives must be
 explicitly re-attested under the six-field identity before reuse.
 
 Choose one materialized root for the commands below:
@@ -143,7 +163,7 @@ Git commit, diff, and command provenance do not enter this decision.
 Discovery imports the registered baseline as its graph root; it never
 re-measures it on its own. Before any agent session can open, the cell must
 therefore pass the baseline reproduction gate: the manifest's frozen
-discovery command (folds 0/1/2) runs once more under loop-parity code
+discovery command (folds 0-4) runs once more under loop-parity code
 resolution (no worktree PYTHONPATH — `automil` resolves from the installed
 environment exactly as it does under the orchestrator daemon), and every
 fold's validation primary value must land within the predeclared epsilon of
@@ -166,13 +186,13 @@ gates.
 Every run of a runtime set (the cell-root directory a cell sits in) trains
 on one GPU type, declared for that set under `gpu` in
 `reproduction_policy.json`: a full NVIDIA H100 80GB HBM3 without MIG for
-`runtime` and `runtime-rehearsal`, an NVIDIA RTX 6000 Ada for
-`runtime-aihub`. On the same GPU type a re-run reproduces its baseline bit
+`runtime`, an NVIDIA RTX 6000 Ada for the three `runtime-aihub-hnsc-*` sets.
+On the same GPU type a re-run reproduces its baseline bit
 for bit. Two types disagree: a full H100 and a 3g.40gb MIG slice by up to
 0.045 validation AUC per fold (fir jobs 61495558 / 61495560), an RTX 6000
 Ada and a full H100 by up to 0.043 (aihub, 2026-09-30). `campaign_stage.py
 run-baseline` and `run-baseline-reproduction`, and `campaign_operate.py up`
-and `finish` before they start an orchestrator, refuse a GPU that
+before it starts an orchestrator, refuse a GPU that
 `nvidia-smi` does not report as the type declared for the cell's set, and
 refuse a set with no declaration. On fir request full GPUs
 (`--gpus=h100:N`), never a slice. A completed run's `result.json` records
@@ -280,8 +300,7 @@ Do not freeze early. If the 12-hour agent-active budget exhausts below 30
 charged attempts, the freeze fails closed by design: report the cell as
 blocked rather than working around it; no path reopens a closed cell.
 When the stage ledger reports exactly 30 charged attempts,
-freeze the complete unique candidates and select up to 10 by the locked
-validation ordering:
+freeze the distinct complete candidates as the winner pool:
 
 ```bash
 uv run python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" \
@@ -289,11 +308,10 @@ uv run python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" \
 ```
 
 Immediately after discovery freezes, end this coding-agent session. The
-synchronous `SessionEnd` hook closes the exact activity interval. Do not keep
-the agent alive through promotion: promotion has no proposals and uses its own
-wall-clock controller. Preserve the runtime's end timestamp and usage in a
-filled `agent_session_end.template.json`; it will be attested after the winner
-freezes.
+synchronous `SessionEnd` hook closes the exact activity interval, and winner
+selection refuses until it has. Preserve the runtime's end timestamp and usage
+in a filled `agent_session_end.template.json`; it will be attested after the
+winner freezes.
 
 ## 4b. Run discovery cells as SLURM jobs (the HPC option)
 
@@ -318,8 +336,7 @@ running: no `git pull`, no edits under `src/`, `benchmarks/src/`,
 the protocol's pinned hash (every launch checks it; a test pins it); no
 `CLAUDE.md`, `CLAUDE.local.md` or `.claude/` may appear anywhere on the path
 from the runtime root up to `/` (the runtime reads memory from every
-ancestor). Exports to `version3` stay Leo-only (`sealed/` is owner-only by
-design).
+ancestor). Exports stay Leo-only (`sealed/` is owner-only by design).
 
 **Per-member setup, once.** `uv` and `claude 2.1.286` on `PATH`
 (`DISABLE_AUTOUPDATER=1`); `claude login` on a login node with your Team
@@ -340,24 +357,21 @@ only then claims the cell with the new job id. Every job takes one H100,
 in batches of 8, 8, 8 and 6, each started after the one before has ended,
 and the daemon packs a whole batch onto one GPU: `campaign_operate.py`
 starts it with `AUTOMIL_MAX_CONCURRENT_PER_GPU` set to the predictor's cap
-of 8, in place of the frozen cell config's own cap. A second GPU would only
-shorten promotion by one round. The cap was raised from 4 to 8 on
-2026-09-15 from the four LUAD KRAS rehearsal cells: packed 4 per GPU they
-used 18-21 % of their cores (nnMIL 54 %), 4-5 GB of RAM and 1-1.5 GB of
+of 8, in place of the frozen cell config's own cap. The cap was raised from
+4 to 8 on 2026-09-15 from the four LUAD KRAS rehearsal cells: packed 4 per
+GPU they used 18-21 % of their cores (nnMIL 54 %), 4-5 GB of RAM and 1-1.5 GB of
 VRAM per attempt, and each attempt ran only 1.1-1.2x its serial time; on
 fir, eight packed ABMIL attempts used 5.2 cores on average and 56 GB at
 peak (2026-10-03). The wall is the shorter of 24 h and 72 h whose 85 %
 holds the predicted job time (`campaign_shape.py`, from the cell's baseline
 elapsed time): the serial gate, then the four batches one after another,
-each as long as its slowest attempt (twice the baseline's per-fold time and
-never under 15 minutes; measured 0.84-2.24 times on the 2026-10 trial
-cells), one of them running into the 10 h attempt timeout (aihub's DTFD
-cell did in its third batch on 2026-10-02), the ten promotion candidates in
-two rounds, and 2 h for setup and the agent's planning. A finish-only
-recovery takes one GPU for 24 h, which holds the promotion of every cell
-that fits a discovery wall. Against the registered 78 cells (2026-10-03)
-this gives 35 cells a 24 h wall and 43 cells a 72 h wall, and every cell
-fits. Claims are once-only tombstones:
+each as long as its slowest attempt (twice the baseline's time for the same
+five folds and never under 15 minutes; measured 0.84-2.24 times on the
+2026-10 trial cells), one of them running into the 17 h attempt timeout
+(aihub's DTFD cell ran into the 10 h timeout of the three-fold attempts in
+its third batch on 2026-10-02), and 2 h for setup and the agent's planning.
+A finish-only recovery takes one GPU for 24 h: the freeze, the winner and the
+session close train nothing. Claims are once-only tombstones:
 a queued job holds its claim; a dead job's claim is replaced only after a
 successful cluster-wide `squeue` shows it gone. `--dry-run` prints the
 classification and every cell's shape without submitting; `--cell` picks a
@@ -376,7 +390,7 @@ written by freeze-discovery only), then scrapes the session's own exporter
 for token and cost counters (`operator/usage.json`, passed to
 `finish --usage-json`), captures `/usage` before and after
 (`operator/usage_before.txt`, `usage_after.txt`), ends the
-session with `/exit`, runs the finish ladder on the same GPUs, normalizes
+session with `/exit`, runs the finish ladder, normalizes
 the cell's files to group read/write, and submits the next cell as the same
 user (`--no-chain` at submission stops after the one cell: rehearsals and
 member tests). Failures land in `logs/discovery_cells/FAILED.tsv`; a stranded
@@ -391,23 +405,27 @@ re-materialized and re-run from a fresh baseline.)
 its own cell-root directory beside `runtime/`, built from the same manifest
 and protocol (row indices and exporter ports unchanged) with its own committed
 roster, `<name>.roster.json` (cohorts, cells census, `cell_ids`), and its
-GPU type declared in `reproduction_policy.json`. The committed sets are
-`runtime-rehearsal`, the four TCGA-LUAD KRAS cells with H-optimus-1 (one per
-MIL model) on fir, and `runtime-aihub`, the same four plus the KRAS TITAN
-cell on aihub's RTX 6000 Ada GPUs, trained there from its own baselines and
-run by the workstation driver (Section 4c). Round 1 (v3) roots are parked
-under `logs/discovery_cells/rehearsal-archive/`. Each materialized root is
-about 1,000 files, so only the set's cells are built:
+GPU type declared in `reproduction_policy.json`. The committed sets are the
+three aihub sets of the TCGA-HNSC grade trial, which split its five cells
+(H-optimus-1 with CLAM, nnMIL, ABMIL and DTFD-MIL, plus TITAN) over aihub's
+three RTX 6000 Ada GPUs, one chain each, trained there from their own
+baselines and run by the workstation driver (Section 4c):
+`runtime-aihub-hnsc-a` (CLAM and TITAN), `runtime-aihub-hnsc-b` (DTFD-MIL)
+and `runtime-aihub-hnsc-c` (ABMIL and nnMIL). Round 1 (v3) roots are parked
+under `logs/discovery_cells/rehearsal-archive/`; the v4 rosters
+(`runtime-rehearsal`, `runtime-aihub`) are at commit `e978c28`. Each
+materialized root is about 1,000 files, so only the set's cells are built:
 
 ```bash
 uv run python benchmarks/scripts/campaign_manifest.py materialize \
-    --output-root benchmarks/campaigns/preprint_130/runtime-rehearsal \
+    --output-root benchmarks/campaigns/preprint_130/runtime-aihub-hnsc-a \
     --agent-protocol benchmarks/campaigns/preprint_130/agent_protocol.json \
-    --cells @benchmarks/campaigns/preprint_130/runtime-rehearsal.roster.json
-sbatch --account=def-jma-ab benchmarks/scripts/slurm/submit_rehearsal_baselines.sh runtime-rehearsal
-benchmarks/scripts/slurm/submit_discovery_cell.sh --runtime runtime-rehearsal --no-chain
+    --cells @benchmarks/campaigns/preprint_130/runtime-aihub-hnsc-a.roster.json
 ```
 
+On fir, a set declared on the H100s continues with
+`sbatch --account=def-jma-ab benchmarks/scripts/slurm/submit_rehearsal_baselines.sh <set>`
+and `benchmarks/scripts/slurm/submit_discovery_cell.sh --runtime <set> --no-chain`.
 The launchers take `--runtime <name>`; logs go to
 `logs/discovery_cells/<name>/`. The shape predictor scales a baseline's time
 back when its retry loaded folds from cache (the ledger total then covers
@@ -418,10 +436,11 @@ rehearsal set may be frozen and certified on its own (Section 6); its
 `selection_freeze.json` and `campaign_certification.json` stay in its own
 directory, and `report` refuses it. Its cells use the same splits and test
 folds as the final-grid cells with the same ids, so certifying it opens those
-cells' held-out folds before the final grid is frozen. For `runtime-aihub`
-this was decided on 2026-10-05 and is recorded in `PROGRESS.md`. Held-out
-values of a rehearsal set never go into a tracked file, and the trajectory
-audit of Section 6 applies to it as to the grid.
+cells' held-out folds before the final grid is frozen. The decision to
+certify a set is recorded in `PROGRESS.md`, as it was for the aihub KRAS
+trial on 2026-10-05. Held-out values of a rehearsal set never go into a
+tracked file, and the trajectory audit of Section 6 applies to it as to the
+grid.
 
 **Session record.** The runtime's own transcript of the cell's session,
 `~/.claude/projects/<cwd>/<session-id>.jsonl` (every user, assistant and
@@ -477,10 +496,15 @@ does not reproduce there. On the host, as the account that runs the agent:
    survives SSH drops:
 
 ```bash
-benchmarks/scripts/run_discovery_chain.sh --runtime runtime-aihub --gpus 0,1,2 --dry-run
-tmux -L disc_chain new -s chain
-benchmarks/scripts/run_discovery_chain.sh --runtime runtime-aihub --gpus 0,1,2
+benchmarks/scripts/run_discovery_chain.sh --runtime runtime-aihub-hnsc-a --gpus 0 --wall-hours 72 --dry-run
+tmux -L disc_chain_a new -s chain
+benchmarks/scripts/run_discovery_chain.sh --runtime runtime-aihub-hnsc-a --gpus 0 --wall-hours 72
 ```
+
+A chain takes one GPU, because the daemon packs a whole batch onto one. The
+three sets run side by side, `runtime-aihub-hnsc-b` on GPU 1 and
+`runtime-aihub-hnsc-c` on GPU 2, each chain in a tmux server of its own
+(`-L disc_chain_b`, `-L disc_chain_c`).
 
 Each cell gets a run id `ws<timestamp>`, a log at
 `logs/disc_cell_<run id>.out` and a wall of `--wall-hours` (default 48, at
@@ -503,30 +527,25 @@ own: log in there once (`HOME=<dir> claude`, then `/login`) and start the
 driver with the same `HOME`, so none of that touches the account's own
 settings. Every login on one plan draws on the same weekly window.
 
-## 5. Run exact promotion
+## 5. Select the winner and finalize the session
 
-Materialize exact copies of the frozen candidate overlays. No agent proposes or
-edits candidates during promotion:
-
-```bash
-uv run python benchmarks/scripts/campaign_stage.py materialize-promotion \
-  --cell-root "$CAMPAIGN_CELL_ROOT"
-uv run automil --project "$CAMPAIGN_CELL_ROOT/promotion" orchestrator start
-```
-
-After every queued promotion job is terminal, freeze eligibility and select the
-five-fold validation winner:
+Every distinct complete discovery attempt is a candidate. Each candidate's lift
+is its five-fold validation mean minus the baseline's, paired fold by fold. The
+leader, the candidate with the highest lift, replaces the baseline only if its
+lift exceeds `max(0.01, 2.93 x paired SE)`, with the SE pooled over the
+candidates; 2.93 is Sidak's one-sided 5% value for the best of 30 attempts.
+Otherwise the cell keeps its native baseline. Once the discovery session has
+ended (Section 4), select the winner:
 
 ```bash
-uv run python benchmarks/scripts/campaign_stage.py freeze-promotion \
-  --cell-root "$CAMPAIGN_CELL_ROOT"
 uv run python benchmarks/scripts/campaign_stage.py select-winner \
   --cell-root "$CAMPAIGN_CELL_ROOT"
 ```
 
-The winner record is immutable. `advance` may perform the next safe transition
-through selection, but it intentionally stops at `winner-frozen` and never
-reveals held-out data.
+The winner record is immutable. The selection freeze and certification re-run
+the rule and require the identical record. `advance` may perform the next safe
+transition through selection, but it intentionally stops at `winner-frozen` and
+never reveals held-out data.
 
 After the winner freezes, finalize the already-ended, pre-bound discovery
 session with the saved `agent_session_end.template.json`. Exact, estimated, and
@@ -570,9 +589,9 @@ For a rehearsal set, name it:
 
 ```bash
 uv run python benchmarks/scripts/campaign_manifest.py freeze-selections \
-    --output-root benchmarks/campaigns/preprint_130/runtime-aihub
+    --output-root benchmarks/campaigns/preprint_130/runtime-aihub-hnsc-a
 uv run python benchmarks/scripts/campaign_manifest.py certify-all \
-    --output-root benchmarks/campaigns/preprint_130/runtime-aihub
+    --output-root benchmarks/campaigns/preprint_130/runtime-aihub-hnsc-a
 ```
 
 A set's cells follow the launchers' rule: a set with `<name>.roster.json`
@@ -597,9 +616,9 @@ Formal sessions run with shell and web research access, so the val-firewall's
 anti-accident posture is completed by this audit-trail check, not by an OS
 boundary.
 
-Each freeze entry binds the winner kind, candidate, promotion node (when
-searched), baseline candidate, and the canonical cell-local path plus SHA-256
-of all five sealed winner and baseline fold files. Certification and reporting
+Each freeze entry binds the winner kind, candidate, the winner rule's record,
+baseline candidate, and the canonical cell-local path plus SHA-256 of all five
+sealed winner and baseline fold files. Certification and reporting
 re-read those files and recompute their fold metrics and aggregates; a newly
 hashed downstream bundle or index therefore cannot relabel a run or replace
 its evidence without conflicting with the independently maintained cell state,
@@ -621,9 +640,9 @@ trained fold models.
 ## Recovery and audit trail
 
 The authoritative per-cell ledger is `<cell-root>/campaign_state.json`. Every
-write is lock-serialized, atomic, revisioned, and content-hashed. Discovery and
-promotion artifacts remain in their respective `automil/orchestrator/archive/`
-directories; the native baseline is imported into `baseline/archive/`; the
+write is lock-serialized, atomic, revisioned, and content-hashed. Discovery
+artifacts remain in `automil/orchestrator/archive/`; the native baseline is
+imported into `baseline/archive/`; the
 certified winner bundle is recorded by the stage ledger. Re-running a completed
 transition is either idempotent or fails closed on declared-identity or artifact
 integrity drift. A declared cell spec that becomes unreadable is held at

@@ -10,7 +10,7 @@
 #
 # Submit from the campaign checkout root, after the set's baselines job:
 #   sbatch --account=def-jma-ab --dependency=afterok:<baselines job> \
-#       benchmarks/scripts/slurm/measure_reproduction.sh runtime-rehearsal
+#       benchmarks/scripts/slurm/measure_reproduction.sh <set>
 #
 #SBATCH --job-name=measure_repro
 #SBATCH --time=08:00:00

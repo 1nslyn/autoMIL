@@ -1,6 +1,6 @@
 #!/bin/bash
 # Native five-fold baselines for a rehearsal set (a cell-root directory beside
-# the final grid, see runtime-rehearsal.roster.json). One job on one full
+# the final grid, see <set>.roster.json). One job on one full
 # H100 with two workers on it (a baseline training is feature-I/O bound: a
 # tenth of a GPU's compute, ~16 GB of VRAM and ~50 GB of RAM per worker;
 # BL_WORKERS_PER_GPU overrides the packing). Never a MIG slice: every
@@ -12,7 +12,7 @@
 # the final grid.
 #
 # Usage, from the campaign checkout root, as the member who owns the set:
-#   sbatch --account=def-jma-ab benchmarks/scripts/slurm/submit_rehearsal_baselines.sh runtime-rehearsal
+#   sbatch --account=def-jma-ab benchmarks/scripts/slurm/submit_rehearsal_baselines.sh <set>
 #
 #SBATCH --job-name=rehearsal_baselines
 #SBATCH --time=12:00:00

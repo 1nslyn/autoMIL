@@ -29,7 +29,7 @@
 #   --account NAME  SLURM account (default: def-jma-ab)
 #   --runtime NAME  cell-root directory under the campaign dir (default:
 #                   runtime, the final grid); a rehearsal set such as
-#                   runtime-rehearsal has its own roster NAME.roster.json
+#                   runtime-aihub-hnsc-a has its own roster NAME.roster.json
 #   --e5-hours H    with --cell: the five-fold baseline time to shape from, for
 #                   a cell whose baseline retry loaded every fold from cache
 #                   (the predictor refuses it when the ledger carries a time)
