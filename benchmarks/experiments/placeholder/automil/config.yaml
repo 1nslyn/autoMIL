@@ -31,8 +31,8 @@ baseline:
   primary_value: 0.0
 
 metrics:
-  primary: "val_auc"
-  track: ["val_auc", "val_bacc"]
+  primary: "val_auc_smooth"
+  track: ["val_auc_smooth", "val_auc", "val_bacc"]
 
 training:
   learning_rate: 3e-4
@@ -142,4 +142,4 @@ env:
 # Selection primary_value = the primary validation metric alone
 # (companions in metrics.track stay recorded but do not vote).
 scoring:
-  formula: "val_auc"
+  formula: "val_auc_smooth"
