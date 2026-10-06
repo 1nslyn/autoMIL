@@ -126,7 +126,8 @@ def run_dtfd_experiment(
             _write_fold_result_json(fold, result, ordinal=exp_cfg.task.ordinal)
             continue
 
-        fold_policy_runtime = policy_runtime.for_fold()
+        fold_seed = exp_cfg.train.seed + fold
+        fold_policy_runtime = policy_runtime.for_fold(seed=fold_seed, fold=fold)
 
         split_csv = os.path.join(splits_dir, f"splits_{fold}.csv")
         if exp_cfg.is_survival:
@@ -136,7 +137,7 @@ def run_dtfd_experiment(
             raw = train_dtfd_survival_fold(
                 train_samples, val_samples, test_samples,
                 embed_dim=exp_cfg.embed_dim, nll_bins=exp_cfg.task.nll_bins,
-                cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+                cfg=cfg, device=torch_device, seed=fold_seed,
                 policy_runtime=fold_policy_runtime,
                 fold_dir=fold_dir,
             )
@@ -147,7 +148,7 @@ def run_dtfd_experiment(
             raw = train_dtfd_fold(
                 train_slides, val_slides, test_slides,
                 embed_dim=exp_cfg.embed_dim, num_classes=num_classes,
-                cfg=cfg, device=torch_device, seed=exp_cfg.train.seed + fold,
+                cfg=cfg, device=torch_device, seed=fold_seed,
                 policy_runtime=fold_policy_runtime,
                 ordinal=exp_cfg.task.ordinal,
                 fold_dir=fold_dir,

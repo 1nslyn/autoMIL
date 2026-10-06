@@ -35,6 +35,34 @@ def create_mask_from_bag_sizes(bags, bag_sizes):
     return mask
 
 
+def transform_training_bags(policy_runtime, features, bag_sizes, labels, *, epoch, keep_shape=False):
+    """Pass each bag of a padded training batch through the policy's bag transform.
+
+    ``features`` is ``[B, Nmax, D]``, zero-padded past each bag's ``bag_sizes``
+    entry. The policy sees the unpadded ``[n, D]`` bags; ``keep_shape`` makes
+    the runtime refuse a transform that changes a bag's instance count. When no
+    bag changed, ``features`` and ``bag_sizes`` come back as the very same
+    objects; otherwise a new batch of the same ``[B, Nmax, D]`` shape, padding
+    zeroed again, and the new bag sizes.
+    """
+    bags = [features[i, :size] for i, size in enumerate(bag_sizes.tolist())]
+    transformed = [
+        policy_runtime.transform_bag(bag, label=target, epoch=epoch, keep_shape=keep_shape)
+        for bag, target in zip(bags, labels.tolist())
+    ]
+    if all(after is before for after, before in zip(transformed, bags)):
+        return features, bag_sizes
+    sizes = [bag.size(0) for bag in transformed]
+    if max(sizes) > features.size(1):
+        raise ValueError(
+            f"a policy's transform_bag() returned a bag of {max(sizes)} instances; "
+            f"a batch holds at most {features.size(1)}"
+        )
+    padded = torch.nn.utils.rnn.pad_sequence(transformed, batch_first=True)
+    padded = F.pad(padded, (0, 0, 0, features.size(1) - max(sizes)))
+    return padded, torch.tensor(sizes, dtype=bag_sizes.dtype, device=bag_sizes.device)
+
+
 def default_collate_fn(batch):
     """Picklable collate function for fixed-length sequence bags."""
     features_list = [item[0] for item in batch]
@@ -234,6 +262,14 @@ class ClassificationTrainer(BaseTrainer):
                 bag_sizes = bag_sizes.to(self.device)
                 labels = labels.to(self.device)
                 
+                if self.policy_runtime is not None:
+                    # vision_transformer attends over per-instance coordinates the
+                    # policy never sees: it may change a bag's features, not its size.
+                    features, bag_sizes = transform_training_bags(
+                        self.policy_runtime, features, bag_sizes, labels, epoch=epoch,
+                        keep_shape=self.model_type == 'vision_transformer',
+                    )
+
                 optimizer.zero_grad()
                 
                 with torch.amp.autocast(device_type, dtype=torch.bfloat16):
@@ -272,6 +308,8 @@ class ClassificationTrainer(BaseTrainer):
                 self.writer.add_scalar('Train/Loss', avg_loss, epoch)
             
             # Validation
+            if self.policy_runtime is not None:
+                self.policy_runtime.before_validation(epoch=epoch)
             self.model.eval()
             torch.set_grad_enabled(False)
             val_metrics = self.evaluate('val')

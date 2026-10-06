@@ -76,6 +76,28 @@ def _evaluate(
     return metrics
 
 
+def _transform_slide_vectors(
+    policy_runtime: PolicyRuntime,
+    embeddings: torch.Tensor,
+    targets: list[int],
+    epoch: int,
+) -> torch.Tensor:
+    """The batch of slide vectors the probe trains on.
+
+    A slide is one vector, so each row reaches the policy as a ``[1, D]`` bag
+    whose shape it must keep. ``embeddings`` itself comes back unless a row
+    changed.
+    """
+    rows = embeddings.split(1)
+    transformed = [
+        policy_runtime.transform_bag(row, label=target, epoch=epoch, keep_shape=True)
+        for row, target in zip(rows, targets)
+    ]
+    if all(after is before for after, before in zip(transformed, rows)):
+        return embeddings
+    return torch.cat(transformed)
+
+
 def train_titan_fold(
     exp_cfg: ExperimentConfig,
     train_ds: TitanSlideDataset,
@@ -140,8 +162,12 @@ def train_titan_fold(
     for _epoch in range(exp_cfg.train.max_epochs):
         model.train()
         for embeddings, labels in train_loader:
+            targets = labels.tolist()  # the loader's CPU labels: no device sync
             embeddings = embeddings.to(torch_device)
             labels = labels.to(torch_device)
+            embeddings = _transform_slide_vectors(
+                policy_runtime, embeddings, targets, _epoch,
+            )
 
             optimizer.zero_grad()
             logits = model(embeddings)
@@ -149,6 +175,7 @@ def train_titan_fold(
             loss.backward()
             optimizer.step()
 
+        policy_runtime.before_validation(epoch=_epoch)
         val_metrics, y_true_v, y_probs_v = _evaluate(
             model, val_loader, torch_device, n_classes, ordinal=ordinal,
             predictions_path=os.path.join(fold_dir, "predictions_val.csv"),

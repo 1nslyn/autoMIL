@@ -172,7 +172,9 @@ def run_experiment(
         from autobench.pipeline.clam.survival_train import train_survival_fold
 
         for fold in exp_cfg.selected_folds:
-            fold_policy_runtime = policy_runtime.for_fold()
+            fold_policy_runtime = policy_runtime.for_fold(
+                seed=exp_cfg.train.seed, fold=fold,
+            )
             result = train_survival_fold(
                 exp_cfg, benchmark_dir, fold, results_dir, device,
                 policy_runtime=fold_policy_runtime,
@@ -186,7 +188,9 @@ def run_experiment(
         # Splits directory: splits/{strategy}/{task}/
         splits_subdir = os.path.join(exp_cfg.strategy, exp_cfg.task.name)
         for fold in exp_cfg.selected_folds:
-            fold_policy_runtime = policy_runtime.for_fold()
+            fold_policy_runtime = policy_runtime.for_fold(
+                seed=exp_cfg.train.seed, fold=fold,
+            )
             train_split, val_split, test_split = load_fold_splits(
                 dataset, benchmark_dir, splits_subdir, fold,
                 task_csv_name=exp_cfg.task.name,

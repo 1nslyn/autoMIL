@@ -93,6 +93,8 @@ def _train_one_epoch(
     opt1: torch.optim.Optimizer,
     device: torch.device,
     py_rng: random.Random,
+    policy_runtime: PolicyRuntime,
+    epoch: int,
 ) -> float:
     """Run one training epoch; return mean tier-2 loss over slides.
 
@@ -107,6 +109,7 @@ def _train_one_epoch(
     for i in order:
         slide = slides[i]
         features = _read_bag(slide.h5_path).to(device)
+        features = policy_runtime.transform_bag(features, label=slide.label, epoch=epoch)
         label_t = torch.LongTensor([slide.label]).to(device)
 
         sub_preds, sub_labels, pseudo_feats = _pseudo_bag_forward(
@@ -224,13 +227,15 @@ def train_dtfd_fold(
 
         for epoch in range(cfg.max_epochs):
             mean_tier2 = _train_one_epoch(
-                bundle, train_slides, cfg, ce_cri, opt0, opt1, device, py_rng
+                bundle, train_slides, cfg, ce_cri, opt0, opt1, device, py_rng,
+                policy_runtime, epoch,
             )
             history.append(mean_tier2)
             sched0.step()
             sched1.step()
 
             if val_slides:
+                policy_runtime.before_validation(epoch=epoch)
                 cur_auc, cur = val_scores(bundle, val_slides, cfg, num_classes, device, seed)
                 # Protocol v4: select on the primary validation metric (AUC);
                 # the CE loss is reported beside it for policies.

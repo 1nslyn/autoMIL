@@ -590,8 +590,8 @@ class TestRunnerSurvival:
             from_runner.append(id(runtime))
             return runtime
 
-        def _spy_for_fold(self):
-            runtime = original_for_fold(self)
+        def _spy_for_fold(self, **fold):
+            runtime = original_for_fold(self, **fold)
             if id(self) in from_runner:
                 from_runner.append(id(runtime))
             return runtime

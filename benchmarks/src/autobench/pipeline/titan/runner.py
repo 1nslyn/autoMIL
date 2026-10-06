@@ -94,7 +94,9 @@ def run_titan_experiment(
 
     fold_results: list[dict] = []
     for fold in exp_cfg.selected_folds:
-        fold_policy_runtime = policy_runtime.for_fold()
+        fold_policy_runtime = policy_runtime.for_fold(
+            seed=exp_cfg.train.seed + fold, fold=fold,
+        )
         split_csv = os.path.join(
             benchmark_dir, "splits", exp_cfg.strategy, exp_cfg.task.name,
             f"splits_{fold}.csv",

@@ -40,6 +40,8 @@ def _train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     py_rng: random.Random,
+    policy_runtime: PolicyRuntime,
+    epoch: int,
 ) -> float:
     """Run one training epoch; return mean loss over slides."""
     model.train()
@@ -49,7 +51,9 @@ def _train_one_epoch(
     losses: list[float] = []
     for i in order:
         slide = slides[i]
-        features = _read_bag(slide.h5_path).to(device).unsqueeze(0)  # [1, N, in_dim]
+        bag = _read_bag(slide.h5_path).to(device)  # [N, in_dim]
+        bag = policy_runtime.transform_bag(bag, label=slide.label, epoch=epoch)
+        features = bag.unsqueeze(0)  # [1, N, in_dim]
         label_t = torch.LongTensor([slide.label]).to(device)
 
         out = model(features)
@@ -162,9 +166,13 @@ def train_abmil_fold(
 
         start = time.time()
         for _epoch in range(cfg.max_epochs):
-            _train_one_epoch(model, train_slides, ce_cri, optimizer, device, py_rng)
+            _train_one_epoch(
+                model, train_slides, ce_cri, optimizer, device, py_rng,
+                policy_runtime, _epoch,
+            )
 
             if val_slides:
+                policy_runtime.before_validation(epoch=_epoch)
                 cur_metrics, y_true_v, y_probs_v = _evaluate(
                     model, val_slides, num_classes, device, ordinal=ordinal,
                     return_probs=True,

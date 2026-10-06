@@ -2,12 +2,15 @@
 
 The autoMIL framework only records and transports a selected policy.  This
 module is the benchmark consumer's single adapter: it resolves that selection,
-instantiates the registered policy, and exposes three guarded operations to all
-five MIL arms.  Model construction, forward paths, defining losses, validation,
-and result writing remain in protected trainers and are never passed in.
+instantiates the registered policy, and exposes its guarded operations to all
+five MIL arms: optimizer and scheduler wrapping, stopping, the training-bag
+transform and the pre-validation hook.  Model construction, forward paths,
+defining losses, validation, and result writing remain in protected trainers
+and are never passed in.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import types
@@ -189,6 +192,15 @@ def resolve_policy_name(exp_cfg: Any, automil_dir: Path | None = None) -> str | 
     return explicit or archived
 
 
+def defines_seam(policy_cls: type, seam: str) -> bool:
+    """True when ``policy_cls`` defines ``seam`` itself rather than inheriting
+    the no-op from ``PolicyVariant``."""
+    from automil.registry.variants.policy import PolicyVariant
+
+    method = getattr(policy_cls, seam, None)
+    return method is not None and method is not getattr(PolicyVariant, seam)
+
+
 @dataclass
 class PolicyRuntime:
     """Fail-loud, fold-local wrapper around one optional ``PolicyVariant``.
@@ -202,8 +214,14 @@ class PolicyRuntime:
     name: str | None = None
     policy: Any | None = None
     policy_factory: type[Any] | None = None
+    # The fold's training seed and index: they seed each overridden seam's
+    # private generator, so a transform is reproducible and draws nothing from
+    # the global RNGs that drive shuffling, dropout and sampling.
+    seed: int | None = None
+    fold: int | None = None
     # Every evaluated epoch's scalar metrics, in call order, for this fold only.
     history: list[tuple[int, dict[str, float]]] = field(default_factory=list)
+    _generators: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_experiment(
@@ -234,12 +252,32 @@ class PolicyRuntime:
             ) from exc
         return cls(name=name, policy_factory=policy_cls)
 
-    def for_fold(self) -> "PolicyRuntime":
+    def for_fold(
+        self, *, seed: int | None = None, fold: int | None = None,
+    ) -> "PolicyRuntime":
         """Return a fresh runtime: no policy instance or epoch history crosses folds."""
         factory = self.policy_factory
         if factory is None and self.policy is not None:
             factory = type(self.policy)
-        return type(self)(name=self.name, policy_factory=factory)
+        return type(self)(name=self.name, policy_factory=factory, seed=seed, fold=fold)
+
+    def _generator(self, seam: str) -> Any:
+        """The seam's private CPU generator for this fold, built on first use."""
+        if seam not in self._generators:
+            if self.seed is None or self.fold is None:
+                raise RuntimeError(
+                    f"policy {self.name!r} overrides {seam}() but the runtime was "
+                    "not given the fold's seed and index (for_fold(seed=, fold=))"
+                )
+            import torch
+
+            digest = hashlib.sha256(
+                f"{int(self.seed)}:{int(self.fold)}:{seam}".encode()
+            ).digest()
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(int.from_bytes(digest[:8], "big") >> 1)
+            self._generators[seam] = generator
+        return self._generators[seam]
 
     def smoothed(self, selected_epoch: int, key: str) -> float | None:
         """This fold's selection score for ``key`` around ``selected_epoch``."""
@@ -355,3 +393,63 @@ class PolicyRuntime:
         if type(decision) is not bool:
             raise TypeError(f"policy {self.name!r} should_stop() must return bool")
         return decision
+
+    def transform_bag(
+        self,
+        features: Any,
+        *,
+        label: Any,
+        epoch: int,
+        min_instances: int = 1,
+        keep_shape: bool = False,
+    ) -> Any:
+        """The training bag the model sees: ``features`` itself unless a policy transforms it.
+
+        ``features`` is one slide's ``[N, D]`` tensor. The arm states what its
+        model needs: ``min_instances`` (CLAM samples eight instances per class
+        branch) and ``keep_shape`` (a slide-embedding arm has one vector per
+        slide). Without an overriding policy this returns the same object and
+        draws no random number, so a native run is unchanged.
+        """
+        policy = self._resolved_policy()
+        if policy is None or not defines_seam(type(policy), "transform_bag"):
+            return features
+        import torch
+
+        version = features._version
+        out = policy.transform_bag(
+            features, label=label, epoch=int(epoch),
+            generator=self._generator("transform_bag"),
+        )
+        if features._version != version:
+            raise RuntimeError(f"policy {self.name!r} modified a training bag in place")
+        if (
+            not isinstance(out, torch.Tensor)
+            or out.dtype != features.dtype
+            or out.device != features.device
+            or out.ndim != features.ndim
+            or out.shape[1:] != features.shape[1:]
+        ):
+            raise TypeError(
+                f"policy {self.name!r} transform_bag() must return a tensor with the "
+                f"bag's dtype, device and feature shape {tuple(features.shape[1:])}"
+            )
+        if keep_shape and out.shape != features.shape:
+            raise TypeError(
+                f"policy {self.name!r} transform_bag() must keep this arm's bag shape "
+                f"{tuple(features.shape)}"
+            )
+        if out.shape[0] < min_instances:
+            raise ValueError(
+                f"policy {self.name!r} transform_bag() left {out.shape[0]} instances; "
+                f"this arm needs at least {min_instances}"
+            )
+        return out
+
+    def before_validation(self, *, epoch: int) -> None:
+        """Run the policy's pre-validation hook, if it defines one."""
+        policy = self._resolved_policy()
+        if policy is None or not defines_seam(type(policy), "before_validation"):
+            return
+        if policy.before_validation(epoch=int(epoch)) is not None:
+            raise TypeError(f"policy {self.name!r} before_validation() must return None")

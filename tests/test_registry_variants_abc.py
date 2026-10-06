@@ -97,6 +97,29 @@ def test_policy_step_default_delegates_to_opt():
     opt.step.assert_called_once()
 
 
+def test_policy_transform_bag_default_returns_the_bag_unchanged():
+    from automil.registry.variants.policy import PolicyVariant
+
+    class StubPolicy(PolicyVariant):
+        def wrap_optimizer(self, opt):
+            return opt
+
+    bag = MagicMock()
+    out = StubPolicy().transform_bag(bag, label=1, epoch=0, generator=MagicMock())
+    assert out is bag
+    assert bag.method_calls == []
+
+
+def test_policy_before_validation_default_is_a_no_op():
+    from automil.registry.variants.policy import PolicyVariant
+
+    class StubPolicy(PolicyVariant):
+        def wrap_optimizer(self, opt):
+            return opt
+
+    assert StubPolicy().before_validation(epoch=0) is None
+
+
 def test_no_top_level_torch_import_in_model_py():
     """D-24 + TYPE_CHECKING guard: framework must not require torch at import time
     (the synthetic-consumer round-trip in Plan 01-12 is torch-free)."""

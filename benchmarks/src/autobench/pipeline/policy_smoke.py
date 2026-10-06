@@ -15,6 +15,13 @@ for DTFD or an unspecified arm, the DTFD seam: both tier optimizers wrapped,
 then both ``MultiStepLR`` schedulers built on the targets the trainer
 resolves and wrapped, before either tier trains.
 
+A policy that overrides ``transform_bag`` or ``before_validation`` has those
+seams driven too. The bag transform runs through the runtime the trainers use,
+seeded as a fold's is, on the bag the arm hands it (CLAM: eight instances must
+survive; TITAN: one vector per slide, shape kept); it must give the same bags
+on two runs and draw nothing from the global RNGs. The survival trainers call
+neither seam, so overriding one there is refused: the cell would run without it.
+
 Exit codes: 0 the policy passed; 1 it failed a seam (the diagnostics name the
 call order or the role); 2 usage (missing file, unknown task family or arm, no
 PolicyVariant subclass in the module).
@@ -38,6 +45,21 @@ STEPS_PER_ORDER = 3
 ROLES = ("tier1", "tier2")
 TASK_FAMILIES = ("classification", "survival")
 ARMS = ("abmil", "clam", "dtfd", "nnmil", "titan")
+#: The train-only data seams of PolicyVariant, none of them wired into the survival trainers.
+SEAMS = ("transform_bag", "before_validation")
+BAG_INSTANCES = 16
+BAG_WIDTH = 8
+#: CLAM's instance-level loss samples ``ModelConfig.B`` instances per class branch.
+CLAM_MIN_INSTANCES = 8
+#: The bag each arm's classification trainer hands the bag transform: what it
+#: is, how many instances it has, and what the arm's model needs back.
+BAG_CASES = {
+    "bag": (f"a bag of {BAG_INSTANCES} instances", BAG_INSTANCES, {}),
+    "clam": (f"a CLAM bag of {BAG_INSTANCES} instances, {CLAM_MIN_INSTANCES} kept", BAG_INSTANCES,
+             {"min_instances": CLAM_MIN_INSTANCES}),
+    "titan": ("a TITAN slide vector, shape kept", 1, {"keep_shape": True}),
+}
+ARM_BAG_CASE = {"abmil": "bag", "dtfd": "bag", "nnmil": "bag", "clam": "clam", "titan": "titan"}
 #: The call order each arm's CLASSIFICATION trainer uses between two stopping
 #: decisions; every non-DTFD survival adapter zeroes before the forward pass.
 ARM_ORDER = {
@@ -275,6 +297,107 @@ def _run_stopping(policy_cls: type, arm: str | None, family: str) -> None:
             ) from exc
 
 
+def _global_rng_state() -> tuple:
+    """The process-wide torch, numpy and Python RNG states, comparable with ``==``."""
+    import random
+
+    import numpy as np
+    import torch
+
+    numpy_state = np.random.get_state()
+    return (
+        torch.get_rng_state().numpy().tobytes(),
+        numpy_state[0], numpy_state[1].tobytes(), *numpy_state[2:],
+        random.getstate(),
+    )
+
+
+def _transform_bags(policy_cls: type, rows: int, constraints: dict) -> list:
+    """Three epochs of one bag through a fresh fold runtime, as a trainer drives it."""
+    import torch
+
+    from autobench.pipeline.policy_dispatch import PolicyRuntime
+
+    bag = torch.randn(rows, BAG_WIDTH, generator=torch.Generator().manual_seed(0))
+    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold(
+        seed=0, fold=0,
+    )
+    return [
+        runtime.transform_bag(bag, label=epoch % 2, epoch=epoch, **constraints)
+        for epoch in range(STEPS_PER_ORDER)
+    ]
+
+
+def _run_transform_bag(policy_cls: type, rows: int, constraints: dict) -> None:
+    """The runtime accepts what the policy returns; two runs agree; the global RNGs stay put."""
+    import torch
+
+    before = _global_rng_state()
+    first = _transform_bags(policy_cls, rows, constraints)
+    second = _transform_bags(policy_cls, rows, constraints)
+    if _global_rng_state() != before:
+        raise SmokeFailure(
+            "transform_bag() drew from a global RNG; draw from the generator argument"
+        )
+    if not all(torch.equal(a, b) for a, b in zip(first, second)):
+        raise SmokeFailure(
+            "transform_bag() is not reproducible: two runs seeded alike returned different bags"
+        )
+
+
+def _run_before_validation(policy_cls: type, arm: str | None) -> None:
+    """The hook after the optimizer is wrapped and a step has run, as a classification
+    trainer calls it (the survival trainers never do)."""
+    import torch
+    from torch import nn
+
+    from autobench.pipeline.policy_dispatch import PolicyRuntime
+
+    model, features, labels = _model_and_batch()
+    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold(
+        seed=0, fold=0,
+    )
+    optimizer = runtime.wrap_optimizer(torch.optim.Adam(model.parameters(), lr=1e-2))
+    order = _stop_order(arm, "classification")
+    _train_step(order, model, optimizer, nn.CrossEntropyLoss(), features, labels)
+    runtime.before_validation(epoch=0)
+
+
+def _refuse_survival(seam: str) -> None:
+    raise SmokeFailure(
+        f"{seam}() is not wired for survival trainers: this cell would run without it"
+    )
+
+
+def _seam_checks(
+    policy_cls: type, arm: str | None, family: str,
+) -> list[tuple[str, Callable[[], None]]]:
+    """One check per data seam the policy overrides."""
+    from autobench.pipeline.policy_dispatch import defines_seam
+
+    checks: list[tuple[str, Callable[[], None]]] = []
+    for seam in SEAMS:
+        if not defines_seam(policy_cls, seam):
+            continue
+        if family == "survival":
+            checks.append((f"{seam} seam (survival)", lambda seam=seam: _refuse_survival(seam)))
+        elif seam == "transform_bag":
+            for case in ((ARM_BAG_CASE[arm],) if arm else tuple(BAG_CASES)):
+                what, rows, constraints = BAG_CASES[case]
+                checks.append((
+                    f"transform_bag seam ({what})",
+                    lambda rows=rows, constraints=constraints: _run_transform_bag(
+                        policy_cls, rows, constraints,
+                    ),
+                ))
+        else:
+            checks.append((
+                "before_validation seam",
+                lambda: _run_before_validation(policy_cls, arm),
+            ))
+    return checks
+
+
 def _checks(policy_cls: type, arm: str | None, family: str) -> Sequence[tuple[str, Callable[[], None]]]:
     checks = [
         *[(order, lambda order=order: _run_order(order, policy_cls)) for order in CALL_ORDERS],
@@ -286,6 +409,7 @@ def _checks(policy_cls: type, arm: str | None, family: str) -> Sequence[tuple[st
     if arm in (None, "dtfd"):
         checks.append(("DTFD tiers tier1/tier2 with MultiStepLR schedulers",
                        lambda: _run_dtfd_tiers(policy_cls)))
+    checks.extend(_seam_checks(policy_cls, arm, family))
     return tuple(checks)
 
 
