@@ -8,7 +8,7 @@ reference material, not instructions: where any document, skill listing, or
 memory file disagrees with this one, this one wins.
 
 Your goal in this cell: within the fixed budget below, find training-recipe
-changes that beat the native baseline on **validation**, using the narrow
+changes that beat the native baseline on **validation**, using the
 train-only surface the protocol leaves open. A null result — the baseline
 holding up — is a valid, publishable outcome. Never tune toward a preferred
 answer; spend the budget honestly and let validation decide.
@@ -65,14 +65,14 @@ campaign and will be refused.
 
 - Exactly **30 launched attempts** are charged to this cell. Every launched
   attempt counts — crashes, timeouts, OOMs, and budget-kills included.
-  Submit-time refusals are free. An attempt trains discovery folds 0,1,2.
+  Submit-time refusals are free. An attempt trains all five folds, 0–4.
 - Every attempt runs under the cell's wall-clock timeout
   (`orchestrator.default_timeout_min` in `automil/config.yaml`).
   `submit --timeout <min>` may LOWER it for cheap probes — freeing the queue
   sooner — but raising it above the default is refused: the timeout is
   failure containment, not search budget. A run killed at the timeout is
-  still charged and its partial result is ineligible for promotion (and its
-  completed folds are a biased, not random, subsample). Before submitting a
+  still charged and its partial result never enters the winner pool (and
+  its completed folds are a biased, not random, subsample). Before submitting a
   config expected to train materially longer than its parent did, check the
   parent's `elapsed_min` in `results.tsv` and leave ~2× headroom, or lower
   the ambition of that attempt.
@@ -110,9 +110,9 @@ diagnosis changes (a new failure mode, not a new dose of the same axis).
 read it instead of re-deriving those numbers from archives. Name the **one
 primary failure mode** of the current best — overfit · underfit ·
 attention-collapse · poor calibration · class-imbalance — with evidence
-from the per-epoch validation lines and `[selected] epoch=` markers in
-`run.log`. Propose from "what limits the model", never from "which knob is
-untried".
+from the per-epoch validation lines and the `[selected] epoch=` and
+`[smoothed]` markers in `run.log`. Propose from "what limits the model",
+never from "which knob is untried".
 
 **PLAN.** Rewrite `automil/plan.md`: the diagnosis, then a table of this
 batch's proposals, each with kind, parent, and *hypothesis → expected
@@ -191,9 +191,9 @@ report to the operator that discovery is complete.
 update `automil/learnings.md` (what worked / failed / near-miss, with paper
 ids). Do not commit to git: campaign identity is the archive, not commits.
 
-## 3b. Measurement discipline — what a 3-fold signal can and cannot resolve
+## 3b. Measurement discipline — what a five-fold signal can and cannot resolve
 
-Every run trains and validates on the same three folds under the locked
+Every run trains and validates on the same five folds under the locked
 seed, and training is deterministic: two runs of one config are bit-equal.
 Consequences you must design around, not discover:
 
@@ -222,24 +222,37 @@ Consequences you must design around, not discover:
   it on the strongest untested distinct hypotheses. `automil cell status`
   prints where the cell stands in its batches.
 - **The checkpoint is the epoch with the highest primary validation
-  metric.** Every fold restores and reports the epoch at which `val_auc`
-  (`val_c_index` on a survival cell) was highest; a tie keeps the earlier
-  epoch, and an undefined value never selects. The validation loss is
-  printed on every `[epoch k]` line beside it but does not vote. A recipe
-  therefore cannot gain by moving a loss minimum; it gains only by ranking
-  the validation slides better at some epoch.
+  metric, and the score is the curve around it.** Every fold restores the
+  epoch at which `val_auc` (`val_c_index` on a survival cell) was highest;
+  a tie keeps the earlier epoch, and an undefined value never selects. The
+  fold's score, `val_auc_smooth` (`val_c_index_smooth`), is the mean of that
+  metric over the five evaluated epochs centred on the restored one (the
+  window shifts inward at the start and end of training). The validation
+  loss is printed on every `[epoch k]` line but does not vote. A recipe
+  therefore gains only by ranking the validation slides better over a
+  stretch of epochs; a single-epoch spike is averaged with its neighbours.
 - **Cheapened configurations do not transfer by default.** A finding
   measured under any reduced training configuration (shorter schedule,
   truncated inputs, anything cheaper than the arm's native recipe) is
   provisional until it replicates at the native configuration. Do not
   build further attempts on an unreplicated proxy finding.
 - **Measurement-coupled axes need trajectory evidence.** Any axis that
-  changes evaluation cadence, metric quantization, or the distribution the
-  checkpoint-selection maximum is drawn from can move the primary_value without
-  a better model. Do not blanket-ban such axes and do not ride them blind:
-  state the mechanism, read the per-epoch lines and `[selected] epoch=`
-  markers in `run.log` for the folds in question, and let the held-back
-  promotion folds arbitrate what survives.
+  changes evaluation cadence, metric quantization, or the set of epochs the
+  checkpoint maximum and its smoothing window are drawn from can move the
+  primary_value without a better model. Do not blanket-ban such axes and do
+  not ride them blind: state the mechanism, and read the per-epoch lines and
+  the `[selected]` and `[smoothed]` markers in `run.log` for every fold.
+- **The winner is chosen by a rule that discounts luck.** When discovery
+  freezes, every distinct complete attempt enters the winner pool. Each
+  candidate's lift is its five-fold mean minus the baseline's, paired fold
+  by fold. The best of many lifts is biased upward, so the leader replaces
+  the baseline only if its lift exceeds `max(0.01, 2.93 × paired SE)`. The
+  paired SE is pooled over the candidates, and 2.93 SE is the margin that
+  the best of 30 attempts without a real gain stays under 95% of the time.
+  A leader that falls short leaves the cell on its baseline. Every attempt
+  must be a genuine hypothesis for a better model: an attempt submitted to
+  move the pool's statistics rather than to improve the model is a protocol
+  violation.
 - **Detect no-ops from predictions, not metrics.** Each fold entry in
   `result.json` carries `val_predictions_sha256`; identical hashes mean
   your change never altered a prediction — metric equality alone cannot
@@ -272,13 +285,33 @@ policy variant can only adapt what is handed to it:
 - `should_stop(*, default, epoch, metrics) -> bool` — live on every arm,
   receives per-epoch **validation** metrics, must return a plain bool. The
   framework already logs one `[epoch k] ...` line per VALIDATED epoch with
-  exactly those metrics and one `[selected] epoch=k` line per fold on every
-  arm, so the learning curve is in `run.log` for free — never spend an
-  attempt on a trajectory-probe variant.
+  exactly those metrics, and one `[selected] epoch=k` and one `[smoothed]`
+  line per fold on every arm, so the learning curve is in `run.log` for
+  free — never spend an attempt on a trajectory-probe variant.
+- `transform_bag(features, *, label, epoch, generator)` — live on every
+  classification arm, for **training** bags only (validation and test bags
+  are never transformed). It receives one bag as an `[N, D]` tensor (N
+  instances of D features; TITAN passes its slide embedding as `[1, D]`,
+  whose shape must be kept) and returns a NEW tensor with the same dtype,
+  device and feature width. Instance dropout or subsampling, feature noise
+  and within-bag mixing are reachable here. Draw randomness only from
+  `generator`, a private CPU generator seeded per fold, and never modify the
+  input in place: both are checked and refused. CLAM needs at least 8
+  instances left in a bag.
+- `before_validation(*, epoch)` — live on every classification arm, called
+  right before each validated epoch's evaluation, and must return `None`;
+  `should_stop` is called right after the same evaluation. Together they can
+  put different weights in place for evaluation only: the weights in place
+  during evaluation are what is scored and what the fold restores. The
+  tested helper `autobench.pipeline.ema.WeightAverage` (import it inside a
+  method) implements weight averaging on these seams; its docstring shows
+  the three methods to write.
+- `transform_bag` and `before_validation` are not wired on survival cells:
+  a policy that defines either is refused at submit there.
 - `step(loss, opt)` — invoked by **no** shipped trainer. Dead code here.
 - SAM-class two-pass optimizers are out of reach through this seam (no
-  closure re-evaluates the loss). Loss shaping, sampling changes, and
-  ensembling are not reachable and not permitted.
+  closure re-evaluates the loss). Loss shaping and ensembling are not
+  reachable and not permitted.
 
 Module rules (statically enforced before launch): top-level imports only
 `automil.registry`, `__future__`, `typing`, `collections.abc` — numerical
@@ -305,20 +338,22 @@ class MyPolicy(PolicyVariant):
 
 **Your objective is ONE declared metric.** This cell's primary metric is
 declared in `automil/config.yaml` (`scoring.formula`, mirrored by
-`metrics.primary`): `val_auc` on a classification cell, `val_c_index` on a
-survival cell. Read that declaration at session start and optimize exactly
-that number — it is the only quantity keep/discard, ranking, UCB, and the
-frozen winner ever see, and `automil rank` prints its name in the
-leaderboard header so you never have to guess. Every `result.json`
+`metrics.primary`): `val_auc_smooth` on a classification cell,
+`val_c_index_smooth` on a survival cell (§3b). Read that declaration at
+session start and optimize exactly that number — it is the only quantity
+keep/discard, ranking, UCB, and the frozen winner ever see, and
+`automil rank` prints its name in the leaderboard header so you never have
+to guess. Every `result.json`
 `metrics` block you can see is validation-only, and `primary_value` is
 that declared metric recomputed from it by the framework at ingest.
-Companion metrics (`val_bacc`, and `val_qwk` on the ordinal grade task)
-stay recorded and are worth reading for diagnosis, but they do not vote.
+Companion metrics (`val_auc` at the restored epoch, `val_bacc`, and
+`val_qwk` on the ordinal grade task) stay recorded and are worth reading
+for diagnosis, but they do not vote.
 
 **`val_bacc` does hold a veto.** On a classification cell,
 `scoring.guard` declares a non-inferiority margin, and a candidate that
-wins on `val_auc` is still discarded if its `val_bacc` fell more than that
-margin below its parent's. The margin is one quantization step of balanced
+wins on the primary metric is still discarded if its `val_bacc` fell more
+than that margin below its parent's. The margin is one quantization step of balanced
 accuracy on this cell's validation splits — the most a single WORST-CASE
 validation slide changing side can move the number — so a drop that size
 passes. The margin widens with the noise of the comparison the way the
@@ -326,14 +361,14 @@ keep-bar does: the drop is judged against `max(one slide, k × paired SE)`
 of the per-fold balanced-accuracy deltas between the child and its parent,
 so a drop smaller than its own fold-to-fold noise is not evidence of harm;
 `automil rank` prints the bar a `GUARD-FAIL` faced. The same guard is
-applied again at the candidate freeze, there against the cell BASELINE
-rather than your parent: a balanced-accuracy collapse cannot be promoted and certified even
-if it tops the val_auc leaderboard. It can reject, never promote: your
-objective is still `val_auc` alone and nothing is gained by trading
-`val_auc` for `val_bacc`. Practically, treat a discard whose `val_auc`
-went UP as a signal that the change moved the decision boundary rather
-than the ranking, and propose accordingly instead of re-running the same
-family. `automil rank` marks these `GUARD-FAIL` with the observed drop.
+applied again when discovery freezes, there against the cell BASELINE
+rather than your parent: a balanced-accuracy collapse cannot enter the
+winner pool even if it tops the leaderboard. It can reject, never select:
+your objective is still the primary metric alone and nothing is gained by
+trading it for `val_bacc`. Practically, treat a discard whose primary
+value went UP as a signal that the change moved the decision boundary
+rather than the ranking, and propose accordingly instead of re-running the
+same family. `automil rank` marks these `GUARD-FAIL` with the observed drop.
 
 Held-out test data is sealed at write time and quarantined
 outside your reach until a campaign-wide reveal long after this session

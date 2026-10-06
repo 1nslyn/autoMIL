@@ -8,8 +8,6 @@ without parsing them, while discovery freeze reads only agent-facing
 from __future__ import annotations
 
 import fcntl
-import copy
-import hashlib
 import logging
 import json
 import math
@@ -18,7 +16,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,7 +39,7 @@ from automil.cells import (
     resolve_cap_config,
     resolve_cell_identity,
 )
-from automil.cells.state import Cell, CellStatus, read_cell, write_cell
+from automil.cells.state import read_cell
 from automil.launch_binding import LaunchBindingError, validate_launch_binding
 from automil.runtime_helpers import atomic_write_text, group_mkdtemp
 
@@ -54,13 +51,9 @@ from autobench.campaign import (
     ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
-    DATASETS,
     DISCOVERY_ATTEMPTS,
     HELD_OUT_SCHEMA_BY_FAMILY,
     VALIDATION_SCHEMA_BY_FAMILY,
-    PROMOTION_CANDIDATES,
-    PROMOTION_WALL_CLOCK_CONTAINMENT,
-    PROTOCOL,
     PROTOCOL_VERSION,
     REPRODUCTION_POLICY_PATH,
     STAGE_FOLDS,
@@ -68,6 +61,7 @@ from autobench.campaign import (
     TRAINING_TREE_PATHS,
     classify_attempt_outcome,
     content_sha256,
+    max_lift_winner,
     file_sha256,
     load_manifest,
     unique_complete_sources,
@@ -75,7 +69,7 @@ from autobench.campaign import (
 )
 from autobench.campaign_gpu import CampaignGpuError, require_declared_gpu
 
-STATE_SCHEMA_VERSION = 3
+STATE_SCHEMA_VERSION = 4
 STATE_FILE = "campaign_state.json"
 BASELINE_ATTESTATION_FILE = "baseline_attestation.json"
 EXECUTION_IDENTITY_FILE = "execution_identity.json"
@@ -91,7 +85,7 @@ CAMPAIGN_CELL_COUNT = ACTIVE_CELL_COUNT
 #: The grid's set directory; a rehearsal set beside it carries <set>.roster.json.
 PUBLICATION_SET = "runtime"
 SET_ROSTER_FIELDS = frozenset({"purpose", "note", "cohorts", "cells", "cell_ids"})
-SELECTION_FREEZE_SCHEMA_VERSION = 4
+SELECTION_FREEZE_SCHEMA_VERSION = 5
 #: The legal held-out fold shapes, derived from the one schema authority.
 #: Context-free validators check membership here; the FAMILY-exact lock is
 #: enforced at both ends of the evidence chain — bundle build
@@ -230,14 +224,7 @@ def _initialize_stage_state_unlocked(
             "frozen": False,
             "frozen_at": None,
             "attempt_audit": [],
-            "promoted_candidates": [],
-        },
-        "promotion": {
-            "candidate_budget": PROMOTION_CANDIDATES,
-            "jobs": [],
-            "frozen": False,
-            "materialized": False,
-            "materialized_at": None,
+            "candidates": [],
         },
         "winner": None,
         "certification": None,
@@ -613,9 +600,9 @@ def _ensure_discovery_baseline_root(
 ) -> str:
     """Create or verify the discovery graph's validation-only incumbent.
 
-    Discovery compares candidates on folds 0/1/2, so its graph root must use
-    the same evidence.  The campaign's final baseline incumbent remains the
-    separately frozen five-fold mean in ``campaign_state.json``.
+    Discovery compares candidates on the discovery folds, so its graph root
+    carries the registered baseline's evidence on exactly those folds (all
+    five) beside the frozen incumbent in ``campaign_state.json``.
     """
     from automil.graph import locked_update, merged_metadata
     from automil.scoring import cross_fold_se
@@ -705,7 +692,7 @@ def _ensure_discovery_baseline_root(
 
         node_id = graph.add_executed(
             parent_id=None,
-            description="native upstream baseline (discovery folds 0/1/2)",
+            description="native upstream baseline (five folds)",
             techniques=[],
             metrics={
                 "primary_value": discovery_mean,
@@ -1563,7 +1550,7 @@ def _discovery_cell(adir: Path, budget_cell_id: str):
 
 
 def freeze_discovery(cell_root: Path) -> dict[str, Any]:
-    """Freeze up to ten complete candidates after the charged-attempt budget."""
+    """Freeze every distinct complete candidate after the charged-attempt budget."""
     with _stage_lock(cell_root):
         return _freeze_discovery_unlocked(cell_root)
 
@@ -1709,7 +1696,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                     "identity": identity,
                     "validation_folds": folds,
                     "val_predictions_sha256": hashes,
-                    "discovery_mean": _mean(folds),
+                    "validation_mean": _mean(folds),
                     "sealed_fold_sha256": _sealed_fold_hashes(
                         archive, STAGE_FOLDS["discovery"],
                     ),
@@ -1723,7 +1710,7 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
                 # and one such cell blocks the campaign-wide selection freeze.
                 audit.update({
                     "candidate_sha256": candidate_sha,
-                    "validation_mean": candidate["discovery_mean"],
+                    "validation_mean": candidate["validation_mean"],
                 })
                 if guard_drop is not None:
                     drop, margin = guard_drop
@@ -1750,18 +1737,14 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         )
 
     # The census rows plus each run's outcome identity: the selection freeze
-    # re-derives the same roster from the census and the same archive.
+    # re-derives the same pool from the census and the same archive.
     by_node = {candidate["candidate_id"]: candidate for candidate in eligible}
     unique_sources = unique_complete_sources([
         {**row, "outcome_sha256": outcomes.get(row["node_id"])}
         for row in attempt_audit
     ])
-    promoted = [
-        by_node[source["source_node_id"]]
-        for source in unique_sources[:PROMOTION_CANDIDATES]
-    ]
     frozen_at = _utc_now()
-    state["phase"] = "promotion-ready" if promoted else "selection-ready"
+    state["phase"] = "selection-ready"
     state["discovery"].update({
         "attempts_charged": DISCOVERY_ATTEMPTS,
         "complete_candidates": len(eligible),
@@ -1769,7 +1752,9 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         "frozen": True,
         "frozen_at": frozen_at,
         "attempt_audit": sorted(attempt_audit, key=_attempt_order),
-        "promoted_candidates": promoted,
+        "candidates": [
+            by_node[source["source_node_id"]] for source in unique_sources
+        ],
     })
     state["revision"] += 1
     state["updated_at"] = frozen_at
@@ -1778,27 +1763,26 @@ def _freeze_discovery_unlocked(cell_root: Path) -> dict[str, Any]:
         "attempts_charged": DISCOVERY_ATTEMPTS,
         "complete_candidates": len(eligible),
         "unique_complete_candidates": len(unique_sources),
-        "promoted_candidates": len(promoted),
         "at": frozen_at,
     })
     return _commit_state(cell_root, state)
 
 
 def _companion_guard_floor(
-    adir: Path, state: Mapping[str, Any], folds: object = None,
+    adir: Path, state: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    """The companion floor a promoted candidate must clear, or ``None``.
+    """The companion floor a winner-pool candidate must clear, or ``None``.
 
     The keep/discard gate is a parent-relative SEARCH screen, and the freeze
-    deliberately ignores it — promotion is the arbitration that screen defers
-    to. But the guard is not a screen: it is a predeclared, deterministic
-    non-inferiority floor, and a guard that only steers the search while a
-    balanced-accuracy collapse still gets promoted and certified is not the
-    protection the protocol claims. So it is applied here too, against the
-    CELL BASELINE rather than against a parent: at arbitration time the parent
-    relation is a search artifact, and the statement worth making about a
-    certified winner is that it is not worse than the native baseline by more
-    than one validation slide.
+    deliberately ignores it — the winner rule is the arbitration that screen
+    defers to. But the guard is not a screen: it is a predeclared,
+    deterministic non-inferiority floor, and a guard that only steers the
+    search while a balanced-accuracy collapse still enters the pool and gets
+    certified is not the protection the protocol claims. So it is applied here
+    too, against the CELL BASELINE rather than against a parent: at
+    arbitration time the parent relation is a search artifact, and the
+    statement worth making about a certified winner is that it is not worse
+    than the native baseline by more than one validation slide.
 
     The drop and the margin are judged as the gate judges them, from the same
     per-fold evidence: the drop is the difference of per-fold means
@@ -1806,7 +1790,7 @@ def _companion_guard_floor(
     ``max(one-slide quantum, se_multiplier x paired SE)`` of the per-fold
     companion deltas (:func:`automil.graph.companion_margin`), so a drop
     smaller than its own fold-to-fold noise does not decide a cell at either
-    stage, and no recovered or hand-rounded aggregate can make the two stages
+    place, and no recovered or hand-rounded aggregate can make the two
     disagree about one candidate.
 
     The declaration is read from the FROZEN ``graph.json`` meta, not from
@@ -1857,7 +1841,7 @@ def _companion_guard_floor(
     if declared is None:
         return None
     metric, margin = declared
-    stage_folds = tuple(STAGE_FOLDS["discovery"] if folds is None else folds)
+    stage_folds = STAGE_FOLDS["discovery"]
     baseline = state.get("baseline") or {}
     stage_baseline = [
         fold for fold in (baseline.get("validation_folds") or [])
@@ -1868,10 +1852,6 @@ def _companion_guard_floor(
             "cannot apply the companion guard at freeze: the registered "
             f"baseline carries no evidence for folds {list(stage_folds)}"
         )
-    # K is part of the lattice, so a stage that averages MORE folds has a finer
-    # one-slide step and its own margin — derived from the same published
-    # counts, over the folds this stage actually averages.
-    margin = _stage_guard_margin(adir, stage_folds, margin)
     baseline_folds = _fold_metric_values(stage_baseline, metric)
     if len(baseline_folds) != len(stage_folds):
         raise CampaignStageError(
@@ -1901,30 +1881,6 @@ def _fold_metric_values(folds: list[Mapping[str, Any]], metric: str) -> dict[int
     }
 
 
-def _stage_guard_margin(adir: Path, folds, declared: float) -> float:
-    """The margin for a stage that averages ``folds``.
-
-    ``declared`` is the frozen margin for the DISCOVERY folds — the one the
-    framework gate consumes. A stage averaging a different fold set sits on a
-    different lattice, so its margin is the same derivation over its own
-    folds, from the same hash-bound published counts. Falls back to the
-    declared margin only when the counts are not available at all, which for a
-    materialized cell means an operator hand-edit.
-    """
-    from autobench.guard_margin import GuardMarginError, derived_margin_for_counts
-
-    try:
-        cell = json.loads((adir / "campaign_cell.json").read_text())
-        counts = (cell.get("guard") or {}).get("validation_class_counts")
-        if not counts:
-            return declared
-        return derived_margin_for_counts(counts, folds)
-    except (OSError, json.JSONDecodeError, GuardMarginError) as exc:
-        raise CampaignStageError(
-            f"cannot derive the companion margin for folds {list(folds)}: {exc}"
-        ) from exc
-
-
 def _companion_guard_shortfall(
     floor: Mapping[str, Any] | None, folds: list[Mapping[str, Any]],
 ) -> tuple[float, float] | None:
@@ -1949,440 +1905,6 @@ def _companion_guard_shortfall(
     # Same ulp slack as the gate: a drop of exactly the margin is a drop of one
     # validation slide, which is not evidence of harm.
     return (drop, margin) if drop - margin > 1e-9 else None
-
-
-def _map_overlay_path(path: str, source_adir_rel: str, target_adir_rel: str) -> str:
-    candidate = PurePosixPath(path)
-    source_root = PurePosixPath(source_adir_rel)
-    try:
-        suffix = candidate.relative_to(source_root)
-    except ValueError as exc:
-        raise CampaignStageError(
-            f"candidate overlay path {path!r} escapes its discovery automil root"
-        ) from exc
-    return (PurePosixPath(target_adir_rel) / suffix).as_posix()
-
-
-def _copy_exact_overlay(
-    *,
-    source_archive: Path,
-    target_archive: Path,
-    source_spec: Mapping[str, Any],
-    source_adir_rel: str,
-    target_adir_rel: str,
-) -> tuple[dict[str, str], list[str], list[str]]:
-    source_manifest = source_spec.get("overlay_manifest") or {}
-    if not isinstance(source_manifest, dict):
-        raise CampaignStageError("source overlay_manifest must be an object")
-    target_manifest: dict[str, str] = {}
-    path_map: dict[str, str] = {}
-    for source_path, recorded_hash in sorted(source_manifest.items()):
-        if not isinstance(source_path, str) or not isinstance(recorded_hash, str):
-            raise CampaignStageError("source overlay manifest is not string-to-string")
-        target_path = _map_overlay_path(
-            source_path, source_adir_rel, target_adir_rel,
-        )
-        source_file = source_archive / source_path
-        if not source_file.is_file():
-            raise CampaignStageError(f"source overlay file is missing: {source_path}")
-        actual = f"sha256:{file_sha256(source_file)}"
-        if actual != recorded_hash:
-            raise CampaignStageError(f"source overlay hash drift: {source_path}")
-        destination = target_archive / target_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_file, destination)
-        target_manifest[target_path] = actual
-        path_map[source_path] = target_path
-
-    source_deletions = source_spec.get("deletions") or []
-    if not isinstance(source_deletions, list) or not all(
-        isinstance(path, str) for path in source_deletions
-    ):
-        raise CampaignStageError("source deletions must be a list of paths")
-    target_deletions = [
-        _map_overlay_path(path, source_adir_rel, target_adir_rel)
-        for path in source_deletions
-    ]
-    source_framework = source_spec.get("framework_overlay_files") or []
-    if not isinstance(source_framework, list) or not all(
-        isinstance(path, str) for path in source_framework
-    ):
-        raise CampaignStageError("source framework_overlay_files must be paths")
-    target_framework = []
-    for path in source_framework:
-        mapped = path_map.get(path)
-        if mapped is None:
-            raise CampaignStageError(
-                f"framework overlay path {path!r} is absent from source manifest"
-            )
-        target_framework.append(mapped)
-    return target_manifest, target_deletions, target_framework
-
-
-def _selection_from_overlay(
-    archive: Path, framework_files: list[str],
-) -> Mapping[str, Any] | None:
-    candidates = [
-        archive / path for path in framework_files
-        if PurePosixPath(path).name == "applied_variant.json"
-    ]
-    if not candidates:
-        return None
-    if len(candidates) != 1:
-        raise CampaignStageError("promotion overlay has multiple variant selections")
-    try:
-        selection = json.loads(candidates[0].read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise CampaignStageError(f"invalid promotion variant selection: {exc}") from exc
-    if not isinstance(selection, dict):
-        raise CampaignStageError("promotion variant selection must be an object")
-    return selection
-
-
-def _promotion_cell(
-    adir: Path, *, cell: Mapping[str, Any], config: Mapping[str, Any], budget: int,
-) -> None:
-    from automil.cells.capconfig import resolve_cap_config
-    from automil.cells.state import normalize_mil_model
-
-    cap = resolve_cap_config(dict(config), eval_budget_override=budget)
-    budget_identity = cell["budget_identity"]
-    expected_id = budget_identity["cell_id"]
-    created = Cell(
-        cell_id=expected_id,
-        dataset=str(budget_identity["dataset"]),
-        encoder=str(budget_identity["encoder"]),
-        mil_model=normalize_mil_model(str(budget_identity["mil_model"])),
-        started_at=time.time(),
-        budget_seconds=cap.budget_seconds,
-        safety_buffer_seconds=cap.safety_buffer_seconds,
-        status=CellStatus.ACTIVE,
-        # Promotion has no coding-agent session. Its time wall therefore uses
-        # exact elapsed wall time while the eval axis controls candidate count.
-        mode="wall_clock",
-        eval_budget=budget,
-    )
-    write_cell(created, adir / "cells")
-
-
-def materialize_promotion(
-    cell_root: Path, *, repo_root: Path,
-) -> dict[str, Any]:
-    """Atomically create exact promotion jobs for the frozen top candidates."""
-    with _stage_lock(cell_root):
-        return _materialize_promotion_unlocked(cell_root, repo_root=repo_root)
-
-
-def _materialize_promotion_unlocked(
-    cell_root: Path, *, repo_root: Path,
-) -> dict[str, Any]:
-    state = load_stage_state(cell_root)
-    if (
-        not state["promotion"]["materialized"]
-        and state["phase"] != "promotion-ready"
-    ):
-        raise CampaignStageError(
-            f"promotion can materialize only from promotion-ready, got {state['phase']!r}"
-        )
-    _require_closed_discovery_activity(cell_root, state)
-    if state["promotion"]["materialized"]:
-        return state
-    candidates = state["discovery"]["promoted_candidates"]
-    if not candidates or len(candidates) > PROMOTION_CANDIDATES:
-        raise CampaignStageError("frozen promotion candidate count is invalid")
-    repo_root = repo_root.resolve()
-    cell_root = cell_root.resolve()
-    try:
-        cell_root.relative_to(repo_root)
-    except ValueError as exc:
-        raise CampaignStageError("campaign cell root must live inside repo_root") from exc
-
-    source_adir = cell_root / "automil"
-    source_adir_rel = source_adir.relative_to(repo_root).as_posix()
-    cell = json.loads((source_adir / "campaign_cell.json").read_text())
-    target_dir = cell_root / "promotion"
-    target_adir = target_dir / "automil"
-    target_adir_rel = target_adir.relative_to(repo_root).as_posix()
-    if target_dir.exists():
-        jobs = _recover_promotion_plan(
-            state, target_adir=target_adir, source_adir=source_adir,
-        )
-        return _finalize_promotion_state(cell_root, state, jobs)
-
-    temporary = Path(group_mkdtemp(dir=str(cell_root), prefix=".promotion-"))
-    temporary_adir = temporary / "automil"
-    try:
-        source_config = yaml.safe_load((source_adir / "config.yaml").read_text()) or {}
-        config = copy.deepcopy(source_config)
-        config["files"] = {
-            "editable": [f"{target_adir_rel}/variants/_policies/*.py"],
-        }
-        config.setdefault("run", {})["command"] = cell["commands"]["promotion"]
-        config["run"]["mil_model"] = cell["model"]
-        config.setdefault("cap", {})["eval_budget"] = len(candidates)
-        # The deep-copied discovery config carries the 12h agent-active
-        # budget; promotion has no agent, so that number would be a wall-clock
-        # kill switch mid-evaluation. Containment-size the time wall instead.
-        config["cap"]["budget"] = PROMOTION_WALL_CLOCK_CONTAINMENT
-        config["cap"]["mode"] = "wall_clock"
-        # The batches and the phasing rule belong to the agent's discovery;
-        # the controller submits the shortlist in one go.
-        config["cap"].pop("phasing", None)
-        config["training"] = {"fold_count": len(STAGE_FOLDS["promotion"])}
-        config.setdefault("campaign", {})["stage"] = "promotion"
-        temporary_adir.mkdir(parents=True)
-        (temporary_adir / "config.yaml").write_text(
-            yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
-        )
-        (temporary_adir / "campaign_cell.json").write_text(
-            json.dumps(cell, indent=2, sort_keys=True) + "\n"
-        )
-        (temporary_adir / ".gitignore").write_text(
-            "graph.json\nresults.tsv\nresult.json\norchestrator/\ncells/\n"
-            ".activity.jsonl\n.activity.samples.json\n.activity.lock\n"
-            ".automil_active\n.automil_worktrees/\n*.log\n*.pid\n"
-        )
-        (temporary_adir / "plan.md").write_text(
-            f"# Frozen promotion — {state['cell_id']}\n\n"
-            f"{len(candidates)} exact candidates; no agent proposals permitted.\n"
-        )
-        (temporary_adir / "learnings.md").write_text(
-            f"# Promotion ledger — {state['cell_id']}\n"
-        )
-        (temporary_adir / "variants" / "_policies").mkdir(parents=True)
-        _promotion_cell(
-            temporary_adir, cell=cell, config=config, budget=len(candidates),
-        )
-
-        policy = load_candidate_policy(temporary_adir)
-        target_command = config["run"]["command"]
-        command_hash = hashlib.sha256(target_command.encode()).hexdigest()
-        campaign_binding = dict(config["campaign"])
-        from automil.admissibility import validate_campaign_binding
-
-        manifest_path = repo_root / campaign_binding["manifest"]
-        validate_campaign_binding(
-            manifest_path,
-            campaign_binding,
-            base_run_command=target_command,
-            budget_cell_id=cell["budget_identity"]["cell_id"],
-        )
-
-        jobs: list[dict[str, Any]] = []
-        queue_dir = temporary_adir / "orchestrator" / "queue"
-        archive_root = temporary_adir / "orchestrator" / "archive"
-        queue_dir.mkdir(parents=True)
-        from automil.graph import locked_update, merged_metadata
-
-        with locked_update(temporary_adir / "graph.json") as graph:
-            for rank, candidate in enumerate(candidates, 1):
-                source_node = candidate["candidate_id"]
-                source_archive = source_adir / "orchestrator" / "archive" / source_node
-                source_spec_path = source_archive / "spec.json"
-                if file_sha256(source_spec_path) != candidate["source_spec_sha256"]:
-                    raise CampaignStageError(
-                        f"source spec changed after discovery freeze: {source_node}"
-                    )
-                source_spec = json.loads(source_spec_path.read_text())
-                source_verdict = revalidate_candidate_spec(
-                    load_candidate_policy(source_adir), source_spec, source_archive,
-                ).to_dict()
-                source_sha, _ = _candidate_identity(source_spec, source_verdict)
-                if source_sha != candidate["candidate_sha256"]:
-                    raise CampaignStageError(
-                        f"source candidate identity changed after freeze: {source_node}"
-                    )
-
-                target_node = graph.add_proposed(
-                    parent_id="campaign_root",
-                    description=f"promotion rank {rank}: exact {source_node}",
-                    techniques=[],
-                    kind="hp" if source_verdict["candidate_class"] == "config-only"
-                    else "regularization",
-                )
-                graph.mark_running(target_node)
-                graph_node = graph.get_node(target_node)
-                graph_node["cell_id"] = cell["budget_identity"]["cell_id"]
-                graph_node["metadata"] = merged_metadata(graph_node, {
-                    "source_node_id": source_node,
-                    "source_candidate_sha256": source_sha,
-                })
-
-                target_archive = archive_root / target_node
-                target_archive.mkdir(parents=True)
-                manifest, deletions, framework_files = _copy_exact_overlay(
-                    source_archive=source_archive,
-                    target_archive=target_archive,
-                    source_spec=source_spec,
-                    source_adir_rel=source_adir_rel,
-                    target_adir_rel=target_adir_rel,
-                )
-                selection = _selection_from_overlay(target_archive, framework_files)
-                candidate_paths = sorted(
-                    (set(manifest) - set(framework_files)) | set(deletions)
-                )
-                override = source_spec.get("run_command_override")
-                verdict = policy.classify(
-                    candidate_paths,
-                    override=str(override) if override is not None else None,
-                    variant_selection=selection,
-                )
-                if not verdict.accepted:
-                    raise CampaignStageError(
-                        f"promotion mapping made {source_node} inadmissible: {verdict.reason}"
-                    )
-                config_parts = [
-                    f"{path}:{digest}" for path, digest in sorted(manifest.items())
-                ] + [f"DELETE:{path}" for path in sorted(deletions)]
-                if override is not None:
-                    config_parts.append(f"OVERRIDE:{override}")
-                config_hash = hashlib.sha256(
-                    "\n".join(config_parts).encode()
-                ).hexdigest()[:16]
-                target_spec: dict[str, Any] = {
-                    "id": target_node,
-                    "description": f"promotion rank {rank}: exact {source_node}",
-                    "base_commit": source_spec["base_commit"],
-                    "overlay_dir": f"archive/{target_node}",
-                    "overlay_manifest": manifest,
-                    "deletions": deletions,
-                    "framework_overlay_files": framework_files,
-                    "admissibility": verdict.to_dict(),
-                    "base_run_command_sha256": command_hash,
-                    "priority": 0,
-                    "estimated_vram_gb": source_spec.get("estimated_vram_gb", 0),
-                    "graph_metadata": {
-                        "parent_id": "campaign_root",
-                        "techniques": [],
-                        "config_hash": config_hash,
-                    },
-                    "submitted_at": _utc_now(),
-                    "metadata": {
-                        "backend": (config.get("backend") or {}).get("name", "local"),
-                        "runtime": "campaign-controller",
-                        "cell_id": cell["budget_identity"]["cell_id"],
-                        "campaign": campaign_binding,
-                        "promotion": {
-                            "source_node_id": source_node,
-                            "source_candidate_sha256": source_sha,
-                            "source_spec_sha256": candidate["source_spec_sha256"],
-                            "expected_folds": list(STAGE_FOLDS["promotion"]),
-                        },
-                    },
-                }
-                if override is not None:
-                    target_spec["run_command_override"] = override
-                revalidate_candidate_spec(policy, target_spec, target_archive)
-                (queue_dir / f"{target_node}.json").write_text(
-                    json.dumps(target_spec, indent=2, sort_keys=True) + "\n"
-                )
-                target_sha, target_identity = _candidate_identity(
-                    target_spec, verdict.to_dict(),
-                )
-                jobs.append({
-                    "rank": rank,
-                    "source_node_id": source_node,
-                    "source_candidate_sha256": source_sha,
-                    "promotion_node_id": target_node,
-                    "promotion_candidate_sha256": target_sha,
-                    "promotion_identity": target_identity,
-                    "status": "queued",
-                })
-
-        plan = {
-            "campaign_id": CAMPAIGN_ID,
-            "cell_id": state["cell_id"],
-            "source_state_sha256": state["state_sha256"],
-            "jobs": jobs,
-        }
-        plan["plan_sha256"] = content_sha256(plan)
-        (temporary_adir / "promotion_plan.json").write_text(
-            json.dumps(plan, indent=2, sort_keys=True) + "\n"
-        )
-        os.replace(temporary, target_dir)
-    except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
-
-    return _finalize_promotion_state(cell_root, state, jobs)
-
-
-def _recover_promotion_plan(
-    state: Mapping[str, Any], *, target_adir: Path, source_adir: Path,
-) -> list[dict[str, Any]]:
-    """Adopt an atomically published plan if state commit was interrupted."""
-    plan_path = target_adir / "promotion_plan.json"
-    try:
-        plan = json.loads(plan_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise CampaignStageError(
-            "promotion directory exists without a recoverable immutable plan"
-        ) from exc
-    recorded_hash = plan.pop("plan_sha256", None)
-    if recorded_hash != content_sha256(plan):
-        raise CampaignStageError("promotion plan integrity hash mismatch")
-    if (
-        plan.get("campaign_id") != CAMPAIGN_ID
-        or plan.get("cell_id") != state["cell_id"]
-        or plan.get("source_state_sha256") != state["state_sha256"]
-    ):
-        raise CampaignStageError("promotion plan is not bound to the frozen state")
-    jobs = plan.get("jobs")
-    if not isinstance(jobs, list):
-        raise CampaignStageError("promotion plan jobs must be a list")
-    expected = [
-        (candidate["candidate_id"], candidate["candidate_sha256"])
-        for candidate in state["discovery"]["promoted_candidates"]
-    ]
-    actual = [
-        (job.get("source_node_id"), job.get("source_candidate_sha256"))
-        for job in jobs if isinstance(job, dict)
-    ]
-    if actual != expected:
-        raise CampaignStageError("promotion plan candidate order/identity drifted")
-    if not (target_adir / "graph.json").is_file():
-        raise CampaignStageError("promotion plan is missing graph.json")
-    for job in jobs:
-        node_id = job["promotion_node_id"]
-        queue_spec = target_adir / "orchestrator" / "queue" / f"{node_id}.json"
-        archived_spec = target_adir / "orchestrator" / "archive" / node_id / "spec.json"
-        running_specs = list(
-            (target_adir / "orchestrator" / "running").glob(f"*/{node_id}.json")
-        )
-        if not queue_spec.is_file() and not archived_spec.is_file() and not running_specs:
-            raise CampaignStageError(f"promotion job {node_id} has no durable spec")
-    # Re-read the source specs named by the plan. This does not inspect results
-    # or any held-out file; it proves the frozen source identity still exists.
-    for job in jobs:
-        source_spec = (
-            source_adir / "orchestrator" / "archive"
-            / job["source_node_id"] / "spec.json"
-        )
-        if not source_spec.is_file():
-            raise CampaignStageError(
-                f"promotion source disappeared: {job['source_node_id']}"
-            )
-    return jobs
-
-
-def _finalize_promotion_state(
-    cell_root: Path, state: dict[str, Any], jobs: list[dict[str, Any]],
-) -> dict[str, Any]:
-    now = _utc_now()
-    state["phase"] = "promotion"
-    state["promotion"].update({
-        "jobs": jobs,
-        "materialized": True,
-        "materialized_at": now,
-    })
-    state["revision"] += 1
-    state["updated_at"] = now
-    state["history"].append({
-        "event": "promotion-materialized",
-        "jobs": len(jobs),
-        "at": now,
-    })
-    return _commit_state(cell_root, state)
 
 
 def _require_closed_discovery_activity(
@@ -2448,195 +1970,8 @@ def _require_closed_discovery_activity(
     ):
         raise CampaignStageError(
             "SessionEnd and a durable final Claude active-time sample are required "
-            "before promotion or winner selection"
+            "before winner selection"
         )
-
-
-def freeze_promotion(cell_root: Path) -> dict[str, Any]:
-    """Reconcile every promotion job and freeze the five-fold eligible pool."""
-    with _stage_lock(cell_root):
-        return _freeze_promotion_unlocked(cell_root)
-
-
-def _freeze_promotion_unlocked(cell_root: Path) -> dict[str, Any]:
-    state = load_stage_state(cell_root)
-    if state["promotion"]["frozen"]:
-        return state
-    expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
-        _cell_task_family(cell_root, state)
-    ]
-    promotion_floor = _companion_guard_floor(
-        cell_root / "automil", state, CERTIFICATION_FOLDS,
-    )
-    if state["phase"] != "promotion":
-        raise CampaignStageError(
-            f"promotion can freeze only from promotion phase, got {state['phase']!r}"
-        )
-    jobs = state["promotion"]["jobs"]
-    if not jobs:
-        raise CampaignStageError("promotion ledger contains no jobs")
-    adir = cell_root / "promotion" / "automil"
-    pending = _pending_stage_work(adir)
-    if pending:
-        raise CampaignStageError(f"promotion still has queued/running work: {pending}")
-    cell = json.loads((adir / "campaign_cell.json").read_text())
-    budget_cell = _discovery_cell(adir, cell["budget_identity"]["cell_id"])
-    if budget_cell.eval_budget != len(jobs):
-        raise CampaignStageError("promotion budget differs from frozen job count")
-    if budget_cell.consumed_evals != len(jobs):
-        raise CampaignStageError(
-            f"promotion requires {len(jobs)} charged attempts; "
-            f"found {budget_cell.consumed_evals}"
-        )
-
-    policy = load_candidate_policy(adir)
-    discovery_by_id = {
-        candidate["candidate_id"]: candidate
-        for candidate in state["discovery"]["promoted_candidates"]
-    }
-    frozen_jobs: list[dict[str, Any]] = []
-    eligible: list[dict[str, Any]] = []
-    for job in jobs:
-        job = dict(job)
-        source_node = job["source_node_id"]
-        source = discovery_by_id.get(source_node)
-        if source is None or source["candidate_sha256"] != job["source_candidate_sha256"]:
-            raise CampaignStageError(
-                f"promotion job {job['promotion_node_id']} lost its frozen source identity"
-            )
-        job.update({
-            "candidate_class": source["identity"]["candidate_class"],
-            "policy_hash": source["identity"]["policy_hash"],
-            "result_status": "missing",
-            "source_spec_sha256": source["source_spec_sha256"],
-            "promotion_spec_sha256": None,
-            "submitted_at": None,
-            "elapsed_seconds": None,
-            "peak_vram_mb": None,
-            "validation_mean": None,
-        })
-        node_id = job["promotion_node_id"]
-        archive = adir / "orchestrator" / "archive" / node_id
-        job.update(_terminal_evidence(adir, node_id, None))
-        spec_path = archive / "spec.json"
-        result_path = archive / "result.json"
-        if not spec_path.is_file():
-            raise CampaignStageError(
-                f"promotion job {node_id} lost its durable spec"
-            )
-        try:
-            spec = json.loads(spec_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            raise CampaignStageError(
-                f"promotion spec is unreadable for {node_id}: {exc}"
-            ) from exc
-        job["promotion_spec_sha256"] = file_sha256(spec_path)
-        job["submitted_at"] = spec.get("submitted_at")
-        link = (spec.get("metadata") or {}).get("promotion") or {}
-        if (
-            link.get("source_node_id") != source_node
-            or link.get("source_candidate_sha256") != source["candidate_sha256"]
-            or link.get("source_spec_sha256") != source["source_spec_sha256"]
-            or link.get("expected_folds") != list(STAGE_FOLDS["promotion"])
-        ):
-            raise CampaignStageError(f"promotion source link drifted for {node_id}")
-        verdict = revalidate_candidate_spec(policy, spec, archive).to_dict()
-        promotion_sha, _ = _candidate_identity(spec, verdict)
-        if promotion_sha != job["promotion_candidate_sha256"]:
-            raise CampaignStageError(f"promotion candidate identity drifted for {node_id}")
-        if not result_path.is_file():
-            job.update({
-                "status": "ineligible",
-                "reason": "terminal promotion is missing result.json",
-            })
-            frozen_jobs.append(job)
-            continue
-        try:
-            result = json.loads(result_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            job.update({
-                "status": "ineligible",
-                "reason": f"terminal promotion result is unreadable: {exc}",
-            })
-            frozen_jobs.append(job)
-            continue
-        job.update(_terminal_evidence(adir, node_id, result))
-        if result.get("status") != "completed":
-            job.update({
-                "status": "ineligible",
-                "reason": f"promotion status {result.get('status')!r}",
-            })
-            frozen_jobs.append(job)
-            continue
-        try:
-            promotion_folds = _validation_folds(
-                result, STAGE_FOLDS["promotion"],
-                expected_metrics=expected_metrics,
-            )
-            promotion_sealed = _sealed_fold_hashes(
-                archive, STAGE_FOLDS["promotion"],
-            )
-        except CampaignStageError as exc:
-            job.update({"status": "ineligible", "reason": str(exc)})
-            frozen_jobs.append(job)
-            continue
-        five_folds = sorted(
-            [*source["validation_folds"], *promotion_folds],
-            key=lambda fold: fold["fold_index"],
-        )
-        if [fold["fold_index"] for fold in five_folds] != list(CERTIFICATION_FOLDS):
-            raise CampaignStageError(f"five-fold coverage is not exact for {node_id}")
-        selection_candidate = {
-            "candidate_id": source_node,
-            "candidate_sha256": source["candidate_sha256"],
-            "promotion_node_id": node_id,
-            "promotion_candidate_sha256": promotion_sha,
-            "validation_folds": five_folds,
-            "validation_mean": _mean(five_folds),
-            "sealed_fold_sha256": {
-                **source["sealed_fold_sha256"],
-                **promotion_sealed,
-            },
-        }
-        guard_drop = _companion_guard_shortfall(promotion_floor, five_folds)
-        if guard_drop is not None:
-            drop, margin = guard_drop
-            job.update({
-                "status": "ineligible",
-                "reason": (
-                    f"companion guard: {promotion_floor['metric']} fell "
-                    f"{drop:.4f} below the baseline over five folds "
-                    f"(margin {margin:.4f})"
-                ),
-                "validation_mean": selection_candidate["validation_mean"],
-            })
-        else:
-            eligible.append(selection_candidate)
-            job.update({
-                "status": "eligible",
-                "reason": "complete five-fold validation",
-                "validation_mean": selection_candidate["validation_mean"],
-            })
-        frozen_jobs.append(job)
-
-    frozen_at = _utc_now()
-    state["phase"] = "selection-ready"
-    state["promotion"].update({
-        "jobs": frozen_jobs,
-        "attempts_charged": len(jobs),
-        "eligible_candidates": eligible,
-        "frozen": True,
-        "frozen_at": frozen_at,
-    })
-    state["revision"] += 1
-    state["updated_at"] = frozen_at
-    state["history"].append({
-        "event": "promotion-frozen",
-        "attempts_charged": len(jobs),
-        "eligible_candidates": len(eligible),
-        "at": frozen_at,
-    })
-    return _commit_state(cell_root, state)
 
 
 def _verify_baseline_unchanged(
@@ -2705,21 +2040,8 @@ def _select_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         raise CampaignStageError("native baseline is not registered")
     _verify_baseline_unchanged(cell_root, state, baseline)
 
-    pool: list[dict[str, Any]] = [{
-        "kind": "baseline",
-        "candidate_id": "baseline",
-        "candidate_sha256": baseline["candidate_sha256"],
-        "validation_folds": baseline["validation_folds"],
-        "validation_mean": float(baseline["validation_mean"]),
-        "promotion_node_id": None,
-    }]
-    for candidate in state["promotion"].get("eligible_candidates", []):
-        if [fold["fold_index"] for fold in candidate["validation_folds"]] != list(
-            CERTIFICATION_FOLDS
-        ):
-            raise CampaignStageError(
-                f"selection candidate {candidate['candidate_id']} lacks exact five-fold evidence"
-            )
+    candidates = state["discovery"]["candidates"]
+    for candidate in candidates:
         recomputed = _mean(candidate["validation_folds"])
         if not math.isclose(
             recomputed, float(candidate["validation_mean"]), rel_tol=0.0, abs_tol=1e-12,
@@ -2727,45 +2049,39 @@ def _select_winner_unlocked(cell_root: Path) -> dict[str, Any]:
             raise CampaignStageError(
                 f"selection candidate {candidate['candidate_id']} mean drifted"
             )
-        pool.append({
+    selection = _winner_selection(baseline["validation_folds"], candidates)
+    selected = next((
+        candidate for candidate in candidates
+        if candidate["candidate_id"] == selection["winner"]
+    ), None)
+    if selected is None:
+        winner: dict[str, Any] = {
+            "kind": "baseline",
+            "candidate_id": "baseline",
+            "candidate_sha256": baseline["candidate_sha256"],
+            "sealed_fold_sha256": None,
+            "validation_folds": baseline["validation_folds"],
+            "validation_mean": float(baseline["validation_mean"]),
+        }
+    else:
+        winner = {
             "kind": "searched",
-            **candidate,
-            "validation_mean": recomputed,
-        })
-
-    # Exact ties prefer the native baseline. Remaining ties use the stable
-    # discovery node id, never filesystem iteration or completion order.
-    pool.sort(key=lambda candidate: (
-        -candidate["validation_mean"],
-        0 if candidate["kind"] == "baseline" else 1,
-        candidate["candidate_id"],
-    ))
-    selected = pool[0]
+            "candidate_id": selected["candidate_id"],
+            "candidate_sha256": selected["candidate_sha256"],
+            "sealed_fold_sha256": selected["sealed_fold_sha256"],
+            "validation_folds": selected["validation_folds"],
+            "validation_mean": float(selected["validation_mean"]),
+        }
     selected_at = _utc_now()
-    audit = [{
-        "rank": rank,
-        "kind": candidate["kind"],
-        "candidate_id": candidate["candidate_id"],
-        "candidate_sha256": candidate["candidate_sha256"],
-        "promotion_node_id": candidate.get("promotion_node_id"),
-        "validation_mean": candidate["validation_mean"],
-    } for rank, candidate in enumerate(pool, 1)]
-    winner = {
-        "kind": selected["kind"],
-        "candidate_id": selected["candidate_id"],
-        "candidate_sha256": selected["candidate_sha256"],
-        "promotion_node_id": selected.get("promotion_node_id"),
-        "sealed_fold_sha256": selected.get("sealed_fold_sha256"),
-        "validation_folds": selected["validation_folds"],
-        "validation_mean": selected["validation_mean"],
+    winner.update({
         "baseline_validation_mean": baseline["validation_mean"],
         "lift_over_baseline": (
-            selected["validation_mean"] - float(baseline["validation_mean"])
+            winner["validation_mean"] - float(baseline["validation_mean"])
         ),
-        "selection_audit": audit,
-        "selection_sha256": content_sha256(audit),
+        "selection": selection,
+        "selection_sha256": content_sha256(selection),
         "selected_at": selected_at,
-    }
+    })
     state["winner"] = winner
     state["phase"] = "winner-frozen"
     state["revision"] += 1
@@ -2781,6 +2097,33 @@ def _select_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     return _commit_state(cell_root, state)
 
 
+def _winner_selection(
+    baseline_folds: list[Mapping[str, Any]],
+    candidates: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """The winner rule over normalized five-fold evidence, in pool order.
+
+    Each candidate carries ``candidate_id``, ``candidate_sha256`` and
+    ``validation_folds``; the rule pairs their fold primary values with the
+    baseline's (:func:`autobench.campaign.max_lift_winner`).
+    """
+    for folds in (baseline_folds, *(c["validation_folds"] for c in candidates)):
+        if [fold["fold_index"] for fold in folds] != list(CERTIFICATION_FOLDS):
+            raise CampaignStageError(
+                "winner selection requires exact five-fold evidence"
+            )
+    return max_lift_winner(
+        [fold["primary_value"] for fold in baseline_folds],
+        [{
+            "candidate_id": candidate["candidate_id"],
+            "candidate_sha256": candidate["candidate_sha256"],
+            "fold_values": [
+                fold["primary_value"] for fold in candidate["validation_folds"]
+            ],
+        } for candidate in candidates],
+    )
+
+
 def _same_fold_evidence(left: list[Mapping[str, Any]], right: list[Mapping[str, Any]]) -> bool:
     return content_sha256(left) == content_sha256(right)
 
@@ -2789,76 +2132,42 @@ def _searched_winner_sources(
     cell_root: Path, state: Mapping[str, Any], winner: Mapping[str, Any],
 ) -> dict[int, Path]:
     source = next((
-        candidate for candidate in state["discovery"]["promoted_candidates"]
+        candidate for candidate in state["discovery"]["candidates"]
         if candidate["candidate_id"] == winner["candidate_id"]
     ), None)
-    promoted = next((
-        candidate for candidate in state["promotion"].get("eligible_candidates", [])
-        if candidate["candidate_id"] == winner["candidate_id"]
-    ), None)
-    if source is None or promoted is None:
-        raise CampaignStageError("frozen searched winner is absent from its stage ledgers")
+    if source is None:
+        raise CampaignStageError("frozen searched winner is absent from the discovery ledger")
     if (
         source["candidate_sha256"] != winner["candidate_sha256"]
-        or promoted["promotion_node_id"] != winner["promotion_node_id"]
         or not _same_fold_evidence(
-            promoted["validation_folds"], winner["validation_folds"],
+            source["validation_folds"], winner["validation_folds"],
         )
     ):
         raise CampaignStageError("frozen searched winner identity/evidence drifted")
 
-    discovery_adir = cell_root / "automil"
-    discovery_archive = (
-        discovery_adir / "orchestrator" / "archive" / winner["candidate_id"]
-    )
-    discovery_spec_path = discovery_archive / "spec.json"
-    if file_sha256(discovery_spec_path) != source["source_spec_sha256"]:
+    adir = cell_root / "automil"
+    archive = adir / "orchestrator" / "archive" / winner["candidate_id"]
+    spec_path = archive / "spec.json"
+    if file_sha256(spec_path) != source["source_spec_sha256"]:
         raise CampaignStageError("winner discovery spec changed after selection")
-    discovery_spec = json.loads(discovery_spec_path.read_text())
-    discovery_verdict = revalidate_candidate_spec(
-        load_candidate_policy(discovery_adir), discovery_spec, discovery_archive,
+    spec = json.loads(spec_path.read_text())
+    verdict = revalidate_candidate_spec(
+        load_candidate_policy(adir), spec, archive,
     ).to_dict()
-    discovery_sha, _ = _candidate_identity(discovery_spec, discovery_verdict)
-    if discovery_sha != winner["candidate_sha256"]:
+    candidate_sha, _ = _candidate_identity(spec, verdict)
+    if candidate_sha != winner["candidate_sha256"]:
         raise CampaignStageError("winner discovery candidate changed after selection")
-    discovery_result = json.loads((discovery_archive / "result.json").read_text())
-    expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
-        _cell_task_family(cell_root, state)
-    ]
-    discovery_folds = _validation_folds(
-        discovery_result, STAGE_FOLDS["discovery"],
-        expected_metrics=expected_metrics,
+    result = json.loads((archive / "result.json").read_text())
+    folds = _validation_folds(
+        result, STAGE_FOLDS["discovery"],
+        expected_metrics=VALIDATION_SCHEMA_BY_FAMILY[
+            _cell_task_family(cell_root, state)
+        ],
     )
-    if not _same_fold_evidence(discovery_folds, source["validation_folds"]):
-        raise CampaignStageError("winner discovery validation evidence changed")
-
-    promotion_adir = cell_root / "promotion" / "automil"
-    promotion_archive = (
-        promotion_adir / "orchestrator" / "archive"
-        / winner["promotion_node_id"]
-    )
-    promotion_spec = json.loads((promotion_archive / "spec.json").read_text())
-    promotion_verdict = revalidate_candidate_spec(
-        load_candidate_policy(promotion_adir), promotion_spec, promotion_archive,
-    ).to_dict()
-    promotion_sha, _ = _candidate_identity(promotion_spec, promotion_verdict)
-    if promotion_sha != promoted["promotion_candidate_sha256"]:
-        raise CampaignStageError("winner promotion candidate changed after selection")
-    promotion_result = json.loads((promotion_archive / "result.json").read_text())
-    promotion_folds = _validation_folds(
-        promotion_result, STAGE_FOLDS["promotion"],
-        expected_metrics=expected_metrics,
-    )
-    five_folds = sorted(
-        [*discovery_folds, *promotion_folds], key=lambda fold: fold["fold_index"],
-    )
-    if not _same_fold_evidence(five_folds, winner["validation_folds"]):
+    if not _same_fold_evidence(folds, winner["validation_folds"]):
         raise CampaignStageError("winner five-fold validation evidence changed")
     sources = {
-        fold: (
-            discovery_archive if fold in STAGE_FOLDS["discovery"]
-            else promotion_archive
-        ) / "certify" / f"fold_{fold}_result.json"
+        fold: archive / "certify" / f"fold_{fold}_result.json"
         for fold in CERTIFICATION_FOLDS
     }
     expected_hashes = winner.get("sealed_fold_sha256")
@@ -3639,16 +2948,18 @@ def _is_sha256(value: object) -> bool:
     )
 
 
-def _archived_outcomes(
+def _archived_evidence(
     cell_root: Path, state: Mapping[str, Any], attempts: list[Mapping[str, Any]],
-) -> dict[str, str]:
-    """Each eligible discovery attempt's outcome identity, re-read from the
-    validation evidence the discovery freeze read, keyed by node id."""
+) -> tuple[dict[str, str], dict[str, list[dict[str, Any]]]]:
+    """Each eligible discovery attempt's outcome identity and fold evidence,
+    re-read from the validation evidence the discovery freeze read, keyed by
+    node id."""
     expected_metrics = VALIDATION_SCHEMA_BY_FAMILY[
         _cell_task_family(cell_root, state)
     ]
     archive_root = cell_root / "automil" / "orchestrator" / "archive"
     outcomes: dict[str, str] = {}
+    evidence: dict[str, list[dict[str, Any]]] = {}
     for row in attempts:
         if not row["eligible"]:
             continue
@@ -3666,7 +2977,8 @@ def _archived_outcomes(
         outcomes[row["node_id"]] = _outcome_sha256(
             folds, _prediction_hashes(result, folds),
         )
-    return outcomes
+        evidence[row["node_id"]] = folds
+    return outcomes, evidence
 
 
 def _process_evidence(cell_root: Path, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -3751,7 +3063,7 @@ def _process_evidence(cell_root: Path, state: Mapping[str, Any]) -> dict[str, An
         ordered.append(json.loads(json.dumps(row)))
     if len({row["attempt_seq"] for row in ordered}) != len(ordered):
         raise CampaignStageError("discovery process attempt_seq is not unique")
-    outcomes = _archived_outcomes(cell_root, state, ordered)
+    outcomes, archived_folds = _archived_evidence(cell_root, state, ordered)
     ordered = sorted(
         ({**row, "outcome_sha256": outcomes.get(row["node_id"])} for row in ordered),
         key=_attempt_order,
@@ -3798,9 +3110,7 @@ def _process_evidence(cell_root: Path, state: Mapping[str, Any]) -> dict[str, An
     complete_candidates = sum(row["eligible"] for row in ordered)
     unique_sources = unique_complete_sources(ordered)
     unique_complete_candidates = len(unique_sources)
-    expected_sources = unique_sources[:PROMOTION_CANDIDATES]
-    expected_promoted = len(expected_sources)
-    promoted = discovery.get("promoted_candidates")
+    candidates = discovery.get("candidates")
     actual_sources = [
         {
             "source_node_id": str(candidate.get("candidate_id")),
@@ -3811,80 +3121,34 @@ def _process_evidence(cell_root: Path, state: Mapping[str, Any]) -> dict[str, An
             )),
             "policy_hash": str((candidate.get("identity") or {}).get("policy_hash")),
         }
-        for candidate in promoted
-    ] if isinstance(promoted, list) else []
+        for candidate in candidates
+    ] if isinstance(candidates, list) else []
     if (
         discovery.get("complete_candidates") != complete_candidates
         or discovery.get("unique_complete_candidates") != unique_complete_candidates
-        or actual_sources != expected_sources
+        or actual_sources != unique_sources
     ):
         raise CampaignStageError("discovery process counts do not reconcile")
 
-    promotion = state.get("promotion")
-    if not isinstance(promotion, dict):
-        raise CampaignStageError("promotion process evidence is missing")
-    jobs = promotion.get("jobs")
-    if not isinstance(jobs, list) or len(jobs) > PROMOTION_CANDIDATES:
-        raise CampaignStageError("promotion process roster is invalid")
-    if not isinstance(promoted, list) or len(promoted) != len(jobs):
-        raise CampaignStageError("promotion process differs from the discovery freeze")
-    attempts_charged = promotion.get("attempts_charged", 0)
-    if attempts_charged != len(jobs):
-        raise CampaignStageError("promotion charged-attempt count is inconsistent")
-    if jobs and not promotion.get("frozen"):
-        raise CampaignStageError("promotion process is not frozen")
-    frozen_jobs = json.loads(json.dumps(jobs))
-    job_fields = {
-        "rank", "source_node_id", "source_candidate_sha256",
-        "promotion_node_id", "promotion_candidate_sha256",
-        "promotion_identity", "status", "candidate_class", "policy_hash",
-        "result_status", "source_spec_sha256", "promotion_spec_sha256",
-        "submitted_at", "elapsed_seconds", "peak_vram_mb", "validation_mean",
-        "termination_reason", "budget_killed", "outcome_class", "reason",
-    }
-    for rank, (job, source) in enumerate(
-        zip(frozen_jobs, expected_sources, strict=True), 1,
+    # The winner rule re-run on the archive's evidence must give the record
+    # the winner was frozen with.
+    selection = _winner_selection(baseline["validation_folds"], [{
+        "candidate_id": source["source_node_id"],
+        "candidate_sha256": source["source_candidate_sha256"],
+        "validation_folds": archived_folds[source["source_node_id"]],
+    } for source in unique_sources])
+    winner = state.get("winner")
+    if (
+        not isinstance(winner, Mapping)
+        or winner.get("selection") != selection
+        or winner.get("selection_sha256") != content_sha256(selection)
+        or winner.get("candidate_id") != selection["winner"]
     ):
-        if (
-            not isinstance(job, dict)
-            or set(job) != job_fields
-            or job.get("rank") != rank
-            or any(job.get(key) != value for key, value in source.items())
-            or not _is_sha256(job.get("promotion_candidate_sha256"))
-            or job.get("status") not in {"eligible", "ineligible"}
-            or not isinstance(job.get("reason"), str)
-            or not job["reason"]
-            or job.get("candidate_class") not in {"config-only", "train-only-source"}
-            or job.get("outcome_class") not in ATTEMPT_OUTCOME_CLASSES
-            or not isinstance(job.get("termination_reason"), str)
-            or not isinstance(job.get("budget_killed"), bool)
-            or job.get("outcome_class") != classify_attempt_outcome(
-                job.get("result_status"), job.get("termination_reason"),
-                job.get("budget_killed"),
-            )
-        ):
-            raise CampaignStageError("promotion process job is incomplete")
-        if job["status"] == "eligible" and (
-            job.get("result_status") != "completed"
-            or job.get("outcome_class") != "completed"
-            or job.get("reason") != "complete five-fold validation"
-            or not _is_sha256(job.get("promotion_spec_sha256"))
-            or isinstance(job.get("validation_mean"), bool)
-            or not isinstance(job.get("validation_mean"), (int, float))
-            or not math.isfinite(float(job["validation_mean"]))
-            or not 0 <= float(job["validation_mean"]) <= 1
-        ):
-            raise CampaignStageError("eligible promotion process job is incomplete")
-    promotion_status_counts = {
-        status: sum(job["status"] == status for job in frozen_jobs)
-        for status in ("eligible", "ineligible")
-    }
-    promotion_outcome_counts = {
-        outcome: sum(job["outcome_class"] == outcome for job in frozen_jobs)
-        for outcome in ATTEMPT_OUTCOME_CLASSES
-    }
+        raise CampaignStageError(
+            "frozen winner differs from the winner rule on the discovery evidence"
+        )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "baseline": {
             "folds": list(CERTIFICATION_FOLDS),
             "result_status": baseline.get("result_status"),
@@ -3896,7 +3160,6 @@ def _process_evidence(cell_root: Path, state: Mapping[str, Any]) -> dict[str, An
             "baseline_validation_mean": baseline_value,
             "complete_candidates": complete_candidates,
             "unique_complete_candidates": unique_complete_candidates,
-            "promoted_candidates": len(promoted),
             "candidate_class_counts": class_counts,
             "result_status_counts": result_counts,
             "outcome_class_counts": outcome_counts,
@@ -3904,18 +3167,7 @@ def _process_evidence(cell_root: Path, state: Mapping[str, Any]) -> dict[str, An
             "validation_anytime": trajectory,
             "resources": _process_resource_summary(ordered),
         },
-        "promotion": {
-            "candidate_budget": PROMOTION_CANDIDATES,
-            "attempts_charged": attempts_charged,
-            "status_counts": promotion_status_counts,
-            "outcome_class_counts": promotion_outcome_counts,
-            "yield": (
-                promotion_status_counts["eligible"] / len(frozen_jobs)
-                if frozen_jobs else None
-            ),
-            "jobs": frozen_jobs,
-            "resources": _process_resource_summary(frozen_jobs),
-        },
+        "selection": selection,
     }
 
 
@@ -4013,8 +3265,8 @@ def validate_process_evidence_artifact(
     if (
         not isinstance(raw, dict)
         or expected_sha256 != content_sha256(raw)
-        or set(raw) != {"schema_version", "baseline", "discovery", "promotion"}
-        or raw.get("schema_version") != 2
+        or set(raw) != {"schema_version", "baseline", "discovery", "selection"}
+        or raw.get("schema_version") != 3
     ):
         raise CampaignStageError(f"{cell_id}: process evidence schema/hash mismatch")
 
@@ -4034,9 +3286,8 @@ def validate_process_evidence_artifact(
     discovery_fields = {
         "attempt_budget", "attempts_charged", "baseline_validation_mean",
         "complete_candidates", "unique_complete_candidates",
-        "promoted_candidates", "candidate_class_counts",
-        "result_status_counts", "outcome_class_counts", "attempts",
-        "validation_anytime", "resources",
+        "candidate_class_counts", "result_status_counts",
+        "outcome_class_counts", "attempts", "validation_anytime", "resources",
     }
     if not isinstance(discovery, dict) or set(discovery) != discovery_fields:
         raise CampaignStageError(f"{cell_id}: discovery process schema is invalid")
@@ -4162,14 +3413,12 @@ def validate_process_evidence_artifact(
     complete_candidates = sum(row["eligible"] for row in attempts)
     unique_sources = unique_complete_sources(attempts)
     unique_complete_candidates = len(unique_sources)
-    expected_sources = unique_sources[:PROMOTION_CANDIDATES]
     if (
         discovery.get("candidate_class_counts") != class_counts
         or discovery.get("result_status_counts") != result_counts
         or discovery.get("outcome_class_counts") != outcome_counts
         or discovery.get("complete_candidates") != complete_candidates
         or discovery.get("unique_complete_candidates") != unique_complete_candidates
-        or discovery.get("promoted_candidates") != len(expected_sources)
         or discovery.get("resources") != _process_resource_summary(attempts)
     ):
         raise CampaignStageError(f"{cell_id}: discovery summaries do not reconcile")
@@ -4208,132 +3457,71 @@ def validate_process_evidence_artifact(
                 f"{cell_id}: validation-anytime trajectory is inconsistent"
             )
 
-    promotion = raw.get("promotion")
-    promotion_fields = {
-        "candidate_budget", "attempts_charged", "status_counts",
-        "outcome_class_counts", "yield", "jobs", "resources",
-    }
-    if not isinstance(promotion, dict) or set(promotion) != promotion_fields:
-        raise CampaignStageError(f"{cell_id}: promotion process schema is invalid")
-    jobs = promotion.get("jobs")
-    if (
-        promotion.get("candidate_budget") != PROMOTION_CANDIDATES
-        or not isinstance(jobs, list)
-        or len(jobs) != len(expected_sources)
-        or len(jobs) > PROMOTION_CANDIDATES
-        or promotion.get("attempts_charged") != len(jobs)
-    ):
-        raise CampaignStageError(f"{cell_id}: promotion census is inconsistent")
-    job_fields = {
-        "rank", "source_node_id", "source_candidate_sha256",
-        "promotion_node_id", "promotion_candidate_sha256",
-        "promotion_identity", "status", "candidate_class", "policy_hash",
-        "result_status", "source_spec_sha256", "promotion_spec_sha256",
-        "submitted_at", "elapsed_seconds", "peak_vram_mb", "validation_mean",
-        "termination_reason", "budget_killed", "outcome_class", "reason",
-    }
-    for rank, (job, source) in enumerate(
-        zip(jobs, expected_sources, strict=True), 1,
-    ):
-        if not isinstance(job, dict) or set(job) != job_fields:
-            raise CampaignStageError(f"{cell_id}: promotion job schema drift")
-        identity = job.get("promotion_identity")
-        if (
-            job.get("rank") != rank
-            or any(job.get(key) != value for key, value in source.items())
-            or not isinstance(job.get("promotion_node_id"), str)
-            or not job["promotion_node_id"]
-            or not _is_sha256(job.get("promotion_candidate_sha256"))
-            or not isinstance(identity, dict)
-            or set(identity) != {
-                "overlay_manifest", "deletions",
-                "candidate_class", "policy_hash", "variant_selection_hash",
-                "override_hash",
-            }
-            or content_sha256(identity) != job["promotion_candidate_sha256"]
-            or identity.get("candidate_class") != job.get("candidate_class")
-            or job.get("status") not in {"eligible", "ineligible"}
-            or not isinstance(job.get("result_status"), str)
-            or not job["result_status"]
-            or not isinstance(job.get("termination_reason"), str)
-            or not job["termination_reason"]
-            or not isinstance(job.get("budget_killed"), bool)
-            or job.get("outcome_class") not in ATTEMPT_OUTCOME_CLASSES
-            or job.get("outcome_class") != classify_attempt_outcome(
-                job.get("result_status"), job.get("termination_reason"),
-                job.get("budget_killed"),
-            )
-            or not isinstance(job.get("reason"), str)
-            or not job["reason"]
-        ):
-            raise CampaignStageError(f"{cell_id}: promotion job value drift")
-        try:
-            submitted = datetime.fromisoformat(str(job.get("submitted_at")))
-        except ValueError as exc:
-            raise CampaignStageError(
-                f"{cell_id}: promotion timestamp is invalid"
-            ) from exc
-        if submitted.tzinfo is None:
-            raise CampaignStageError(f"{cell_id}: promotion timestamp lacks timezone")
-        for key in ("elapsed_seconds", "peak_vram_mb"):
-            value = job.get(key)
-            if value is not None and (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-                or float(value) < 0
-            ):
-                raise CampaignStageError(
-                    f"{cell_id}: promotion job {key} is invalid"
-                )
-        promotion_spec = job.get("promotion_spec_sha256")
-        if not _is_sha256(promotion_spec):
-            raise CampaignStageError(
-                f"{cell_id}: promotion spec hash is invalid"
-            )
-        validation_mean = job.get("validation_mean")
-        if validation_mean is not None:
-            _process_unit_interval(
-                validation_mean, f"{cell_id}.promotion.validation_mean",
-            )
-        if job["status"] == "eligible" and (
-            job["result_status"] != "completed"
-            or job["outcome_class"] != "completed"
-            or job["reason"] != "complete five-fold validation"
-            or not _is_sha256(promotion_spec)
-            or validation_mean is None
-        ):
-            raise CampaignStageError(
-                f"{cell_id}: eligible promotion job is incomplete"
-            )
-    if (
-        len({job["promotion_node_id"] for job in jobs}) != len(jobs)
-        or len({job["promotion_spec_sha256"] for job in jobs}) != len(jobs)
-    ):
-        raise CampaignStageError(
-            f"{cell_id}: promotion job identities are not unique"
-        )
-    status_counts = {
-        status: sum(job["status"] == status for job in jobs)
-        for status in ("eligible", "ineligible")
-    }
-    promotion_outcomes = {
-        outcome: sum(job["outcome_class"] == outcome for job in jobs)
-        for outcome in ATTEMPT_OUTCOME_CLASSES
-    }
-    expected_yield = status_counts["eligible"] / len(jobs) if jobs else None
-    if (
-        promotion.get("status_counts") != status_counts
-        or promotion.get("outcome_class_counts") != promotion_outcomes
-        or promotion.get("yield") != expected_yield
-        or promotion.get("resources") != _process_resource_summary(jobs)
-    ):
-        raise CampaignStageError(f"{cell_id}: promotion summaries do not reconcile")
-    _validate_process_resource_summary(
-        promotion.get("resources"), count=len(jobs),
-        label=f"{cell_id}.promotion",
+    _validate_process_selection(
+        raw.get("selection"), attempts, unique_sources, cell_id=cell_id,
+        baseline_validation_mean=discovery["baseline_validation_mean"],
     )
     return json.loads(json.dumps(raw))
+
+
+def _validate_process_selection(
+    selection: object,
+    attempts: list[Mapping[str, Any]],
+    unique_sources: list[Mapping[str, str]],
+    *,
+    cell_id: str,
+    baseline_validation_mean: float,
+) -> None:
+    """The recorded winner-rule run must be the rule's own output on its
+    recorded inputs, and those inputs must be the census's pool."""
+    means = {row["node_id"]: row["validation_mean"] for row in attempts}
+    try:
+        if not isinstance(selection, dict):
+            raise TypeError("selection is not an object")
+        pool = selection["pool"]
+        baseline_values = selection["baseline_fold_values"]
+        values = [*baseline_values, *(
+            value for entry in pool for value in entry["fold_values"]
+        )]
+        for value in values:
+            _process_unit_interval(value, f"{cell_id}.selection.fold_value")
+        expected = max_lift_winner(baseline_values, [{
+            "candidate_id": entry["candidate_id"],
+            "candidate_sha256": entry["candidate_sha256"],
+            "fold_values": entry["fold_values"],
+        } for entry in pool])
+        consistent = (
+            selection == expected
+            and len(baseline_values) == len(CERTIFICATION_FOLDS)
+            and [
+                (entry["candidate_id"], entry["candidate_sha256"])
+                for entry in pool
+            ] == [
+                (source["source_node_id"], source["source_candidate_sha256"])
+                for source in unique_sources
+            ]
+            and math.isclose(
+                math.fsum(baseline_values) / len(baseline_values),
+                float(baseline_validation_mean), rel_tol=0.0, abs_tol=1e-12,
+            )
+            and all(
+                math.isclose(
+                    math.fsum(entry["fold_values"]) / len(entry["fold_values"]),
+                    float(means[entry["candidate_id"]]),
+                    rel_tol=0.0, abs_tol=1e-12,
+                )
+                for entry in pool
+            )
+        )
+    except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise CampaignStageError(
+            f"{cell_id}: winner selection record is malformed: {exc}"
+        ) from exc
+    if not consistent:
+        raise CampaignStageError(
+            f"{cell_id}: winner selection record differs from the winner rule "
+            "on the census pool"
+        )
 
 
 def _process_matches_session(
@@ -4489,7 +3677,6 @@ def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
     entry_fields = {
         "cell_id", "cell_sha256", "state_sha256", "selection_sha256",
         "winner_kind", "winner_candidate_id", "winner_candidate_sha256",
-        "winner_promotion_node_id",
         "winner_validation_mean", "baseline_validation_mean",
         "baseline_candidate_sha256", "winner_source_folds",
         "baseline_source_folds",
@@ -4530,21 +3717,13 @@ def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
                 return False
         if row["winner_kind"] == "baseline" and (
             row["winner_candidate_id"] != "baseline"
-            or row["winner_promotion_node_id"] is not None
             or row["winner_candidate_sha256"]
             != row["baseline_candidate_sha256"]
             or row["winner_validation_mean"] != row["baseline_validation_mean"]
             or row["winner_source_folds"] != row["baseline_source_folds"]
         ):
             return False
-        if (
-            row["winner_kind"] == "searched"
-            and (
-                row["winner_candidate_id"] == "baseline"
-                or not isinstance(row.get("winner_promotion_node_id"), str)
-                or not row["winner_promotion_node_id"]
-            )
-        ):
+        if row["winner_kind"] == "searched" and row["winner_candidate_id"] == "baseline":
             return False
         try:
             _validate_source_fold_anchors_artifact(
@@ -4563,19 +3742,35 @@ def validate_selection_freeze_artifact(artifact: object) -> dict[str, Any]:
                 expected_session_id=row["agent_session_id"],
                 expected_session_binding=row["agent_session_binding_sha256"],
             )
+            selection = process["selection"]
+            if (
+                row["selection_sha256"] != content_sha256(selection)
+                or row["winner_candidate_id"] != selection["winner"]
+            ):
+                raise CampaignStageError(
+                    "winner differs from the winner rule's record"
+                )
+            if (
+                row["baseline_validation_mean"]
+                != process["discovery"]["baseline_validation_mean"]
+            ):
+                raise CampaignStageError(
+                    "baseline mean differs from process evidence"
+                )
             if row["winner_kind"] == "searched":
-                matches = [
-                    job for job in process["promotion"]["jobs"]
-                    if job["promotion_node_id"]
-                    == row["winner_promotion_node_id"]
+                pool = [
+                    entry for entry in selection["pool"]
+                    if entry["candidate_id"] == row["winner_candidate_id"]
                 ]
-                if len(matches) != 1 or (
-                    matches[0]["status"] != "eligible"
-                    or matches[0]["source_node_id"]
-                    != row["winner_candidate_id"]
-                    or matches[0]["source_candidate_sha256"]
-                    != row["winner_candidate_sha256"]
-                    or matches[0]["validation_mean"]
+                attempts = [
+                    attempt for attempt in process["discovery"]["attempts"]
+                    if attempt["node_id"] == row["winner_candidate_id"]
+                ]
+                if (
+                    len(pool) != 1
+                    or len(attempts) != 1
+                    or pool[0]["candidate_sha256"] != row["winner_candidate_sha256"]
+                    or attempts[0]["validation_mean"]
                     != row["winner_validation_mean"]
                 ):
                     raise CampaignStageError(
@@ -4656,7 +3851,7 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
     winner = artifact.get("winner")
     baseline = artifact.get("baseline")
     if (
-        artifact.get("schema_version") != 2
+        artifact.get("schema_version") != 3
         or artifact.get("campaign_id") != CAMPAIGN_ID
         or not isinstance(artifact.get("cell_id"), str)
         or not artifact["cell_id"]
@@ -4667,24 +3862,11 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
         or recorded != content_sha256(payload)
         or artifact.get("retrained") is not False
         or not isinstance(winner, dict)
-        or set(winner) != {
-            "kind", "candidate_id", "candidate_sha256", "promotion_node_id",
-        }
+        or set(winner) != {"kind", "candidate_id", "candidate_sha256"}
         or winner.get("kind") not in {"baseline", "searched"}
         or not isinstance(winner.get("candidate_id"), str)
         or not winner["candidate_id"]
         or not _is_sha256(winner.get("candidate_sha256"))
-        or (
-            winner["kind"] == "baseline"
-            and winner.get("promotion_node_id") is not None
-        )
-        or (
-            winner["kind"] == "searched"
-            and (
-                not isinstance(winner.get("promotion_node_id"), str)
-                or not winner["promotion_node_id"]
-            )
-        )
         or not isinstance(baseline, dict)
         or set(baseline) != {
             "candidate_id", "candidate_sha256", "validation_mean",
@@ -4920,8 +4102,6 @@ def validate_certification_bundle_binding(
         != freeze_entry.get("winner_candidate_id")
         or winner.get("candidate_sha256")
         != freeze_entry.get("winner_candidate_sha256")
-        or winner.get("promotion_node_id")
-        != freeze_entry.get("winner_promotion_node_id")
     ):
         raise CampaignStageError(
             "certification bundle differs from the frozen validation winner"
@@ -5093,8 +4273,6 @@ def validate_certified_runtime_binding(
         != freeze_entry.get("winner_candidate_id")
         or winner.get("candidate_sha256")
         != freeze_entry.get("winner_candidate_sha256")
-        or winner.get("promotion_node_id")
-        != freeze_entry.get("winner_promotion_node_id")
         or winner.get("validation_mean")
         != freeze_entry.get("winner_validation_mean")
         or baseline.get("candidate_sha256")
@@ -5171,8 +4349,6 @@ def _verify_selection_freeze_for_cell(
         or entry.get("winner_candidate_sha256") != winner.get("candidate_sha256")
         or entry.get("winner_candidate_id") != winner.get("candidate_id")
         or entry.get("winner_kind") != winner.get("kind")
-        or entry.get("winner_promotion_node_id")
-        != winner.get("promotion_node_id")
         or entry.get("winner_validation_mean") != winner.get("validation_mean")
         or entry.get("baseline_validation_mean")
         != (state.get("baseline") or {}).get("validation_mean")
@@ -5250,8 +4426,6 @@ def freeze_campaign_selections(
                     or entry.get("winner_kind") != winner.get("kind")
                     or entry.get("winner_candidate_id")
                     != winner.get("candidate_id")
-                    or entry.get("winner_promotion_node_id")
-                    != winner.get("promotion_node_id")
                     or entry.get("winner_validation_mean")
                     != winner.get("validation_mean")
                     or entry.get("baseline_validation_mean")
@@ -5339,7 +4513,6 @@ def freeze_campaign_selections(
                 "winner_kind": winner["kind"],
                 "winner_candidate_id": winner["candidate_id"],
                 "winner_candidate_sha256": winner["candidate_sha256"],
-                "winner_promotion_node_id": winner.get("promotion_node_id"),
                 "winner_validation_mean": winner["validation_mean"],
                 "baseline_validation_mean": state["baseline"]["validation_mean"],
                 "baseline_candidate_sha256": state["baseline"]["candidate_sha256"],
@@ -5688,14 +4861,13 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     }
     certified_at = _utc_now()
     bundle: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "campaign_id": CAMPAIGN_ID,
         "cell_id": state["cell_id"],
         "winner": {
             "kind": winner["kind"],
             "candidate_id": winner["candidate_id"],
             "candidate_sha256": winner["candidate_sha256"],
-            "promotion_node_id": winner.get("promotion_node_id"),
         },
         "selection_sha256": winner["selection_sha256"],
         "selection_freeze_sha256": selection_freeze_sha256,

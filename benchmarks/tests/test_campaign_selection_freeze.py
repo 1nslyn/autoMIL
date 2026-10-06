@@ -14,15 +14,20 @@ import autobench.campaign_stages as campaign_stages
 from autobench.campaign import (
     ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
+    ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
     DISCOVERY_ATTEMPTS,
+    PROTOCOL_VERSION,
     content_sha256,
+    max_lift_winner,
     file_sha256,
     load_manifest,
+    unique_complete_sources,
 )
 from autobench.campaign_stages import (
     BASELINE_ATTESTATION_FILE,
     CAMPAIGN_CELL_COUNT,
+    SELECTION_FREEZE_SCHEMA_VERSION,
     CampaignStageError,
     certify_campaign,
     certify_winner,
@@ -113,6 +118,10 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         "started_at": "2026-08-04T00:00:00+00:00",
         "bound_at": "2026-08-04T00:00:00+00:00",
     })
+    baseline_folds = [
+        {"fold_index": fold, "primary_value": 0.5, "metrics": {}}
+        for fold in range(5)
+    ]
     state["phase"] = "winner-frozen"
     state["baseline"] = {
         "candidate_sha256": candidate_sha256,
@@ -121,10 +130,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         "sealed_fold_sha256": sealed_fold_sha256,
         "attestation_sha256": baseline_attestation["attestation_sha256"],
         "validation_mean": 0.5,
-        "validation_folds": [
-            {"fold_index": fold, "primary_value": 0.5, "metrics": {}}
-            for fold in range(5)
-        ],
+        "validation_folds": baseline_folds,
         "result_status": "completed",
         "resources": {
             "elapsed_seconds": {
@@ -162,20 +168,24 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
             }
             for index in range(DISCOVERY_ATTEMPTS)
         ],
-        "promoted_candidates": [],
     })
-    state["promotion"]["attempts_charged"] = 0
+    # No attempt completed, so the pool is empty and the rule keeps the
+    # baseline; the record is the rule's own, never written by hand.
+    selection = max_lift_winner(
+        [fold["primary_value"] for fold in baseline_folds], [],
+    )
     state["winner"] = {
         "kind": "baseline",
         "candidate_id": "baseline",
         "candidate_sha256": candidate_sha256,
-        "promotion_node_id": None,
+        "sealed_fold_sha256": None,
+        "validation_folds": baseline_folds,
         "validation_mean": 0.5,
+        "baseline_validation_mean": 0.5,
         "lift_over_baseline": 0.0,
-        "selection_sha256": content_sha256({
-            "cell_id": cell["cell_id"],
-            "candidate_sha256": candidate_sha256,
-        }),
+        "selection": selection,
+        "selection_sha256": content_sha256(selection),
+        "selected_at": "2026-08-04T01:00:00+00:00",
     }
     state["state_sha256"] = content_sha256({
         key: value for key, value in state.items() if key != "state_sha256"
@@ -363,7 +373,7 @@ def test_certify_campaign_indexes_exactly_the_frozen_roster_bundles(
             for fold in range(5)
         ]
         bundle = {
-            "schema_version": 2,
+            "schema_version": 3,
             "campaign_id": state["campaign_id"],
             "cell_id": state["cell_id"],
             "selection_freeze_sha256": freeze["freeze_sha256"],
@@ -373,7 +383,6 @@ def test_certify_campaign_indexes_exactly_the_frozen_roster_bundles(
                 "kind": "baseline",
                 "candidate_id": "baseline",
                 "candidate_sha256": state["winner"]["candidate_sha256"],
-                "promotion_node_id": None,
             },
             "validation_mean": 0.5,
             "baseline": {
@@ -548,11 +557,286 @@ def test_campaign_freeze_refuses_an_extra_off_roster_cell_even_with_valid_state(
 
 
 # ---------------------------------------------------------------------------
+# A freeze entry must agree with the winner rule's own record. A searched
+# winner needs a real candidate spec on disk to pass through
+# freeze_campaign_selections, so these tests assemble a one-cell freeze whose
+# evidence is genuine where the validator reads it (the selection is the rule's
+# output on the census pool, the process evidence reconciles with it, every
+# hash is recomputed) and forge one field of the entry, re-hashing the freeze
+# so that field is the only thing wrong.
+
+#: The first attempts to complete: (candidate sha256, validation mean), every
+#: fold at that mean, over a 0.5 baseline. The rule elects the first.
+SEARCHED_RUNS = (("d" * 64, 0.7), ("e" * 64, 0.6))
+BASELINE_VALUE = 0.5
+
+
+def _missing_resources(count: int) -> dict:
+    return {
+        "elapsed_seconds": {
+            "reported": 0, "missing": count, "maximum": None,
+            "total": None, "gpu_attached_job_hours": None,
+        },
+        "peak_vram_mb": {"reported": 0, "missing": count, "maximum": None},
+    }
+
+
+def _searched_attempt(index: int, session_id: str, binding: str) -> dict:
+    run = SEARCHED_RUNS[index] if index < len(SEARCHED_RUNS) else None
+    return {
+        "node_id": f"node_{index + 1:04d}",
+        "source_spec_sha256": f"{index + 1:064x}",
+        "submitted_at": f"2026-08-04T00:{index:02d}:00+00:00",
+        "attempt_seq": index + 1,
+        "agent_session_id": session_id,
+        "agent_session_binding_sha256": binding,
+        "candidate_class": "config-only",
+        "policy_hash": "b" * 64,
+        "result_status": "crash" if run is None else "completed",
+        "termination_reason": "unspecified",
+        "budget_killed": False,
+        "outcome_class": "crash" if run is None else "completed",
+        "elapsed_seconds": None,
+        "peak_vram_mb": None,
+        "eligible": run is not None,
+        "reason": "fixture crash" if run is None else "complete",
+        "candidate_sha256": None if run is None else run[0],
+        "validation_mean": None if run is None else run[1],
+        "outcome_sha256": None if run is None else content_sha256({"run": index}),
+    }
+
+
+def _searched_process(session_id: str, binding: str) -> dict:
+    """Process evidence (schema 3) of a cell whose first attempts completed and
+    whose winner is the rule's choice among them."""
+    attempts = [
+        _searched_attempt(index, session_id, binding)
+        for index in range(DISCOVERY_ATTEMPTS)
+    ]
+    means = {row["node_id"]: row["validation_mean"] for row in attempts}
+    selection = max_lift_winner(
+        [BASELINE_VALUE] * 5,
+        [
+            {
+                "candidate_id": source["source_node_id"],
+                "candidate_sha256": source["source_candidate_sha256"],
+                "fold_values": [means[source["source_node_id"]]] * 5,
+            }
+            for source in unique_complete_sources(attempts)
+        ],
+    )
+    assert selection["accepted"], "the fixture pool must elect its leader"
+    best, best_id, anytime = BASELINE_VALUE, "baseline", []
+    for index, row in enumerate(attempts, 1):
+        if row["eligible"] and row["validation_mean"] > best:
+            best, best_id = row["validation_mean"], row["node_id"]
+        anytime.append({
+            "attempt_index": index,
+            "node_id": row["node_id"],
+            "result_status": row["result_status"],
+            "outcome_class": row["outcome_class"],
+            "eligible": row["eligible"],
+            "validation_mean": row["validation_mean"],
+            "running_best_candidate_id": best_id,
+            "running_best_validation_mean": best,
+        })
+    completed = len(SEARCHED_RUNS)
+    outcomes = {"completed": completed, "crash": DISCOVERY_ATTEMPTS - completed}
+    return {
+        "schema_version": 3,
+        "baseline": {
+            "folds": list(range(5)),
+            "result_status": "completed",
+            "resources": _missing_resources(1),
+        },
+        "discovery": {
+            "attempt_budget": DISCOVERY_ATTEMPTS,
+            "attempts_charged": DISCOVERY_ATTEMPTS,
+            "baseline_validation_mean": BASELINE_VALUE,
+            "complete_candidates": completed,
+            "unique_complete_candidates": completed,
+            "candidate_class_counts": {
+                "config-only": DISCOVERY_ATTEMPTS,
+                "train-only-source": 0,
+                "inadmissible": 0,
+            },
+            "result_status_counts": outcomes,
+            "outcome_class_counts": {
+                outcome: outcomes.get(outcome, 0)
+                for outcome in ATTEMPT_OUTCOME_CLASSES
+            },
+            "attempts": attempts,
+            "validation_anytime": anytime,
+            "resources": _missing_resources(DISCOVERY_ATTEMPTS),
+        },
+        "selection": selection,
+    }
+
+
+def _rehashed(artifact: dict) -> dict:
+    return {
+        **artifact,
+        "freeze_sha256": content_sha256({
+            key: value for key, value in artifact.items()
+            if key != "freeze_sha256"
+        }),
+    }
+
+
+def _searched_freeze_artifact() -> dict:
+    """A one-cell selection freeze whose winner is a searched candidate."""
+    cell = next(
+        row for row in load_manifest(MANIFEST)["cells"]
+        if row["dataset"] in ACTIVE_ROSTER["cohorts"]
+    )
+    cell_id = cell["cell_id"]
+    session_id = f"session-{cell_id}"
+    binding = content_sha256({"binding": cell_id})
+    process = _searched_process(session_id, binding)
+    selection = process["selection"]
+    winner = next(
+        row for row in process["discovery"]["attempts"]
+        if row["node_id"] == selection["winner"]
+    )
+
+    def anchors(label: str) -> dict:
+        return {
+            f"fold_{fold}_result.json": {
+                "path": f"{cell_id}/{label}/fold_{fold}_result.json",
+                "sha256": content_sha256({"label": label, "fold": fold}),
+            }
+            for fold in range(5)
+        }
+
+    entry = {
+        "cell_id": cell_id,
+        "cell_sha256": cell["cell_sha256"],
+        "state_sha256": content_sha256({"state": cell_id}),
+        "selection_sha256": content_sha256(selection),
+        "winner_kind": "searched",
+        "winner_candidate_id": winner["node_id"],
+        "winner_candidate_sha256": winner["candidate_sha256"],
+        "winner_validation_mean": winner["validation_mean"],
+        "baseline_validation_mean": BASELINE_VALUE,
+        "baseline_candidate_sha256": content_sha256({"baseline": cell_id}),
+        "winner_source_folds": anchors("winner"),
+        "baseline_source_folds": anchors("baseline"),
+        "agent_session_sha256": content_sha256({"session": cell_id}),
+        "agent_session_id": session_id,
+        "agent_session_binding_sha256": binding,
+        "agent_usage": {
+            "status": "unavailable",
+            "input_tokens": None,
+            "output_tokens": None,
+            "cached_input_tokens": None,
+            "cost_usd": None,
+            "basis": "fixture runtime does not expose usage",
+        },
+        "process_sha256": content_sha256(process),
+        "process_evidence": process,
+    }
+    return _rehashed({
+        "schema_version": SELECTION_FREEZE_SCHEMA_VERSION,
+        "campaign_id": CAMPAIGN_ID,
+        "manifest_sha256": file_sha256(MANIFEST),
+        "protocol_version": PROTOCOL_VERSION,
+        "agent_protocol_sha256": content_sha256(AGENT_PROTOCOL),
+        "roster_sha256": content_sha256({cell_id: cell["cell_sha256"]}),
+        "cell_count": 1,
+        "cells": [entry],
+        "frozen_at": "2026-08-04T02:00:00+00:00",
+    })
+
+
+def _forged(artifact: dict, **changes: object) -> dict:
+    """The artifact with its one entry's fields replaced and the freeze
+    re-hashed: the forgery passes the integrity hash."""
+    return _rehashed({**artifact, "cells": [{**artifact["cells"][0], **changes}]})
+
+
+def test_selection_freeze_accepts_the_winner_the_rule_elected():
+    artifact = _searched_freeze_artifact()
+    entry = artifact["cells"][0]
+    selection = entry["process_evidence"]["selection"]
+
+    assert validate_selection_freeze_artifact(artifact) == artifact
+    assert entry["winner_candidate_id"] == selection["winner"] != "baseline"
+
+
+def test_selection_freeze_rejects_a_winner_the_rule_did_not_elect():
+    artifact = _searched_freeze_artifact()
+    process = artifact["cells"][0]["process_evidence"]
+    selection = process["selection"]
+    runner_up = next(
+        row for row in selection["pool"]
+        if row["candidate_id"] != selection["winner"]
+    )
+    attempt = next(
+        row for row in process["discovery"]["attempts"]
+        if row["node_id"] == runner_up["candidate_id"]
+    )
+    # An entry that is coherent for the runner-up: only the rule's record
+    # disagrees with it.
+    forged = _forged(
+        artifact,
+        winner_candidate_id=runner_up["candidate_id"],
+        winner_candidate_sha256=runner_up["candidate_sha256"],
+        winner_validation_mean=attempt["validation_mean"],
+    )
+
+    with pytest.raises(
+        CampaignStageError, match="winner differs from the winner rule's record",
+    ):
+        validate_selection_freeze_artifact(forged)
+
+
+def test_selection_freeze_rejects_a_selection_hash_that_is_not_the_records():
+    forged = _forged(
+        _searched_freeze_artifact(),
+        selection_sha256=content_sha256({"selection": "another record"}),
+    )
+
+    with pytest.raises(
+        CampaignStageError, match="winner differs from the winner rule's record",
+    ):
+        validate_selection_freeze_artifact(forged)
+
+
+@pytest.mark.parametrize("field, value", [
+    ("winner_candidate_sha256", "1" * 64),
+    ("winner_validation_mean", 0.65),
+])
+def test_selection_freeze_rejects_a_searched_winner_that_differs_from_its_pool_entry(
+    field, value,
+):
+    forged = _forged(_searched_freeze_artifact(), **{field: value})
+
+    with pytest.raises(
+        CampaignStageError, match="searched winner differs from process evidence",
+    ):
+        validate_selection_freeze_artifact(forged)
+
+
+def test_selection_freeze_rejects_a_baseline_mean_that_differs_from_process_evidence():
+    forged = _forged(
+        _searched_freeze_artifact(), baseline_validation_mean=BASELINE_VALUE + 0.01,
+    )
+
+    with pytest.raises(
+        CampaignStageError, match="baseline mean differs from process evidence",
+    ):
+        validate_selection_freeze_artifact(forged)
+
+
+# ---------------------------------------------------------------------------
 # Rehearsal sets: a set with <set>.roster.json beside it freezes and certifies
 # exactly the cells its roster names, never the publication grid.
 
 CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
-AIHUB_ROSTER = json.loads((CAMPAIGN_DIR / "runtime-aihub.roster.json").read_text())
+#: The committed aihub rehearsal set the tests below copy: two TCGA-HNSC grade
+#: cells (a tile arm and the slide arm).
+REHEARSAL_SET = "runtime-aihub-hnsc-a"
+AIHUB_ROSTER = json.loads((CAMPAIGN_DIR / f"{REHEARSAL_SET}.roster.json").read_text())
 AIHUB_IDS = sorted(AIHUB_ROSTER["cell_ids"])
 
 
@@ -561,7 +845,7 @@ def _manifest_rows() -> dict[str, dict]:
 
 
 def _materialize_rehearsal_set(
-    tmp_path: Path, roster: object = None, name: str = "runtime-aihub",
+    tmp_path: Path, roster: object = None, name: str = REHEARSAL_SET,
     cell_ids: list[str] | None = None,
 ) -> Path:
     """The agent protocol, the manifest, ``<name>.roster.json`` beside the set
@@ -607,7 +891,7 @@ def test_a_rehearsal_set_freezes_and_certifies_exactly_its_roster(tmp_path):
 
     freeze = freeze_campaign_selections(runtime_root, MANIFEST)
     rows = _manifest_rows()
-    assert freeze["cell_count"] == len(AIHUB_IDS) == 5
+    assert freeze["cell_count"] == len(AIHUB_IDS) == 2
     assert sorted(row["cell_id"] for row in freeze["cells"]) == AIHUB_IDS
     assert freeze["roster_sha256"] == content_sha256(
         campaign_stages._roster_payload([rows[cell_id] for cell_id in AIHUB_IDS])
@@ -616,7 +900,7 @@ def test_a_rehearsal_set_freezes_and_certifies_exactly_its_roster(tmp_path):
     index = certify_campaign(runtime_root, MANIFEST)
     index_path = runtime_root / "campaign_certification.json"
     first_bytes = index_path.read_bytes()
-    assert index["cell_count"] == 5
+    assert index["cell_count"] == len(AIHUB_IDS)
     assert sorted(row["cell_id"] for row in index["cells"]) == AIHUB_IDS
     for cell_id in AIHUB_IDS:
         state = json.loads((runtime_root / cell_id / "campaign_state.json").read_text())
@@ -658,7 +942,7 @@ def _active_ids() -> list[str]:
 
 BAD_ROSTERS = {
     "unknown-id": lambda: _roster_with(
-        cell_ids=AIHUB_IDS[:-1] + ["tcga_luad__kras__nope__abmil__s42__preprint-v4"],
+        cell_ids=AIHUB_IDS[:-1] + ["tcga_hnsc__grade__nope__abmil__s42__preprint-v5"],
     ),
     "off-roster-id": lambda: _roster_with(cell_ids=AIHUB_IDS[:-1] + [_off_roster_id()]),
     "duplicate-id": lambda: _roster_with(cell_ids=AIHUB_IDS[:-1] + [AIHUB_IDS[0]]),
@@ -666,7 +950,7 @@ BAD_ROSTERS = {
     "wrong-purpose": lambda: _roster_with(purpose="publication"),
     "missing-purpose": lambda: _roster_with(purpose=_DROP),
     "extra-key": lambda: _roster_with(extra=1),
-    "cells-mismatch": lambda: _roster_with(cells=4),
+    "cells-mismatch": lambda: _roster_with(cells=len(AIHUB_IDS) + 1),
     "cells-bool": lambda: _roster_with(cell_ids=AIHUB_IDS[:1], cells=True),
     "cohorts-missing": lambda: _roster_with(cohorts=[]),
     "cohorts-extra": lambda: _roster_with(cohorts=["tcga_luad", "tcga_hnsc"]),
@@ -704,7 +988,7 @@ def test_a_rehearsal_set_refuses_a_missing_roster_cell(tmp_path):
     assert "missing=" in str(exc_info.value) and AIHUB_IDS[-1] in str(exc_info.value)
 
 
-@pytest.mark.parametrize("name", ["runtime", "runtime-aihub"])
+@pytest.mark.parametrize("name", ["runtime", REHEARSAL_SET])
 def test_a_set_without_a_roster_file_is_the_whole_publication_grid(tmp_path, name):
     runtime_root = _materialize_rehearsal_set(tmp_path, name=name)
     (tmp_path / f"{name}.roster.json").unlink()
@@ -748,7 +1032,7 @@ def test_a_roster_edited_after_the_freeze_certifies_nothing(tmp_path):
     freeze_campaign_selections(runtime_root, MANIFEST)
     dropped = AIHUB_IDS[-1]
     (runtime_root / dropped).rename(tmp_path / "parked-cell")
-    (tmp_path / "runtime-aihub.roster.json").write_text(json.dumps(_roster_with(
+    (tmp_path / f"{REHEARSAL_SET}.roster.json").write_text(json.dumps(_roster_with(
         cell_ids=AIHUB_IDS[:-1], cells=len(AIHUB_IDS) - 1,
     )))
 

@@ -11,12 +11,13 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import shlex
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import yaml
 
@@ -26,13 +27,13 @@ from automil.activity_hooks import (
 )
 from automil.cells.state import make_cell_id, normalize_mil_model
 
-#: 7 adds the per-cell companion guard. The CAMPAIGN_ID deliberately does NOT
-#: move with it: this is the same 130-cell campaign under the same training
-#: protocol, and bumping it would mean editing an analysis plan whose whole
-#: value is being frozen before certification.
-SCHEMA_VERSION = 7
+#: 7 added the per-cell companion guard; 8 is protocol v5 (one five-fold
+#: discovery stage and the selection-adjusted winner bar). The CAMPAIGN_ID
+#: deliberately does NOT move with the schema: it is the same 130-cell
+#: campaign, and every cell id and hash already moves with PROTOCOL_VERSION.
+SCHEMA_VERSION = 8
 CAMPAIGN_ID = "automil-preprint-130-v6"
-PROTOCOL_VERSION = "preprint-v4"
+PROTOCOL_VERSION = "preprint-v5"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 #: Per-dataset+task companion-guard margins, derived from the frozen validation
 #: splits by derive_guard_margins.py and checked in so the number in the paper
@@ -74,11 +75,10 @@ TILE_ARMS = (
     ("abmil", "abmil_models"),
     ("dtfd", "dtfd_models"),
 )
-STAGE_FOLDS = {
-    "discovery": (0, 1, 2),
-    "promotion": (3, 4),
-}
 CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
+#: v5 judges every discovery attempt on all five folds, so the evidence an
+#: attempt is searched on is the evidence the winner is selected on.
+STAGE_FOLDS = {"discovery": CERTIFICATION_FOLDS}
 BASELINE_FOLDS = CERTIFICATION_FOLDS
 #: The frozen held-out evidence schema, per task FAMILY — the one authority the
 #: sealed fold writers, the certification reader, and the analysis stage all
@@ -143,13 +143,6 @@ AGENT_TIME_ACCOUNTING = {
     "observer": "localhost Prometheus scrape",
     "session_binding": "synchronous SessionStart/SessionEnd hooks",
 }
-# Promotion runs with no coding agent in the loop, so its wall-clock cap is
-# pure runaway containment, never a search budget: the eval axis (exact frozen
-# candidate count) is the only binding limit. Sized far above the worst case
-# (10 candidates x 2 folds x the 6h attempt timeout ~= 5d serial) so the cap
-# can only ever catch a hung job, not kill legitimate in-flight promotion.
-PROMOTION_WALL_CLOCK_CONTAINMENT = "7d"
-PROMOTION_CANDIDATES = 10
 ATTEMPT_OUTCOME_CLASSES = (
     "completed", "budget-killed", "timeout", "oom", "cancelled",
     "partial", "crash", "missing-result", "unknown",
@@ -188,11 +181,11 @@ def unique_complete_sources(
 ) -> list[dict[str, str]]:
     """The distinct complete discovery candidates, best validation mean first.
 
-    The first ``PROMOTION_CANDIDATES`` are the promotion roster. An eligible
-    attempt is skipped when an earlier kept one has the same candidate
-    identity or the same ``outcome_sha256``: a run that reproduced another's
-    validation predictions is the same measurement, and re-running it on the
-    promotion folds would buy no information. Ties on the mean keep the
+    They are the winner rule's pool. An eligible attempt is skipped when an
+    earlier kept one has the same candidate identity or the same
+    ``outcome_sha256``: a run that reproduced another's validation
+    predictions is the same measurement, and counting it twice would
+    understate the spread between candidates. Ties on the mean keep the
     earlier node id.
     """
     eligible = sorted(
@@ -217,20 +210,15 @@ def unique_complete_sources(
             "policy_hash": str(row["policy_hash"]),
         })
     return selected
-# This is a failure-containment wall clock for one submitted multi-fold attempt,
-# not an optimization budget.  Three CLAM classification folds take about
-# 206 minutes in the committed timing census. The runtime-canary rehearsal
-# showed 360 punishing exactly the recipes that train longer than the native
-# defaults (three charged partials, 23.6 wasted GPU-hours, and a re-run
-# attempt in one cell; every such config completed within 600). Ten hours
-# still contains a hung attempt at ~2.4x the longest completed rehearsal run
-# while no longer clipping the search surface — and submit refuses any
-# per-spec attempt to raise it further (lowering stays free).
-ATTEMPT_TIMEOUT_MIN = 600
-MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL = (
-    DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
-    + PROMOTION_CANDIDATES * len(STAGE_FOLDS["promotion"])
-)
+# This is a failure-containment wall clock for one submitted five-fold
+# attempt, not an optimization budget. The runtime-canary rehearsal showed 360
+# minutes for three folds punishing exactly the recipes that train longer than
+# the native defaults (three charged partials, 23.6 wasted GPU-hours); every
+# such config completed within 600. Five folds scale that by 5/3 to 1020,
+# about 1.8x the slowest modelled five-fold CLAM attempt (~9.2 h), so a hung
+# attempt is still contained without clipping the search surface — and submit
+# refuses any per-spec attempt to raise it further (lowering stays free).
+ATTEMPT_TIMEOUT_MIN = 1020
 # C-j (claims-alignment): submit hosts and the controller host are not the same
 # machine on a cluster, and the freeze used to abort PERMANENTLY on a
 # submitted_at even one second before bound_at — timestamps live in hashed
@@ -266,6 +254,95 @@ DISCOVERY_PHASING = {
     "reserve_neighbours_min": 2,
 }
 assert sum(DISCOVERY_PHASING["batches"]) == DISCOVERY_ATTEMPTS
+# The winner rule's bar: the leader's paired lift must clear both a fixed
+# floor and this many paired standard errors (max_lift_winner). 2.93 is
+# Sidak's one-sided 5% critical value for the best of the 30 attempts a cell
+# launches, NormalDist().inv_cdf(0.95 ** (1 / 30)) = 2.9275, rounded up. It is
+# written out so the bar never depends on a platform's libm.
+WINNER_FLOOR = 0.01
+WINNER_SE_MULTIPLIER = 2.93
+
+
+def max_lift_winner(
+    baseline_fold_values: Sequence[float],
+    pool: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Pick one cell's winner from validation fold values alone.
+
+    ``pool`` holds the cell's distinct complete candidates in
+    ``unique_complete_sources`` order, each ``{"candidate_id",
+    "candidate_sha256", "fold_values"}`` with one value per fold, paired
+    fold by fold with ``baseline_fold_values``. A candidate's lift is its
+    mean minus the baseline mean; the leader has the highest lift (ties keep
+    pool order).
+
+    The best of many lifts is biased upward, so the leader must clear a bar
+    set for the maximum of the whole search: ``max(WINNER_FLOOR,
+    WINNER_SE_MULTIPLIER * se)``, where ``se`` is the standard error of one
+    candidate's lift, from the paired fold variance pooled over the
+    candidates. The leader replaces the baseline iff its lift exceeds the
+    bar. An empty pool keeps the baseline.
+
+    Pure and deterministic: the selection freeze and certification re-run it
+    on the recorded inputs and require the identical record. Every step is a
+    correctly rounded IEEE operation (a square is a product, never ``**``,
+    which goes through the platform's ``pow``), so the record is the same on
+    every machine.
+    """
+    baseline = [float(value) for value in baseline_fold_values]
+    folds = len(baseline)
+    if folds < 2:
+        raise CampaignManifestError("the winner rule needs at least two paired folds")
+    record: dict[str, Any] = {
+        "rule": "sidak-max-lift",
+        "floor": WINNER_FLOOR,
+        "se_multiplier": WINNER_SE_MULTIPLIER,
+        "baseline_fold_values": baseline,
+        "pool": [],
+        "fold_variance": None,
+        "standard_error": None,
+        "leader": None,
+        "leader_lift": None,
+        "bar": None,
+        "accepted": False,
+        "winner": "baseline",
+    }
+    if not pool:
+        return record
+    baseline_mean = math.fsum(baseline) / folds
+    entries: list[dict[str, Any]] = []
+    for candidate in pool:
+        values = [float(value) for value in candidate["fold_values"]]
+        if len(values) != folds:
+            raise CampaignManifestError(
+                f"candidate {candidate['candidate_id']} has {len(values)} fold "
+                f"values; the baseline has {folds}"
+            )
+        lift = math.fsum(values) / folds - baseline_mean
+        residuals = [value - base - lift for value, base in zip(values, baseline)]
+        entries.append({
+            "candidate_id": str(candidate["candidate_id"]),
+            "candidate_sha256": str(candidate["candidate_sha256"]),
+            "fold_values": values,
+            "lift": lift,
+            "fold_variance": math.fsum(r * r for r in residuals) / (folds - 1),
+        })
+    fold_variance = math.fsum(entry["fold_variance"] for entry in entries) / len(entries)
+    standard_error = math.sqrt(fold_variance / folds)
+    leader = entries[max(range(len(entries)), key=lambda index: entries[index]["lift"])]
+    bar = max(WINNER_FLOOR, WINNER_SE_MULTIPLIER * standard_error)
+    accepted = leader["lift"] > bar
+    record.update({
+        "pool": entries,
+        "fold_variance": fold_variance,
+        "standard_error": standard_error,
+        "leader": leader["candidate_id"],
+        "leader_lift": leader["lift"],
+        "bar": bar,
+        "accepted": accepted,
+        "winner": leader["candidate_id"] if accepted else "baseline",
+    })
+    return record
 
 PROTOCOL = {
     "protocol_version": PROTOCOL_VERSION,
@@ -282,8 +359,6 @@ PROTOCOL = {
     },
     "discovery_agent_active_budget": DISCOVERY_AGENT_ACTIVE_BUDGET,
     "agent_time_accounting": AGENT_TIME_ACCOUNTING,
-    "promotion_candidates": PROMOTION_CANDIDATES,
-    "promotion_wall_clock_containment": PROMOTION_WALL_CLOCK_CONTAINMENT,
     "attempt_outcome_classes": list(ATTEMPT_OUTCOME_CLASSES),
     "frozen_winners": 1,
     "stage_folds": {key: list(value) for key, value in STAGE_FOLDS.items()},
@@ -294,7 +369,11 @@ PROTOCOL = {
     },
     "winner_selection": {
         "metric_source": "validation",
-        "aggregation": "mean",
+        "pool": "unique-complete-discovery-candidates",
+        "statistic": "paired-fold-lift-over-baseline",
+        "rule": "sidak-max-lift",
+        "floor": WINNER_FLOOR,
+        "se_multiplier": WINNER_SE_MULTIPLIER,
         "folds": list(CERTIFICATION_FOLDS),
     },
     "certification": {
@@ -309,14 +388,9 @@ PROTOCOL = {
     },
     "submit_clock_skew_tolerance_seconds": SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
     "identity_locked_hparams": list(EXPECTED_IDENTITY_LOCKED_HPARAMS),
-    "agentic_fold_trainings_per_cell": {
-        "discovery": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),
-        "promotion_per_candidate": len(STAGE_FOLDS["promotion"]),
-        "promotion_candidates_min": 0,
-        "promotion_candidates_max": PROMOTION_CANDIDATES,
-        "minimum": DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"]),
-        "maximum": MAXIMUM_AGENTIC_FOLD_TRAININGS_PER_CELL,
-    },
+    "agentic_fold_trainings_per_cell": (
+        DISCOVERY_ATTEMPTS * len(STAGE_FOLDS["discovery"])
+    ),
 }
 _CANARY_PROPOSAL_POLICY = "canary proposal policy"
 _CANARY_TOOLSET = "canary toolset"
@@ -620,8 +694,8 @@ def _cell_record(
         },
     }
     # There is deliberately no ``final`` training command.  The frozen winner
-    # already owns folds 0-2 from discovery and folds 3-4 from promotion; final
-    # reporting unseals only that candidate's existing five-fold held-out data.
+    # already owns all five folds from its discovery attempt; final reporting
+    # unseals only that candidate's existing five-fold held-out data.
     cell["commands"] = {
         stage: _run_command(cell, stage)
         for stage in ("baseline", *STAGE_FOLDS)
@@ -650,15 +724,9 @@ def _validate_guard(guard: Any, label: str) -> dict[str, Any]:
         )
     # The margin's K is the number of folds AVERAGED into the gated number, so
     # counts published for a different fold set are internally consistent and
-    # still wrong: a five-fold counts block yields a margin 5/3 too tight for a
-    # three-fold discovery mean.
-    # Every CERTIFICATION fold: the guard binds at two stages that average
-    # different fold sets — the search gate and the discovery freeze on folds
-    # 0-2, the promotion freeze on all five — and each stage's margin is
-    # derived from the counts of the folds IT averages. Publishing counts for
-    # only some folds would leave one of those margins underivable, and
-    # publishing counts for the wrong set yields a margin that is internally
-    # consistent and still wrong for the mean it gates.
+    # still wrong for the mean it gates. The search gate and the discovery
+    # freeze both average every certification fold, so the counts must cover
+    # exactly those folds.
     if set(counts) != {str(fold) for fold in CERTIFICATION_FOLDS}:
         raise CampaignManifestError(
             f"{label}: companion-guard counts cover folds {sorted(counts)}; "
@@ -802,7 +870,7 @@ def build_preprint_manifest(repo_root: Path) -> dict[str, Any]:
         ) from exc
     if (
         not isinstance(analysis_plan, dict)
-        or analysis_plan.get("schema_version") != 2
+        or analysis_plan.get("schema_version") != 3
         or analysis_plan.get("campaign_id") != CAMPAIGN_ID
         or analysis_plan.get("status") != "frozen-before-held-out-certification"
     ):

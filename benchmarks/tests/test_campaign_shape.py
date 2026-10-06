@@ -36,42 +36,43 @@ cs = _load_module()
 
 
 def test_predict_hours_known_value_one_gpu():
-    # e5 = 1 h -> gate 0.6 (undilated), slowest attempt 2*0.6 = 1.2, four
-    # batches 4.8, one batch at the 10 h timeout adds 8.8, promotion two
-    # rounds of 2*0.4 = 1.6, overhead 2.0
-    assert cs.predict_hours(3600.0, 1) == pytest.approx(17.8, abs=1e-9)
+    # e5 = 1 h -> gate 1.0 (undilated), slowest attempt 2*1.0 = 2.0, four
+    # batches 8.0, one batch at the 17 h timeout adds 15.0, overhead 2.0;
+    # nothing trains after discovery
+    assert cs.predict_hours(3600.0, 1) == pytest.approx(26.0, abs=1e-9)
 
 
 def test_predict_hours_known_value_three_gpus():
-    # The workstation's three GPUs run promotion in one round: 1.6 -> 0.8.
-    assert cs.predict_hours(3600.0, 3) == pytest.approx(17.0, abs=1e-9)
+    # The workstation's three GPUs shorten nothing: a batch of 8 fits one.
+    assert cs.predict_hours(3600.0, 3) == pytest.approx(26.0, abs=1e-9)
 
 
-def test_more_gpus_shorten_only_promotion():
-    """A batch of 8 fits one GPU, so a second GPU saves one promotion round
-    and a third saves nothing."""
+def test_more_gpus_do_not_shorten_a_cell():
+    """A batch of 8 fits one GPU and the stages after discovery train
+    nothing, so no further GPU saves a round."""
     e5_seconds = 2.5 * 3600
-    one, two, three = (cs.predict_hours(e5_seconds, gpus) for gpus in (1, 2, 3))
-    assert one - two == pytest.approx(cs.attempt_hours(e5_seconds, cs.PROMOTION_FOLDS))
-    assert two == pytest.approx(three)
+    one = cs.predict_hours(e5_seconds, 1)
+    for gpus in (2, 3, 4):
+        assert cs.predict_hours(e5_seconds, gpus) == pytest.approx(one)
     assert cs.discovery_hours(e5_seconds, 1) == pytest.approx(cs.discovery_hours(e5_seconds, 3))
 
 
-def test_the_slowest_attempt_costs_the_dilated_per_fold_time():
-    assert cs.attempt_hours(0.71 * 3600, cs.DISCOVERY_FOLDS) == pytest.approx(2 * 0.71 * 0.6)
-    assert cs.fold_hours(0.71 * 3600, cs.DISCOVERY_FOLDS) == pytest.approx(0.71 * 0.6)
+def test_the_slowest_attempt_costs_the_dilated_baseline_time():
+    # An attempt re-runs all five baseline folds: the whole baseline, dilated.
+    assert cs.attempt_hours(0.71 * 3600, cs.DISCOVERY_FOLDS) == pytest.approx(2 * 0.71)
+    assert cs.fold_hours(0.71 * 3600, cs.DISCOVERY_FOLDS) == pytest.approx(0.71)
 
 
 def test_tiny_baselines_pay_the_per_attempt_floor():
     # The TITAN rehearsal cell: e5 = 194 s, attempts still took ~16 min.
     assert cs.attempt_hours(194.0, cs.DISCOVERY_FOLDS) == cs.ATTEMPT_FLOOR_H
     assert cs.fold_hours(194.0, cs.DISCOVERY_FOLDS) == cs.ATTEMPT_FLOOR_H
-    # e5 = 180 s: 0.25 gate + 4*0.25 + (10 - 0.25) + 2*0.25 + 2
-    assert cs.predict_hours(180.0, 1) == pytest.approx(13.5, abs=1e-9)
+    # e5 = 180 s: 0.25 gate + 4*0.25 + (17 - 0.25) + 2
+    assert cs.predict_hours(180.0, 1) == pytest.approx(20.0, abs=1e-9)
 
 
 def test_an_attempt_as_long_as_the_timeout_adds_no_timeout_batch():
-    e5_seconds = 9.0 * 3600  # slowest attempt 10.8 h, past the 10 h timeout
+    e5_seconds = 9.0 * 3600  # slowest attempt 18 h, past the 17 h timeout
     attempt = cs.attempt_hours(e5_seconds, cs.DISCOVERY_FOLDS)
     assert attempt > cs.ATTEMPT_TIMEOUT_H
     assert cs.discovery_hours(e5_seconds, 1) == pytest.approx(
@@ -83,19 +84,19 @@ def test_the_copied_constants_match_the_frozen_protocol():
     from autobench import campaign
 
     assert list(cs.DISCOVERY_BATCHES) == campaign.DISCOVERY_PHASING["batches"]
-    assert cs.PROMOTION_CANDIDATES == campaign.PROMOTION_CANDIDATES
-    assert cs.DISCOVERY_FOLDS == len(campaign.STAGE_FOLDS["discovery"])
-    assert cs.PROMOTION_FOLDS == len(campaign.STAGE_FOLDS["promotion"])
+    assert cs.DISCOVERY_FOLDS == len(campaign.STAGE_FOLDS["discovery"]) == 5
     assert cs.TOTAL_FOLDS == len(campaign.BASELINE_FOLDS)
-    assert cs.ATTEMPT_TIMEOUT_H * 60 == campaign.ATTEMPT_TIMEOUT_MIN
+    assert cs.ATTEMPT_TIMEOUT_H == campaign.ATTEMPT_TIMEOUT_MIN / 60
 
 
 # Measured on the 2026-10 trial cells (aihub: three RTX 6000 Ada; fir: two
-# H100): each cell's time from the job's start to the discovery freeze, with
-# its registered baseline time. A session that has not finished discovery by the wall less the
-# finish reserve is cut and the cell is stranded, so this is the time the
-# prediction must hold. DTFD's third batch ran into the 10 h attempt
-# timeout; its anchor fails for any dilation below 1.72.
+# H100) under protocol v4: each cell's time from the job's start to the
+# discovery freeze, with its registered baseline time. A session that has not
+# finished discovery by the wall less the finish reserve is cut and the cell
+# is stranded, so this is the time the prediction must hold. Those attempts
+# trained three folds under a 10 h timeout; a v5 attempt trains five folds
+# under a 17 h one and is no faster, so the v5 prediction has to clear every
+# measurement.
 TRIAL_DISCOVERY = (
     # (cell, e5 seconds, GPUs, hours from job start to discovery frozen)
     ("aihub kras hoptimus1 dtfd", 10496.3, 3, 22.795),
@@ -122,11 +123,21 @@ def test_every_shape_is_one_gpu_with_a_quarter_node():
 
 
 def test_the_wall_moves_to_72_hours_past_the_24_hour_fit():
-    # 1.4 h predicts 20.12 h (fits 0.85 * 24 = 20.4); 1.5 h predicts 20.7 h.
-    assert cs.choose_shape(1.4 * 3600).wall_hours == 24
-    slow = cs.choose_shape(1.5 * 3600)
+    # The 17 h timeout batch leaves the 24 h wall to the smallest baselines:
+    # 0.19 h predicts 20.39 h (fits 0.85 * 24 = 20.4); 0.2 h predicts 20.45 h.
+    assert cs.choose_shape(0.19 * 3600).wall_hours == 24
+    slow = cs.choose_shape(0.2 * 3600)
     assert (slow.gpus, slow.wall_hours) == (1, 72)
-    assert slow.predicted_hours == pytest.approx(20.7)
+    assert slow.predicted_hours == pytest.approx(20.45)
+
+
+def test_a_seven_hour_baseline_fits_no_wall():
+    # The longest wall holds 0.85 * 72 = 61.2 h: a 5.5 h baseline predicts
+    # 57.5 h and a 7 h one predicts 68 h.
+    held = cs.choose_shape(5.5 * 3600)
+    assert (held.gpus, held.wall_hours) == (1, 72)
+    assert held.predicted_hours == pytest.approx(57.5)
+    assert cs.choose_shape(7.0 * 3600) is None
 
 
 def test_choose_shape_returns_none_when_nothing_fits():
@@ -134,16 +145,14 @@ def test_choose_shape_returns_none_when_nothing_fits():
     assert cs.choose_shape(e5_seconds) is None
 
 
-def test_the_finish_lane_holds_every_cell_that_fits_a_discovery_shape():
-    """The finish-only lane needs no baseline time: it holds the promotion of
-    the slowest baseline that still fits a discovery shape."""
-    lo, hi = 0.0, 1000 * 3600.0
-    for _ in range(60):
-        mid = (lo + hi) / 2
-        lo, hi = (mid, hi) if cs.choose_shape(mid) else (lo, mid)
+def test_the_finish_lane_trains_nothing_so_the_overhead_fits_its_short_wall():
+    """The discovery freeze, the winner and the session close run no
+    training: the lane needs no baseline time, and its shorter wall holds the
+    fixed overhead."""
     lane = cs.finish_shape()
-    assert (lane.gpus, lane.wall_hours) == (1, 24)
-    assert cs.promotion_hours(lo, lane.gpus) + cs.OVERHEAD_H <= cs.FIT_FRACTION * lane.wall_hours
+    assert (lane.gpus, lane.wall_hours) == (1, cs.WALL_OPTIONS_H[0])
+    assert lane.predicted_hours == 0.0
+    assert cs.OVERHEAD_H <= cs.FIT_FRACTION * lane.wall_hours
 
 
 # ---------------------------------------------------------------------------

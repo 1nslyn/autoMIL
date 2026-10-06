@@ -12,7 +12,7 @@ the margin has to be honest about the lattice:
 
     margin = 1 / (K x C x min_{f,c} n_{f,c})
 
-- ``K``   folds averaged into the reported number (discovery: 3)
+- ``K``   folds averaged into the reported number (discovery: 5)
 - ``C``   classes balanced accuracy averages recall over
 - ``n_{f,c}``  slides of class ``c`` in fold ``f``'s VALIDATION column
 
@@ -214,11 +214,10 @@ def derived_margin_for_counts(
     is enforced at every freeze rather than merely stated: it re-runs the same
     arithmetic ``derive_guard`` ran, from the counts alone.
 
-    ``folds`` selects the subset being averaged. The guard binds at stages that
-    average different fold sets — the search gate and the discovery freeze on
-    the discovery folds, the promotion freeze on all five — and K is part of
-    the lattice, so each stage's margin is this same derivation over ITS folds.
-    Default: every fold in the block.
+    ``folds`` selects the subset being averaged; K is part of the lattice, so
+    the margin is this derivation over exactly the folds the gated mean
+    averages (the search gate and the discovery freeze both average every
+    discovery fold). Default: every fold in the block.
     """
     if not isinstance(counts, Mapping) or not counts:
         raise GuardMarginError("no validation class counts")
@@ -281,24 +280,25 @@ def verify_against_run(fold_counts: dict[int, dict[str, int]], results_dir: Path
 
 def derive_guard(
     benchmark_dir: Path | str, strategy: str, task: str, folds,
-    *, margin_folds=None,
 ) -> dict:
-    """The frozen ``{metric, margin, basis}`` declaration for one cell.
+    """The frozen ``{metric, margin, basis}`` declaration for one cell, from
+    the validation class counts of ``folds`` in the cohort's splits."""
+    counts = validation_class_counts(benchmark_dir, strategy, task, folds)
+    return guard_from_counts({
+        str(fold): block for fold, block in counts.items()
+    })
+
+
+def guard_from_counts(counts: Mapping[str, Mapping[str, int]]) -> dict:
+    """The declaration a published ``validation_class_counts`` block implies.
 
     ``basis`` is provenance, not configuration: the framework ignores it, and
     it travels into the materialized config and then into ``graph.json`` so
-    every frozen artifact records the arithmetic behind its own margin.
+    every frozen artifact records the arithmetic behind its own margin. The
+    margin covers every fold in the block, which is every fold the gated mean
+    averages.
     """
-    counts = validation_class_counts(benchmark_dir, strategy, task, folds)
-    # `folds` is what the published COUNTS cover; `margin_folds` is the subset
-    # the DECLARED margin gates. They differ because the guard binds at stages
-    # that average different fold sets: the counts have to cover every stage,
-    # while the one number in the declaration is the one the framework gate
-    # consumes. Every other stage re-derives its own margin from these counts.
-    gated = {
-        fold: block for fold, block in counts.items()
-        if margin_folds is None or fold in set(margin_folds)
-    }
+    gated = {int(fold): dict(block) for fold, block in counts.items()}
     margin = balanced_accuracy_margin(gated)
     n_folds = len(gated)
     n_classes = len(next(iter(gated.values())))
@@ -306,14 +306,9 @@ def derive_guard(
         ((label, n) for c in gated.values() for label, n in c.items()),
         key=lambda item: item[1],
     )
+    # The recording grid has to be able to tell one slide from two; see
+    # _grid_aligned, which refuses a margin that cannot reject two slides.
     quantum = _grid_aligned(margin)
-    # The recording grid has to be able to tell one slide from two. Rounding
-    # can shrink an observed two-slide drop by up to one grid step, so the
-    # smallest a genuine two-slide drop can be RECORDED as is 2*margin - grid;
-    # if the (grid-aligned) one-slide margin reaches that, the guard cannot
-    # reject two slides and is not worth declaring. Refuse rather than ship a
-    # margin that reads as protection: on cohorts this large the metric simply
-    # is not recorded precisely enough to guard at single-slide resolution.
     return {
         "metric": GUARD_METRIC,
         "margin": quantum,
@@ -324,6 +319,6 @@ def derive_guard(
             "grid the metric is recorded on"
         ),
         "validation_class_counts": {
-            str(fold): dict(sorted(c.items())) for fold, c in sorted(counts.items())
+            str(fold): dict(sorted(c.items())) for fold, c in sorted(gated.items())
         },
     }

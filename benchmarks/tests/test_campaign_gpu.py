@@ -27,7 +27,8 @@ H100 = "NVIDIA H100 80GB HBM3"
 RTX = "NVIDIA RTX 6000 Ada Generation"
 FULL_H100 = {"name": H100, "mig": False}
 RTX_ADA = {"name": RTX, "mig": False}
-DECLARED = {"runtime": FULL_H100, "runtime-aihub": RTX_ADA}
+WORKSTATION_SET = "runtime-aihub-hnsc-a"
+DECLARED = {"runtime": FULL_H100, WORKSTATION_SET: RTX_ADA}
 
 
 def _declare(repo_root: Path, gpu=DECLARED) -> None:
@@ -61,10 +62,12 @@ def _nvidia_smi(monkeypatch, stdout: str = "", returncode: int = 0,
 
 
 def test_committed_policy_declares_each_runtime_set():
+    """The final grid trains on fir's full H100s; each of the three aihub
+    protocol-v5 trial sets trains on aihub's RTX 6000 Ada."""
     repo_root = Path(__file__).resolve().parents[2]
     assert load_declared_gpu(repo_root, "runtime") == FULL_H100
-    assert load_declared_gpu(repo_root, "runtime-rehearsal") == FULL_H100
-    assert load_declared_gpu(repo_root, "runtime-aihub") == RTX_ADA
+    for name in ("runtime-aihub-hnsc-a", "runtime-aihub-hnsc-b", "runtime-aihub-hnsc-c"):
+        assert load_declared_gpu(repo_root, name) == RTX_ADA, name
 
 
 def test_every_committed_runtime_set_is_declared_and_counted():
@@ -115,16 +118,16 @@ def test_workstation_set_trains_on_its_declared_rtx(tmp_path, monkeypatch):
     _declare(tmp_path)
     _nvidia_smi(monkeypatch, "".join(f"{i}, {RTX}, [N/A]\n" for i in range(3)))
     require_declared_gpu(
-        tmp_path, cell_root=_cell(tmp_path, "runtime-aihub"), gpu_ids=[0, 1, 2],
+        tmp_path, cell_root=_cell(tmp_path, WORKSTATION_SET), gpu_ids=[0, 1, 2],
     )
 
 
 def test_h100_is_refused_for_the_workstation_set(tmp_path, monkeypatch):
     _declare(tmp_path)
     _nvidia_smi(monkeypatch, f"0, {H100}, Disabled\n")
-    with pytest.raises(CampaignGpuError, match="runtime set runtime-aihub"):
+    with pytest.raises(CampaignGpuError, match=f"runtime set {WORKSTATION_SET}"):
         require_declared_gpu(
-            tmp_path, cell_root=_cell(tmp_path, "runtime-aihub"), gpu_ids=[0],
+            tmp_path, cell_root=_cell(tmp_path, WORKSTATION_SET), gpu_ids=[0],
         )
 
 
@@ -165,13 +168,13 @@ def test_empty_request_is_refused(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("cell_root", [
     Path("campaign/archive/dataset__task__arm"),
-    Path("campaign/runtime/dataset__task__arm/promotion"),
-], ids=["undeclared-set", "promotion-root"])
+    Path("campaign/runtime/dataset__task__arm/automil"),
+], ids=["undeclared-set", "inside-a-cell"])
 def test_cell_outside_a_declared_set_is_refused_before_nvidia_smi(
     tmp_path, monkeypatch, cell_root,
 ):
-    """A promotion root's parent is its discovery cell, never a runtime set:
-    a caller must pass the discovery cell root."""
+    """A path inside a cell has the cell directory for a parent, never a
+    runtime set: a caller must pass the cell root itself."""
     _declare(tmp_path)
     calls = _nvidia_smi(monkeypatch, f"0, {H100}, Disabled\n")
     with pytest.raises(CampaignGpuError, match="declares no GPU"):
@@ -201,7 +204,7 @@ def test_absent_policy_is_refused(tmp_path):
     {"runtime": {"name": "", "mig": False}},
     {"runtime": {"name": H100, "mig": False, "count": 2}},
     {"runtime": [H100, False]},
-    {"runtime": FULL_H100, "runtime-aihub": {"name": RTX}},
+    {"runtime": FULL_H100, WORKSTATION_SET: {"name": RTX}},
 ])
 def test_malformed_gpu_declaration_is_refused(tmp_path, gpu):
     """The whole map is checked: a typo in another set's entry fails every

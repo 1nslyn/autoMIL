@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import math
 import shutil
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -23,19 +23,22 @@ from automil.cells.activity import (
     read_activity_report,
     record_hook_event,
 )
-from automil.cells.state import Cell, CellStatus, make_cell_id, read_cell, write_cell
+from automil.cells.state import Cell, CellStatus, make_cell_id, write_cell
 from autobench.campaign import (
     ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
     DISCOVERY_ATTEMPTS,
-    PROTOCOL,
     PROTOCOL_VERSION,
     STAGE_FOLDS,
     SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
+    WINNER_FLOOR,
+    WINNER_SE_MULTIPLIER,
     content_sha256,
+    max_lift_winner,
     file_sha256,
+    unique_complete_sources,
 )
 from autobench.campaign_stages import (
     BASELINE_ATTESTATION_FILE,
@@ -51,14 +54,13 @@ from autobench.campaign_stages import (
     certify_winner,
     finalize_agent_session,
     freeze_discovery as _freeze_discovery,
-    freeze_promotion,
     initialize_stage_state,
     load_stage_state,
-    materialize_promotion,
     open_agent_session,
     register_baseline,
     run_native_baseline,
     select_winner,
+    validate_process_evidence_artifact,
     validate_selection_freeze_artifact,
 )
 
@@ -162,10 +164,7 @@ def _make_staged_cell(tmp_path, *, task_family: str = "binary", guard: dict | No
                 "python benchmarks/scripts/run_experiment.py --folds 0,1,2,3,4"
             ),
             "discovery": (
-                "python benchmarks/scripts/run_experiment.py --folds 0,1,2"
-            ),
-            "promotion": (
-                "python benchmarks/scripts/run_experiment.py --folds 3,4"
+                "python benchmarks/scripts/run_experiment.py --folds 0,1,2,3,4"
             ),
         },
         "budget_identity": {
@@ -415,13 +414,15 @@ def _attempts(
         }
         (archive / "spec.json").write_text(json.dumps(spec))
         if index < completed:
+            # Each default candidate trails the baseline (_baseline: 0.60 +
+            # fold/100) by the same 0.11 - index/100 on every fold, so the pool
+            # has no winner until a test lifts a candidate (_set_lifts).
+            base = 0.49 + index / 100
             result = {
                 "status": "completed",
-                "primary_value": 0.5 + index / 100,
+                "primary_value": base,
                 "metrics": {"val_auc": 0.5, "val_bacc": 0.5},
-                "validation_folds": _folds(
-                    STAGE_FOLDS["discovery"], 0.5 + index / 100,
-                ),
+                "validation_folds": _folds(STAGE_FOLDS["discovery"], base),
             }
             sealed = archive / "certify"
             sealed.mkdir()
@@ -436,6 +437,38 @@ def _attempts(
         else:
             result = {"status": "crash", "primary_value": 0.0, "metrics": {}}
         (archive / "result.json").write_text(json.dumps(result))
+
+
+#: What _baseline() registers on folds 0-4: fold f scores 0.60 + f/100.
+BASELINE_FOLD_VALUES = [
+    fold["primary_value"] for fold in _folds(CERTIFICATION_FOLDS, 0.60)
+]
+
+
+def _set_fold_values(adir: Path, node_id: str, values) -> None:
+    """Rewrite one completed attempt's per-fold validation primary values."""
+    path = adir / "orchestrator" / "archive" / node_id / "result.json"
+    result = json.loads(path.read_text())
+    folds = sorted(result["validation_folds"], key=lambda fold: fold["fold_index"])
+    for fold, value in zip(folds, values, strict=True):
+        fold["primary_value"] = value
+        fold["metrics"]["val_auc"] = value
+    result["primary_value"] = sum(values) / len(values)
+    path.write_text(json.dumps(result))
+
+
+def _set_lifts(adir: Path, lifts) -> None:
+    """Put completed attempts at the baseline's fold values plus a lift: a
+    number is that lift on every fold, a sequence is one lift per fold."""
+    for node_id, lift in lifts.items():
+        per_fold = (
+            [lift] * len(CERTIFICATION_FOLDS)
+            if isinstance(lift, (int, float)) else list(lift)
+        )
+        _set_fold_values(adir, node_id, [
+            base + delta
+            for base, delta in zip(BASELINE_FOLD_VALUES, per_fold, strict=True)
+        ])
 
 
 def test_initial_state_is_restart_idempotent_and_integrity_checked(staged_cell):
@@ -489,7 +522,7 @@ def test_baseline_registration_hashes_but_does_not_parse_sealed_test(staged_cell
     root = graph["nodes"][root_id]
     assert root["parent_id"] is None
     assert root["status"] == "keep"
-    assert root["primary_value"] == pytest.approx(0.61)
+    assert root["primary_value"] == pytest.approx(0.62)
     assert root["metadata"]["cell_id"] == cell["budget_identity"]["cell_id"]
     assert [
         fold["fold_index"] for fold in root["metadata"]["validation_folds"]
@@ -762,7 +795,7 @@ def _guard_block(*, margin=0.0099, metric="val_bacc"):
         "metric": metric,
         "margin": margin,
         "validation_class_counts": {
-            str(fold): {"pos": 17, "neg": 30} for fold in range(3)
+            str(fold): {"pos": 17, "neg": 30} for fold in range(5)
         },
     }
 
@@ -789,7 +822,7 @@ def test_freeze_guard_refuses_a_multiplier_the_protocol_does_not_record(staged_c
     register_baseline(cell_root, _baseline(cell_root))
     _tamper_frozen_scoring(adir, lambda scoring: scoring.__setitem__("se_multiplier", 50.0))
     _attempts(adir, cell["cell_id"], completed=12)
-    _set_companion_folds(adir, [0.62, 0.60, 0.40])     # a collapse only k=50 would forgive
+    _set_companion_folds(adir, [0.62, 0.60, 0.60, 0.58, 0.40])  # a collapse only k=50 would forgive
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
     with pytest.raises(CampaignStageError, match="se_multiplier"):
         freeze_discovery(cell_root)
@@ -815,10 +848,10 @@ def test_companion_shortfall_fails_closed_on_a_non_finite_companion_fold():
     kept the companion: the same fail-closed rule the gate applies."""
     from autobench.campaign_stages import _companion_guard_shortfall
     floor = {"metric": "val_bacc", "margin": 0.0099, "baseline": 0.60,
-             "baseline_folds": {0: 0.60, 1: 0.60, 2: 0.60}, "se_multiplier": 1.0}
-    folds = [{"fold_index": 0, "metrics": {"val_bacc": 0.60}},
-             {"fold_index": 1, "metrics": {"val_bacc": float("nan")}},
-             {"fold_index": 2, "metrics": {"val_bacc": 0.60}}]
+             "baseline_folds": {fold: 0.60 for fold in range(5)}, "se_multiplier": 1.0}
+    folds = [{"fold_index": fold, "metrics": {
+                 "val_bacc": float("nan") if fold == 1 else 0.60}}
+             for fold in range(5)]
     assert _companion_guard_shortfall(floor, folds) == (float("inf"), 0.0099)
 
 
@@ -867,7 +900,7 @@ def test_freeze_guard_rejects_a_collapse_without_shorting_the_ledger(staged_cell
     """The guard must bind at the freeze — and must not brick the cell doing it.
 
     The freeze deliberately ignores graph status, so without this the candidate
-    the guard stamped `discard` is still ranked, promoted and certifiable. But
+    the guard stamped `discard` is still pooled, selectable and certifiable. But
     the per-attempt ledger is what makes the 30-attempt census exact, and a
     frozen discovery can never be re-frozen: dropping a row here would leave
     the cell unable to finalize its session, produce process evidence, or
@@ -885,7 +918,7 @@ def test_freeze_guard_rejects_a_collapse_without_shorting_the_ledger(staged_cell
     assert len(audit) == DISCOVERY_ATTEMPTS          # the ledger stays exact
     assert sum("companion guard" in (row.get("reason") or "") for row in audit) == 12
     assert state["discovery"]["complete_candidates"] == 0
-    assert state["discovery"]["promoted_candidates"] == []
+    assert state["discovery"]["candidates"] == []
     assert state["phase"] == "selection-ready"
 
 
@@ -913,12 +946,13 @@ def test_freeze_guard_reads_the_frozen_declaration_not_the_config(staged_cell):
 
     state = freeze_discovery(cell_root)
     assert state["discovery"]["complete_candidates"] == 0
-    assert state["discovery"]["promoted_candidates"] == []
+    assert state["discovery"]["candidates"] == []
 
 
-def test_freeze_promotes_normally_when_the_companion_holds(staged_cell):
-    """The guard only ever subtracts: a candidate that keeps its companion is
-    promoted exactly as before, and the ranking stays a pure val_auc argmax."""
+def test_freeze_keeps_every_candidate_when_the_companion_holds(staged_cell):
+    """The guard only ever subtracts: a candidate that keeps its companion
+    enters the pool exactly as before, and the pool stays ordered by the
+    primary validation mean."""
     cell_root, adir, cell, _, _ = staged_cell
     _declare_guard(adir)
     register_baseline(cell_root, _baseline(cell_root))
@@ -929,8 +963,8 @@ def test_freeze_promotes_normally_when_the_companion_holds(staged_cell):
     state = freeze_discovery(cell_root)
     assert len(state["discovery"]["attempt_audit"]) == DISCOVERY_ATTEMPTS
     assert state["discovery"]["complete_candidates"] == 12
-    assert [c["candidate_id"] for c in state["discovery"]["promoted_candidates"]] == [
-        f"node_{index:04d}" for index in range(12, 2, -1)
+    assert [c["candidate_id"] for c in state["discovery"]["candidates"]] == [
+        f"node_{index:04d}" for index in range(12, 0, -1)
     ]
 
 
@@ -945,7 +979,8 @@ def _set_companion_folds(adir, per_fold):
         if result.get("status") != "completed":
             continue
         result["metrics"]["val_bacc"] = mean
-        for fold, value in zip(sorted(result["validation_folds"], key=lambda f: f["fold_index"]), per_fold):
+        folds = sorted(result["validation_folds"], key=lambda f: f["fold_index"])
+        for fold, value in zip(folds, per_fold, strict=True):
             fold["metrics"]["val_bacc"] = value
         path.write_text(json.dumps(result))
 
@@ -959,13 +994,14 @@ def test_freeze_guard_margin_widens_with_the_paired_fold_noise(staged_cell):
     _declare_guard(adir)
     register_baseline(cell_root, _baseline(cell_root))   # baseline val_bacc 0.60 on every fold
     _attempts(adir, cell["cell_id"], completed=12)
-    # deltas +0.02, 0.00, -0.08: mean -0.02 (past the 0.0099 quantum), paired SE 0.0306
-    _set_companion_folds(adir, [0.62, 0.60, 0.52])
+    # deltas +0.06, +0.04, 0.00, -0.06, -0.14: mean -0.02 (past the 0.0099
+    # quantum), paired SE 0.0363
+    _set_companion_folds(adir, [0.66, 0.64, 0.60, 0.54, 0.46])
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
 
     state = freeze_discovery(cell_root)
     assert state["discovery"]["complete_candidates"] == 12
-    assert len(state["discovery"]["promoted_candidates"]) == 10
+    assert len(state["discovery"]["candidates"]) == 12
 
 
 def test_freeze_guard_uniform_drop_past_the_quantum_still_rejects(staged_cell):
@@ -973,7 +1009,7 @@ def test_freeze_guard_uniform_drop_past_the_quantum_still_rejects(staged_cell):
     _declare_guard(adir)
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
-    _set_companion_folds(adir, [0.58, 0.58, 0.58])       # deltas -0.02 x3: paired SE 0
+    _set_companion_folds(adir, [0.58] * 5)       # deltas -0.02 x5: paired SE 0
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
 
     state = freeze_discovery(cell_root)
@@ -984,7 +1020,9 @@ def test_freeze_guard_uniform_drop_past_the_quantum_still_rejects(staged_cell):
     assert state["discovery"]["complete_candidates"] == 0
 
 
-def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
+def test_freeze_charges_failures_and_keeps_every_unique_complete_candidate(
+    staged_cell,
+):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
@@ -993,23 +1031,76 @@ def test_freeze_charges_failures_and_promotes_top_ten_complete(staged_cell):
     )
 
     state = freeze_discovery(cell_root)
-    promoted = state["discovery"]["promoted_candidates"]
-    assert state["phase"] == "promotion-ready"
+    candidates = state["discovery"]["candidates"]
+    assert state["phase"] == "selection-ready"
     assert state["discovery"]["attempts_charged"] == DISCOVERY_ATTEMPTS
     assert state["discovery"]["complete_candidates"] == 12
     assert state["discovery"]["unique_complete_candidates"] == 12
     assert len(state["discovery"]["attempt_audit"]) == DISCOVERY_ATTEMPTS
-    assert len(promoted) == PROTOCOL["promotion_candidates"] == 10
-    assert [candidate["candidate_id"] for candidate in promoted] == [
-        f"node_{index:04d}" for index in range(12, 2, -1)
+    # The pool is uncapped: all twelve, best five-fold mean first.
+    assert [candidate["candidate_id"] for candidate in candidates] == [
+        f"node_{index:04d}" for index in range(12, 0, -1)
     ]
     assert all(set(candidate["validation_folds"][0]) == {
         "fold_index", "metrics", "primary_value",
-    } for candidate in promoted)
-    assert all(len(candidate["sealed_fold_sha256"]) == 3 for candidate in promoted)
+    } for candidate in candidates)
+    assert all(
+        [fold["fold_index"] for fold in candidate["validation_folds"]]
+        == list(CERTIFICATION_FOLDS)
+        for candidate in candidates
+    )
+    assert all(len(candidate["sealed_fold_sha256"]) == 5 for candidate in candidates)
+    assert "promotion" not in state
 
     # Restarting cannot spend, reorder, or refreeze anything.
     assert freeze_discovery(cell_root) == state
+
+
+def test_discovery_freeze_keeps_each_unique_candidate_in_pool_order(staged_cell):
+    """The pool the winner rule judges is every distinct complete candidate in
+    unique_complete_sources order. A run that reproduced another's
+    predictions is one measurement, so it appears once, and the earlier node
+    keeps the slot."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    twin_path = _twin_fold_evidence(
+        archive_root, donor="node_0012", twin="node_0011",
+    )
+    _set_fold_prediction_hashes(twin_path, seed="repeated-run")
+    _set_fold_prediction_hashes(
+        archive_root / "node_0012" / "result.json", seed="repeated-run",
+    )
+    # node_0003 outscores every node between it and node_0011, so the pool
+    # order is the five-fold mean's, not the node ids'.
+    _set_lifts(adir, {"node_0003": -0.005})
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    frozen = freeze_discovery(cell_root)
+
+    pool = [candidate["candidate_id"] for candidate in frozen["discovery"]["candidates"]]
+    assert pool == [
+        "node_0011", "node_0003",
+        *(f"node_{index:04d}" for index in range(10, 3, -1)),
+        "node_0002", "node_0001",
+    ]
+    assert frozen["phase"] == "selection-ready"
+    assert frozen["discovery"]["complete_candidates"] == 12
+    assert frozen["discovery"]["unique_complete_candidates"] == len(pool) == 11
+    event = frozen["history"][-1]
+    assert event["event"] == "discovery-frozen"
+    assert event["unique_complete_candidates"] == 11
+    assert "promoted_candidates" not in event
+
+    # The frozen pool is the pool unique_complete_sources gives on the census.
+    selected = select_winner(cell_root)
+    census = _process_evidence(cell_root, selected)["discovery"]["attempts"]
+    assert pool == [
+        source["source_node_id"] for source in unique_complete_sources(census)
+    ]
 
 
 def test_discovery_audit_joins_failure_completion_without_reclassifying_spec(
@@ -1089,11 +1180,11 @@ def test_discovery_deduplicates_semantically_identical_hparams(staged_cell):
     assert state["discovery"]["unique_complete_candidates"] == 11
     assert "node_0012" in {
         candidate["candidate_id"]
-        for candidate in state["discovery"]["promoted_candidates"]
+        for candidate in state["discovery"]["candidates"]
     }
     assert "node_0011" not in {
         candidate["candidate_id"]
-        for candidate in state["discovery"]["promoted_candidates"]
+        for candidate in state["discovery"]["candidates"]
     }
 
 
@@ -1102,7 +1193,7 @@ def test_discovery_deduplicates_outcome_identical_candidates(staged_cell):
     under the locked seed: two DISTINCT configs with identical per-fold
     primary values are one measurement wearing two names (uni_v2 canary: a
     weight-decay value inside the logit-scaling invariant regime reproduced
-    its parent to 16 digits and occupied a second promotion slot). When
+    its parent to 16 digits and counted twice in the pool). When
     neither candidate carries val_predictions_sha256 (pre-hash artifacts,
     e.g. the live canary cells), the primary_value-tuple rule still dedups.
     Hash-bearing candidates are covered by the tests below."""
@@ -1117,17 +1208,17 @@ def test_discovery_deduplicates_outcome_identical_candidates(staged_cell):
 
     state = freeze_discovery(cell_root)
 
-    promoted = {
+    pooled = {
         candidate["candidate_id"]
-        for candidate in state["discovery"]["promoted_candidates"]
+        for candidate in state["discovery"]["candidates"]
     }
     assert state["discovery"]["complete_candidates"] == 12
     assert state["discovery"]["unique_complete_candidates"] == 11
     # Equal means tie-break on candidate_id, so the earlier node keeps the slot.
-    assert "node_0011" in promoted
-    assert "node_0012" not in promoted
+    assert "node_0011" in pooled
+    assert "node_0012" not in pooled
     kept = next(
-        candidate for candidate in state["discovery"]["promoted_candidates"]
+        candidate for candidate in state["discovery"]["candidates"]
         if candidate["candidate_id"] == "node_0011"
     )
     assert kept["val_predictions_sha256"] == [None] * len(
@@ -1140,7 +1231,7 @@ def test_discovery_keeps_tied_primary_values_with_distinct_prediction_hashes(
 ):
     """Quantized primary_values can tie for genuinely different configs. With
     complete per-fold hash vectors on BOTH candidates, the byte discriminator
-    decides: different predictions => two real candidates, both promoted."""
+    decides: different predictions => two real candidates, both pooled."""
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
@@ -1160,7 +1251,7 @@ def test_discovery_keeps_tied_primary_values_with_distinct_prediction_hashes(
 
     by_id = {
         candidate["candidate_id"]: candidate
-        for candidate in state["discovery"]["promoted_candidates"]
+        for candidate in state["discovery"]["candidates"]
     }
     assert state["discovery"]["unique_complete_candidates"] == 12
     assert {"node_0011", "node_0012"} <= set(by_id)
@@ -1197,15 +1288,15 @@ def test_discovery_deduplicates_equal_prediction_hash_vectors(staged_cell):
 
     state = freeze_discovery(cell_root)
 
-    promoted = {
+    pooled = {
         candidate["candidate_id"]
-        for candidate in state["discovery"]["promoted_candidates"]
+        for candidate in state["discovery"]["candidates"]
     }
     assert state["discovery"]["unique_complete_candidates"] == 11
-    assert "node_0011" in promoted
-    assert "node_0012" not in promoted
+    assert "node_0011" in pooled
+    assert "node_0012" not in pooled
     kept = next(
-        candidate for candidate in state["discovery"]["promoted_candidates"]
+        candidate for candidate in state["discovery"]["candidates"]
         if candidate["candidate_id"] == "node_0011"
     )
     assert kept["val_predictions_sha256"] == [
@@ -1233,7 +1324,7 @@ def test_discovery_mixed_hash_presence_never_primary_value_dedups(staged_cell):
 
     by_id = {
         candidate["candidate_id"]: candidate
-        for candidate in state["discovery"]["promoted_candidates"]
+        for candidate in state["discovery"]["candidates"]
     }
     assert state["discovery"]["unique_complete_candidates"] == 12
     assert {"node_0011", "node_0012"} <= set(by_id)
@@ -1250,11 +1341,11 @@ def test_discovery_mixed_hash_presence_never_primary_value_dedups(staged_cell):
 def test_process_evidence_reconciles_a_discovery_that_repeated_a_run(
     staged_cell, donor_seed, unique, same_outcome,
 ):
-    """The selection freeze re-derives the promotion roster from the census
+    """The selection freeze re-derives the winner rule's pool from the census
     with the discovery freeze's own rule: a config that reproduced another's
     validation predictions byte for byte is the same measurement and gives
     up its slot, while a hashed run never matches a hashless one."""
-    cell_root, adir, cell, _, repo_root = staged_cell
+    cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
     archive_root = adir / "orchestrator/archive"
@@ -1270,20 +1361,19 @@ def test_process_evidence_reconciles_a_discovery_that_repeated_a_run(
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
     )
     freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=8)
-    state = freeze_promotion(cell_root)
+    state = select_winner(cell_root)
 
     process = _process_evidence(cell_root, state)
 
     rows = {row["node_id"]: row for row in process["discovery"]["attempts"]}
-    promoted = {job["source_node_id"] for job in process["promotion"]["jobs"]}
+    pooled = {entry["candidate_id"] for entry in process["selection"]["pool"]}
     assert process["discovery"]["unique_complete_candidates"] == unique
+    assert len(pooled) == unique
     assert (
         rows["node_0011"]["outcome_sha256"] == rows["node_0012"]["outcome_sha256"]
     ) is same_outcome
-    assert "node_0011" in promoted
-    assert ("node_0012" in promoted) is not same_outcome
+    assert "node_0011" in pooled
+    assert ("node_0012" in pooled) is not same_outcome
 
 
 def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
@@ -1296,252 +1386,7 @@ def test_zero_complete_candidates_falls_through_to_selection_ready(staged_cell):
     state = freeze_discovery(cell_root)
     assert state["phase"] == "selection-ready"
     assert state["discovery"]["complete_candidates"] == 0
-    assert state["discovery"]["promoted_candidates"] == []
-
-
-def test_promotion_materializes_exact_jobs_and_an_independent_budget(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12, source_at=11)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    frozen = freeze_discovery(cell_root)
-
-    state = materialize_promotion(cell_root, repo_root=repo_root)
-    promotion = cell_root / "promotion" / "automil"
-    jobs = state["promotion"]["jobs"]
-    assert state["phase"] == "promotion"
-    assert state["promotion"]["materialized"] is True
-    assert len(jobs) == 10
-    assert len(list((promotion / "orchestrator" / "queue").glob("*.json"))) == 10
-
-    budget = read_cell(
-        promotion / "cells" / f"{cell['budget_identity']['cell_id']}.json"
-    )
-    assert budget.eval_budget == 10
-    assert budget.consumed_evals == 0
-    # The deep-copied discovery config carried the 12h agent-active budget;
-    # promotion has no agent, so its time wall is pure runaway containment.
-    assert budget.mode == "wall_clock"
-    assert budget.budget_seconds == 7 * 24 * 3600
-    config = yaml.safe_load((promotion / "config.yaml").read_text())
-    assert config["cap"]["budget"] == "7d"
-    assert config["cap"]["mode"] == "wall_clock"
-    assert "phasing" not in config["cap"]          # discovery's batches stay behind
-    assert config["run"]["command"] == cell["commands"]["promotion"]
-    assert config["training"]["fold_count"] == 2
-    assert config["campaign"]["stage"] == "promotion"
-
-    first = jobs[0]
-    assert first["source_node_id"] == "node_0012"
-    spec = json.loads((
-        promotion / "orchestrator" / "queue"
-        / f"{first['promotion_node_id']}.json"
-    ).read_text())
-    assert spec["metadata"]["promotion"]["source_candidate_sha256"] == (
-        first["source_candidate_sha256"]
-    )
-    assert spec["metadata"]["campaign"]["stage"] == "promotion"
-    mapped = (
-            promotion / "orchestrator" / "archive"
-            / first["promotion_node_id"]
-            / (
-                "dataset__arm__task/promotion/automil/variants/"
-                "_policies/candidate_11.py"
-            )
-        )
-    assert mapped.read_text() == "# exact train-only policy candidate\n"
-
-    # A restart returns the frozen jobs without duplicating graph/queue entries.
-    assert materialize_promotion(cell_root, repo_root=repo_root) == state
-
-    # Simulate power loss after atomic directory publication but before the
-    # state transition commit. The immutable plan is adopted, not duplicated.
-    (cell_root / "campaign_state.json").write_text(
-        json.dumps(frozen, indent=2, sort_keys=True) + "\n"
-    )
-    recovered = materialize_promotion(cell_root, repo_root=repo_root)
-    assert recovered["phase"] == "promotion"
-    assert recovered["promotion"]["jobs"] == jobs
-    assert len(list((promotion / "orchestrator" / "queue").glob("*.json"))) == 10
-
-
-def test_promotion_requires_closed_discovery_activity_before_mutation(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    frozen = freeze_discovery(cell_root, end_session=False)
-
-    with pytest.raises(
-        CampaignStageError,
-        match="SessionEnd and a durable final Claude active-time sample",
-    ):
-        materialize_promotion(cell_root, repo_root=repo_root)
-
-    assert load_stage_state(cell_root) == frozen
-    assert not (cell_root / "promotion").exists()
-
-
-def _finish_promotion(
-    cell_root: Path, *, completed: int, promotion_base: float = 0.7,
-    promotion_bases: list[float] | None = None,
-) -> None:
-    adir = cell_root / "promotion" / "automil"
-    state = load_stage_state(cell_root)
-    for index, job in enumerate(state["promotion"]["jobs"]):
-        job_base = (
-            promotion_bases[index]
-            if promotion_bases is not None else promotion_base + index / 100
-        )
-        node_id = job["promotion_node_id"]
-        queue = adir / "orchestrator" / "queue" / f"{node_id}.json"
-        archive = adir / "orchestrator" / "archive" / node_id
-        spec = json.loads(queue.read_text())
-        queue.unlink()
-        (archive / "spec.json").write_text(json.dumps(spec))
-        result = (
-            {
-                "status": "completed",
-                "primary_value": job_base,
-                "metrics": {"val_auc": 0.7, "val_bacc": 0.7},
-                "validation_folds": _folds(
-                    STAGE_FOLDS["promotion"], job_base,
-                ),
-            }
-            if index < completed else
-            {"status": "crash", "primary_value": 0.0, "metrics": {}}
-        )
-        (archive / "result.json").write_text(json.dumps(result))
-        if index < completed:
-            sealed = archive / "certify"
-            sealed.mkdir(exist_ok=True)
-            for fold in STAGE_FOLDS["promotion"]:
-                (sealed / f"fold_{fold}_result.json").write_text(json.dumps({
-                    "fold_index": fold,
-                    "held_out": {
-                        "test_auc": 0.70 + fold / 100,
-                        "test_bacc": 0.70 + fold / 100,
-                    },
-                }))
-    cell_path = (
-        adir / "cells"
-        / f"{json.loads((adir / 'campaign_cell.json').read_text())['budget_identity']['cell_id']}.json"
-    )
-    budget = read_cell(cell_path)
-    write_cell(
-        replace(
-            budget,
-            consumed_evals=len(state["promotion"]["jobs"]),
-            completed_evals=completed,
-        ),
-        adir / "cells",
-    )
-
-
-def test_promotion_freeze_excludes_crashes_but_keeps_their_cost(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=8)
-
-    state = freeze_promotion(cell_root)
-    assert state["phase"] == "selection-ready"
-    assert state["promotion"]["attempts_charged"] == 10
-    assert len(state["promotion"]["eligible_candidates"]) == 8
-    assert [job["status"] for job in state["promotion"]["jobs"]] == (
-        ["eligible"] * 8 + ["ineligible"] * 2
-    )
-    for candidate in state["promotion"]["eligible_candidates"]:
-        assert [fold["fold_index"] for fold in candidate["validation_folds"]] == [
-            0, 1, 2, 3, 4,
-        ]
-        assert len(candidate["sealed_fold_sha256"]) == 5
-    assert freeze_promotion(cell_root) == state
-
-
-def test_promotion_freeze_marks_missing_terminal_artifacts_ineligible(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10)
-    state = load_stage_state(cell_root)
-    archives = cell_root / "promotion/automil/orchestrator/archive"
-    first = archives / state["promotion"]["jobs"][0]["promotion_node_id"]
-    second = archives / state["promotion"]["jobs"][1]["promotion_node_id"]
-    (first / "result.json").unlink()
-    (second / "certify/fold_3_result.json").unlink()
-
-    frozen = freeze_promotion(cell_root)
-
-    assert frozen["phase"] == "selection-ready"
-    assert len(frozen["promotion"]["eligible_candidates"]) == 8
-    assert frozen["promotion"]["jobs"][0]["status"] == "ineligible"
-    assert "missing result.json" in frozen["promotion"]["jobs"][0]["reason"]
-    assert len(frozen["promotion"]["jobs"][0]["promotion_spec_sha256"]) == 64
-    assert frozen["promotion"]["jobs"][0]["submitted_at"]
-    assert frozen["promotion"]["jobs"][1]["status"] == "ineligible"
-    assert "sealed folds must be exactly" in frozen["promotion"]["jobs"][1]["reason"]
-    select_winner(cell_root)
-    _write_global_selection_freeze(cell_root)
-    artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
-    assert validate_selection_freeze_artifact(artifact) == artifact
-
-
-def test_promotion_freeze_fails_closed_when_durable_spec_is_missing(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10)
-    state = load_stage_state(cell_root)
-    first_id = state["promotion"]["jobs"][0]["promotion_node_id"]
-    (
-        cell_root / "promotion/automil/orchestrator/archive"
-        / first_id / "spec.json"
-    ).unlink()
-
-    with pytest.raises(CampaignStageError, match="lost its durable spec"):
-        freeze_promotion(cell_root)
-    assert not (cell_root.parent / SELECTION_FREEZE_FILE).exists()
-
-
-def test_promotion_freeze_rejects_cross_stage_identity_drift(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10)
-    state = load_stage_state(cell_root)
-    node_id = state["promotion"]["jobs"][0]["promotion_node_id"]
-    spec_path = cell_root / "promotion/automil/orchestrator/archive" / node_id / "spec.json"
-    spec = json.loads(spec_path.read_text())
-    spec["metadata"]["promotion"]["source_candidate_sha256"] = "0" * 64
-    spec_path.write_text(json.dumps(spec))
-
-    with pytest.raises(CampaignStageError, match="source link drifted"):
-        freeze_promotion(cell_root)
+    assert state["discovery"]["candidates"] == []
 
 
 def test_zero_complete_discovery_freezes_baseline_with_zero_lift(staged_cell):
@@ -1558,13 +1403,20 @@ def test_zero_complete_discovery_freezes_baseline_with_zero_lift(staged_cell):
     assert state["winner"]["kind"] == "baseline"
     assert state["winner"]["candidate_id"] == "baseline"
     assert state["winner"]["lift_over_baseline"] == pytest.approx(0.0)
+    # An empty pool still carries the rule's record: no leader, nothing accepted.
+    selection = state["winner"]["selection"]
+    assert selection["pool"] == []
+    assert selection["leader"] is None and selection["leader_lift"] is None
+    assert selection["accepted"] is False and selection["winner"] == "baseline"
+    assert state["winner"]["selection_sha256"] == content_sha256(selection)
     assert select_winner(cell_root) == state
 
 
-def test_zero_candidate_selection_requires_closed_discovery_activity(staged_cell):
+@pytest.mark.parametrize("completed", [0, 12], ids=["empty-pool", "full-pool"])
+def test_selection_requires_closed_discovery_activity(staged_cell, completed):
     cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=0)
+    _attempts(adir, cell["cell_id"], completed=completed)
     _open_budget_cell(
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
     )
@@ -1572,7 +1424,8 @@ def test_zero_candidate_selection_requires_closed_discovery_activity(staged_cell
 
     with pytest.raises(
         CampaignStageError,
-        match="SessionEnd and a durable final Claude active-time sample",
+        match="SessionEnd and a durable final Claude active-time sample "
+              "are required before winner selection",
     ):
         select_winner(cell_root)
 
@@ -1633,70 +1486,18 @@ def test_selection_requires_the_durable_final_activity_sample(staged_cell):
         select_winner(cell_root)
 
 
-def test_fivefold_validation_mean_can_select_searched_candidate(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
-    freeze_promotion(cell_root)
-
-    state = select_winner(cell_root)
-    winner = state["winner"]
-    assert winner["kind"] == "searched"
-    assert winner["candidate_id"] == "node_0012"
-    assert [fold["fold_index"] for fold in winner["validation_folds"]] == [
-        0, 1, 2, 3, 4,
-    ]
-    assert winner["validation_mean"] == pytest.approx(
-        sum(fold["primary_value"] for fold in winner["validation_folds"]) / 5
-    )
-    assert winner["lift_over_baseline"] > 0
-
-
-def test_stage_process_evidence_rejects_inconsistent_eligible_promotion(
-    staged_cell,
-):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
-    state = freeze_promotion(cell_root)
-    assert _process_evidence(cell_root, state)["promotion"]["status_counts"]["eligible"] == 10
-
-    drifted = json.loads(json.dumps(state))
-    drifted["promotion"]["jobs"][0].update({
-        "result_status": "crash",
-        "outcome_class": "crash",
-        "validation_mean": None,
-    })
-    with pytest.raises(CampaignStageError, match="eligible promotion"):
-        _process_evidence(cell_root, drifted)
-
-
 def test_process_evidence_follows_the_admission_sequence_not_the_clock(staged_cell):
     """The freeze records the sequence submit minted under its lock and the
     exported history follows it: a submit stamped by a clock that ran
     behind keeps the position it was judged at."""
-    cell_root, adir, cell, _, repo_root = staged_cell
+    cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
     frozen = freeze_discovery(cell_root)
     audit = frozen["discovery"]["attempt_audit"]
     assert [row["attempt_seq"] for row in audit] == list(range(1, DISCOVERY_ATTEMPTS + 1))
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
-    state = freeze_promotion(cell_root)
+    state = select_winner(cell_root)
     skewed = json.loads(json.dumps(state))
     rows = skewed["discovery"]["attempt_audit"]
     rows[0]["submitted_at"], rows[1]["submitted_at"] = rows[1]["submitted_at"], rows[0]["submitted_at"]
@@ -1720,49 +1521,417 @@ def test_a_spec_without_an_admission_sequence_cannot_freeze(staged_cell):
         freeze_discovery(cell_root)
 
 
-def test_exact_validation_tie_prefers_native_baseline(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
+def _selected(staged_cell, lifts=None, *, completed=12, source_at=None):
+    """Register the baseline, run a discovery whose completed attempts sit at
+    ``lifts`` (see _set_lifts) over it, freeze it, and freeze the winner.
+    Returns the winner-frozen state."""
+    cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
+    _attempts(adir, cell["cell_id"], completed=completed, source_at=source_at)
+    if lifts:
+        _set_lifts(adir, lifts)
     _open_budget_cell(
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
     )
     freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    # Rank-1 source node_0012 has discovery primary values .610/.620/.630.
-    # Promotion .615/.625 makes the exact five-fold mean .620, baseline's mean.
-    _finish_promotion(cell_root, completed=1, promotion_base=0.585)
-    freeze_promotion(cell_root)
+    return select_winner(cell_root)
 
-    state = select_winner(cell_root)
+
+def _rule_on_state(state):
+    """The winner rule run on exactly the evidence the state froze."""
+    return max_lift_winner(
+        [fold["primary_value"] for fold in state["baseline"]["validation_folds"]],
+        [{
+            "candidate_id": candidate["candidate_id"],
+            "candidate_sha256": candidate["candidate_sha256"],
+            "fold_values": [
+                fold["primary_value"] for fold in candidate["validation_folds"]
+            ],
+        } for candidate in state["discovery"]["candidates"]],
+    )
+
+
+def _fold_noise(lift, amplitude=0.07):
+    """Per-fold deltas that alternate in sign and average to ``lift``."""
+    return [
+        lift - amplitude / len(CERTIFICATION_FOLDS) + amplitude * (-1) ** fold
+        for fold in CERTIFICATION_FOLDS
+    ]
+
+
+def _noise_pool_lifts():
+    """Twelve candidates, every one with alternating-sign per-fold deltas.
+    Eleven differ from one another by at most 0.01 in mean lift; node_0004
+    is the best of the twelve at 0.075."""
+    others = [f"node_{index:04d}" for index in range(1, 13) if index != 4]
+    lifts = {
+        node_id: _fold_noise(0.001 * (position - 5))
+        for position, node_id in enumerate(others)
+    }
+    lifts["node_0004"] = _fold_noise(0.075)
+    return lifts
+
+
+#: One candidate 0.05 above the baseline on every fold, in a pool whose other
+#: eleven (the _attempts defaults) trail it by 0.05 to 0.16, each by the same
+#: amount on every fold.
+CLEAR_WINNER_LIFTS = {"node_0007": 0.05}
+#: The two pools every selection check runs on: a leader the rule accepts, and
+#: a leader it refuses.
+POOLS = pytest.mark.parametrize(
+    "lifts", [CLEAR_WINNER_LIFTS, _noise_pool_lifts()],
+    ids=["clear-winner", "fold-noise"],
+)
+
+
+def test_a_clearly_better_candidate_becomes_the_searched_winner(staged_cell):
+    """One candidate beats the baseline by the same 0.05 on every fold, so
+    its lead carries no fold noise and clears the floor: it is the frozen
+    winner, and its five sealed folds are the ones in its own discovery
+    archive."""
+    cell_root, adir, _, _, _ = staged_cell
+    state = _selected(staged_cell, CLEAR_WINNER_LIFTS)
+
+    winner = state["winner"]
+    assert state["phase"] == "winner-frozen"
+    assert winner["kind"] == "searched"
+    assert winner["candidate_id"] == "node_0007"
+    assert winner["lift_over_baseline"] == pytest.approx(0.05)
+    record = winner["selection"]
+    assert record["leader"] == "node_0007"
+    assert record["accepted"] is True
+    assert record["leader_lift"] > WINNER_FLOOR
+    # The premise: the same lift on every fold, so no fold noise.
+    assert record["standard_error"] == pytest.approx(0.0, abs=1e-9)
+    assert "promotion_node_id" not in winner and "selection_audit" not in winner
+
+    archive = (adir / "orchestrator/archive/node_0007").resolve()
+    sources = _winner_sealed_sources(cell_root, state, winner)
+    assert sorted(sources) == list(CERTIFICATION_FOLDS)
+    for fold, path in sources.items():
+        assert path.is_file()
+        assert path.resolve() == archive / "certify" / f"fold_{fold}_result.json"
+    anchors = _source_fold_anchors(cell_root.parent, sources)
+    assert all(
+        record["path"].startswith(
+            f"{cell_root.name}/automil/orchestrator/archive/node_0007/certify/"
+        )
+        for record in anchors.values()
+    )
+    assert winner["sealed_fold_sha256"] == {
+        filename: record["sha256"] for filename, record in anchors.items()
+    }
+
+
+def test_a_lead_inside_the_noise_of_the_search_keeps_the_baseline(staged_cell):
+    """Every candidate's per-fold deltas alternate in sign, so the paired SE
+    is wide. The leader's lift would clear a two-SE bar for one attempt, but
+    not the bar for the best of thirty attempts, so the baseline stays."""
+    state = _selected(staged_cell, _noise_pool_lifts())
+
+    for candidate in state["discovery"]["candidates"]:
+        deltas = [
+            fold["primary_value"] - base for fold, base in zip(
+                candidate["validation_folds"], BASELINE_FOLD_VALUES,
+            )
+        ]
+        assert all(a * b < 0 for a, b in zip(deltas, deltas[1:]))
+    winner = state["winner"]
+    record = winner["selection"]
+    assert winner["kind"] == "baseline"
+    assert winner["candidate_id"] == "baseline"
+    assert winner["sealed_fold_sha256"] is None
+    assert winner["lift_over_baseline"] == pytest.approx(0.0)
+    assert record["leader"] == "node_0004"
+    assert 2 * record["standard_error"] < record["leader_lift"] < record["bar"]
+    assert record["bar"] == WINNER_SE_MULTIPLIER * record["standard_error"] > WINNER_FLOOR
+    assert record["accepted"] is False and record["winner"] == "baseline"
+
+
+def test_a_candidate_that_only_ties_the_baseline_does_not_replace_it(staged_cell):
+    """node_0012 gets exactly the baseline's fold values: lift 0 on every fold."""
+    state = _selected(staged_cell, {"node_0012": 0.0})
+
+    assert state["winner"]["selection"]["leader"] == "node_0012"
     assert state["winner"]["validation_mean"] == pytest.approx(0.62)
     assert state["winner"]["kind"] == "baseline"
 
 
-def test_searched_tie_uses_stable_discovery_node_id(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
+def test_tied_leaders_resolve_to_the_earlier_node(staged_cell):
+    """Two different runs that tie exactly on every fold are both in the pool.
+    Equal means order by node id, and the rule keeps the first leader."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    _set_lifts(adir, {"node_0009": 0.05, "node_0004": 0.05})
+    for node_id in ("node_0004", "node_0009"):
+        _set_fold_prediction_hashes(
+            adir / "orchestrator/archive" / node_id / "result.json", seed=node_id,
+        )
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+    freeze_discovery(cell_root)
+
+    state = select_winner(cell_root)
+
+    pool = state["winner"]["selection"]["pool"]
+    assert [entry["candidate_id"] for entry in pool[:2]] == ["node_0004", "node_0009"]
+    assert pool[0]["lift"] == pytest.approx(pool[1]["lift"])
+    assert state["winner"]["candidate_id"] == "node_0004"
+
+
+@POOLS
+def test_the_winner_record_is_the_winner_rule_on_the_state_evidence(
+    staged_cell, lifts,
+):
+    state = _selected(staged_cell, lifts)
+
+    winner = state["winner"]
+    selection = winner["selection"]
+    assert selection == _rule_on_state(state)
+    assert winner["selection_sha256"] == content_sha256(selection)
+    assert [entry["candidate_id"] for entry in selection["pool"]] == [
+        candidate["candidate_id"] for candidate in state["discovery"]["candidates"]
+    ]
+    assert winner["candidate_id"] == selection["winner"]
+    event = state["history"][-1]
+    assert event["event"] == "winner-frozen"
+    assert event["selection_sha256"] == winner["selection_sha256"]
+
+
+def test_selection_over_an_empty_pool_is_the_winner_rule_too(staged_cell):
+    state = _selected(staged_cell, completed=0)
+
+    assert state["winner"]["selection"] == _rule_on_state(state)
+    assert state["winner"]["selection"]["pool"] == []
+
+
+def _validate_process(process):
+    """validate_process_evidence_artifact on ``process`` as it stands: the
+    hash is taken from the content, so only the contents can fail it."""
+    attempt = process["discovery"]["attempts"][0]
+    return validate_process_evidence_artifact(
+        process, content_sha256(process), cell_id="dataset__arm__task",
+        expected_session_id=attempt["agent_session_id"],
+        expected_session_binding=attempt["agent_session_binding_sha256"],
+    )
+
+
+def _reissued(selection):
+    """The record the rule gives on a record's own, possibly edited, inputs."""
+    return max_lift_winner(
+        selection["baseline_fold_values"], selection["pool"],
+    )
+
+
+def _edit_a_pool_fold_value(process):
+    process["selection"]["pool"][0]["fold_values"][2] += 0.001
+
+
+def _edit_a_baseline_fold_value(process):
+    process["selection"]["baseline_fold_values"][1] += 0.001
+
+
+def _flip_the_winner(process):
+    selection = process["selection"]
+    selection["winner"] = (
+        selection["leader"] if selection["winner"] == "baseline" else "baseline"
+    )
+
+
+def _forge_a_pool_fold_value(process):
+    _edit_a_pool_fold_value(process)
+    process["selection"] = _reissued(process["selection"])
+
+
+def _forge_a_baseline_fold_value(process):
+    _edit_a_baseline_fold_value(process)
+    process["selection"] = _reissued(process["selection"])
+
+
+def _forge_a_fold_value_out_of_range(process):
+    values = process["selection"]["pool"][0]["fold_values"]
+    values[2], values[3] = values[2] + 0.9, values[3] - 0.9    # the mean holds
+    process["selection"] = _reissued(process["selection"])
+
+
+def _forge_the_pool_order(process):
+    process["selection"]["pool"].reverse()
+    process["selection"] = _reissued(process["selection"])
+
+
+def _forge_a_dropped_candidate(process):
+    process["selection"]["pool"].pop()
+    process["selection"] = _reissued(process["selection"])
+
+
+def _forge_two_folds_that_keep_every_mean(process):
+    selection = process["selection"]
+    for series in (
+        selection["baseline_fold_values"],
+        *(entry["fold_values"] for entry in selection["pool"]),
+    ):
+        mean = math.fsum(series) / len(series)
+        series[:] = [mean, mean]
+    process["selection"] = _reissued(selection)
+
+
+@POOLS
+@pytest.mark.parametrize("tamper", [
+    _edit_a_pool_fold_value,
+    _edit_a_baseline_fold_value,
+    _flip_the_winner,
+    _forge_a_pool_fold_value,
+    _forge_a_baseline_fold_value,
+    _forge_a_fold_value_out_of_range,
+    _forge_the_pool_order,
+    _forge_a_dropped_candidate,
+    _forge_two_folds_that_keep_every_mean,
+], ids=lambda tamper: tamper.__name__.strip("_"))
+def test_process_evidence_rejects_a_forged_selection_record(
+    staged_cell, lifts, tamper,
+):
+    """Every tamper is rehashed, so only the contents can fail the check. The
+    record must be the rule's own output on its own inputs (a forged record
+    that is consistent with itself still fails), and its inputs must be the
+    census: the pool in census order, each fold mean the attempt's mean, the
+    baseline mean the recorded one, every fold value in [0, 1]."""
+    cell_root, _, _, _, _ = staged_cell
+    state = _selected(staged_cell, lifts)
+    process = json.loads(json.dumps(_process_evidence(cell_root, state)))
+    assert _validate_process(process) == process
+
+    tamper(process)
+
+    with pytest.raises(CampaignStageError, match="winner selection record"):
+        _validate_process(process)
+
+
+def _edit_a_record_number(winner):
+    winner["selection"]["leader_lift"] += 0.01
+
+
+def _edit_a_record_number_and_rehash(winner):
+    _edit_a_record_number(winner)
+    winner["selection_sha256"] = content_sha256(winner["selection"])
+
+
+def _replace_the_record_hash(winner):
+    winner["selection_sha256"] = "0" * 64
+
+
+def _edit_a_record_fold_value_and_rehash(winner):
+    winner["selection"]["pool"][0]["fold_values"][2] += 0.001
+    winner["selection_sha256"] = content_sha256(winner["selection"])
+
+
+def _swap_the_winner_id(winner):
+    winner["candidate_id"] = (
+        winner["selection"]["leader"]
+        if winner["candidate_id"] == "baseline" else "baseline"
+    )
+
+
+@POOLS
+@pytest.mark.parametrize("edit", [
+    _edit_a_record_number,
+    _edit_a_record_number_and_rehash,
+    _replace_the_record_hash,
+    _edit_a_record_fold_value_and_rehash,
+    _swap_the_winner_id,
+], ids=lambda edit: edit.__name__.strip("_"))
+def test_process_evidence_rejects_a_winner_whose_selection_record_was_edited(
+    staged_cell, lifts, edit,
+):
+    cell_root, _, _, _, _ = staged_cell
+    state = _selected(staged_cell, lifts)
+    assert _process_evidence(cell_root, state)["selection"] == state["winner"]["selection"]
+    doctored = json.loads(json.dumps(state))
+
+    edit(doctored["winner"])
+
+    with pytest.raises(
+        CampaignStageError,
+        match="frozen winner differs from the winner rule on the discovery evidence",
+    ):
+        _process_evidence(cell_root, doctored)
+
+
+@pytest.mark.parametrize("target", ["winner", "loser"])
+def test_the_selection_freeze_rechecks_every_pool_candidate_against_the_archive(
+    staged_cell, target,
+):
+    """The freeze re-reads each pooled candidate's result.json and re-runs the
+    rule: a fold value edited after the winner froze fails closed, whether the
+    candidate is the winner or one that lost."""
+    cell_root, adir, _, _, _ = staged_cell
+    state = _selected(staged_cell, CLEAR_WINNER_LIFTS)
+    node_id = state["winner"]["candidate_id"] if target == "winner" else "node_0012"
+    path = adir / "orchestrator/archive" / node_id / "result.json"
+    result = json.loads(path.read_text())
+    fold = result["validation_folds"][2]
+    fold["primary_value"] += 0.001
+    fold["metrics"]["val_auc"] = fold["primary_value"]
+    path.write_text(json.dumps(result))
+
+    with pytest.raises(
+        CampaignStageError, match="frozen winner differs from the winner rule",
+    ):
+        _write_global_selection_freeze(cell_root)
+
+    assert not (cell_root.parent / SELECTION_FREEZE_FILE).exists()
+    assert load_stage_state(cell_root)["phase"] == "winner-frozen"
+
+
+def test_a_candidate_missing_a_sealed_fold_is_excluded_at_the_discovery_freeze(
+    staged_cell,
+):
+    """The winner's five sealed folds live in its own discovery archive, so a
+    candidate that cannot show all five never enters the pool. The rest of
+    the pool still selects, freezes and validates."""
+    cell_root, adir, cell, _, _ = staged_cell
+    register_baseline(cell_root, _baseline(cell_root))
+    _attempts(adir, cell["cell_id"], completed=12)
+    archive_root = adir / "orchestrator/archive"
+    (archive_root / "node_0012/certify/fold_3_result.json").unlink()
+    _open_budget_cell(
+        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
+    )
+
+    frozen = freeze_discovery(cell_root)
+
+    row = next(
+        row for row in frozen["discovery"]["attempt_audit"]
+        if row["node_id"] == "node_0012"
+    )
+    assert row["eligible"] is False
+    assert "sealed folds must be exactly" in row["reason"]
+    assert frozen["discovery"]["complete_candidates"] == 11
+    assert "node_0012" not in {
+        candidate["candidate_id"] for candidate in frozen["discovery"]["candidates"]
+    }
+    select_winner(cell_root)
+    _write_global_selection_freeze(cell_root)
+    artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
+    assert validate_selection_freeze_artifact(artifact) == artifact
+
+
+def test_a_lost_launched_spec_fails_the_discovery_freeze_closed(staged_cell):
+    cell_root, adir, cell, _, _ = staged_cell
     register_baseline(cell_root, _baseline(cell_root))
     _attempts(adir, cell["cell_id"], completed=12)
     _open_budget_cell(
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
     )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    # node_0012 has .03 more discovery-primary_value mass than node_0011;
-    # adding .015 to each of node_0011's two promotion folds makes them tie.
-    bases = [0.75, 0.765] + [0.5] * 8
-    _finish_promotion(
-        cell_root, completed=2, promotion_bases=bases,
-    )
-    freeze_promotion(cell_root)
+    (adir / "orchestrator/archive/node_0003/spec.json").unlink()
 
-    state = select_winner(cell_root)
-    audit = state["winner"]["selection_audit"]
-    searched = [row for row in audit if row["kind"] == "searched"]
-    assert searched[0]["validation_mean"] == pytest.approx(
-        searched[1]["validation_mean"]
-    )
-    assert state["winner"]["candidate_id"] == "node_0011"
+    with pytest.raises(
+        CampaignStageError,
+        match=f"exactly {DISCOVERY_ATTEMPTS - 1} launched discovery specs",
+    ):
+        freeze_discovery(cell_root)
+    assert load_stage_state(cell_root)["phase"] == "discovery"
 
 
 def test_winner_selection_detects_baseline_artifact_drift(staged_cell):
@@ -1784,38 +1953,21 @@ def _write_searched_sealed_folds(
     cell_root: Path, state: dict, *, selected_valid: bool = True,
 ) -> None:
     winner = state["winner"]
-    discovery = cell_root / "automil/orchestrator/archive"
-    promotion = cell_root / "promotion/automil/orchestrator/archive"
+    archive_root = cell_root / "automil/orchestrator/archive"
     # Every loser is deliberately malformed after selection. Certification
     # must not open or verify an unselected candidate.
-    for candidate in state["discovery"]["promoted_candidates"]:
-        sealed = discovery / candidate["candidate_id"] / "certify"
-        sealed.mkdir(parents=True, exist_ok=True)
-        for fold in STAGE_FOLDS["discovery"]:
-            (sealed / f"fold_{fold}_result.json").write_text("loser-not-json")
-    for job in state["promotion"]["jobs"]:
-        sealed = promotion / job["promotion_node_id"] / "certify"
-        sealed.mkdir(parents=True, exist_ok=True)
-        for fold in STAGE_FOLDS["promotion"]:
-            (sealed / f"fold_{fold}_result.json").write_text("loser-not-json")
-
-    selected_discovery = discovery / winner["candidate_id"] / "certify"
-    selected_promotion = promotion / winner["promotion_node_id"] / "certify"
-    if selected_valid:
+    for candidate in state["discovery"]["candidates"]:
+        if candidate["candidate_id"] == winner["candidate_id"]:
+            continue
+        sealed = archive_root / candidate["candidate_id"] / "certify"
         for fold in CERTIFICATION_FOLDS:
-            path = (
-                selected_discovery if fold in STAGE_FOLDS["discovery"]
-                else selected_promotion
-            ) / f"fold_{fold}_result.json"
-            path.write_text(json.dumps({
-                "fold_index": fold,
-                "held_out": {
-                    "test_auc": 0.70 + fold / 100,
-                    "test_bacc": 0.70 + fold / 100,
-                },
-            }))
-    else:
-        (selected_discovery / "fold_0_result.json").write_text("selected-not-json")
+            (sealed / f"fold_{fold}_result.json").write_text("loser-not-json")
+    # The winner's five sealed folds are the ones its attempt wrote, which the
+    # discovery freeze hashed; only the corrupt case touches them.
+    if not selected_valid:
+        (
+            archive_root / winner["candidate_id"] / "certify/fold_0_result.json"
+        ).write_text("selected-not-json")
 
 
 def _write_global_selection_freeze(cell_root: Path) -> None:
@@ -1848,7 +2000,6 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         "winner_kind": winner["kind"],
         "winner_candidate_id": winner["candidate_id"],
         "winner_candidate_sha256": winner["candidate_sha256"],
-        "winner_promotion_node_id": winner.get("promotion_node_id"),
         "winner_validation_mean": winner["validation_mean"],
         "baseline_validation_mean": state["baseline"]["validation_mean"],
         "baseline_candidate_sha256": state["baseline"]["candidate_sha256"],
@@ -1862,6 +2013,8 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         "process_evidence": process,
     }
     def sibling_entry(index: int) -> dict:
+        """Another cell that froze the same evidence: the main entry re-rooted
+        under its own cell id and bound to its own agent session."""
         cell_id = f"fixture-cell-{index:03d}"
         session_id = f"fixture-session-{index:03d}"
         session_binding = f"{index + 1:064x}"
@@ -1869,33 +2022,28 @@ def _write_global_selection_freeze(cell_root: Path) -> None:
         for attempt in sibling_process["discovery"]["attempts"]:
             attempt["agent_session_id"] = session_id
             attempt["agent_session_binding_sha256"] = session_binding
-        sibling_sources = {
-            filename: {
-                **record,
-                "path": PurePosixPath(
-                    cell_id, "baseline", "archive", "certify", filename,
-                ).as_posix(),
+
+        def reroot(anchors: dict) -> dict:
+            return {
+                filename: {
+                    **record,
+                    "path": PurePosixPath(
+                        cell_id, *PurePosixPath(record["path"]).parts[1:],
+                    ).as_posix(),
+                }
+                for filename, record in anchors.items()
             }
-            for filename, record in baseline_source_folds.items()
-        }
+
         return {
+            **entry,
             "cell_id": cell_id,
             "cell_sha256": "a" * 64,
             "state_sha256": "b" * 64,
-            "selection_sha256": "c" * 64,
-            "winner_kind": "baseline",
-            "winner_candidate_id": "baseline",
-            "winner_candidate_sha256": "d" * 64,
-            "winner_promotion_node_id": None,
-            "winner_validation_mean": 0.5,
-            "baseline_validation_mean": 0.5,
-            "baseline_candidate_sha256": "d" * 64,
-            "winner_source_folds": sibling_sources,
-            "baseline_source_folds": sibling_sources,
+            "winner_source_folds": reroot(winner_source_folds),
+            "baseline_source_folds": reroot(baseline_source_folds),
             "agent_session_sha256": "e" * 64,
             "agent_session_id": session_id,
             "agent_session_binding_sha256": session_binding,
-            "agent_usage": usage,
             "process_sha256": content_sha256(sibling_process),
             "process_evidence": sibling_process,
         }
@@ -2211,8 +2359,8 @@ def test_discovery_tolerates_ntp_level_skew_on_the_first_proposal(staged_cell):
     _open_budget_cell(adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS)
 
     state = freeze_discovery(cell_root)
-    # completed=0 -> no promotable candidates -> straight to selection-ready;
-    # the point is that freeze SUCCEEDED despite the within-tolerance skew.
+    # The discovery freeze always lands in selection-ready; the point is that
+    # it SUCCEEDED despite the within-tolerance skew.
     assert state["phase"] == "selection-ready"
 
 
@@ -2326,6 +2474,31 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     assert recovered["certification"]["bundle_sha256"] == bundle["bundle_sha256"]
 
 
+def test_a_baseline_winner_over_a_populated_pool_certifies(staged_cell):
+    """Twelve candidates, none accepted: the freeze carries the whole pool and
+    its record, the baseline is the winner, and its sealed folds are the ones
+    certified."""
+    cell_root, _, _, _, _ = staged_cell
+    selected = _selected(staged_cell, _noise_pool_lifts())
+    assert selected["winner"]["kind"] == "baseline"
+    assert selected["discovery"]["unique_complete_candidates"] == 12
+    _write_global_selection_freeze(cell_root)
+    artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
+    assert validate_selection_freeze_artifact(artifact) == artifact
+
+    state = certify_winner(cell_root)
+
+    bundle = json.loads((cell_root / state["certification"]["bundle"]).read_text())
+    assert state["phase"] == "certified"
+    assert bundle["winner"] == {
+        "kind": "baseline",
+        "candidate_id": "baseline",
+        "candidate_sha256": selected["baseline"]["candidate_sha256"],
+    }
+    assert bundle["selection_sha256"] == selected["winner"]["selection_sha256"]
+    assert bundle["held_out_lift"]["test_auc"] == pytest.approx(0.0)
+
+
 def test_cell_certification_rejects_nonwinner_state_drift_after_global_freeze(
     staged_cell,
 ):
@@ -2382,6 +2555,52 @@ def test_selection_freeze_rejects_old_extra_and_incomplete_schemas(staged_cell):
         })
         with pytest.raises(CampaignStageError, match="integrity mismatch"):
             validate_selection_freeze_artifact(artifact)
+
+
+def _name_another_pool_member(entry):
+    """The entry names a different pool member as its winner, consistently with
+    the process evidence's pool and attempts: only the winner rule's record
+    still disagrees."""
+    process = entry["process_evidence"]
+    other = next(
+        member for member in process["selection"]["pool"]
+        if member["candidate_id"] != entry["winner_candidate_id"]
+    )
+    attempt = next(
+        row for row in process["discovery"]["attempts"]
+        if row["node_id"] == other["candidate_id"]
+    )
+    return {
+        "winner_candidate_id": other["candidate_id"],
+        "winner_candidate_sha256": other["candidate_sha256"],
+        "winner_validation_mean": attempt["validation_mean"],
+    }
+
+
+@pytest.mark.parametrize("edit", [
+    lambda entry: {"selection_sha256": "0" * 64},
+    _name_another_pool_member,
+    lambda entry: {"winner_candidate_sha256": "0" * 64},
+    lambda entry: {"winner_validation_mean": 0.999},
+], ids=["selection-hash", "another-pool-member", "winner-sha", "winner-mean"])
+def test_selection_freeze_rejects_a_rehashed_entry_that_disagrees_with_its_record(
+    staged_cell, edit,
+):
+    """The entry's winner must be the one its own selection record names, and
+    a searched winner must be the pool member that record scored."""
+    cell_root, _, _, _, _ = staged_cell
+    _selected(staged_cell, CLEAR_WINNER_LIFTS)
+    _write_global_selection_freeze(cell_root)
+    artifact = json.loads((cell_root.parent / SELECTION_FREEZE_FILE).read_text())
+    assert validate_selection_freeze_artifact(artifact) == artifact
+    entry = artifact["cells"][0]
+    entry.update(edit(entry))
+    artifact["freeze_sha256"] = content_sha256({
+        key: item for key, item in artifact.items() if key != "freeze_sha256"
+    })
+
+    with pytest.raises(CampaignStageError, match="is invalid: (winner|searched winner) differs"):
+        validate_selection_freeze_artifact(artifact)
 
 
 def test_selection_freeze_rejects_rehashed_nonstring_cell_id(staged_cell):
@@ -2526,31 +2745,37 @@ def test_cell_certification_rejects_a_rehashed_nonmanifest_freeze_roster(
 
 
 def test_searched_certification_reads_winner_and_never_losers(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
-    freeze_promotion(cell_root)
-    selected = select_winner(cell_root)
+    cell_root, adir, cell, _, _ = staged_cell
+    # node_0012 is a train-only source candidate: its winner sources are
+    # re-verified from its own discovery archive, overlay file included.
+    selected = _selected(staged_cell, {"node_0012": 0.05}, source_at=11)
+    assert selected["winner"]["kind"] == "searched"
+    assert selected["winner"]["candidate_id"] == "node_0012"
     _write_searched_sealed_folds(cell_root, selected)
     _write_global_selection_freeze(cell_root)
     freeze_artifact = json.loads(
         (cell_root.parent / SELECTION_FREEZE_FILE).read_text()
     )
-    process = freeze_artifact["cells"][0]["process_evidence"]["discovery"]
-    assert process["baseline_validation_mean"] == pytest.approx(0.61)
+    entry = freeze_artifact["cells"][0]
+    process = entry["process_evidence"]["discovery"]
+    assert process["baseline_validation_mean"] == pytest.approx(0.62)
     assert process["validation_anytime"][-1][
         "running_best_validation_mean"
     ] > process["baseline_validation_mean"]
+    assert entry["selection_sha256"] == content_sha256(
+        entry["process_evidence"]["selection"]
+    )
 
     state = certify_winner(cell_root)
     bundle = json.loads((cell_root / "certification/certify.json").read_text())
-    assert bundle["winner"]["candidate_id"] == selected["winner"]["candidate_id"]
+    assert state["phase"] == "certified"
+    assert bundle["schema_version"] == 3
+    assert bundle["winner"] == {
+        "kind": "searched",
+        "candidate_id": "node_0012",
+        "candidate_sha256": selected["winner"]["candidate_sha256"],
+    }
+    assert bundle["selection_sha256"] == selected["winner"]["selection_sha256"]
     assert bundle["held_out"]["test_auc"] == pytest.approx(0.72)
     assert bundle["baseline_held_out"]["test_auc"] == pytest.approx(0.52)
     assert bundle["held_out_lift"]["test_auc"] == pytest.approx(0.20)
@@ -2563,18 +2788,9 @@ def test_searched_certification_reads_winner_and_never_losers(staged_cell):
 
 
 def test_searched_certification_rejects_baseline_comparator_drift(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    baseline = _baseline(cell_root)
-    register_baseline(cell_root, baseline)
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
-    freeze_promotion(cell_root)
-    selected = select_winner(cell_root)
+    cell_root, _, _, _, _ = staged_cell
+    selected = _selected(staged_cell, CLEAR_WINNER_LIFTS)
+    baseline = cell_root / selected["baseline"]["archive"]
     _write_searched_sealed_folds(cell_root, selected)
     _write_global_selection_freeze(cell_root)
     (baseline / "certify/fold_4_result.json").write_text("tampered")
@@ -2585,17 +2801,8 @@ def test_searched_certification_rejects_baseline_comparator_drift(staged_cell):
 
 
 def test_selected_sealed_corruption_blocks_certification(staged_cell):
-    cell_root, adir, cell, _, repo_root = staged_cell
-    register_baseline(cell_root, _baseline(cell_root))
-    _attempts(adir, cell["cell_id"], completed=12)
-    _open_budget_cell(
-        adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
-    )
-    freeze_discovery(cell_root)
-    materialize_promotion(cell_root, repo_root=repo_root)
-    _finish_promotion(cell_root, completed=10, promotion_base=0.75)
-    freeze_promotion(cell_root)
-    selected = select_winner(cell_root)
+    cell_root, _, _, _, _ = staged_cell
+    selected = _selected(staged_cell, CLEAR_WINNER_LIFTS)
     _write_searched_sealed_folds(cell_root, selected, selected_valid=False)
 
     with pytest.raises(CampaignStageError, match="sealed artifact changed"):

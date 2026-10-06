@@ -5,8 +5,8 @@ For each cell root under a campaign runtime directory, this script reads the
 registered baseline's five-fold elapsed time from ``campaign_state.json`` and
 predicts how long the cell's job takes (see ``predict_hours``: the serial
 gate attempt, the discovery batches one after another with one of them
-running into the attempt timeout, the promotion candidates, plus a fixed
-overhead). Every job takes one GPU, because a whole batch runs on one; the
+running into the attempt timeout, plus a fixed overhead). Every job takes
+one GPU, because a whole batch runs on one; the
 wall is the shorter of ``WALL_OPTIONS_H`` whose ``FIT_FRACTION`` holds the
 prediction.
 
@@ -57,32 +57,29 @@ OVERHEAD_H = 2.0
 ATTEMPT_DILATION = 2.0
 ATTEMPT_FLOOR_H = 0.25
 # One batch may run into the attempt timeout (autobench.campaign.
-# ATTEMPT_TIMEOUT_MIN): aihub DTFD's third batch tried heavier settings and
-# lasted the full 10 h (2026-10-02). A cell starts only on a wall that
-# survives one such batch (Leo, 2026-10-03).
-ATTEMPT_TIMEOUT_H = 10.0
+# ATTEMPT_TIMEOUT_MIN, 1020 min for a five-fold attempt): aihub DTFD's third
+# batch tried heavier settings and lasted the full three-fold timeout
+# (2026-10-02). A cell starts only on a wall that survives one such batch
+# (Leo, 2026-10-03).
+ATTEMPT_TIMEOUT_H = 17.0
 
 # Every job takes one GPU and a quarter of a fir node's cores and memory: a
-# whole batch runs on one GPU, so a second one would only shorten promotion
-# by one round. Eight packed ABMIL attempts used 5.2 cores on average and
-# 56 GB at peak on fir (2026-10-03). The walls are fir's 24 h and 3-day GPU
-# tiers; 12 h never holds a full cell once one batch may last 10 h.
+# whole batch runs on one GPU, so a second one would not shorten the cell.
+# Eight packed ABMIL attempts used 5.2 cores on average and 56 GB at peak on
+# fir (2026-10-03). The walls are fir's 24 h and 3-day GPU tiers; 12 h never
+# holds a full cell once one batch may last 17 h.
 JOB_GPUS = 1
 JOB_CORES = 12
 JOB_MEM_GB = 128
 WALL_OPTIONS_H = (24, 72)
 
-# The frozen protocol's stage structure (autobench.campaign STAGE_FOLDS,
-# DISCOVERY_PHASING, PROMOTION_CANDIDATES; a test pins these copies): 3 of
-# the 5 baseline folds are re-run per discovery attempt and 2 per promotion
-# candidate; the discovery attempts are spent in fixed batches, each started
-# only after the earlier ones have finished; the promotion candidates are
-# submitted together.
-DISCOVERY_FOLDS = 3
-PROMOTION_FOLDS = 2
+# The frozen protocol's stage structure (autobench.campaign STAGE_FOLDS and
+# DISCOVERY_PHASING; a test pins these copies): every discovery attempt
+# re-runs all 5 baseline folds, and the attempts are spent in fixed batches,
+# each started only after the earlier ones have finished.
+DISCOVERY_FOLDS = 5
 TOTAL_FOLDS = 5
 DISCOVERY_BATCHES = (8, 8, 8, 6)
-PROMOTION_CANDIDATES = 10
 
 SECONDS_PER_HOUR = 3600.0
 
@@ -154,19 +151,13 @@ def discovery_hours(e5_seconds: float, gpus: int) -> float:
     )
 
 
-def promotion_hours(e5_seconds: float, gpus: int) -> float:
-    """The promotion candidates, submitted together: two rounds on one GPU,
-    one on two or more."""
-    return rounds(PROMOTION_CANDIDATES, gpus) * attempt_hours(e5_seconds, PROMOTION_FOLDS)
-
-
 def predict_hours(e5_seconds: float, gpus: int) -> float:
     """Predict a cell's job wall time (hours) on ``gpus`` GPUs.
 
     ``e5_seconds`` is the 5-fold baseline's total elapsed time, as recorded
     in ``baseline.resources.elapsed_seconds.total``.
     """
-    return discovery_hours(e5_seconds, gpus) + promotion_hours(e5_seconds, gpus) + OVERHEAD_H
+    return discovery_hours(e5_seconds, gpus) + OVERHEAD_H
 
 
 def _job_shape(wall_hours: int, predicted_hours: float) -> Shape:
@@ -177,9 +168,9 @@ def _job_shape(wall_hours: int, predicted_hours: float) -> Shape:
 
 
 def finish_shape() -> Shape:
-    """The finish-only recovery lane: promotion alone, on the shorter wall.
-    It holds every cell that fits a discovery shape (a test pins this), so it
-    needs no baseline time."""
+    """The finish-only recovery lane, on the shorter wall: the discovery
+    freeze, the winner and the session close train nothing, so it needs no
+    baseline time."""
     return _job_shape(WALL_OPTIONS_H[0], 0.0)
 
 

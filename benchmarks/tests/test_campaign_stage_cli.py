@@ -56,9 +56,63 @@ def test_advance_never_auto_certifies(tmp_path, monkeypatch):
         "advance must never call certify_winner",
     ))
 
-    advanced = module.advance(root, tmp_path)
+    advanced = module.advance(root)
     assert advanced["phase"] == "winner-frozen"
     assert advanced["certification"] is None
+
+
+def _write_phase(root: Path, state: dict, phase: str) -> None:
+    moved = {**state, "phase": phase}
+    moved["state_sha256"] = content_sha256({
+        key: value for key, value in moved.items() if key != "state_sha256"
+    })
+    (root / "campaign_state.json").write_text(json.dumps(moved))
+
+
+@pytest.mark.parametrize(
+    "phase, transition",
+    [("discovery", "freeze_discovery"), ("selection-ready", "select_winner")],
+)
+def test_advance_runs_exactly_the_next_stage_transition(
+    tmp_path, monkeypatch, phase, transition,
+):
+    module = _load_cli()
+    root, state = _state(tmp_path)
+    _write_phase(root, state, phase)
+    returned = {"phase": "returned-by-the-transition"}
+    ran = []
+    for name in ("freeze_discovery", "select_winner", "certify_winner"):
+        monkeypatch.setattr(
+            module, name,
+            lambda cell_root, name=name: ran.append((name, cell_root)) or returned,
+        )
+
+    assert module.advance(root) is returned
+    assert ran == [(transition, root)]
+
+
+@pytest.mark.parametrize("phase", ["winner-frozen", "certified"])
+def test_advance_stops_once_the_winner_is_frozen(tmp_path, monkeypatch, phase):
+    module = _load_cli()
+    root, state = _state(tmp_path)
+    _write_phase(root, state, phase)
+    for name in ("freeze_discovery", "select_winner", "certify_winner"):
+        monkeypatch.setattr(
+            module, name, lambda *_, name=name: pytest.fail(f"advance ran {name}"),
+        )
+
+    assert module.advance(root)["phase"] == phase
+
+
+@pytest.mark.parametrize("action", ["materialize-promotion", "freeze-promotion"])
+def test_the_promotion_actions_are_gone(tmp_path, capsys, action):
+    module = _load_cli()
+
+    with pytest.raises(SystemExit) as raised:
+        module.main([action, "--cell-root", "ignored"])
+
+    assert raised.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_status_schema_tracks_the_frozen_protocol(tmp_path):
@@ -69,7 +123,10 @@ def test_status_schema_tracks_the_frozen_protocol(tmp_path):
     assert rendered["protocol_version"] == PROTOCOL_VERSION
     assert "base_commit" not in rendered
     assert rendered["discovery"]["attempt_budget"] == PROTOCOL["discovery_attempts"]
-    assert rendered["promotion"]["jobs"] == 0
+    # v5 has one stage: the pool is the unique complete discovery candidates.
+    assert rendered["discovery"]["unique_complete_candidates"] == 0
+    assert "promoted_candidates" not in rendered["discovery"]
+    assert "promotion" not in rendered
 
 
 def test_baseline_command_is_an_explicit_non_agentic_fivefold_run(tmp_path):

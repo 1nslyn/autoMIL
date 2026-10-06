@@ -340,9 +340,7 @@ def _validated_process_evidence(
 def _search_process_summary(cells: list[dict[str, Any]]) -> dict[str, Any]:
     class_counts: dict[str, int] = defaultdict(int)
     result_counts: dict[str, int] = defaultdict(int)
-    promotion_counts: dict[str, int] = defaultdict(int)
     discovery_outcomes: dict[str, int] = defaultdict(int)
-    promotion_outcomes: dict[str, int] = defaultdict(int)
     stage_resources: dict[str, dict[str, Any]] = {}
     for cell in cells:
         process = cell["search_process"]
@@ -350,13 +348,9 @@ def _search_process_summary(cells: list[dict[str, Any]]) -> dict[str, Any]:
             class_counts[key] += int(value)
         for key, value in process["discovery"]["result_status_counts"].items():
             result_counts[key] += int(value)
-        for key, value in process["promotion"]["status_counts"].items():
-            promotion_counts[key] += int(value)
         for key, value in process["discovery"]["outcome_class_counts"].items():
             discovery_outcomes[key] += int(value)
-        for key, value in process["promotion"]["outcome_class_counts"].items():
-            promotion_outcomes[key] += int(value)
-    for stage in ("baseline", "discovery", "promotion"):
+    for stage in ("baseline", "discovery"):
         resources = [cell["search_process"][stage]["resources"] for cell in cells]
         elapsed_values = [
             float(row["elapsed_seconds"]["total"])
@@ -389,40 +383,12 @@ def _search_process_summary(cells: list[dict[str, Any]]) -> dict[str, Any]:
                 "maximum": max(vram_values) if vram_values else None,
             },
         }
-    search_elapsed_values = [
-        stage_resources[stage]["elapsed_seconds"]["observed_total"]
-        for stage in ("discovery", "promotion")
-        if stage_resources[stage]["elapsed_seconds"]["observed_total"] is not None
-    ]
-    search_elapsed = (
-        math.fsum(search_elapsed_values) if search_elapsed_values else None
-    )
-    search_missing = sum(
-        stage_resources[stage]["elapsed_seconds"]["missing"]
-        for stage in ("discovery", "promotion")
-    )
     return {
         "discovery_attempts": DISCOVERY_ATTEMPTS * len(cells),
         "candidate_class_counts": dict(sorted(class_counts.items())),
         "result_status_counts": dict(sorted(result_counts.items())),
-        "promotion_status_counts": dict(sorted(promotion_counts.items())),
         "discovery_outcome_class_counts": dict(sorted(discovery_outcomes.items())),
-        "promotion_outcome_class_counts": dict(sorted(promotion_outcomes.items())),
         "resources_by_stage": stage_resources,
-        "agentic_search_total": {
-            "elapsed_seconds": {
-                "reported": sum(
-                    stage_resources[stage]["elapsed_seconds"]["reported"]
-                    for stage in ("discovery", "promotion")
-                ),
-                "missing": search_missing,
-                "observed_total": search_elapsed,
-                "observed_gpu_attached_job_hours": (
-                    search_elapsed / 3600 if search_elapsed is not None else None
-                ),
-                "lower_bound": search_missing > 0 and search_elapsed is not None,
-            },
-        },
     }
 
 
@@ -766,7 +732,7 @@ def build_publication_report(
 
     blocks = _ranking_blocks(cells)
     report: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "campaign_id": CAMPAIGN_ID,
         "manifest_sha256": _file_hash(manifest_path, "manifest"),
         "analysis_plan_sha256": _file_hash(plan_path, "analysis plan"),

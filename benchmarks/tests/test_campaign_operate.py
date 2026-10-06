@@ -1,8 +1,8 @@
 """Unit contracts for the operator CLI ``campaign_operate.py``.
 
-Everything is exercised at the subprocess boundary: the module's ``_capture``,
-``_run_or_die`` and ``_popen`` seams are replaced with recorders, so no tmux,
-claude, orchestrator or real controller ever runs here. Daemon liveness uses
+Everything is exercised at the subprocess boundary: the module's ``_capture``
+and ``_run_or_die`` seams are replaced with recorders, so no tmux, claude,
+orchestrator or real controller ever runs here. Daemon liveness uses
 fixture pid/gpu_state files plus a monkeypatched starttime check — the pid
 files themselves are parsed by the daemon's real loader.
 """
@@ -24,7 +24,7 @@ from _helpers import full_h100_nvidia_smi, write_reproduction_policy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_operate.py"
-CELL_NAME = "tcga_luad__kras__uni_v2__clam__s42__preprint-v4"
+CELL_NAME = "tcga_luad__kras__uni_v2__clam__s42__preprint-v5"
 BUDGET_CELL_ID = "deadbeefdeadbeef"
 
 
@@ -167,38 +167,6 @@ def write_budget_cell(adir: Path, consumed: int, budget: int | None) -> Path:
     return adir / "cells" / f"{BUDGET_CELL_ID}.json"
 
 
-def make_promotion_project(
-    cell: Path,
-    *,
-    queued: tuple[str, ...] = ("0001",),
-    plan_nodes: tuple[str, ...] | None = None,
-    consumed: int = 0,
-    budget: int | None = 1,
-) -> Path:
-    """Materialized-promotion fixture: campaign cell, plan, queue, budget."""
-    padir = cell / "promotion" / "automil"
-    (padir / "cells").mkdir(parents=True, exist_ok=True)
-    (padir / "campaign_cell.json").write_text(json.dumps(
-        {"budget_identity": {"cell_id": BUDGET_CELL_ID}}
-    ))
-    queue = padir / "orchestrator" / "queue"
-    queue.mkdir(parents=True, exist_ok=True)
-    for node in queued:
-        (queue / f"{node}.json").write_text("{}")
-    nodes = plan_nodes if plan_nodes is not None else queued
-    (padir / "promotion_plan.json").write_text(json.dumps({
-        "jobs": [{"promotion_node_id": node} for node in nodes],
-    }))
-    write_budget_cell(padir, consumed, budget)
-    return padir
-
-
-def complete_promotion_node(padir: Path, node: str) -> None:
-    archive = padir / "orchestrator" / "archive" / node
-    archive.mkdir(parents=True, exist_ok=True)
-    (archive / "result.json").write_text(json.dumps({"status": "completed"}))
-
-
 class FakeClock:
     def __init__(self) -> None:
         self.time = 0.0
@@ -228,14 +196,13 @@ def classify(argv: list) -> tuple[str, object]:
 
 
 class FakeBoundary:
-    """Recording stand-in for the module's three subprocess seams."""
+    """Recording stand-in for the module's subprocess seams."""
 
     def __init__(self, module, statuses: list[dict]) -> None:
         self.module = module
         self.statuses = list(statuses)
         self.captures: list[list[str]] = []
         self.run_or_die: list[list[str]] = []
-        self.popens: list[tuple[list[str], dict, object]] = []
         self.behaviors: dict[object, object] = {}
 
     def capture(self, argv, env=None):
@@ -256,29 +223,9 @@ class FakeBoundary:
         if behavior is not None:
             behavior(argv)
 
-    def popen(self, argv, env, stdout, stderr):
-        child = FakeChild()
-        self.popens.append((list(argv), dict(env), stdout))
-        pid_dir = Path(argv[argv.index("--project", 3) + 1]) / "automil" / "orchestrator"
-        write_live_daemon(pid_dir, pid=4242)
-        return child
-
     def install(self, monkeypatch) -> None:
         monkeypatch.setattr(self.module, "_capture", self.capture)
         monkeypatch.setattr(self.module, "_run_or_die", self.run)
-        monkeypatch.setattr(self.module, "_popen", self.popen)
-
-
-class FakeChild:
-    pid = 4242
-    returncode: int | None = None
-
-    def poll(self):
-        return self.returncode
-
-    def wait(self, timeout=None):
-        self.returncode = 0
-        return 0
 
 
 def actions(recorded: list[list[str]]) -> list[tuple[str, object]]:
@@ -300,7 +247,7 @@ def test_stage_argv_uses_pinned_workspace_form(operate, tmp_path):
 
 
 def test_automil_argv_pins_workspace_and_project(operate, tmp_path):
-    project = tmp_path / "cell" / "promotion"
+    project = tmp_path / "cell"
     argv = operate.automil_argv(project, "orchestrator", "stop")
     assert argv == [
         "uv", "run", "--project", str(operate.REPO_ROOT),
@@ -430,16 +377,27 @@ def test_up_gpu_argparse_rejects_non_integer(operate, tmp_path, capsys):
     assert "--gpu" in capsys.readouterr().err
 
 
-def test_finish_gpu_argparse_accepts_comma_list(operate, tmp_path):
-    parser = operate.build_parser()
-    args = parser.parse_args(["finish", str(tmp_path / "cell"), "--gpu", "0,1,2,3"])
-    assert args.gpu == [0, 1, 2, 3]
-
-
-def test_finish_gpu_argparse_default_is_none(operate, tmp_path):
+def test_finish_parses_with_just_the_cell_root(operate, tmp_path):
+    """Finish trains nothing, so it takes no GPU: the cell root alone, and the
+    two session options that default to none."""
     parser = operate.build_parser()
     args = parser.parse_args(["finish", str(tmp_path / "cell")])
-    assert args.gpu is None
+    assert args.cell_root == str(tmp_path / "cell")
+    assert args.usage_json is None
+    assert args.attest is None
+
+
+@pytest.mark.parametrize("flag", [["--gpu", "0"], ["--accept-missing"]])
+def test_finish_refuses_a_flag_only_a_promotion_run_needed(
+    operate, tmp_path, capsys, flag,
+):
+    """A stale invocation must fail loudly, not be ignored: nothing in finish
+    starts a daemon or freezes a partial slate any more."""
+    parser = operate.build_parser()
+    with pytest.raises(SystemExit) as excinfo:
+        parser.parse_args(["finish", str(tmp_path / "cell"), *flag])
+    assert excinfo.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
 
 
 def test_session_name_uses_the_full_sanitized_cell_id(operate, tmp_path):
@@ -602,18 +560,6 @@ def test_gpu_claim_refuses_other_cells_live_partition(operate, tmp_path, monkeyp
     assert operate._gpu_claim_conflicts(ours, [0]) == []
 
 
-def test_gpu_claim_covers_sibling_promotion_daemons(operate, tmp_path, monkeypatch):
-    ours = make_cell(tmp_path, name="a__b__uni_v2__clam__s42__v2")
-    other = make_cell(tmp_path, name="a__b__uni_v2__abmil__s42__v2", port=9582)
-    write_live_daemon(
-        other / "promotion" / "automil" / "orchestrator", pid=1234, gpus=[2],
-    )
-    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
-
-    conflicts = operate._gpu_claim_conflicts(ours, [2])
-    assert conflicts and "promotion" in conflicts[0]
-
-
 def test_gpu_claim_covers_twin_runtime_roots(operate, tmp_path, monkeypatch):
     ours = make_cell(tmp_path, name=CELL_NAME, runtime="runtime")
     twin = make_cell(tmp_path, name=CELL_NAME, runtime="runtime-canary")
@@ -623,14 +569,12 @@ def test_gpu_claim_covers_twin_runtime_roots(operate, tmp_path, monkeypatch):
     assert operate._gpu_claim_conflicts(ours, [0])
 
 
-def test_gpu_claim_same_cell_discovery_promotion_pair_is_exempt(
+def test_gpu_claim_the_cells_own_daemon_is_exempt(
     operate, tmp_path, monkeypatch,
 ):
+    """finish runs next to the cell's own live daemon on the same GPU."""
     ours = make_cell(tmp_path)
     write_live_daemon(ours / "automil" / "orchestrator", pid=1111, gpus=[1])
-    write_live_daemon(
-        ours / "promotion" / "automil" / "orchestrator", pid=2222, gpus=[1],
-    )
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
 
     assert operate._gpu_claim_conflicts(ours, [1]) == []
@@ -778,10 +722,12 @@ def test_preflight_passes_a_workstation_cell_on_its_declared_rtx(
 ):
     _pass_preflight_probes(operate, monkeypatch, tmp_path)
     write_reproduction_policy(
-        operate.REPO_ROOT, runtimes=("runtime-aihub",), gpu=RTX_GPU,
+        operate.REPO_ROOT, runtimes=("runtime-aihub-hnsc-a",), gpu=RTX_GPU,
     )
     _forge_rtx_workstation(monkeypatch)
-    operate._preflight(make_cell(tmp_path, runtime="runtime-aihub"), [0, 1, 2])
+    operate._preflight(
+        make_cell(tmp_path, runtime="runtime-aihub-hnsc-a"), [0, 1, 2],
+    )
     assert "declared campaign GPU" in capsys.readouterr().out
 
 
@@ -792,26 +738,6 @@ def test_preflight_refuses_a_mig_slice(operate, tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         operate._preflight(make_cell(tmp_path), [0])
     assert "MIG enabled" in capsys.readouterr().err
-
-
-def test_finish_refuses_to_start_promotion_on_a_mig_slice(
-    operate, tmp_path, monkeypatch, capsys,
-):
-    """Forged violation: promotion runs compare against the same baseline,
-    so their daemon never starts on a slice either."""
-    cell = make_cell(tmp_path)
-    append_journal(cell, session_open_event())
-    append_journal(cell, session_end_event())
-    write_agent_session(cell, status="finalized")
-    make_promotion_project(cell, queued=("0001",), consumed=0, budget=1)
-    _forge_mig_slice(monkeypatch)
-
-    boundary = FakeBoundary(operate, statuses=[{"phase": "promotion"}])
-    boundary.install(monkeypatch)
-    with pytest.raises(SystemExit):
-        operate.main(["finish", str(cell), "--gpu", "3"])
-    assert "MIG enabled" in capsys.readouterr().err
-    assert boundary.popens == []
 
 
 # ---------------------------------------------------------------------------
@@ -1061,165 +987,40 @@ def test_finish_passes_usage_json_verbatim(operate, tmp_path, monkeypatch):
 def test_finish_discovery_phase_freezes_then_walks_the_chain(
     operate, tmp_path, monkeypatch,
 ):
-    """Full walk: discovery → freeze → materialize → promotion (adopt) →
-    freeze-promotion → select-winner → finalize, with skips consulted from
-    the controller's own status between transitions."""
+    """Full walk: discovery -> stop the idle daemon -> freeze -> select-winner
+    -> finalize, each step taken from the controller's own status."""
     cell = make_cell(tmp_path)
     append_journal(cell, session_open_event())
     append_journal(cell, session_end_event())
     write_agent_session(cell, status="open")
-    # Discovery daemon not running (no pid file) — stop is skipped.
-    # Promotion project: materialized with one queued job, live daemon to adopt.
-    padir = make_promotion_project(
-        cell, queued=("0001",), plan_nodes=("0001",), consumed=1, budget=2,
-    )
-    queue = padir / "orchestrator" / "queue"
-    write_live_daemon(padir / "orchestrator", pid=777)
+    orch = cell / "automil" / "orchestrator"
+    write_live_daemon(orch, pid=777)
     monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
 
     boundary = FakeBoundary(operate, statuses=[
         {"phase": "discovery"},
-        {"phase": "promotion-ready"},
-        {"phase": "promotion"},
         {"phase": "selection-ready"},
         {"phase": "winner-frozen"},
     ])
 
-    def drain(argv=None):
-        if (queue / "0001.json").exists():
-            (queue / "0001.json").unlink()
-            complete_promotion_node(padir, "0001")
-            write_budget_cell(padir, 2, 2)
+    def stop_daemon(argv):
+        (orch / "orchestrator.pid").unlink()
 
-    def stop_promotion(argv):
-        (padir / "orchestrator" / "orchestrator.pid").unlink()
-
-    boundary.behaviors[("automil", ("orchestrator", "stop"))] = stop_promotion
+    boundary.behaviors[("automil", ("orchestrator", "stop"))] = stop_daemon
     boundary.install(monkeypatch)
-    clock = FakeClock()
-    clock.on_sleep = drain
-    monkeypatch.setattr(operate, "_now", clock.now)
-    monkeypatch.setattr(operate, "_sleep", clock.sleep)
 
     operate.main(["finish", str(cell)])
 
     assert actions(boundary.run_or_die) == [
-        ("stage", "freeze-discovery"),
-        ("stage", "materialize-promotion"),
         ("automil", ("orchestrator", "stop")),
-        ("stage", "freeze-promotion"),
+        ("stage", "freeze-discovery"),
         ("stage", "select-winner"),
         ("stage", "finalize-agent-session"),
     ]
-    # Adopted, never started: the supervised-child seam stayed untouched.
-    assert boundary.popens == []
-
-
-def test_finish_starting_promotion_daemon_requires_explicit_gpu(
-    operate, tmp_path, monkeypatch, capsys,
-):
-    cell = make_cell(tmp_path)
-    append_journal(cell, session_open_event())
-    append_journal(cell, session_end_event())
-    write_agent_session(cell, status="open")
-    make_promotion_project(cell, queued=("0001",), consumed=0, budget=1)
-
-    boundary = FakeBoundary(operate, statuses=[{"phase": "promotion"}])
-    boundary.install(monkeypatch)
-    with pytest.raises(SystemExit):
-        operate.main(["finish", str(cell)])
-    err = capsys.readouterr().err
-    assert "--gpu" in err
-    assert "AUTOMIL_VISIBLE_GPUS" in err
-    assert boundary.popens == []
-
-
-def _finish_one_queued_promotion(operate, monkeypatch, cell: Path, gpu: str):
-    """Run ``finish --gpu`` on a finalized cell whose promotion queue holds
-    one node that drains on the first poll; returns (boundary, padir)."""
-    append_journal(cell, session_open_event())
-    append_journal(cell, session_end_event())
-    write_agent_session(cell, status="finalized")
-    padir = make_promotion_project(cell, queued=("0001",), consumed=0, budget=1)
-    queue = padir / "orchestrator" / "queue"
-    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
-
-    boundary = FakeBoundary(operate, statuses=[
-        {"phase": "promotion"},
-        {"phase": "selection-ready"},
-        {"phase": "winner-frozen"},
-    ])
-
-    def drain():
-        if (queue / "0001.json").exists():
-            (queue / "0001.json").unlink()
-            complete_promotion_node(padir, "0001")
-            write_budget_cell(padir, 1, 1)
-
-    def stop_promotion(argv):
-        pid_file = padir / "orchestrator" / "orchestrator.pid"
-        if pid_file.exists():
-            pid_file.unlink()
-
-    boundary.behaviors[("automil", ("orchestrator", "stop"))] = stop_promotion
-    boundary.install(monkeypatch)
-    clock = FakeClock()
-    clock.on_sleep = drain
-    monkeypatch.setattr(operate, "_now", clock.now)
-    monkeypatch.setattr(operate, "_sleep", clock.sleep)
-
-    operate.main(["finish", str(cell), "--gpu", gpu])
-    return boundary, padir
-
-
-def test_finish_starts_supervised_promotion_child_with_gpu_partition(
-    operate, tmp_path, monkeypatch,
-):
-    cell = make_cell(tmp_path)
-    boundary, padir = _finish_one_queued_promotion(operate, monkeypatch, cell, "3")
-
-    assert len(boundary.popens) == 1
-    argv, env, stdout = boundary.popens[0]
-    assert classify(argv) == ("automil", ("orchestrator", "start"))
-    assert str(cell / "promotion") in argv
-    assert env["AUTOMIL_VISIBLE_GPUS"] == "3"
-    assert env["AUTOMIL_MAX_CONCURRENT_PER_GPU"] == str(operate.MAX_CONCURRENT_PER_GPU)
-    assert Path(stdout.name) == padir / "orchestrator" / "operate_supervisor.log"
-    assert ("stage", "freeze-promotion") in actions(boundary.run_or_die)
-
-
-def test_finish_starts_supervised_promotion_child_with_multi_gpu_partition(
-    operate, tmp_path, monkeypatch,
-):
-    """--gpu 0,1 must reach the promotion daemon's env as the normalized
-    comma string, not a Python list repr."""
-    boundary, _ = _finish_one_queued_promotion(
-        operate, monkeypatch, make_cell(tmp_path), "0,1",
-    )
-
-    assert len(boundary.popens) == 1
-    _, env, _ = boundary.popens[0]
-    assert env["AUTOMIL_VISIBLE_GPUS"] == "0,1"
-
-
-def test_finish_starts_a_workstation_promotion_on_its_declared_rtx(
-    operate, tmp_path, monkeypatch,
-):
-    """The committed policy declares the RTX for runtime-aihub. The check
-    reads the discovery cell's set: the promotion root's parent is the cell
-    itself, which declares no GPU."""
-    _forge_rtx_workstation(monkeypatch)
-    boundary, _ = _finish_one_queued_promotion(
-        operate, monkeypatch, make_cell(tmp_path, runtime="runtime-aihub"), "0",
-    )
-
-    assert len(boundary.popens) == 1
-    _, env, _ = boundary.popens[0]
-    assert env["AUTOMIL_VISIBLE_GPUS"] == "0"
 
 
 def test_finish_reentry_skips_completed_transitions(operate, tmp_path, monkeypatch):
-    """A finish re-run on a promotion-frozen cell touches nothing before
+    """A finish re-run on a discovery-frozen cell touches nothing before
     select-winner: phase decides, not history."""
     cell = make_cell(tmp_path)
     append_journal(cell, session_open_event())
@@ -1233,11 +1034,28 @@ def test_finish_reentry_skips_completed_transitions(operate, tmp_path, monkeypat
     boundary.install(monkeypatch)
     operate.main(["finish", str(cell)])
 
-    recorded = actions(boundary.run_or_die)
-    assert ("stage", "freeze-discovery") not in recorded
-    assert ("stage", "materialize-promotion") not in recorded
-    assert ("stage", "freeze-promotion") not in recorded
-    assert recorded[0] == ("stage", "select-winner")
+    assert actions(boundary.run_or_die) == [("stage", "select-winner")]
+
+
+@pytest.mark.parametrize("phase", ["promotion-ready", "promotion"])
+def test_finish_refuses_a_phase_the_ladder_no_longer_walks(
+    operate, tmp_path, monkeypatch, capsys, phase,
+):
+    """The promotion phases are gone: a status that still reports one stops
+    finish before anything runs, never falling through to the session close."""
+    cell = make_cell(tmp_path)
+    append_journal(cell, session_open_event())
+    append_journal(cell, session_end_event())
+    write_agent_session(cell, status="open")
+
+    boundary = FakeBoundary(operate, statuses=[{"phase": phase}])
+    boundary.install(monkeypatch)
+    with pytest.raises(SystemExit) as excinfo:
+        operate.main(["finish", str(cell)])
+
+    assert excinfo.value.code == 2
+    assert f"does not know how to advance phase {phase!r}" in capsys.readouterr().err
+    assert boundary.run_or_die == []
 
 
 # ---------------------------------------------------------------------------
@@ -1306,160 +1124,6 @@ def test_finish_discovery_dead_daemon_falls_through_to_controller_refusal(
 
 
 # ---------------------------------------------------------------------------
-# finish — promotion drain semantics, stall detection, slate completeness
-# ---------------------------------------------------------------------------
-def test_promotion_drained_uses_at_least_semantics(operate, tmp_path, monkeypatch):
-    """consumed > budget still counts as drained; == would poll forever."""
-    cell = make_cell(tmp_path)
-    padir = make_promotion_project(cell, queued=(), consumed=3, budget=2)
-    monkeypatch.setattr(operate, "_sleep", lambda seconds: None)
-    assert operate._promotion_drained(padir) is True
-
-
-def test_promotion_drained_requires_two_clean_samples(operate, tmp_path, monkeypatch):
-    """queue/ and running/ are sampled non-atomically: a spec appearing
-    between the two samples must void the drained verdict."""
-    cell = make_cell(tmp_path)
-    padir = make_promotion_project(cell, queued=(), consumed=1, budget=1)
-    queue = padir / "orchestrator" / "queue"
-    clock = FakeClock()
-    clock.on_sleep = lambda: (queue / "raced.json").write_text("{}")
-    monkeypatch.setattr(operate, "_sleep", clock.sleep)
-
-    assert operate._promotion_drained(padir) is False
-    assert clock.sleeps == [operate.DRAIN_CONFIRM_SECONDS]
-
-
-def test_promotion_budget_unknown_on_obsolete_cell_layout(
-    operate, tmp_path, capsys,
-):
-    """read_cell fails loud on obsolete layouts; the operator surface must
-    report UNKNOWN (never drained), not a silent 0."""
-    cell = make_cell(tmp_path)
-    padir = cell / "promotion" / "automil"
-    (padir / "cells").mkdir(parents=True)
-    (padir / "campaign_cell.json").write_text(json.dumps(
-        {"budget_identity": {"cell_id": BUDGET_CELL_ID}}
-    ))
-    (padir / "cells" / f"{BUDGET_CELL_ID}.json").write_text(
-        json.dumps({"consumed_evals": 2, "eval_budget": 2})
-    )
-
-    assert operate._promotion_budget(padir) is None
-    assert "obsolete cell layout" in capsys.readouterr().out
-    assert operate._promotion_drained_once(padir) is False
-
-
-def test_finish_promotion_stall_refuses_and_lists_missing_results(
-    operate, tmp_path, monkeypatch, capsys,
-):
-    """Cap-refused/cancelled specs leave consumed < budget forever with an
-    empty queue. finish must stop polling after the stall window and surface
-    the incomplete slate instead of hanging silently."""
-    cell = make_cell(tmp_path)
-    append_journal(cell, session_open_event())
-    append_journal(cell, session_end_event())
-    write_agent_session(cell, status="open")
-    padir = make_promotion_project(
-        cell, queued=(), plan_nodes=("0001", "0002"), consumed=1, budget=2,
-    )
-    complete_promotion_node(padir, "0001")
-    write_live_daemon(padir / "orchestrator", pid=777)
-    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
-
-    boundary = FakeBoundary(operate, statuses=[{"phase": "promotion"}])
-    boundary.install(monkeypatch)
-    clock = FakeClock()
-    monkeypatch.setattr(operate, "_now", clock.now)
-    monkeypatch.setattr(operate, "_sleep", clock.sleep)
-
-    with pytest.raises(SystemExit) as excinfo:
-        operate.main(["finish", str(cell)])
-
-    assert excinfo.value.code == 2
-    captured = capsys.readouterr()
-    assert "STALLED" in captured.out
-    assert "0002" in captured.err
-    assert "0001" not in captured.err
-    assert "--accept-missing" in captured.err
-    # Bounded: exactly the stall window of polls, then no more sleeping.
-    assert clock.sleeps == [operate.POLL_SECONDS] * operate.STALL_POLL_LIMIT
-    assert ("stage", "freeze-promotion") not in actions(boundary.run_or_die)
-
-
-def test_finish_promotion_stall_accept_missing_freezes_the_slate(
-    operate, tmp_path, monkeypatch, capsys,
-):
-    cell = make_cell(tmp_path)
-    append_journal(cell, session_open_event())
-    append_journal(cell, session_end_event())
-    write_agent_session(cell, status="finalized")
-    padir = make_promotion_project(
-        cell, queued=(), plan_nodes=("0001", "0002"), consumed=1, budget=2,
-    )
-    complete_promotion_node(padir, "0001")
-    write_live_daemon(padir / "orchestrator", pid=777)
-    monkeypatch.setattr(operate, "is_pid_alive_with_starttime", lambda pid, ticks: True)
-
-    boundary = FakeBoundary(operate, statuses=[
-        {"phase": "promotion"},
-        {"phase": "selection-ready"},
-        {"phase": "winner-frozen"},
-    ])
-
-    def stop_promotion(argv):
-        pid_file = padir / "orchestrator" / "orchestrator.pid"
-        if pid_file.exists():
-            pid_file.unlink()
-
-    boundary.behaviors[("automil", ("orchestrator", "stop"))] = stop_promotion
-    boundary.install(monkeypatch)
-    clock = FakeClock()
-    monkeypatch.setattr(operate, "_now", clock.now)
-    monkeypatch.setattr(operate, "_sleep", clock.sleep)
-
-    operate.main(["finish", str(cell), "--accept-missing"])
-
-    captured = capsys.readouterr()
-    assert "WARNING" in captured.out
-    assert "0002" in captured.out
-    recorded = actions(boundary.run_or_die)
-    assert recorded == [
-        ("automil", ("orchestrator", "stop")),
-        ("stage", "freeze-promotion"),
-        ("stage", "select-winner"),
-    ]
-
-
-def test_finish_drained_promotion_still_requires_complete_slate(
-    operate, tmp_path, monkeypatch, capsys,
-):
-    """Drained counters alone are not proof of measurement: a billed job
-    whose archive lacks result.json must refuse, not freeze as 'ineligible'."""
-    cell = make_cell(tmp_path)
-    append_journal(cell, session_open_event())
-    append_journal(cell, session_end_event())
-    write_agent_session(cell, status="open")
-    padir = make_promotion_project(
-        cell, queued=(), plan_nodes=("0001", "0002"), consumed=2, budget=2,
-    )
-    complete_promotion_node(padir, "0001")
-
-    boundary = FakeBoundary(operate, statuses=[{"phase": "promotion"}])
-    boundary.install(monkeypatch)
-    monkeypatch.setattr(operate, "_sleep", lambda seconds: None)
-
-    with pytest.raises(SystemExit) as excinfo:
-        operate.main(["finish", str(cell)])
-
-    assert excinfo.value.code == 2
-    err = capsys.readouterr().err
-    assert "0002" in err
-    assert "--accept-missing" in err
-    assert ("stage", "freeze-promotion") not in actions(boundary.run_or_die)
-
-
-# ---------------------------------------------------------------------------
 # watch — budget lines through the typed reader
 # ---------------------------------------------------------------------------
 def test_budget_lines_use_typed_reader_and_report_unreadable_verbatim(
@@ -1482,6 +1146,27 @@ def test_budget_lines_use_typed_reader_and_report_unreadable_verbatim(
     assert any(
         "obsolete.json: unreadable: " in line and "obsolete cell layout" in line
         for line in lines
+    )
+
+
+def test_watch_reports_how_many_unique_candidates_discovery_holds(
+    operate, tmp_path, monkeypatch, capsys,
+):
+    cell = make_cell(tmp_path)
+    boundary = FakeBoundary(operate, statuses=[{
+        "phase": "discovery",
+        "discovery": {
+            "attempts_charged": 12, "attempt_budget": 30,
+            "unique_complete_candidates": 7,
+        },
+    }])
+    boundary.install(monkeypatch)
+
+    operate._watch_once(cell)
+
+    assert (
+        "phase discovery | attempts_charged 12/30 | unique candidates 7"
+        in capsys.readouterr().out
     )
 
 

@@ -10,8 +10,8 @@ reproduction_policy.json therefore maps each runtime set (the directory the
 cells sit in) to one GPU type. The two places that hand GPUs to training
 call ``require_declared_gpu`` before any work starts:
 ``campaign_stages._execute_frozen_command`` (baselines and the reproduction
-gate) and ``campaign_operate`` before it starts an orchestrator daemon
-(discovery and promotion).
+gate) and ``campaign_operate`` before it starts the discovery orchestrator
+daemon.
 """
 from __future__ import annotations
 

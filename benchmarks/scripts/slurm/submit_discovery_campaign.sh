@@ -12,8 +12,8 @@
 # The whole cell runs on this node: reproduction gate -> up (orchestrator
 # daemon on this job's GPUs) -> launch (pinned claude, interactive in a
 # job-private tmx server) -> bind -> release line -> watch (with the
-# active-time nudge) -> usage capture -> /exit -> finish (freeze ->
-# promotion on the same GPUs -> winner -> finalize) -> chain the next cell.
+# active-time nudge) -> usage capture -> /exit -> finish (freeze -> winner
+# -> finalize) -> chain the next cell.
 #
 # THE ONE RULE THAT MATTERS: a wall-kill mid-session strands the cell
 # PERMANENTLY (one session per cell, no relaunch; freeze demands exactly 30
@@ -292,12 +292,12 @@ end_session() {
     return 1
 }
 
-# The finish ladder on this job's GPUs, with the session's scraped usage
-# when a run (this one or the one that ended the session) left it behind.
+# The finish ladder, with the session's scraped usage when a run (this one
+# or the one that ended the session) left it behind.
 finish_cell() {  # cell
     local usage_flag=()
     [ -s "$OPDIR/usage.json" ] && usage_flag=(--usage-json "$OPDIR/usage.json")
-    operate finish "$RUNTIME/$1" --gpu "$GPU_LIST" ${usage_flag[@]+"${usage_flag[@]}"} >> "$LOG" 2>&1
+    operate finish "$RUNTIME/$1" ${usage_flag[@]+"${usage_flag[@]}"} >> "$LOG" 2>&1
 }
 
 run_cell() {

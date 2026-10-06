@@ -59,15 +59,13 @@
         "missing-result",
         "unknown"
       ],
-      "promotion_fields": [
-        "the exact stable top-10 unique discovery roster and all of its frozen promotion jobs",
-        "eligible/ineligible status and reason",
-        "promotion yield",
-        "elapsed seconds and peak VRAM with explicit missingness"
+      "resource_aggregation": "report the five-fold native baseline and the five-fold discovery attempts as separate strata; elapsed_seconds/3600 is named GPU-attached job-hours (not measured accelerator utilization), and a stratum total is an observed total labelled a lower bound when attempts lack timing",
+      "selection_fields": [
+        "the distinct complete discovery candidates in validation order with their five-fold validation values (the winner rule's pool)",
+        "the winner rule's pooled fold variance, standard error, leader and its lift, the bar, and the decision"
       ],
-      "resource_aggregation": "report the five-fold native baseline, three-fold discovery, and two-fold promotion as separate strata; elapsed_seconds/3600 is named GPU-attached job-hours (not measured accelerator utilization), and any cross-stage agentic-search value is an observed total labelled a lower bound when attempts lack timing",
       "timing": "process evidence is hashed into the 130-cell selection freeze before any held-out value is opened",
-      "unit": "one predeclared cell with exactly 30 discovery attempts and at most 10 promotion jobs"
+      "unit": "one predeclared cell with exactly 30 five-fold discovery attempts"
     },
     "tile_ranking_response": {
       "arms": [
@@ -116,6 +114,6 @@
     "tie_method": "average ranks",
     "top_arm_definition": "the complete set tied at the maximum primary metric"
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "status": "frozen-before-held-out-certification"
 }

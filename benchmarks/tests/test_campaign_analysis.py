@@ -18,8 +18,10 @@ from autobench.campaign import (
     STAGE_FOLDS,
     VALIDATION_SCHEMA_BY_FAMILY,
     content_sha256,
+    max_lift_winner,
     file_sha256,
     load_manifest,
+    unique_complete_sources,
 )
 from autobench.campaign_analysis import (
     CampaignAnalysisError,
@@ -103,6 +105,11 @@ def _missing_resources(count: int) -> dict:
     }
 
 
+#: Every fold of the cell's native baseline, which is what the state writer
+#: below records and what the winner rule pairs each candidate's folds with.
+BASELINE_FOLD_VALUES = (0.5,) * 5
+
+
 def _search_process(cell_id: str) -> dict:
     attempts = [
         {
@@ -129,7 +136,7 @@ def _search_process(cell_id: str) -> dict:
         for index in range(DISCOVERY_ATTEMPTS)
     ]
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "baseline": {
             "folds": list(range(5)),
             "result_status": "completed",
@@ -141,7 +148,6 @@ def _search_process(cell_id: str) -> dict:
             "baseline_validation_mean": 0.5,
             "complete_candidates": 0,
             "unique_complete_candidates": 0,
-            "promoted_candidates": 0,
             "candidate_class_counts": {
                 "config-only": DISCOVERY_ATTEMPTS,
                 "train-only-source": 0,
@@ -175,25 +181,8 @@ def _search_process(cell_id: str) -> dict:
             ],
             "resources": _missing_resources(DISCOVERY_ATTEMPTS),
         },
-        "promotion": {
-            "candidate_budget": 10,
-            "attempts_charged": 0,
-            "status_counts": {"eligible": 0, "ineligible": 0},
-            "outcome_class_counts": {
-                "completed": 0,
-                "budget-killed": 0,
-                "timeout": 0,
-                "oom": 0,
-                "cancelled": 0,
-                "partial": 0,
-                "crash": 0,
-                "missing-result": 0,
-                "unknown": 0
-            },
-            "yield": None,
-            "jobs": [],
-            "resources": _missing_resources(0),
-        },
+        # No attempt completed: the pool is empty and the rule keeps the baseline.
+        "selection": max_lift_winner(BASELINE_FOLD_VALUES, []),
     }
 
 
@@ -205,15 +194,36 @@ def _run_hashes(seed: str) -> list[str]:
     ]
 
 
+def _selection_over(attempts: list[dict], node_ids: list[str]) -> dict:
+    """The winner rule's own record over ``node_ids`` in that order, each a
+    run whose every fold sits at its attempt's validation mean."""
+    by_node = {row["node_id"]: row for row in attempts}
+    return max_lift_winner(BASELINE_FOLD_VALUES, [
+        {
+            "candidate_id": node_id,
+            "candidate_sha256": by_node[node_id]["candidate_sha256"],
+            "fold_values": (
+                [by_node[node_id]["validation_mean"]] * len(BASELINE_FOLD_VALUES)
+            ),
+        }
+        for node_id in node_ids
+    ])
+
+
+def _census_pool(attempts: list[dict]) -> list[str]:
+    return [
+        source["source_node_id"] for source in unique_complete_sources(attempts)
+    ]
+
+
 def _eligible_process(
     cell_id: str = "fixture-cell",
     candidates: tuple[tuple[str, str, float], ...] | None = None,
-    promoted: tuple[int, ...] = (0, 1),
 ) -> dict:
     """The first attempts complete as ``candidates`` (candidate identity, the
     seed of the run's predictions, validation mean); by default two distinct
     runs seeded ``<cell>/<node>``, the archive ``_write_certified_state``
-    writes. ``promoted`` lists, in rank order, the attempts the roster holds."""
+    writes. The selection is the winner rule's record on the census pool."""
     process = _search_process(cell_id)
     attempts = process["discovery"]["attempts"]
     if candidates is None:
@@ -236,8 +246,7 @@ def _eligible_process(
     discovery = process["discovery"]
     discovery.update({
         "complete_candidates": len(candidates),
-        "unique_complete_candidates": len(promoted),
-        "promoted_candidates": len(promoted),
+        "unique_complete_candidates": len(unique_complete_sources(attempts)),
         "result_status_counts": {
             "completed": len(candidates),
             "crash": DISCOVERY_ATTEMPTS - len(candidates),
@@ -266,57 +275,7 @@ def _eligible_process(
             "running_best_validation_mean": best,
         })
     discovery["validation_anytime"] = anytime
-    jobs = []
-    for rank, row in enumerate((attempts[index] for index in promoted), 1):
-        promotion_identity = {
-            "overlay_manifest": {},
-            "deletions": [],
-            "candidate_class": row["candidate_class"],
-            "policy_hash": row["policy_hash"],
-            "variant_selection_hash": None,
-            "override_hash": None,
-        }
-        jobs.append({
-            "rank": rank,
-            "source_node_id": row["node_id"],
-            "source_candidate_sha256": row["candidate_sha256"],
-            "promotion_node_id": f"promotion_{rank:04d}",
-            "promotion_candidate_sha256": content_sha256(promotion_identity),
-            "promotion_identity": promotion_identity,
-            "status": "eligible",
-            "candidate_class": row["candidate_class"],
-            "policy_hash": row["policy_hash"],
-            "result_status": "completed",
-            "source_spec_sha256": row["source_spec_sha256"],
-            "promotion_spec_sha256": f"{rank:064x}",
-            "submitted_at": f"2026-08-04T01:0{rank}:00+00:00",
-            "elapsed_seconds": None,
-            "peak_vram_mb": None,
-            "validation_mean": 0.65,
-            "termination_reason": "unspecified",
-            "budget_killed": False,
-            "outcome_class": "completed",
-            "reason": "complete five-fold validation",
-        })
-    process["promotion"] = {
-        "candidate_budget": 10,
-        "attempts_charged": len(promoted),
-        "status_counts": {"eligible": len(promoted), "ineligible": 0},
-        "outcome_class_counts": {
-            "completed": len(promoted),
-            "budget-killed": 0,
-            "timeout": 0,
-            "oom": 0,
-            "cancelled": 0,
-            "partial": 0,
-            "crash": 0,
-            "missing-result": 0,
-            "unknown": 0,
-        },
-        "yield": 1.0,
-        "jobs": jobs,
-        "resources": _missing_resources(len(promoted)),
-    }
+    process["selection"] = _selection_over(attempts, _census_pool(attempts))
     return process
 
 
@@ -343,17 +302,17 @@ def _write_certified_state(
             for fold in range(5)
         ]
 
-    promoted = [
+    candidates = [
         {
-            "candidate_id": job["source_node_id"],
-            "candidate_sha256": job["source_candidate_sha256"],
-            "source_spec_sha256": job["source_spec_sha256"],
+            "candidate_id": source["source_node_id"],
+            "candidate_sha256": source["source_candidate_sha256"],
+            "source_spec_sha256": source["source_spec_sha256"],
             "identity": {
-                "candidate_class": job["candidate_class"],
-                "policy_hash": job["policy_hash"],
+                "candidate_class": source["candidate_class"],
+                "policy_hash": source["policy_hash"],
             },
         }
-        for job in process["promotion"]["jobs"]
+        for source in unique_complete_sources(process["discovery"]["attempts"])
     ]
     state["baseline"] = {
         "candidate_sha256": freeze_entry["baseline_candidate_sha256"],
@@ -406,18 +365,12 @@ def _write_certified_state(
         "unique_complete_candidates": process["discovery"][
             "unique_complete_candidates"
         ],
-        "promoted_candidates": promoted,
-    })
-    state["promotion"].update({
-        "jobs": process["promotion"]["jobs"],
-        "attempts_charged": process["promotion"]["attempts_charged"],
-        "frozen": True,
+        "candidates": candidates,
     })
     state["winner"] = {
         "kind": freeze_entry["winner_kind"],
         "candidate_id": freeze_entry["winner_candidate_id"],
         "candidate_sha256": freeze_entry["winner_candidate_sha256"],
-        "promotion_node_id": freeze_entry["winner_promotion_node_id"],
         "validation_mean": freeze_entry["winner_validation_mean"],
         "validation_folds": validation_folds(
             freeze_entry["winner_validation_mean"]
@@ -426,6 +379,7 @@ def _write_certified_state(
             filename: record["sha256"]
             for filename, record in freeze_entry["winner_source_folds"].items()
         },
+        "selection": process["selection"],
         "selection_sha256": freeze_entry["selection_sha256"],
     }
     state["certification"] = {
@@ -489,7 +443,12 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
         process = _eligible_process(cell["cell_id"])
         for attempt in process["discovery"]["attempts"]:
             attempt["agent_session_binding_sha256"] = session_binding
-        first_job = process["promotion"]["jobs"][0]
+        selection = process["selection"]
+        assert selection["accepted"], "the fixture pool must elect its leader"
+        winner_attempt = next(
+            row for row in process["discovery"]["attempts"]
+            if row["node_id"] == selection["winner"]
+        )
         baseline_folds = _folds(
             cell["task_family"], framework_baseline[cell["framework"]],
         )
@@ -521,12 +480,11 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
             "cell_id": cell["cell_id"],
             "cell_sha256": cell["cell_sha256"],
             "state_sha256": content_sha256({"state": cell["cell_id"]}),
-            "selection_sha256": content_sha256({"selection": cell["cell_id"]}),
+            "selection_sha256": content_sha256(selection),
             "winner_kind": "searched",
-            "winner_candidate_id": first_job["source_node_id"],
-            "winner_candidate_sha256": first_job["source_candidate_sha256"],
-            "winner_promotion_node_id": first_job["promotion_node_id"],
-            "winner_validation_mean": first_job["validation_mean"],
+            "winner_candidate_id": winner_attempt["node_id"],
+            "winner_candidate_sha256": winner_attempt["candidate_sha256"],
+            "winner_validation_mean": winner_attempt["validation_mean"],
             "baseline_validation_mean": 0.5,
             "baseline_candidate_sha256": baseline_candidate_sha256,
             "winner_source_folds": source_anchors["winner"],
@@ -607,7 +565,7 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
             + framework_lift[cell["framework"]],
         )
         bundle = {
-            "schema_version": 2,
+            "schema_version": 3,
             "campaign_id": CAMPAIGN_ID,
             "cell_id": cell["cell_id"],
             "selection_freeze_sha256": freeze_hash,
@@ -618,7 +576,6 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
                 "kind": freeze_entry["winner_kind"],
                 "candidate_id": freeze_entry["winner_candidate_id"],
                 "candidate_sha256": freeze_entry["winner_candidate_sha256"],
-                "promotion_node_id": freeze_entry["winner_promotion_node_id"],
             },
             "selection_sha256": freeze_entry["selection_sha256"],
             "validation_mean": freeze_entry["winner_validation_mean"],
@@ -771,6 +728,34 @@ def test_report_contains_complete_lift_and_cross_arm_ranking_estimands(tmp_path)
         for block in report["tile_ranking_blocks"]
     )
     assert (runtime_root / "publication_report.json").is_file()
+
+
+def test_report_summarizes_the_search_by_baseline_and_discovery_stage_only(tmp_path):
+    runtime_root = tmp_path / "runtime"
+    _certified_campaign(runtime_root)
+
+    report = build_publication_report(
+        runtime_root=runtime_root, manifest_path=MANIFEST, repo_root=REPO_ROOT,
+    )
+
+    search = report["summaries"]["search_process"]
+    assert report["schema_version"] == 3
+    assert set(search) == {
+        "discovery_attempts", "candidate_class_counts", "result_status_counts",
+        "discovery_outcome_class_counts", "resources_by_stage",
+    }
+    assert set(search["resources_by_stage"]) == {"baseline", "discovery"}
+    assert search["discovery_attempts"] == DISCOVERY_ATTEMPTS * ACTIVE_CELL_COUNT
+    # Every fixture cell completed its first two attempts and crashed the rest.
+    assert search["result_status_counts"] == {
+        "completed": 2 * ACTIVE_CELL_COUNT,
+        "crash": (DISCOVERY_ATTEMPTS - 2) * ACTIVE_CELL_COUNT,
+    }
+    assert all(
+        set(cell["search_process"])
+        == {"schema_version", "baseline", "discovery", "selection"}
+        for cell in report["cells"]
+    )
 
 
 def test_report_fails_closed_if_one_certification_is_missing(tmp_path):
@@ -1035,12 +1020,12 @@ def test_resigned_baseline_identity_drift_is_rejected_everywhere(tmp_path):
         )
 
 
-def test_resigned_promotion_identity_drift_is_rejected_everywhere(tmp_path):
+def test_resigned_winner_identity_drift_is_rejected_everywhere(tmp_path):
     runtime_root = tmp_path / "runtime"
     paths = _certified_campaign(runtime_root)
     bundle_path = next(iter(paths.values()))
     bundle = json.loads(bundle_path.read_text())
-    bundle["winner"]["promotion_node_id"] = "forged-promotion"
+    bundle["winner"]["candidate_sha256"] = "1" * 64
     _resign_bundle_and_index(runtime_root, bundle_path, bundle)
 
     with pytest.raises(CampaignStageError, match="frozen validation winner"):
@@ -1084,7 +1069,7 @@ def test_process_evidence_rejects_eligible_discovery_crash():
         )
 
 
-def test_process_evidence_accepts_a_consistent_eligible_promotion_chain():
+def test_process_evidence_accepts_a_consistent_eligible_pool_and_selection():
     process = _eligible_process()
 
     assert _validated_process_evidence(
@@ -1122,32 +1107,6 @@ def test_process_evidence_rejects_mixed_negative_resource_values():
         )
 
 
-def test_process_evidence_recomputes_exact_top10_promotion_sources():
-    process = _eligible_process()
-    process["promotion"]["jobs"][0]["source_node_id"] = (
-        f"node_{DISCOVERY_ATTEMPTS:04d}"
-    )
-
-    with pytest.raises(CampaignAnalysisError, match="promotion job value drift"):
-        _validated_process_evidence(
-            process, content_sha256(process), "fixture-cell",
-        )
-
-
-def test_process_evidence_rejects_incomplete_eligible_promotion():
-    process = _eligible_process()
-    process["promotion"]["jobs"][0].update({
-        "result_status": "crash",
-        "outcome_class": "crash",
-        "validation_mean": None,
-    })
-
-    with pytest.raises(CampaignAnalysisError, match="eligible promotion job"):
-        _validated_process_evidence(
-            process, content_sha256(process), "fixture-cell",
-        )
-
-
 #: The second run reproduced the first one's validation predictions under
 #: another config (same outcome, same mean); the third is distinct.
 TWIN_RUNS = (
@@ -1155,18 +1114,41 @@ TWIN_RUNS = (
 )
 
 
-def test_process_evidence_accepts_a_roster_that_skips_a_repeated_run():
-    process = _eligible_process(candidates=TWIN_RUNS, promoted=(0, 2))
+def test_process_evidence_accepts_a_pool_that_skips_a_repeated_run():
+    process = _eligible_process(candidates=TWIN_RUNS)
 
+    assert _census_pool(process["discovery"]["attempts"]) == [
+        "node_0001", "node_0003",
+    ]
+    assert [row["candidate_id"] for row in process["selection"]["pool"]] == [
+        "node_0001", "node_0003",
+    ]
     assert _validated_process_evidence(
         process, content_sha256(process), "fixture-cell",
     ) == process
 
 
-def test_process_evidence_refuses_a_roster_that_promotes_a_repeated_run():
-    process = _eligible_process(candidates=TWIN_RUNS, promoted=(0, 1))
+#: Pools a forger could record in place of the census's: node_0002 repeats
+#: node_0001's run, so the census holds node_0001 and node_0003 in that order.
+FORGED_POOLS = {
+    "reordered": ["node_0003", "node_0001"],
+    "repeated-run": ["node_0001", "node_0002", "node_0003"],
+    "omitted-candidate": ["node_0001"],
+}
 
-    with pytest.raises(CampaignAnalysisError, match="promotion job value drift"):
+
+@pytest.mark.parametrize("case", sorted(FORGED_POOLS))
+def test_process_evidence_refuses_a_selection_whose_pool_is_not_the_census_pool(case):
+    process = _eligible_process(candidates=TWIN_RUNS)
+    # The rule's own record on the forged pool: its numbers, its fold means
+    # and its baseline all agree, so only the pool's membership or order is wrong.
+    process["selection"] = _selection_over(
+        process["discovery"]["attempts"], FORGED_POOLS[case],
+    )
+
+    with pytest.raises(
+        CampaignAnalysisError, match="differs from the winner rule on the census pool",
+    ):
         _validated_process_evidence(
             process, content_sha256(process), "fixture-cell",
         )
@@ -1187,20 +1169,6 @@ def test_process_evidence_refuses_an_outcome_on_an_attempt_that_never_completed(
     process["discovery"]["attempts"][-1]["outcome_sha256"] = "a" * 64
 
     with pytest.raises(CampaignAnalysisError, match="carries an outcome"):
-        _validated_process_evidence(
-            process, content_sha256(process), "fixture-cell",
-        )
-
-
-@pytest.mark.parametrize(
-    "field", ["promotion_node_id", "promotion_spec_sha256"],
-)
-def test_process_evidence_rejects_duplicate_promotion_identity(field):
-    process = _eligible_process()
-    jobs = process["promotion"]["jobs"]
-    jobs[1][field] = jobs[0][field]
-
-    with pytest.raises(CampaignAnalysisError, match="identities are not unique"):
         _validated_process_evidence(
             process, content_sha256(process), "fixture-cell",
         )
@@ -1250,7 +1218,6 @@ def test_certification_bundle_rejects_false_baseline_winner_lift(tmp_path):
         "kind": "baseline",
         "candidate_id": "baseline",
         "candidate_sha256": bundle["baseline"]["candidate_sha256"],
-        "promotion_node_id": None,
     }
     bundle["bundle_sha256"] = content_sha256({
         key: value for key, value in bundle.items() if key != "bundle_sha256"

@@ -178,10 +178,9 @@ def test_passing_reproduction_unblocks_the_session(staged_cell, monkeypatch):
     assert all(
         fold["delta"] == pytest.approx(0.004) for fold in block["folds"]
     )
-    # Loop parity: the discovery command ran, on discovery folds, without
-    # worktree PYTHONPATH injection.
-    assert "0,1,2" in observed["command"]
-    assert "0,1,2,3,4" not in observed["command"]
+    # Loop parity: the discovery command ran, on all five discovery folds,
+    # without worktree PYTHONPATH injection.
+    assert "0,1,2,3,4" in observed["command"]
     assert observed["env"]["AUTOMIL_FOLD_COUNT"] == str(len(DISCOVERY_FOLDS))
     assert observed["env"]["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
     assert "PYTHONPATH" not in observed["env"] or "repo" not in observed["env"].get(
@@ -363,7 +362,9 @@ def test_prediction_hashes_are_diagnosis_never_a_gate(staged_cell, monkeypatch):
     _fake_execution(
         monkeypatch,
         fold_values=[base[fold] for fold in DISCOVERY_FOLDS],
-        fold_hashes={0: "a" * 64, 1: "b" * 64, 2: "a" * 64},
+        fold_hashes={
+            0: "a" * 64, 1: "b" * 64, 2: "a" * 64, 3: "a" * 64, 4: "b" * 64,
+        },
     )
     state = run_baseline_reproduction(cell_root, repo_root=repo_root)
     block = state["baseline_reproduction"]
@@ -372,7 +373,7 @@ def test_prediction_hashes_are_diagnosis_never_a_gate(staged_cell, monkeypatch):
         fold["fold_index"]: fold["prediction_hash_match"]
         for fold in block["folds"]
     }
-    assert matches == {0: True, 1: False, 2: True}
+    assert matches == {0: True, 1: False, 2: True, 3: True, 4: False}
 
 
 def test_forged_session_verdict_bound_to_other_baseline_is_refused(

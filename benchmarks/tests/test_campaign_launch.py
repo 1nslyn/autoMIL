@@ -24,9 +24,12 @@ from automil.activity_hooks import (
 
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
+    WINNER_FLOOR,
+    WINNER_SE_MULTIPLIER,
     CampaignManifestError,
     build_agent_protocol,
     content_sha256,
+    validate_agent_protocol,
 )
 from autobench.campaign_launch import (
     CampaignLaunchError,
@@ -72,7 +75,7 @@ def launch_host(tmp_path):
     """A fake repository with one materialized-enough cell, ready to launch."""
     repo_root = tmp_path / "repo"
     runtime_root = repo_root / "runtime"
-    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v4"
+    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v5"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
     (repo_root / "CLAUDE.md").write_text("# repo dev instructions\n")
@@ -158,6 +161,16 @@ def test_committed_sources_build_a_publication_protocol():
     assert toolset["ancestor_memory"].keys() == {"CLAUDE.md"}
 
 
+def test_committed_protocol_embeds_the_committed_policy_and_toolset():
+    """agent_protocol.json is the frozen copy every cell launches from: a
+    policy or toolset edited without re-freezing it would start cells on
+    instructions the repository no longer shows."""
+    protocol = json.loads((CAMPAIGN_DIR / AGENT_PROTOCOL_FILE).read_text())
+    assert validate_agent_protocol(protocol) == protocol
+    assert protocol["proposal_policy_content"] == POLICY_SOURCE.read_text()
+    assert protocol["toolset_content"] == TOOLSET_SOURCE.read_text()
+
+
 def test_committed_policy_carries_the_load_bearing_rules():
     text = " ".join(POLICY_SOURCE.read_text().split())
     for anchor in (
@@ -183,8 +196,25 @@ def test_committed_policy_carries_the_load_bearing_rules():
         "--predicted-delta",
         "--role neighbour",
         "registry.policy_smoke",
+        # v5: five-fold attempts, the ban on steering the winner pool, the
+        # two policy seams for training bags and evaluation weights, and
+        # the log marker that shows the smoothed score.
+        "An attempt trains all five folds",
+        "submitted to move the pool's statistics rather than to improve "
+        "the model is a protocol violation",
+        "`transform_bag(features, *, label, epoch, generator)`",
+        "`before_validation(*, epoch)`",
+        "`[smoothed]`",
     ):
         assert anchor in text, f"proposal policy lost its {anchor!r} rule"
+
+
+def test_committed_policy_states_the_winner_bar_the_protocol_applies():
+    """The agent is told the bar its best candidate must clear; it has to be
+    the one the winner rule applies, or the instruction misleads."""
+    text = " ".join(POLICY_SOURCE.read_text().split())
+    bar = f"max({WINNER_FLOOR:g}, {WINNER_SE_MULTIPLIER:g} × paired SE)"
+    assert bar in text, f"proposal policy no longer states the winner bar {bar!r}"
 
 
 def test_builder_rejects_a_placeholder_model_version():

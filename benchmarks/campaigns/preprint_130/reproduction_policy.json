@@ -5,11 +5,15 @@
       "name": "NVIDIA H100 80GB HBM3",
       "mig": false
     },
-    "runtime-rehearsal": {
-      "name": "NVIDIA H100 80GB HBM3",
+    "runtime-aihub-hnsc-a": {
+      "name": "NVIDIA RTX 6000 Ada Generation",
       "mig": false
     },
-    "runtime-aihub": {
+    "runtime-aihub-hnsc-b": {
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "mig": false
+    },
+    "runtime-aihub-hnsc-c": {
       "name": "NVIDIA RTX 6000 Ada Generation",
       "mig": false
     }
@@ -26,7 +30,7 @@
         "tcga_luad__kras__uni_v2__clam__s42__preprint-v3"
       ],
       "observed_max_abs_delta": 0.021569,
-      "note": "Declared 2026-08-31 from a preprint-v3 measurement on a 2g.20gb MIG slice against full-H100 baselines. Kept at 0.025 on 2026-09-26 for re-runs on the declared GPU, where a re-run of the same code reproduces the baseline exactly; a delta inside epsilon therefore means code or data drift that stays small. Real substrate drift (wrong splits/features/labels) manifests at >=0.05."
+      "note": "Declared 2026-08-31 from a preprint-v3 measurement on a 2g.20gb MIG slice against full-H100 baselines. Kept at 0.025 on 2026-09-26 for re-runs on the declared GPU, where a re-run of the same code reproduces the baseline exactly; a delta inside epsilon therefore means code or data drift that stays small. Real substrate drift (wrong splits/features/labels) manifests at >=0.05. From preprint-v5 (2026-10-06) the gate re-runs all five folds and compares each fold's smoothed primary value; a same-GPU re-run still reproduces the baseline exactly, so epsilon keeps its meaning."
     },
     "gpu": {
       "jobs": [
@@ -51,7 +55,7 @@
         "tcga_luad__kras__hoptimus1__dtfd__s42__preprint-v4",
         "tcga_luad__kras__hoptimus1__nnmil__s42__preprint-v4"
       ],
-      "note": "Discovery folds 0-2 re-run on an RTX 6000 Ada and compared with the full-H100 baselines of fir. Predictions differed on all 12 folds; the largest per-fold gap was 0.043 (ABMIL), above epsilon, while an RTX repeat of ABMIL reproduced the first RTX run bit for bit. H100 baselines therefore cannot anchor RTX runs: runtime-aihub trains its own baselines on the RTX. It is a rehearsal set; official cells run on fir."
+      "note": "Discovery folds 0-2 re-run on an RTX 6000 Ada and compared with the full-H100 baselines of fir. Predictions differed on all 12 folds; the largest per-fold gap was 0.043 (ABMIL), above epsilon, while an RTX repeat of ABMIL reproduced the first RTX run bit for bit. H100 baselines therefore cannot anchor RTX runs: every aihub set trains its own baselines on the RTX. They are rehearsal sets; official cells run on fir."
     }
   }
 }

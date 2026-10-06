@@ -8,7 +8,10 @@ derivation against the slides a completed run actually scored.
 from __future__ import annotations
 
 import csv
+import importlib.util
+import json
 import math
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,10 +19,13 @@ import pytest
 from autobench.guard_margin import (RECORDED_DECIMALS, GuardMarginError,
                                     balanced_accuracy_margin, derive_guard,
                                     derived_margin_for_counts,
-                                    validation_class_counts, verify_against_run)
+                                    guard_from_counts, validation_class_counts,
+                                    verify_against_run)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LUAD = REPO_ROOT / "datasets/TCGA-LUAD/benchmark"
+GUARD_MARGINS = REPO_ROOT / "benchmarks/campaigns/preprint_130/guard_margins.json"
+DERIVE_SCRIPT = REPO_ROOT / "benchmarks/campaigns/preprint_130/derive_guard_margins.py"
 CANARY_RESULTS = (
     REPO_ROOT / "benchmarks/campaigns/preprint_130/runtime-canary"
     / "tcga_luad__kras__virchow2__nnmil__s42__preprint-v2"
@@ -38,6 +44,11 @@ def _grid(quantum: float) -> float:
     """
     grid = 10 ** -RECORDED_DECIMALS
     return math.ceil((quantum + grid / 2) / grid) * grid
+
+
+def _committed_guards() -> dict[str, dict]:
+    """The frozen artifact: one declaration per classification cell."""
+    return json.loads(GUARD_MARGINS.read_text())
 
 
 def _cohort(tmp_path: Path, folds: dict[int, list[str]], labels: dict[str, str],
@@ -111,6 +122,23 @@ class TestMarginArithmetic:
         one = derive_guard(benchmark, "standard", "t", (0,))["margin"]
         assert one == pytest.approx(3 * three, rel=2e-2)   # +/- one recording grid step
 
+    def test_the_margin_covers_exactly_the_folds_given(self, tmp_path):
+        """The declaration reaches only the folds it was handed: a thin class
+        in a fold outside the request neither sets the step nor appears in
+        the published counts."""
+        labels, val = _balanced({"pos": 17, "neg": 30})
+        thin = [s for s in val if not s.startswith("pos_")] + \
+            [f"pos_{i}" for i in range(11)]
+        benchmark = _cohort(
+            tmp_path, {0: val, 1: val, 2: val, 3: val, 4: thin}, labels,
+        )
+        three = derive_guard(benchmark, "standard", "t", (0, 1, 2))
+        five = derive_guard(benchmark, "standard", "t", (0, 1, 2, 3, 4))
+        assert set(three["validation_class_counts"]) == {"0", "1", "2"}
+        assert three["margin"] == pytest.approx(_grid(1 / (3 * 2 * 17)), abs=1e-9)
+        assert set(five["validation_class_counts"]) == {"0", "1", "2", "3", "4"}
+        assert five["margin"] == pytest.approx(_grid(1 / (5 * 2 * 11)), abs=1e-9)
+
     def test_counts_travel_with_the_margin(self, tmp_path):
         """The number must be re-derivable by hand from what it publishes."""
         labels, val = _balanced({"pos": 17, "neg": 30})
@@ -142,27 +170,21 @@ class TestMarginIsCheckableFromItsOwnCounts:
             guard["validation_class_counts"]
         ) == pytest.approx(guard["margin"], abs=1e-12)
 
-    def test_each_stage_derives_its_own_margin_from_the_same_counts(self):
-        """K is part of the lattice, so a stage averaging more folds is finer.
+    def test_the_margin_covers_exactly_the_folds_given(self):
+        """K is part of the lattice, so the same cohort averaged over more
+        folds has a finer step, and a declaration never reaches past the
+        folds in the block it is built from."""
+        from autobench.campaign import STAGE_FOLDS
 
-        The guard binds at stages that average different fold sets — the
-        search gate and the discovery freeze on folds 0-2, the promotion
-        freeze on all five — and one published counts block has to serve both.
-        """
-        import json
-
-        from autobench.campaign import CERTIFICATION_FOLDS, STAGE_FOLDS
-
-        counts = json.loads(
-            (REPO_ROOT / "benchmarks/campaigns/preprint_130/guard_margins.json")
-            .read_text()
-        )["tcga_luad__kras"]["validation_class_counts"]
-        assert set(counts) == {str(f) for f in CERTIFICATION_FOLDS}
-        three = derived_margin_for_counts(counts, STAGE_FOLDS["discovery"])
-        five = derived_margin_for_counts(counts, CERTIFICATION_FOLDS)
-        assert five < three           # more folds averaged => finer lattice
-        assert three == pytest.approx(0.0099, abs=1e-12)
-        assert five == pytest.approx(0.0060, abs=1e-12)
+        counts = _committed_guards()["tcga_luad__kras"]["validation_class_counts"]
+        assert set(counts) == {str(f) for f in STAGE_FOLDS["discovery"]}
+        five = guard_from_counts(counts)
+        three = guard_from_counts({fold: counts[fold] for fold in ("0", "1", "2")})
+        assert set(five["validation_class_counts"]) == set(counts)
+        assert set(three["validation_class_counts"]) == {"0", "1", "2"}
+        assert five["margin"] < three["margin"]   # more folds averaged => finer lattice
+        assert five["margin"] == pytest.approx(0.0060, abs=1e-12)
+        assert three["margin"] == pytest.approx(0.0099, abs=1e-12)
 
     def test_a_missing_fold_refuses_rather_than_averaging_a_subset(self):
         counts = {str(f): {"pos": 17, "neg": 30} for f in range(3)}
@@ -170,15 +192,9 @@ class TestMarginIsCheckableFromItsOwnCounts:
             derived_margin_for_counts(counts, (0, 1, 2, 3, 4))
 
     def test_frozen_campaign_artifact_is_self_consistent(self):
-        import json
-
-        frozen = json.loads(
-            (REPO_ROOT / "benchmarks/campaigns/preprint_130/guard_margins.json")
-            .read_text()
-        )
         from autobench.campaign import STAGE_FOLDS
 
-        for key, guard in frozen.items():
+        for key, guard in _committed_guards().items():
             assert derived_margin_for_counts(
                 guard["validation_class_counts"], STAGE_FOLDS["discovery"]
             ) == pytest.approx(guard["margin"], abs=1e-12), key
@@ -192,6 +208,81 @@ class TestMarginIsCheckableFromItsOwnCounts:
     def test_unusable_counts_refuse(self, counts):
         with pytest.raises(GuardMarginError):
             derived_margin_for_counts(counts)
+
+
+class TestDeclarationFromCounts:
+    """``guard_from_counts`` is the one place a declaration is built: the
+    splits give it counts, and the published counts give the same one back."""
+
+    @pytest.mark.parametrize("per_class, n_folds", [
+        ({"pos": 17, "neg": 30}, 5),
+        ({"a": 6, "b": 20, "c": 20}, 5),
+        ({"pos": 17, "neg": 30}, 3),
+    ], ids=["binary", "three-class", "three-folds"])
+    def test_published_counts_rebuild_the_declaration(
+        self, tmp_path, per_class, n_folds,
+    ):
+        labels, val = _balanced(per_class)
+        benchmark = _cohort(tmp_path, {i: val for i in range(n_folds)}, labels)
+        guard = derive_guard(benchmark, "standard", "t", range(n_folds))
+        assert guard_from_counts(guard["validation_class_counts"]) == guard
+
+    def test_a_ragged_fold_sets_the_step_and_is_named_in_the_basis(self):
+        counts = {"0": {"neg": 30, "pos": 17}, "1": {"neg": 30, "pos": 11}}
+        guard = guard_from_counts(counts)
+        assert guard["margin"] == pytest.approx(_grid(1 / (2 * 2 * 11)), abs=1e-9)
+        assert "11 slides in the smallest validation class 'pos'" in guard["basis"]
+
+    @pytest.mark.parametrize("counts, message", [
+        ({}, "no folds"),
+        ({"0": {"a": 5, "b": 5}, "1": {"a": 10}}, "different class sets"),
+        ({"0": {"a": 5}, "1": {"a": 5}}, "undefined below two"),
+        ({str(f): {"a": 1112, "b": 1112} for f in range(3)}, "too fine for the"),
+    ], ids=["empty", "class-sets-differ", "one-class", "too-fine-for-the-grid"])
+    def test_unusable_counts_refuse(self, counts, message):
+        with pytest.raises(GuardMarginError, match=message):
+            guard_from_counts(counts)
+
+
+class TestDerivationScript:
+    """``derive_guard_margins.py --from-counts`` moves the artifact to the
+    folds the gated mean averages without the data being mounted."""
+
+    @pytest.fixture()
+    def script(self, monkeypatch):
+        import dotenv
+
+        # The script loads benchmarks/.env and prepends its own source root to
+        # sys.path; neither may outlive the test.
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: False)
+        monkeypatch.setattr(sys, "path", list(sys.path))
+        spec = importlib.util.spec_from_file_location(
+            "derive_guard_margins_under_test", DERIVE_SCRIPT,
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_every_committed_entry_re_derives_from_its_own_counts(self, script):
+        committed = _committed_guards()
+        assert committed
+        assert script.derive_from_counts(committed) == committed
+
+    def test_only_the_gated_folds_are_re_derived(self, script):
+        counts = {str(f): {"a": 40, "b": 40} for f in range(5)}
+        counts["5"] = {"a": 1, "b": 1}      # a fold the gated mean does not average
+        rebuilt = script.derive_from_counts(
+            {"x__y": {"validation_class_counts": counts}}
+        )["x__y"]
+        assert set(rebuilt["validation_class_counts"]) == {"0", "1", "2", "3", "4"}
+        assert rebuilt["margin"] == pytest.approx(_grid(1 / (5 * 2 * 40)), abs=1e-9)
+
+    def test_counts_of_another_fold_set_cannot_be_re_derived(self, script):
+        stale = {"x__y": {"validation_class_counts": {
+            str(f): {"a": 5, "b": 5} for f in range(3)
+        }}}
+        with pytest.raises(GuardMarginError, match="the gated mean averages"):
+            script.derive_from_counts(stale)
 
 
 class TestRecordingGridMustBeUsable:
@@ -211,13 +302,13 @@ class TestRecordingGridMustBeUsable:
             derive_guard(benchmark, "standard", "t", (0, 1, 2))
 
     def test_the_campaign_cohort_is_comfortably_inside_the_usable_range(self):
-        """luad/kras: one slide records as <= 0.0099, two as >= 0.0195."""
-        quantum = 1 / (3 * 2 * 17)
+        """luad/kras: one slide records as <= 0.0060, two as >= 0.0116."""
+        quantum = 1 / (5 * 2 * 17)
         grid = 10 ** -RECORDED_DECIMALS
         assert derived_margin_for_counts(
-            {str(f): {"mutant": 17, "wildtype": 30} for f in range(3)}
-        ) == pytest.approx(0.0099, abs=1e-12)
-        assert 0.0099 < 2 * quantum - grid
+            {str(f): {"mutant": 17, "wildtype": 30} for f in range(5)}
+        ) == pytest.approx(0.0060, abs=1e-12)
+        assert 0.0060 < 2 * quantum - grid
 
 
 class TestFailsLoud:
@@ -284,25 +375,20 @@ class TestRunCrossCheck:
 class TestRealCohort:
     def test_tcga_luad_kras_margin(self):
         """The number frozen in guard_margins.json, re-derived from the splits."""
-        guard = derive_guard(LUAD, "standard", "kras", (0, 1, 2))
-        assert guard["margin"] == pytest.approx(0.0099, abs=1e-9)
-        for fold in ("0", "1", "2"):
+        from autobench.campaign import STAGE_FOLDS
+
+        guard = derive_guard(LUAD, "standard", "kras", STAGE_FOLDS["discovery"])
+        assert guard["margin"] == pytest.approx(0.0060, abs=1e-9)
+        for fold in ("0", "1", "2", "3", "4"):
             assert guard["validation_class_counts"][fold] == {
                 "mutant": 17, "wildtype": 30,
             }
 
     def test_frozen_artifact_matches_a_fresh_derivation(self):
-        import json
+        from autobench.campaign import STAGE_FOLDS
 
-        frozen = json.loads(
-            (REPO_ROOT / "benchmarks/campaigns/preprint_130/guard_margins.json")
-            .read_text()
-        )
-        from autobench.campaign import CERTIFICATION_FOLDS, STAGE_FOLDS
-
-        assert frozen["tcga_luad__kras"] == derive_guard(
-            LUAD, "standard", "kras", CERTIFICATION_FOLDS,
-            margin_folds=STAGE_FOLDS["discovery"],
+        assert _committed_guards()["tcga_luad__kras"] == derive_guard(
+            LUAD, "standard", "kras", STAGE_FOLDS["discovery"],
         )
 
     @pytest.mark.skipif(not CANARY_RESULTS.is_dir(),

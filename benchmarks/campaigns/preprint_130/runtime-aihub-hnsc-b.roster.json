@@ -1,0 +1,11 @@
+{
+  "purpose": "rehearsal",
+  "note": "aihub protocol-v5 trial (Leo 2026-10-06): the five TCGA-HNSC grade cells (H-optimus-1 with CLAM, nnMIL, ABMIL and DTFD-MIL, plus TITAN) split into three sets so that each of aihub's three RTX 6000 Ada GPUs runs one chain of run_discovery_chain.sh. Every baseline is trained on the RTX, the GPU type reproduction_policy.json declares for these sets. Each set is frozen and certified on its own; its results never enter the final experiment, which runs on fir only.",
+  "cohorts": [
+    "tcga_hnsc"
+  ],
+  "cells": 1,
+  "cell_ids": [
+    "tcga_hnsc__grade__hoptimus1__dtfd__s42__preprint-v5"
+  ]
+}

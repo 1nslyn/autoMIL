@@ -83,7 +83,7 @@ disc_scan_report "$SCAN"
 
 # One predictor call per cell: "gpus wall cpus mem predicted e5 source".
 # A finish-only recovery takes the predictor's finish lane (one GPU, the
-# shorter wall: it holds the promotion of every cell that fits a shape).
+# shorter wall: the finish ladder trains nothing).
 shape_for() {
     local mode="$1" cell="$2" args shape_json
     if [ "$mode" = "finish" ]; then args="--finish"; else args="--runtime $RUNTIME --cells $cell --json${E5_SECONDS:+ --e5-seconds $E5_SECONDS}"; fi

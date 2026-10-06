@@ -1,7 +1,7 @@
 {
   "cptac_gbm__tp53": {
-    "basis": "one validation slide: 1/(3 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.027778, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.0279,
+    "basis": "one validation slide: 1/(5 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.016667, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0168,
     "metric": "val_bacc",
     "validation_class_counts": {
       "0": {
@@ -27,8 +27,8 @@
     }
   },
   "cptac_pdac__immune_class": {
-    "basis": "one validation slide: 1/(3 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.015873, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.016,
+    "basis": "one validation slide: 1/(5 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.009524, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0096,
     "metric": "val_bacc",
     "validation_class_counts": {
       "0": {
@@ -59,8 +59,8 @@
     }
   },
   "tcga_hnsc__grade": {
-    "basis": "one validation slide: 1/(3 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.018519, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.0186,
+    "basis": "one validation slide: 1/(5 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.011111, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0112,
     "metric": "val_bacc",
     "validation_class_counts": {
       "0": {
@@ -91,8 +91,8 @@
     }
   },
   "tcga_lgg__idh1": {
-    "basis": "one validation slide: 1/(3 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.015152, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.0153,
+    "basis": "one validation slide: 1/(5 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.009091, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0092,
     "metric": "val_bacc",
     "validation_class_counts": {
       "0": {
@@ -118,8 +118,8 @@
     }
   },
   "tcga_luad__kras": {
-    "basis": "one validation slide: 1/(3 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.009804, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.0099,
+    "basis": "one validation slide: 1/(5 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.005882, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.006,
     "metric": "val_bacc",
     "validation_class_counts": {
       "0": {

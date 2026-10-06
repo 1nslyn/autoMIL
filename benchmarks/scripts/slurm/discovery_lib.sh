@@ -29,12 +29,12 @@ DISC_NUDGE_MAX=3
 DISC_WEEKLY_USAGE_MAX_PCT=85
 DISC_WATCH_INTERVAL_S=120
 # Wall reserved after discovery completes for /exit + the finish ladder
-# (freeze -> promotion on this job's GPUs -> winner -> finalize).
-DISC_FINISH_RESERVE_H=4
+# (freeze -> winner -> finalize; nothing trains).
+DISC_FINISH_RESERVE_H=1
 
 # RUNTIME_NAME selects the cell-root directory under the campaign dir:
 # "runtime" is the final grid; a rehearsal set lives beside it (for example
-# "runtime-rehearsal") with its own committed roster "<name>.roster.json"
+# "runtime-aihub-hnsc-a") with its own committed roster "<name>.roster.json"
 # (cohorts, cells census, cell_ids). A set without that file uses the
 # campaign's active roster. Logs follow the set so a cell id that exists in
 # two sets never shares a log file.

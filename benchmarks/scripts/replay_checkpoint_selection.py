@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-from autobench.campaign import PROTOCOL, STAGE_FOLDS
+from autobench.campaign import PROTOCOL
 from autobench.pipeline.selection import SelectionTracker
 
 EPOCH_LINE = re.compile(r"^\[epoch (\d+)\](?: (.*))?$")
@@ -374,13 +374,15 @@ def _best_node(means: Mapping[str, tuple[float, float]], index: int) -> tuple[ob
     return (node, *eligible[node])
 
 
-#: Fold segments a complete run of each kind carries: the baseline registers
-#: every split fold; a reproduction or a discovery attempt runs the discovery
-#: folds. A run with fewer segments was killed and must not rank as a winner.
+#: Fold segments a complete protocol-v3 run of each kind carries: the baseline
+#: registers every split fold; a reproduction or a discovery attempt ran the
+#: three v3 discovery folds. A run with fewer segments was killed and must not
+#: rank as a winner.
+V3_DISCOVERY_FOLDS = 3
 FOLDS_REQUIRED = {
     "baseline": PROTOCOL["split_folds"],
-    "baseline-reproduction": len(STAGE_FOLDS["discovery"]),
-    "node": len(STAGE_FOLDS["discovery"]),
+    "baseline-reproduction": V3_DISCOVERY_FOLDS,
+    "node": V3_DISCOVERY_FOLDS,
 }
 
 

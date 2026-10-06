@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from automil.activity_hooks import claude_activity_settings
+from automil.admissibility import CandidateClass, load_candidate_policy
 from automil.cells.state import make_cell_id, normalize_mil_model
 from autobench.campaign import (
     ACTIVITY_METRICS_PORT,
@@ -110,6 +111,20 @@ def test_manifest_census_matches_the_frozen_paper_roster(manifest):
     assert sum(c["regime"] == "slide" for c in cells) == 10
 
 
+def test_manifest_refuses_the_analysis_plan_of_the_previous_protocol(tmp_path):
+    """Schema 2 describes a promotion stage that no longer exists: freezing it
+    into a v5 manifest would lock an analysis the protocol cannot produce."""
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    path = fake_repo / ANALYSIS_PLAN_PATH
+    plan = json.loads(path.read_text())
+    plan["schema_version"] = 2
+    path.write_text(json.dumps(plan))
+
+    with pytest.raises(CampaignManifestError, match="analysis plan contract"):
+        build_preprint_manifest(fake_repo)
+
+
 def test_every_command_and_budget_identity_reconstructs_from_the_cell(manifest):
     for cell in manifest["cells"]:
         assert manifest["dataset_sources"][cell["dataset_config"]] == (
@@ -143,25 +158,20 @@ def test_every_command_and_budget_identity_reconstructs_from_the_cell(manifest):
 
 def test_protocol_uses_all_five_validation_folds_without_final_retraining(manifest):
     protocol = manifest["protocol"]
-    assert protocol["stage_folds"] == {
-        "discovery": [0, 1, 2],
-        "promotion": [3, 4],
-    }
+    assert protocol["stage_folds"] == {"discovery": [0, 1, 2, 3, 4]}
     assert protocol["baseline"] == {
         "folds": list(BASELINE_FOLDS),
         "incumbent": True,
         "counts_toward_agentic_budget": False,
     }
-    assert set(protocol["stage_folds"]["discovery"]).isdisjoint(
-        protocol["stage_folds"]["promotion"]
-    )
-    assert sorted(
-        protocol["stage_folds"]["discovery"]
-        + protocol["stage_folds"]["promotion"]
-    ) == list(CERTIFICATION_FOLDS)
+    assert protocol["stage_folds"]["discovery"] == list(CERTIFICATION_FOLDS)
     assert protocol["winner_selection"] == {
         "metric_source": "validation",
-        "aggregation": "mean",
+        "pool": "unique-complete-discovery-candidates",
+        "statistic": "paired-fold-lift-over-baseline",
+        "rule": "sidak-max-lift",
+        "floor": 0.01,
+        "se_multiplier": 2.93,
         "folds": list(CERTIFICATION_FOLDS),
     }
     assert protocol["certification"] == {
@@ -169,21 +179,14 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
         "folds": list(CERTIFICATION_FOLDS),
         "retrain": False,
     }
-    assert protocol["agentic_fold_trainings_per_cell"] == {
-        "discovery": DISCOVERY_ATTEMPTS * 3,
-        "promotion_per_candidate": 2,
-        "promotion_candidates_min": 0,
-        "promotion_candidates_max": 10,
-        "minimum": 90,
-        "maximum": 110,
-    }
+    assert protocol["agentic_fold_trainings_per_cell"] == DISCOVERY_ATTEMPTS * 5 == 150
     assert protocol["discovery_agent_active_budget"] == "12h"
     assert protocol["attempt_timeout"] == {
-        "minutes": 600,
+        "minutes": 1020,
         "role": "failure-containment-not-search-budget",
         "scope": "one-multi-fold-attempt",
     }
-    assert all(set(cell["commands"]) == {"baseline", "discovery", "promotion"}
+    assert all(set(cell["commands"]) == {"baseline", "discovery"}
                for cell in manifest["cells"])
 
 
@@ -214,6 +217,44 @@ def test_materializer_rejects_policy_boundary_drift(tmp_path):
             fake_repo,
             agent_protocol=AGENT_PROTOCOL,
         )
+
+
+#: Everything a train-only policy reaches the trainers through, and the arm
+#: trainers that call it: the agent may write the policy, never these.
+POLICY_SEAMS_AND_ARM_TRAINERS = (
+    "benchmarks/src/autobench/pipeline/policy_dispatch.py",
+    "benchmarks/src/autobench/pipeline/policy_smoke.py",
+    "benchmarks/src/autobench/pipeline/ema.py",
+    "benchmarks/src/autobench/pipeline/clam/train.py",
+    "benchmarks/src/autobench/pipeline/nnmil/train.py",
+)
+
+
+def _template_policy(dataset: str):
+    return load_candidate_policy(
+        REPO_ROOT / "benchmarks/experiments" / dataset / "automil"
+    )
+
+
+@pytest.mark.parametrize("dataset", DATASETS)
+@pytest.mark.parametrize("path", POLICY_SEAMS_AND_ARM_TRAINERS)
+def test_a_candidate_cannot_edit_the_policy_seams_or_the_arm_trainers(dataset, path):
+    verdict = _template_policy(dataset).classify([path])
+
+    assert verdict.candidate_class is CandidateClass.PROTECTED_SURFACE_VIOLATION
+    assert not verdict.accepted
+
+
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_a_candidate_may_still_write_its_own_train_only_policy(dataset):
+    policy_module = (
+        f"benchmarks/experiments/{dataset}/automil/variants/_policies/mine.py"
+    )
+
+    verdict = _template_policy(dataset).classify([policy_module])
+
+    assert verdict.candidate_class is CandidateClass.TRAIN_ONLY_SOURCE
+    assert verdict.accepted
 
 
 def _copy_campaign_sources(fake_repo: Path) -> None:
@@ -260,9 +301,9 @@ def _write_guard_margins(fake_repo: Path) -> dict[str, dict]:
             }
             margins[f"{dataset}__{task}"] = {
                 "metric": "val_bacc",
-                # Self-consistent like a real artifact: the counts cover every
-                # certification fold (stages average different subsets) while
-                # the declared margin is the one the framework gate consumes.
+                # Self-consistent like a real artifact: the counts cover the
+                # five folds the gated mean averages, and the declared margin
+                # is the one those counts imply.
                 "margin": derived_margin_for_counts(
                     counts, PROTOCOL["stage_folds"]["discovery"]
                 ),
@@ -318,8 +359,8 @@ def test_materializer_creates_roster_count_independent_discovery_states(tmp_path
         assert "base_commit" not in config["campaign"]
         assert config["cap"]["eval_budget"] == DISCOVERY_ATTEMPTS
         assert config["cap"]["budget"] == DISCOVERY_AGENT_ACTIVE_BUDGET
-        assert config["training"]["fold_count"] == 3
-        assert config["orchestrator"]["default_timeout_min"] == 600
+        assert config["training"]["fold_count"] == 5
+        assert config["orchestrator"]["default_timeout_min"] == 1020
         assert config["files"]["editable"] == [
             f"{root.relative_to(fake_repo).as_posix()}/variants/_policies/*.py"
         ]
@@ -644,13 +685,15 @@ def test_manifest_refuses_a_margin_its_own_counts_do_not_imply(tmp_path):
         build_preprint_manifest(fake_repo)
 
 
-def test_manifest_refuses_counts_for_the_wrong_fold_set(tmp_path):
-    """The counts have to cover every fold set the guard is applied over.
+@pytest.mark.parametrize("folds", [("0", "1", "2"), ("0", "1", "2", "3", "4", "5")],
+                         ids=["three-fold-block", "extra-fold"])
+def test_manifest_refuses_counts_for_the_wrong_fold_set(tmp_path, folds):
+    """The counts have to cover exactly the folds the gated mean averages.
 
-    K is part of the lattice, so each stage's margin is derived over the folds
-    IT averages — the search gate and the discovery freeze over folds 0-2, the
-    promotion freeze over all five. Counts covering only the discovery folds
-    are internally consistent and still leave the promotion margin underivable.
+    K is part of the lattice: the search gate and the discovery freeze both
+    average all five folds. A block that still covers only folds 0-2 (the
+    protocol before v5), or one that adds a sixth fold, is internally
+    consistent and still describes a lattice the gated mean does not have.
     """
     fake_repo = tmp_path / "repo"
     _copy_campaign_sources(fake_repo)
@@ -659,7 +702,7 @@ def test_manifest_refuses_counts_for_the_wrong_fold_set(tmp_path):
     key = next(iter(margins))
     counts = margins[key]["validation_class_counts"]
     margins[key]["validation_class_counts"] = {
-        fold: counts[fold] for fold in map(str, PROTOCOL["stage_folds"]["discovery"])
+        fold: counts.get(fold, counts["0"]) for fold in folds
     }
     path.write_text(json.dumps(margins, indent=2, sort_keys=True))
 

@@ -80,16 +80,6 @@ AGENT_PROTOCOL_FILE = "agent_protocol.json"
 RELEASE_LINE = "Session is bound. Begin the discovery loop per your policy."
 METRICS_RETRY_ERROR = "Claude active-time metrics were not recorded for this session"
 BIND_RETRY_SECONDS = 30
-POLL_SECONDS = 30
-# finish: queue/ and running/ are sampled non-atomically, so a spec mid-move
-# between them can be absent from both in one sample; "drained" therefore
-# requires two consecutive clean samples this far apart.
-DRAIN_CONFIRM_SECONDS = 2
-# finish: with queue and running both empty, this many consecutive polls
-# without consumed_evals advancing means the ledger can no longer reach its
-# budget (e.g. a cap-refused or cancelled spec). Waiting longer would hang
-# forever; stop and audit the slate instead.
-STALL_POLL_LIMIT = 3
 UNAVAILABLE_USAGE = {
     "status": "unavailable",
     "input_tokens": None,
@@ -200,7 +190,7 @@ def agent_window_command(cell_root: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Subprocess boundary — tests monkeypatch these three
+# Subprocess boundary — tests monkeypatch _capture
 # ---------------------------------------------------------------------------
 def _capture(argv: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True, env=env)
@@ -211,10 +201,6 @@ def _run_or_die(argv: list[str], env: dict | None = None) -> None:
     completed = subprocess.run(argv, env=env)
     if completed.returncode != 0:
         sys.exit(completed.returncode)
-
-
-def _popen(argv: list[str], env: dict, stdout, stderr) -> subprocess.Popen:
-    return subprocess.Popen(argv, env=env, stdout=stdout, stderr=stderr)
 
 
 def _die_verbatim(completed: subprocess.CompletedProcess) -> None:
@@ -349,8 +335,8 @@ def _gpu_claim_conflicts(cell_root: Path, gpus: list[int]) -> list[str]:
     A cell's own partition may span several GPUs (a job may use 1, 2 or 4);
     every requested index is scanned, not just the first.
 
-    Same-cell discovery/promotion pairs are exempt: this cell's own daemons
-    on the same GPU are the normal finish-time state.
+    The cell itself is exempt: its own daemon on the same GPU is the normal
+    finish-time state.
     """
     cell_root = cell_root.resolve()
     requested = set(gpus)
@@ -358,10 +344,7 @@ def _gpu_claim_conflicts(cell_root: Path, gpus: list[int]) -> list[str]:
     for candidate in _candidate_cell_roots(cell_root):
         if candidate.resolve() == cell_root:
             continue
-        for orch_dir in (
-            candidate / "automil" / "orchestrator",
-            candidate / "promotion" / "automil" / "orchestrator",
-        ):
+        for orch_dir in (candidate / "automil" / "orchestrator",):
             pid = _daemon_alive(orch_dir)
             if pid is None:
                 continue
@@ -802,7 +785,7 @@ def _watch_once(cell_root: Path) -> None:
         print(
             f"  phase {status.get('phase')} | attempts_charged "
             f"{discovery.get('attempts_charged')}/{discovery.get('attempt_budget')}"
-            f" | promoted {discovery.get('promoted_candidates')}"
+            f" | unique candidates {discovery.get('unique_complete_candidates')}"
         )
     for line in _budget_lines(cell_root / "automil"):
         print(line)
@@ -961,245 +944,6 @@ def _pending_work_counts(adir: Path) -> tuple[int, int]:
     return queued, in_flight
 
 
-def _promotion_budget(promotion_adir: Path) -> tuple[int, int | None] | None:
-    """(consumed_evals, eval_budget) from the typed cell reader; None = unknown.
-
-    ``read_cell`` fails loud on obsolete cell layouts where a raw parse would
-    silently report 0. An unreadable ledger prints the verbatim error and
-    reports UNKNOWN (never drained) — the stall detector in
-    ``_drive_promotion`` bounds how long an unknown ledger can be polled.
-    """
-    cell = json.loads((promotion_adir / "campaign_cell.json").read_text())
-    budget_cell_id = str(cell["budget_identity"]["cell_id"])
-    cell_path = promotion_adir / "cells" / f"{budget_cell_id}.json"
-    try:
-        budget_cell = read_cell(cell_path)
-    except (OSError, ValueError, TypeError, KeyError) as exc:
-        print(f"finish: cannot read the promotion budget cell {cell_path}: {exc}")
-        return None
-    return budget_cell.consumed_evals, budget_cell.eval_budget
-
-
-def _promotion_drained_once(promotion_adir: Path) -> bool:
-    queued, in_flight = _pending_work_counts(promotion_adir)
-    if queued or in_flight:
-        return False
-    budget = _promotion_budget(promotion_adir)
-    if budget is None:
-        return False
-    consumed, cap = budget
-    # >= — never ==: an overconsumed ledger must still count as drained, or
-    # the poll below would never terminate on it.
-    return cap is not None and consumed >= cap
-
-
-def _promotion_drained(promotion_adir: Path) -> bool:
-    """Two consecutive drained samples: queue/ then running/ are read
-    non-atomically, so a spec mid-move between the two directories can be
-    absent from both in a single sample."""
-    if not _promotion_drained_once(promotion_adir):
-        return False
-    _sleep(DRAIN_CONFIRM_SECONDS)
-    return _promotion_drained_once(promotion_adir)
-
-
-def _promotion_plan_node_ids(promotion_adir: Path) -> list[str]:
-    """Promotion node ids from the immutable plan written at materialization."""
-    plan_path = promotion_adir / "promotion_plan.json"
-    try:
-        plan = json.loads(plan_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        _fail(f"cannot read the immutable promotion plan {plan_path}: {exc}")
-    jobs = plan.get("jobs")
-    if not isinstance(jobs, list) or not all(
-        isinstance(job, dict)
-        and isinstance(job.get("promotion_node_id"), str)
-        and job["promotion_node_id"]
-        for job in jobs
-    ):
-        _fail(f"{plan_path} carries no readable promotion job roster")
-    return [job["promotion_node_id"] for job in jobs]
-
-
-def _require_complete_promotion_slate(
-    promotion_adir: Path, accept_missing: bool,
-) -> None:
-    """Refuse to hand freeze-promotion a partially-measured slate.
-
-    freeze-promotion tolerates a missing result.json by marking the job
-    'ineligible', so proceeding on drained counters alone would silently
-    freeze whatever happened to finish. Every planned node must have a
-    terminal archive result, or the operator must accept the gap explicitly.
-    """
-    archive_root = promotion_adir / "orchestrator" / "archive"
-    missing = [
-        node_id for node_id in _promotion_plan_node_ids(promotion_adir)
-        if not (archive_root / node_id / "result.json").is_file()
-    ]
-    if not missing:
-        print("finish: every planned promotion job has a terminal result.json")
-        return
-    if accept_missing:
-        print(
-            f"finish: WARNING — proceeding with {len(missing)} promotion "
-            "job(s) lacking a terminal result.json (--accept-missing); "
-            "freeze-promotion will mark them ineligible: "
-            + ", ".join(missing)
-        )
-        return
-    _fail(
-        "the promotion queue and running set are empty but these planned "
-        "promotion jobs have no terminal result.json:\n  "
-        + "\n  ".join(missing)
-        + "\nfreeze-promotion would silently mark them 'ineligible' and "
-        "freeze a partially-measured slate. Re-run the missing jobs first, "
-        "or re-run finish with --accept-missing to freeze the slate as-is."
-    )
-
-
-def _supervisor_log_tail(log_path: Path) -> str:
-    try:
-        return "\n".join(log_path.read_text().splitlines()[-20:])
-    except OSError:
-        return "(no supervisor log)"
-
-
-def _drive_promotion(
-    cell_root: Path, gpus: list[int] | None, accept_missing: bool,
-) -> None:
-    promotion_root = cell_root / "promotion"
-    promotion_adir = promotion_root / "automil"
-    if not (promotion_adir / "campaign_cell.json").is_file():
-        _fail(
-            f"phase is promotion but {promotion_adir} is not materialized — "
-            "the controller state and the tree disagree; investigate"
-        )
-    orch_dir = promotion_adir / "orchestrator"
-    log_path = orch_dir / "operate_supervisor.log"
-
-    if _promotion_drained(promotion_adir):
-        print("finish: promotion queue already drained")
-        _require_complete_promotion_slate(promotion_adir, accept_missing)
-        _stop_promotion_daemon(promotion_root, orch_dir, child=None)
-        return
-
-    child: subprocess.Popen | None = None
-    log_handle = None
-    adopted_pid = _daemon_alive(orch_dir)
-    if adopted_pid is not None:
-        print(f"finish: adopting the live promotion orchestrator "
-              f"(pid {adopted_pid}) — polling only, not starting another")
-    else:
-        if gpus is None:
-            _fail(
-                "finish must start a promotion orchestrator but --gpu was "
-                "not given. An unset AUTOMIL_VISIBLE_GPUS schedules on EVERY "
-                "GPU of this shared host (the daemon refuses malformed "
-                "values, not absent ones) — re-run with an explicit --gpu N."
-            )
-        _require_campaign_gpu(cell_root, gpus)
-        orch_dir.mkdir(parents=True, exist_ok=True)
-        log_handle = log_path.open("ab")
-        gpu_value = _gpu_list_env_value(gpus)
-        env = {
-            **os.environ,
-            "AUTOMIL_VISIBLE_GPUS": gpu_value,
-            "AUTOMIL_MAX_CONCURRENT_PER_GPU": str(MAX_CONCURRENT_PER_GPU),
-        }
-        child = _popen(
-            automil_argv(promotion_root, "orchestrator", "start"),
-            env=env, stdout=log_handle, stderr=subprocess.STDOUT,
-        )
-        print(
-            f"finish: started the promotion orchestrator as a supervised "
-            f"foreground child (pid {child.pid}, "
-            f"AUTOMIL_VISIBLE_GPUS={gpu_value}, log {log_path})"
-        )
-        deadline = _now() + 120
-        while _daemon_alive(orch_dir) is None:
-            if child.poll() is not None:
-                _fail(
-                    "the promotion orchestrator exited during startup "
-                    f"(rc {child.returncode}); log tail:\n"
-                    + _supervisor_log_tail(log_path)
-                )
-            if _now() >= deadline:
-                _fail("the promotion orchestrator wrote no live pid file "
-                      f"within 120s; log tail:\n{_supervisor_log_tail(log_path)}")
-            _sleep(2)
-
-    try:
-        stalled = False
-        stall_polls = 0
-        last_consumed: int | None = None
-        while not _promotion_drained(promotion_adir):
-            if child is not None and child.poll() is not None:
-                _fail(
-                    "the supervised promotion orchestrator exited with work "
-                    f"remaining (rc {child.returncode}); log tail:\n"
-                    + _supervisor_log_tail(log_path)
-                )
-            if child is None and _daemon_alive(orch_dir) is None:
-                _fail(
-                    "the adopted promotion orchestrator died with work "
-                    "remaining; re-run finish with --gpu N to start a "
-                    "supervised one"
-                )
-            queued, in_flight = _pending_work_counts(promotion_adir)
-            budget = _promotion_budget(promotion_adir)
-            consumed, cap = budget if budget is not None else (None, None)
-            print(
-                "finish: promotion consumed "
-                f"{'?' if consumed is None else consumed}/"
-                f"{'?' if cap is None else cap}, "
-                f"queued {queued}, running {in_flight}"
-            )
-            # Stall detector: nothing queued, nothing running, and the
-            # consumed counter not advancing means the ledger can never
-            # reach its budget (cap-refused/cancelled spec). Polling on
-            # would hang forever — the one thing this script must not do.
-            if queued == 0 and in_flight == 0 and consumed == last_consumed:
-                stall_polls += 1
-            else:
-                stall_polls = 0
-            last_consumed = consumed
-            if stall_polls >= STALL_POLL_LIMIT:
-                stalled = True
-                print(
-                    "finish: promotion is STALLED — queue and running are "
-                    "empty and consumed_evals has not advanced for "
-                    f"{STALL_POLL_LIMIT} polls; the budget can no longer "
-                    "drain by itself. Auditing the slate instead of waiting."
-                )
-                break
-            _sleep(POLL_SECONDS)
-        if not stalled:
-            print("finish: promotion queue drained")
-        _require_complete_promotion_slate(promotion_adir, accept_missing)
-        _stop_promotion_daemon(promotion_root, orch_dir, child)
-    finally:
-        if log_handle is not None:
-            log_handle.close()
-
-
-def _stop_promotion_daemon(
-    promotion_root: Path, orch_dir: Path, child: subprocess.Popen | None,
-) -> None:
-    if _daemon_alive(orch_dir) is None and child is None:
-        print("finish: promotion orchestrator is not running")
-        return
-    print("finish: stopping the promotion orchestrator")
-    _run_or_die(automil_argv(promotion_root, "orchestrator", "stop"))
-    if child is not None:
-        try:
-            child.wait(timeout=600)
-        except subprocess.TimeoutExpired:
-            _fail("the supervised promotion orchestrator ignored SIGTERM for "
-                  "600s; investigate before re-running finish")
-    else:
-        _wait_daemon_dead(orch_dir, 300, "promotion orchestrator")
-
-
 def _run_stage(action: str, cell_root: Path) -> None:
     print(f"finish: {action}")
     _run_or_die(stage_argv(action, cell_root))
@@ -1261,15 +1005,6 @@ def _finish_discovery(cell_root: Path, args: argparse.Namespace) -> None:
     _run_stage("freeze-discovery", cell_root)
 
 
-def _finish_promotion_ready(cell_root: Path, args: argparse.Namespace) -> None:
-    _run_stage("materialize-promotion", cell_root)
-
-
-def _finish_promotion(cell_root: Path, args: argparse.Namespace) -> None:
-    _drive_promotion(cell_root, args.gpu, args.accept_missing)
-    _run_stage("freeze-promotion", cell_root)
-
-
 def _finish_selection_ready(cell_root: Path, args: argparse.Namespace) -> None:
     _run_stage("select-winner", cell_root)
 
@@ -1278,8 +1013,6 @@ def _finish_selection_ready(cell_root: Path, args: argparse.Namespace) -> None:
 # per advance. Phase decides every step; history never does.
 _FINISH_LADDER = (
     ("discovery", _finish_discovery),
-    ("promotion-ready", _finish_promotion_ready),
-    ("promotion", _finish_promotion),
     ("selection-ready", _finish_selection_ready),
 )
 
@@ -1353,11 +1086,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finish.add_argument("cell_root")
     finish.add_argument(
-        "--gpu", type=_parse_gpu_list, default=None,
-        help="physical GPU index or comma list (e.g. '0' or '0,1,2,3'); "
-             "required whenever finish must START a promotion orchestrator",
-    )
-    finish.add_argument(
         "--usage-json", default=None,
         help="path to a runtime usage JSON block, passed verbatim into the "
              "session attestation; omitted = honest `unavailable`",
@@ -1366,12 +1094,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--attest", default=None,
         help="operator attestation for `automil activity close` when the "
              "runtime died before its SessionEnd hook",
-    )
-    finish.add_argument(
-        "--accept-missing", action="store_true",
-        help="proceed to freeze-promotion even though planned promotion jobs "
-             "lack a terminal result.json (they freeze as 'ineligible'); "
-             "without this flag finish refuses and lists the missing nodes",
     )
     finish.set_defaults(func=cmd_finish)
     return parser

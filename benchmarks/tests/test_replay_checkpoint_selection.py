@@ -142,7 +142,7 @@ def test_a_killed_or_crashed_candidate_never_ranks_as_winner(mod, tmp_path):
     comes from the stage, never from the longest log."""
     fold = "[epoch 0] val_loss=0.5 val_auc={v}\n[selected] epoch=0 source=best\n"
     root = _cell(tmp_path / "k", log=fold.format(v=0.60) * mod.FOLDS_REQUIRED["baseline"])
-    n = mod.FOLDS_REQUIRED["node"]
+    n = 3  # the logs replayed are protocol v3: an attempt ran three fold segments
     _node(root, "node_0002", fold.format(v=0.99) * 2, status="crash")      # killed mid-run
     _node(root, "node_0003", fold.format(v=0.70) * n)                       # complete
     _node(root, "node_0004", fold.format(v=0.98) * n, status="crash")       # crashed after the folds

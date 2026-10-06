@@ -393,7 +393,7 @@ def summary_to_result_json(
     # `unestimable`.
     if "c_index" in test:
         test_ci = _finite_or_none(test.get("c_index", {}).get("mean"))
-        # The campaign ranks discovery, promotion, and the final winner by the
+        # The campaign ranks discovery attempts and the final winner by the
         # equal-weight mean of the same fold primary values. Keep the graph-facing
         # result on that exact scale as well; ``val_pooled`` remains a useful
         # sealed diagnostic but must not silently change the search estimand.
@@ -537,7 +537,8 @@ def summary_to_result_json(
     # A stage is complete only when every fold it declared has a finite
     # selection primary_value.  The old global ``>= 2`` threshold let a 2/3-fold
     # discovery attempt enter keep/UCB even though freeze later rejected it.
-    # Promotion's declared 2/2 subset remains complete; a full run requires 5/5.
+    # A run that declares a fold subset is complete on that subset; a full run
+    # requires 5/5.
     per_fold_val = summary.get("per_fold_val", []) or []
     n_folds_total = summary.get("n_folds", len(per_fold_val))
     valid_fold_primary_values = _per_fold_primary_values(

@@ -15,6 +15,11 @@ by hand from the counts it prints.
     uv run python benchmarks/campaigns/preprint_130/derive_guard_margins.py
     uv run python benchmarks/campaigns/preprint_130/derive_guard_margins.py --write
 
+``--from-counts`` re-derives every recorded entry from the class counts it
+already publishes, without the data: the way to move the margins to a new
+fold set inside the counts (for example after a protocol change in which
+folds a gated mean averages).
+
 Cohorts whose root is not mounted are reported and left untouched; the file is
 MERGED, so one host can contribute one cohort and another host the rest. A
 partial artifact is safe by design: the manifest records the gap as
@@ -42,10 +47,11 @@ from dotenv import load_dotenv  # noqa: E402
 # benchmarks/.env, so resolve them the way every other entry point does.
 load_dotenv(REPO_ROOT / "benchmarks" / ".env")
 
-from autobench.campaign import (CERTIFICATION_FOLDS,  # noqa: E402
-                                DATASETS, GUARD_MARGINS_PATH, STAGE_FOLDS,
+from autobench.campaign import (DATASETS,  # noqa: E402
+                                GUARD_MARGINS_PATH, STAGE_FOLDS,
                                 _dataset_config_path)
-from autobench.guard_margin import GuardMarginError, derive_guard  # noqa: E402
+from autobench.guard_margin import (GuardMarginError,  # noqa: E402
+                                    derive_guard, guard_from_counts)
 
 
 def _benchmark_dir(dataset: str) -> Path:
@@ -79,7 +85,7 @@ def derive_all() -> tuple[dict[str, dict], list[str]]:
     """
     import yaml
 
-    folds = CERTIFICATION_FOLDS
+    folds = STAGE_FOLDS["discovery"]
     margins: dict[str, dict] = {}
     skipped: list[str] = []
     for dataset in DATASETS:
@@ -94,30 +100,37 @@ def derive_all() -> tuple[dict[str, dict], list[str]]:
             if (spec or {}).get("task_type", "classification") == "survival":
                 continue   # no balanced accuracy, no guard
             margins[f"{dataset}__{task}"] = derive_guard(
-                # Counts cover every certification fold — the guard binds at
-                # stages that average different subsets — while the declared
-                # margin is the one the framework gate consumes.
                 benchmark_dir, "standard", task, folds,
-                margin_folds=STAGE_FOLDS["discovery"],
             )
     return margins, skipped
+
+
+def derive_from_counts(existing: dict[str, dict]) -> dict[str, dict]:
+    """Every recorded entry re-derived from its own published counts,
+    restricted to the folds the gated mean averages."""
+    folds = {str(fold) for fold in STAGE_FOLDS["discovery"]}
+    margins: dict[str, dict] = {}
+    for key, guard in existing.items():
+        counts = guard.get("validation_class_counts") or {}
+        if not folds <= set(counts):
+            raise GuardMarginError(
+                f"{key}: counts cover folds {sorted(counts)}; the gated mean "
+                f"averages {sorted(folds)}"
+            )
+        margins[key] = guard_from_counts(
+            {fold: counts[fold] for fold in sorted(folds)}
+        )
+    return margins
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true",
                         help=f"write {GUARD_MARGINS_PATH} (default: print only)")
+    parser.add_argument("--from-counts", action="store_true",
+                        help="re-derive every recorded entry from its published "
+                             "counts instead of reading the mounted splits")
     args = parser.parse_args()
-
-    try:
-        margins, skipped = derive_all()
-    except GuardMarginError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    if not margins:
-        print("error: no cohort is mounted here:\n  " + "\n  ".join(skipped),
-              file=sys.stderr)
-        return 1
 
     path = REPO_ROOT / GUARD_MARGINS_PATH
     # MERGE, never replace: this host may hold one cohort and another host the
@@ -129,6 +142,18 @@ def main() -> int:
         except (OSError, json.JSONDecodeError) as exc:
             print(f"error: cannot read {path}: {exc}", file=sys.stderr)
             return 1
+    try:
+        if args.from_counts:
+            margins, skipped = derive_from_counts(existing), []
+        else:
+            margins, skipped = derive_all()
+    except GuardMarginError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not margins:
+        print("error: no cohort is mounted here:\n  " + "\n  ".join(skipped),
+              file=sys.stderr)
+        return 1
     merged = {**existing, **margins}
 
     width = max(len(k) for k in merged)

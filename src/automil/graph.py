@@ -242,13 +242,13 @@ def effective_accept_margin(
     multiplicity concern for a bar so wide it discarded everything — the
     virchow2 canary discarded 30/30 attempts against a bar its per-fold oracle
     could not reach. The multiplicity concern is real and handled downstream:
-    at k=1 a null child passes with p ≈ 0.21 (one-sided t, 2 df), so over ~30
-    screened candidates several false keeps are EXPECTED — promotion re-runs
-    the top-10 on held-back folds 3/4 and the winner is selected on the 5-fold
-    mean, which is the arbitration this screen defers to. A zero paired SE
+    at k=1 a null child passes with p ≈ 0.19 (one-sided t, 4 df), so over ~30
+    screened candidates several false keeps are EXPECTED — the campaign's
+    winner rule holds the best candidate to a bar set for the best of all 30
+    attempts, which is the arbitration this screen defers to. A zero paired SE
     (fold-uniform delta) keeps at the δ floor; that is legitimately strong
-    paired evidence at this n, but note the sign-test bound: n=3 uniform
-    deltas reach one-sided p = 1/8 at best. NEVER report a keep as
+    paired evidence at this n, but note the sign-test bound: n=5 uniform
+    deltas reach one-sided p = 1/32 at best. NEVER report a keep as
     significance — it is a search-steering screen.
 
     **Marginal** — otherwise, ``k × parent primary_se`` (the pre-existing

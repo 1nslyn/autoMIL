@@ -12,9 +12,7 @@ from autobench.campaign_stages import (
     certify_winner,
     finalize_agent_session,
     freeze_discovery,
-    freeze_promotion,
     load_stage_state,
-    materialize_promotion,
     open_agent_session,
     register_baseline,
     run_baseline_reproduction,
@@ -65,18 +63,10 @@ def public_status(state: dict[str, Any]) -> dict[str, Any]:
             "attempts_charged": state["discovery"]["attempts_charged"],
             "attempt_budget": state["discovery"]["attempt_budget"],
             "complete_candidates": state["discovery"]["complete_candidates"],
-            "promoted_candidates": len(
-                state["discovery"]["promoted_candidates"]
+            "unique_complete_candidates": (
+                state["discovery"]["unique_complete_candidates"]
             ),
             "frozen": state["discovery"]["frozen"],
-        },
-        "promotion": {
-            "jobs": len(state["promotion"]["jobs"]),
-            "materialized": state["promotion"]["materialized"],
-            "frozen": state["promotion"]["frozen"],
-            "eligible_candidates": len(
-                state["promotion"].get("eligible_candidates", [])
-            ),
         },
         "winner": ({
             "kind": winner.get("kind"),
@@ -99,16 +89,12 @@ def baseline_command(cell_root: Path) -> str:
     return str(cell["commands"]["baseline"])
 
 
-def advance(cell_root: Path, repo_root: Path) -> dict[str, Any]:
+def advance(cell_root: Path) -> dict[str, Any]:
     """Advance exactly one safe transition, never the held-out reveal."""
     state = load_stage_state(cell_root)
     phase = state["phase"]
     if phase == "discovery":
         return freeze_discovery(cell_root)
-    if phase == "promotion-ready":
-        return materialize_promotion(cell_root, repo_root=repo_root)
-    if phase == "promotion":
-        return freeze_promotion(cell_root)
     if phase == "selection-ready":
         return select_winner(cell_root)
     if phase in {"winner-frozen", "certified"}:
@@ -118,13 +104,12 @@ def advance(cell_root: Path, repo_root: Path) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Operate one immutable discovery→top-10→five-fold campaign cell.",
+        description="Operate one immutable five-fold discovery campaign cell.",
     )
     parser.add_argument(
         "action",
         choices=(
-            "status", "register-baseline", "freeze-discovery",
-            "materialize-promotion", "freeze-promotion", "select-winner",
+            "status", "register-baseline", "freeze-discovery", "select-winner",
             "certify", "baseline-command", "run-baseline",
             "run-baseline-reproduction", "advance",
             "open-agent-session", "finalize-agent-session",
@@ -208,10 +193,6 @@ def main(argv: list[str] | None = None) -> None:
             state = load_stage_state(cell_root)
         elif args.action == "freeze-discovery":
             state = freeze_discovery(cell_root)
-        elif args.action == "materialize-promotion":
-            state = materialize_promotion(cell_root, repo_root=repo_root)
-        elif args.action == "freeze-promotion":
-            state = freeze_promotion(cell_root)
         elif args.action == "select-winner":
             state = select_winner(cell_root)
         elif args.action == "certify":
@@ -220,7 +201,7 @@ def main(argv: list[str] | None = None) -> None:
             print(bundle.read_text(), end="")
             return
         else:
-            state = advance(cell_root, repo_root)
+            state = advance(cell_root)
         print(json.dumps(public_status(state), indent=2, sort_keys=True))
         if args.action == "advance" and state["phase"] == "winner-frozen":
             print(

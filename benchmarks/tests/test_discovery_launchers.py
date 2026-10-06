@@ -7,6 +7,7 @@ are shared by both paths.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -188,24 +189,71 @@ def _fits_wall(tmp_path: Path, hours_left: int, elapsed_total: float | None):
 
 
 def test_a_cell_that_would_outlast_its_wall_is_refused(tmp_path):
-    """A KRAS CLAM baseline of 4.3 h on the RTX predicts 33.7 h on three
-    GPUs (four batches one after another, one of them at the 10 h attempt
-    timeout): a 12 h wall would end the session mid-discovery and strand it."""
-    refused = _fits_wall(tmp_path, 12, 15600.0)
+    """A KRAS CLAM baseline of 4.3 h on the RTX predicts 49.3 h on three
+    GPUs (five-fold attempts, four batches one after another, one of them at
+    the 17 h attempt timeout): a 48 h wall would end the session
+    mid-discovery and strand it."""
+    refused = _fits_wall(tmp_path, 48, 15600.0)
     assert refused.returncode != 0
     assert "exceeds 85% of the wall" in refused.stdout
 
 
 def test_a_cell_that_fits_its_wall_starts(tmp_path):
-    result = _fits_wall(tmp_path, 48, 15600.0)
+    result = _fits_wall(tmp_path, 72, 15600.0)
     assert result.returncode == 0, result.stdout
-    assert "predicted 33.7 h on 3 GPU" in result.stdout
+    assert "predicted 49.3 h on 3 GPU" in result.stdout
 
 
 def test_a_cell_without_a_baseline_time_is_refused(tmp_path):
     refused = _fits_wall(tmp_path, 48, None)
     assert refused.returncode != 0
     assert "no baseline time" in refused.stdout
+
+
+def _job_function(name: str) -> str:
+    """One function's text out of the job script, which starts a cell the
+    moment it is sourced."""
+    lines = JOB.read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"{name}() {{"))
+    end = next(i for i in range(start, len(lines)) if lines[i] == "}")
+    return "\n".join(lines[start:end + 1])
+
+
+def _finish_arguments(tmp_path: Path, usage: bool) -> list[str]:
+    """What the job's ``finish_cell`` hands ``operate``: the function run for
+    real, in a scope that still holds the job's GPU list, with ``operate``
+    replaced by a recorder that prints one argument per line into the job's
+    log."""
+    opdir, log = tmp_path / "operator", tmp_path / "job.log"
+    opdir.mkdir()
+    if usage:
+        (opdir / "usage.json").write_text("{}")
+    snippet = (
+        f'source "{LIB}"; operate() {{ printf "%s\\n" "$@"; }}; '
+        f'RUNTIME=/runtime; OPDIR="{opdir}"; LOG="{log}"; GPU_LIST=0,1; '
+        f'{_job_function("finish_cell")}; finish_cell some_cell'
+    )
+    result = _run(["bash", "-c", snippet], _env())
+    assert result.returncode == 0, result.stderr
+    return log.read_text().splitlines()
+
+
+@pytest.mark.parametrize("usage", [False, True], ids=["no-usage", "with-usage"])
+def test_the_job_finishes_a_cell_with_arguments_the_operator_accepts(tmp_path, usage):
+    """Finish trains nothing and starts no daemon, so the job gives it no GPU:
+    a cell that ran its whole session must not strand on a refused argument."""
+    spec = importlib.util.spec_from_file_location(
+        "campaign_operate_under_test", SCRIPTS / "campaign_operate.py",
+    )
+    operate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(operate)
+
+    arguments = _finish_arguments(tmp_path, usage)
+    parsed = operate.build_parser().parse_args(arguments)
+
+    assert parsed.command == "finish"
+    assert parsed.cell_root == "/runtime/some_cell"
+    assert parsed.usage_json == (str(tmp_path / "operator" / "usage.json") if usage else None)
 
 
 @pytest.mark.skipif(
