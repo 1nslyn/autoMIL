@@ -40,3 +40,21 @@ def _bag_cache_is_opt_in(monkeypatch):
     monkeypatch.setattr(bag_cache, "_warned", set())
     monkeypatch.setattr(bag_cache, "_disabled", False)
     monkeypatch.setattr(bag_cache, "_checked_dir", None)
+
+
+@pytest.fixture(autouse=True)
+def _gpu_visibility_is_restored():
+    """No test may change which GPUs the tests after it see.
+
+    The nnMIL runner and the GPU worker pin their device by writing
+    ``CUDA_VISIBLE_DEVICES`` (a CPU nnMIL run writes ``cpu``, which hides every
+    GPU). Driven in-process, that write outlives the test: on a GPU host whose
+    CUDA runtime was already queried, every later run that records its device
+    then asks for a GPU the runtime can no longer see, and fails.
+    """
+    before = os.environ.get("CUDA_VISIBLE_DEVICES")
+    yield
+    if before is None:
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = before
