@@ -45,6 +45,57 @@ def test_refresh_persists_claude_native_counter(tmp_path, monkeypatch):
     assert read_activity_report(tmp_path, "cell-1").active_seconds == 12.5
 
 
+def _open_session(project):
+    record_hook_event(
+        project,
+        "cell-1",
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "session-1",
+            "source": "startup",
+        },
+        observed_at=1.0,
+    )
+
+
+def test_a_login_change_mid_session_adds_the_new_account_series(tmp_path):
+    """After a re-login the exporter keeps the old account's series beside the new one."""
+    _open_session(tmp_path)
+    exposition = (
+        'claude_code_active_time_total{session_id="session-1",user_email="a@lab",type="user"} 10\n'
+        'claude_code_active_time_total{session_id="session-1",user_email="a@lab",type="cli"} 1\n'
+        'claude_code_active_time_total{session_id="session-1",user_email="b@home",type="user"} 2\n'
+        'claude_code_active_time_total{session_id="session-1",user_email="b@home",type="cli"} 0.5\n'
+    ).encode()
+
+    observation = activity_metrics.observe_activity_metrics(
+        tmp_path,
+        open_url=lambda url, timeout: _Response(exposition),
+        observed_at=2.0,
+    )
+
+    assert observation.available is True
+    assert read_activity_report(tmp_path, "cell-1").active_seconds == 13.5
+
+
+def test_a_series_repeated_with_identical_labels_holds_admission(tmp_path):
+    _open_session(tmp_path)
+    exposition = (
+        'claude_code_active_time_total{session_id="session-1",type="user"} 10\n'
+        'claude_code_active_time_total{type="user",session_id="session-1"} 10\n'
+    ).encode()
+
+    observation = activity_metrics.observe_activity_metrics(
+        tmp_path,
+        open_url=lambda url, timeout: _Response(exposition),
+        observed_at=2.0,
+    )
+
+    assert observation.available is False
+    assert "duplicate active-time series" in observation.error
+    assert read_activity_report(tmp_path, "cell-1").active_seconds == 0.0
+
+
 def test_refresh_returns_false_when_claude_endpoint_is_absent(tmp_path, monkeypatch):
     def unavailable(*_args, **_kwargs):
         raise URLError("not running")

@@ -658,7 +658,10 @@ def _empty_report() -> ActivityReport:
 def _parse_active_samples(exposition: str) -> dict[str, float]:
     if not isinstance(exposition, str):
         raise ActivityError("Prometheus metrics payload must be text")
-    by_series: dict[tuple[str, str], float] = {}
+    # A series is its full label set. One session can carry several per type:
+    # a re-login mid-session changes the account labels, and the exporter
+    # keeps the old series beside the new one, each counting its own stretch.
+    by_series: dict[tuple[tuple[str, str], ...], tuple[str, float]] = {}
     for raw_line in exposition.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -677,13 +680,15 @@ def _parse_active_samples(exposition: str) -> dict[str, float]:
         activity_type = _identifier(attributes.get("type"), "type")
         if activity_type not in {"cli", "user"}:
             raise ActivityError(f"unsupported active-time type {activity_type!r}")
-        key = (session_id, activity_type)
+        key = tuple(sorted(attributes.items()))
         if key in by_series:
-            raise ActivityError(f"duplicate active-time series {key!r}")
-        by_series[key] = _prometheus_number(match.group("value"))
+            raise ActivityError(
+                f"duplicate active-time series {(session_id, activity_type)!r}"
+            )
+        by_series[key] = (session_id, _prometheus_number(match.group("value")))
 
     samples: dict[str, float] = {}
-    for (session_id, _), value in by_series.items():
+    for session_id, value in by_series.values():
         samples[session_id] = samples.get(session_id, 0.0) + value
     return samples
 
