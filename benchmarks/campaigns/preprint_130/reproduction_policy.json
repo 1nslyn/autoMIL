@@ -16,6 +16,18 @@
     "runtime-aihub-hnsc-c": {
       "name": "NVIDIA RTX 6000 Ada Generation",
       "mig": false
+    },
+    "runtime-aihub-kras-a": {
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "mig": false
+    },
+    "runtime-aihub-kras-b": {
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "mig": false
+    },
+    "runtime-aihub-kras-c": {
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "mig": false
     }
   },
   "declared": "2026-09-26",

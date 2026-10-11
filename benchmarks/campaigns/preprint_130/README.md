@@ -186,7 +186,8 @@ gates.
 Every run of a runtime set (the cell-root directory a cell sits in) trains
 on one GPU type, declared for that set under `gpu` in
 `reproduction_policy.json`: a full NVIDIA H100 80GB HBM3 without MIG for
-`runtime`, an NVIDIA RTX 6000 Ada for the three `runtime-aihub-hnsc-*` sets.
+`runtime`, an NVIDIA RTX 6000 Ada for the three `runtime-aihub-hnsc-*` and
+three `runtime-aihub-kras-*` sets.
 On the same GPU type a re-run reproduces its baseline bit
 for bit. Two types disagree: a full H100 and a 3g.40gb MIG slice by up to
 0.045 validation AUC per fold (fir jobs 61495558 / 61495560), an RTX 6000
@@ -411,7 +412,9 @@ three aihub sets of the TCGA-HNSC grade trial, which split its five cells
 three RTX 6000 Ada GPUs, one chain each, trained there from their own
 baselines and run by the workstation driver (Section 4c):
 `runtime-aihub-hnsc-a` (CLAM and TITAN), `runtime-aihub-hnsc-b` (DTFD-MIL)
-and `runtime-aihub-hnsc-c` (ABMIL and nnMIL). Round 1 (v3) roots are parked
+and `runtime-aihub-hnsc-c` (ABMIL and nnMIL). The TCGA-LUAD KRAS trial reruns
+the five cells of the v4 KRAS trial under v5 in the same split:
+`runtime-aihub-kras-a`, `-b` and `-c`. Round 1 (v3) roots are parked
 under `logs/discovery_cells/rehearsal-archive/`; the v4 rosters
 (`runtime-rehearsal`, `runtime-aihub`) are at commit `e978c28`. Each
 materialized root is about 1,000 files, so only the set's cells are built:
