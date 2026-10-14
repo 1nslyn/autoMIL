@@ -69,6 +69,11 @@ registry:
     timeout_s: 180
   allowed_override_options: ["--hparams", "--policy-variant"]
   allowed_variant_kinds: ["policy"]
+  # Policy methods may import only these and never read or write files, so a
+  # policy cannot reach validation or test data on disk.
+  policy_method_imports: ["torch", "numpy", "math", "autobench.pipeline.ema",
+                          "collections", "itertools", "functools", "copy",
+                          "typing"]
   # Identity locks (claims-alignment A4): the two scalar switches that erase
   # CLAM's defining instance-loss mechanism, plus every arm's capacity /
   # architecture knobs — width and depth change parameter counts, so tuning

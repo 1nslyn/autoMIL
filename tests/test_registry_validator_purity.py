@@ -492,3 +492,73 @@ def test_line_number_reported_on_failure(tmp_path):
         PurityValidator().check(path)
     assert exc_info.value.line is not None
     assert exc_info.value.line >= 1
+
+
+# ---------------------------------------------------------------------------
+# Sealed policy methods: the consumer declares what a method may import
+# ---------------------------------------------------------------------------
+
+SEALED_IMPORTS = ("torch", "numpy", "math", "autobench.pipeline.ema")
+
+SEALED_POLICY = '''
+"""A policy whose methods touch only the declared libraries."""
+from __future__ import annotations
+from automil.registry import register, VariantSpec, PolicyVariant
+
+
+@register(VariantSpec(
+    name="sealed", kind="policy", parent=None,
+    base_commit="abc1234", primary_value=0.0, node_id="node_0002",
+    created_at="2026-10-14T10:00:00Z",
+))
+class Sealed(PolicyVariant):
+    def wrap_optimizer(self, opt):
+        import math
+        import torch
+        import torch.nn.functional as F
+        from autobench.pipeline.ema import WeightAverage
+        return opt
+
+    def train_step(self, ctx):
+        pass  # BODY
+'''
+
+
+def _sealed(tmp_path, body_line):
+    from automil.registry.validators.purity import PurityValidator
+
+    path = _write_module(tmp_path, SEALED_POLICY.replace("pass  # BODY", body_line))
+    PurityValidator(strict_policy=True, method_imports=SEALED_IMPORTS).check(path)
+
+
+def test_a_policy_using_only_declared_imports_is_accepted(tmp_path):
+    _sealed(tmp_path, "pass")
+
+
+@pytest.mark.parametrize("body_line, message", [
+    ("import os", "may import only"),
+    ("import h5py", "may import only"),
+    ("from pathlib import Path", "may import only"),
+    ("from . import sibling", "may import only"),
+    ("import torchvision", "may import only"),
+    ("open('/data/test.csv')", "reads or writes files"),
+    ("__import__('os')", "reads or writes files"),
+    ("eval('1')", "reads or writes files"),
+    ("x = __import__", "reads or writes files"),
+    ("torch.load('/data/bag.pt')", "reads or writes files"),
+    ("np.load('/data/bag.npy')", "reads or writes files"),
+    ("ctx.features.numpy().tofile('/tmp/x')", "reads or writes files"),
+    ("g = self.wrap_optimizer.__globals__", "reaches past the policy"),
+    ("b = __builtins__", "reaches past the policy"),
+], ids=lambda value: value if isinstance(value, str) and " " not in value else None)
+def test_a_sealed_method_cannot_reach_data_or_escape(tmp_path, body_line, message):
+    from automil.registry.errors import ValidationError
+
+    with pytest.raises(ValidationError, match=message):
+        _sealed(tmp_path, body_line)
+
+
+def test_without_a_declared_list_method_bodies_stay_open(tmp_path):
+    from automil.registry.validators.purity import PurityValidator
+
+    PurityValidator(strict_policy=True).check(_write_module(tmp_path, POLICY_MODULE))

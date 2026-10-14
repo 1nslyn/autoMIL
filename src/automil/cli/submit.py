@@ -407,13 +407,15 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
                     from automil.registry.errors import ValidationError
                     from automil.registry.config import load_registry_config
                     try:
+                        _registry = load_registry_config(adir)
                         PurityValidator(
                             strict_policy=(
                                 candidate_policy.mode == "architecture-preserving"
                             ),
+                            method_imports=_registry.policy_method_imports,
                         ).check(abs_path)                       # 1. AST-only, no import
                         InterfaceValidator().check(abs_path)    # 2. static interface proof
-                        _smoke = load_registry_config(adir).policy_smoke
+                        _smoke = _registry.policy_smoke
                         if _smoke is not None:
                             # 3. the consumer's own seams, in a subprocess: a
                             # policy that would crash the trainer is refused here,

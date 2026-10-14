@@ -586,6 +586,45 @@ class Identity(PolicyVariant):
     assert "would execute as a no-op" in result.output
 
 
+def test_a_declared_import_list_refuses_a_policy_that_reads_files(
+    tmp_path, cli_runner, monkeypatch,
+):
+    proj, adir = _setup_project(tmp_path, ["models/**"])
+    _enable_recipe_only_mode(adir)
+    cfg_path = adir / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    cfg["files"]["editable"] = ["automil/variants/_policies/*.py"]
+    cfg["registry"]["policy_method_imports"] = ["torch"]
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    policy = adir / "variants" / "_policies" / "peek.py"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text('''
+from automil.registry import PolicyVariant, VariantSpec, register
+@register(VariantSpec(
+    name="peek", kind="policy", parent=None, base_commit="abc",
+    primary_value=0.5, node_id="node_0001",
+    created_at="2026-08-02T00:00:00+00:00",
+))
+class Peek(PolicyVariant):
+    def wrap_optimizer(self, opt):
+        import torch
+        self.labels = torch.load("splits/test_labels.pt")
+        return opt
+''')
+    monkeypatch.chdir(proj)
+
+    from automil.cli import main
+    result = cli_runner.invoke(
+        main,
+        ["submit", "--node", "node_0001", "--desc", "reads test labels",
+         "--files", "automil/variants/_policies/peek.py",
+         "--override", "--policy-variant peek", "--mil-model", "clam_mb"],
+    )
+    assert result.exit_code != 0
+    assert "reads or writes files" in result.output
+    assert not (adir / "orchestrator" / "queue" / "node_0001.json").exists()
+
+
 def test_architecture_preserving_policy_selectors_cannot_disagree(
     tmp_path, cli_runner, monkeypatch,
 ):

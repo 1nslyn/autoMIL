@@ -40,6 +40,22 @@ _TRUSTED_IMPORTS: frozenset[str] = frozenset({
     "__future__", "automil.registry", "typing", "collections.abc",
 })
 
+# Inside a sealed policy's methods (the consumer declares the method-level
+# import allowlist): calls that read or write files or run code, and the
+# attributes that reach the interpreter past the policy's own objects.
+_SEALED_BANNED_NAMES: frozenset[str] = frozenset({
+    "open", "exec", "eval", "compile", "__import__", "input", "breakpoint",
+})
+_SEALED_BANNED_CALL_ATTRS: frozenset[str] = frozenset({
+    "load", "save", "open", "fromfile", "tofile", "from_file", "memmap",
+    "open_memmap", "loadtxt", "savetxt", "genfromtxt", "fromregex",
+    "savez", "savez_compressed", "load_library",
+})
+_SEALED_ESCAPES: frozenset[str] = frozenset({
+    "__builtins__", "__globals__", "__subclasses__", "__code__",
+    "__closure__", "__loader__", "__spec__", "globals", "locals", "vars",
+})
+
 
 def _is_immutable_literal(node: ast.AST) -> bool:
     """Return whether an AST expression is an immutable constant.
@@ -91,8 +107,14 @@ class PurityValidator:
         are all allowed.
     """
 
-    def __init__(self, *, strict_policy: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        strict_policy: bool = False,
+        method_imports: tuple[str, ...] | None = None,
+    ) -> None:
         self.strict_policy = strict_policy
+        self.method_imports = method_imports
 
     def check(self, module_path: Path) -> None:
         """Validate a variant module for purity. Raises ValidationError on failure."""
@@ -413,6 +435,72 @@ class PurityValidator:
             self._check_shared_state_writes(
                 module_path, node, shared_names or set(),
             )
+            if self.method_imports is not None:
+                self._check_sealed_body(module_path, node, self.method_imports)
+
+    @staticmethod
+    def _sealed_error(module_path: Path, node: ast.AST, reason: str) -> None:
+        raise ValidationError(
+            validator_name="purity",
+            path=module_path,
+            line=getattr(node, "lineno", None),
+            column=getattr(node, "col_offset", None),
+            reason=reason,
+            fix_suggestion=(
+                "Policy methods work only on the objects the training loop "
+                "passes them and the declared libraries."
+            ),
+        )
+
+    def _check_sealed_body(
+        self,
+        module_path: Path,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        allowed: tuple[str, ...],
+    ) -> None:
+        """Keep a policy method away from files, imports and the interpreter."""
+
+        def declared(module: str | None) -> bool:
+            return module is not None and any(
+                module == root or module.startswith(root + ".") for root in allowed
+            )
+
+        for part in ast.walk(node):
+            modules: list[str | None] = []
+            if isinstance(part, ast.Import):
+                modules = [alias.name for alias in part.names]
+            elif isinstance(part, ast.ImportFrom):
+                modules = [None if part.level else part.module]
+            undeclared = [module for module in modules if not declared(module)]
+            if undeclared:
+                self._sealed_error(
+                    module_path, part,
+                    f"policy methods may import only {list(allowed)}; got {undeclared}",
+                )
+            if isinstance(part, ast.Name) and part.id in _SEALED_BANNED_NAMES:
+                self._sealed_error(
+                    module_path, part,
+                    f"policy methods cannot use {part.id}: it reads or writes files or runs code",
+                )
+            if (
+                isinstance(part, ast.Call)
+                and isinstance(part.func, ast.Attribute)
+                and part.func.attr in _SEALED_BANNED_CALL_ATTRS
+            ):
+                self._sealed_error(
+                    module_path, part,
+                    f"policy methods cannot call .{part.func.attr}(): it reads or writes files",
+                )
+            name = (
+                part.attr if isinstance(part, ast.Attribute)
+                else part.id if isinstance(part, ast.Name)
+                else None
+            )
+            if name in _SEALED_ESCAPES:
+                self._sealed_error(
+                    module_path, part,
+                    f"policy methods cannot use {name}: it reaches past the policy",
+                )
 
     @staticmethod
     def _shared_owner(node: ast.AST, shared_names: set[str]) -> bool:

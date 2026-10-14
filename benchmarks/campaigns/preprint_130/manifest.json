@@ -14,7 +14,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "7d62738f5c82cc2ebaba722132a3e83b72f7189d57c56f5ee6c1abdf88a402bd",
+      "cell_sha256": "0977402cd28164f976faca3dc0345af6f6efc3aaa1e8b06c4fedf60b02b388cf",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -62,7 +62,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -80,7 +80,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "06eb0044f0f659acfe759281f735934c231668827187d8dfbe869fb915f98bcf",
+      "cell_sha256": "5c9d66f33c20b6d1a2cf43cdc2806f6ff5087019c247238a38bf694127842a85",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -128,7 +128,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -146,7 +146,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "1d6c47b85bb86341ad5df0f29ac7158ad3e24d698d23650cb3394806d067d6e4",
+      "cell_sha256": "3b0553f51b2373800735a2286eb05d97dda2618d17997937af5d83dfbae76769",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -194,7 +194,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -212,7 +212,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "d6bc2b862ceb64a7a0059dbac761b3903add13f343104512764b739fcb1e7dad",
+      "cell_sha256": "74c9ee59e9e35128b1995bdeaa0ee34ae05ffab38dd2cec5d939013d9fde1298",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -260,7 +260,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -278,7 +278,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "aa867072f1857f2d6fb4bf48f7cdf7178f56be2fd74e967ac8a0803edb9344d5",
+      "cell_sha256": "9293b67c00237714fc2227729c7950fb1b603566d8264b05a78e8250c07dc15c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -326,7 +326,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -344,7 +344,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "e5015b015eb15936b472872338c05fca9216783f6eba4b8a3a5083d284a6d187",
+      "cell_sha256": "1fbbbec832ef9f4ff331b53db7f6e1a956543301253d018d84a3ecc849ef7113",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -392,7 +392,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -410,7 +410,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "08c408a26385e0970dc52b1cc84f687509b6209a8b77ee0c65f669feac1c4dcd",
+      "cell_sha256": "49063de891393cb9f6d3e3126a7edd4aa19afda3a8f468a9e26c443ca84cbc48",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -458,7 +458,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -476,7 +476,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "7bbcd226b583a8039639406be93c67e22fdf299cbf4d928d2f144d0c0575eeca",
+      "cell_sha256": "e8704448f4aef5ea7985928ecdce570faaf54cf7d72a6d53cbe1ce445e79906f",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -524,7 +524,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -542,7 +542,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "d46c4a316e61e805494cb4ef6d47e45a88ec2bb95f98277c675a9696cf715b0c",
+      "cell_sha256": "619c256194d19019afcfbe5a9980252915c5ac6132447b3e970666cf2f00bd1c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -590,7 +590,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -608,7 +608,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "dffe61befdfa55eb66db46645f72f2cd1498e5bbb589258a5b71648dc838035b",
+      "cell_sha256": "9e7a3b3a8d6115dc9c12c194fa3a1d157fd9c9a14d08a060fd2235c0e7783532",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -656,7 +656,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -674,7 +674,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "59766f9191ceb18f99426b264b7b3ee65389088fd7873639912c5ca150516f24",
+      "cell_sha256": "febf90b2bdb8b3f3b58fb92c9f63e8778aacf25eb808d7b0b236fabf2def9dc5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -722,7 +722,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -740,7 +740,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "d30b7d95b113b939e9dfa56677e79b24ee4ab23de78d052bfdceb65024f0f307",
+      "cell_sha256": "360ba84780fe2c5faf9ad53e1a3539f9346d5a5f571e9a69cf1951d59ee019e1",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -788,7 +788,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -806,7 +806,7 @@
         "task": "kras"
       },
       "cell_id": "tcga_luad__kras__titan__titan__s42__preprint-v5",
-      "cell_sha256": "0b84ed0bc29012a12d4bf0ce54a38ccde25a981e0092e9fc3b7e7503f4416cd5",
+      "cell_sha256": "82f3a17ccb9297630963d3de65e2cdc62d9565fc7e26e853af6a48f68dc58ef5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task kras --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -854,7 +854,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -872,7 +872,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "086569c9b498ae9b209a59573115f460c113af18658637d9279b14186a1f327b",
+      "cell_sha256": "325dbd1d04bfed256f1f9467c386ac2a55837e174910737b2148fb1e874bcffd",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -893,7 +893,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -911,7 +911,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "9f927b15631c408e9f9abe3e39e2cc699f55174050c763ac5ed5e056e7ffdeb0",
+      "cell_sha256": "288d0695d0772bf2afed434400e8ec6f221e49067819f84280a6eb232751196b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -932,7 +932,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -950,7 +950,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "411ea557dc56ba5a2ca4857ae7d64a976fd9a96eff95a3c6f2cf389b08c53e66",
+      "cell_sha256": "f105f11e63b9f222121f8ef91888ac8e593f981662c25f232363dc061ec94b4e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -971,7 +971,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -989,7 +989,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "3b0782b3fe886115891723082cd2a075588490d4840078e2e7f52739b42fe547",
+      "cell_sha256": "52b5bf6b22f05346be574b46fb21dd27f066985283a4d2461634bb5bdd610a49",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1010,7 +1010,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1028,7 +1028,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "20002f364d2c2e4c4b03ef9fb6316b090713d93279db882167c1304ac969d4a1",
+      "cell_sha256": "d4a859395d8b066c11e7f0c9c58a0792072a334d6896b9f40e6e642ce13e4f9b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1049,7 +1049,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1067,7 +1067,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "755ee76fdbb9abb8bfa03587c8fdd06e0ff5601b74a1d00c7a78429032aa1ec7",
+      "cell_sha256": "4352e69c10ae1ef71d4e7a2118934da29bd9d77d3cf50214c8ad5972ab366360",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1088,7 +1088,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1106,7 +1106,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "4ab137f326476bc64bfb16f4e68dc754813a28e8e3ca79f0ce7096a857d7a67d",
+      "cell_sha256": "7165e67c0595e0f9355cb83674e758738fd52ea124314f5f7981107499efd5c4",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1127,7 +1127,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1145,7 +1145,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "0a22b747f913dbe0d4fd9bb3bf6247a6223c5f5a04b70d0060de7873c2a9c029",
+      "cell_sha256": "e66656017bdddd35faa2d6bfc0ee5c017ca3f08b6fcd46ed9c9d8781f20bd681",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1166,7 +1166,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1184,7 +1184,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "148a13e5f87ca5600f35b4d97b3841645d832c52030cc16fb53bcd57c6ddf223",
+      "cell_sha256": "ed0ae6d608a5f0e4458dd228f8b9c686fe56e111d3a8ef630d34a7613a7af241",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1205,7 +1205,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1223,7 +1223,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "e379c4ce8f59b05d39cf87dad1bbf14fa598ce7dfe21c9931b70dfbc5232ca03",
+      "cell_sha256": "a241bd4ee510324b7ae20929ab2a80c4b764d15a50703d9c734b1a3d5ac00b10",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1244,7 +1244,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1262,7 +1262,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "147b33b58dbc6b4d56569ca9fbc89c580bec6e9fca8759e25a6ae355f3684d1b",
+      "cell_sha256": "5343bdca4880ffe759582458c11b7734fb19c69ab62253ae0083f36bc10d660f",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1283,7 +1283,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1301,7 +1301,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "7c59194d9fd1914f8cc89cd5b84465a0a404f1f946d56050dc73d9797256e370",
+      "cell_sha256": "ce5d58064a09bf7f05a518a9e6e97b92234a15e3f2df747e4001262f87125043",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1322,7 +1322,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1340,7 +1340,7 @@
         "task": "os"
       },
       "cell_id": "tcga_luad__os__titan__titan__s42__preprint-v5",
-      "cell_sha256": "e2cd6876052f3882845269ed9735bf44a7524147b2682a0ff67eebd06faf27ef",
+      "cell_sha256": "ebbfce3eb6ba31a5ee5e01790b0e5c088d425899160a367838f13addf90ca866",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_luad --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1361,7 +1361,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/tcga_luad/automil/config.yaml",
-      "policy_template_sha256": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4",
+      "policy_template_sha256": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -1379,7 +1379,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "f0ebccb827211be29b994583e58e94e5d93a1c7cad91aced3f6d737b0230e4c6",
+      "cell_sha256": "77030287fdd4d759500def4f35be3f7e01ec0777690db0d888b7d93f91895e79",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1400,7 +1400,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1418,7 +1418,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "c2458a36e6339fa771fb778ddf5f661b0172eadaf785b280f103136e98b85734",
+      "cell_sha256": "eb2de8684490822a19ade66ddc288a69b4763556cabea0b47fba30a934905018",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1439,7 +1439,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1457,7 +1457,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "83c278443f06dc4586ab19cec3abf21385a7e1368e45abb618a13a682c3ebd19",
+      "cell_sha256": "c854b23c9348864903448c6a3e418d8d54b871e8423cc3e200d4b11dcaf46681",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1478,7 +1478,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1496,7 +1496,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "96da83f0d68a7c00de87697200c462a5e54e1046f39bc1d4b20aa5ee18648a4a",
+      "cell_sha256": "fcdae6cb506b1c6dc7cf1945efc11a9d86027a3b9543bc3b5ce1ff629cbdf479",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1517,7 +1517,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1535,7 +1535,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "eb741586e492bf1702824f29fae2b2f8bba20d9cee112e521b78f0574426ff1c",
+      "cell_sha256": "178ac3e3ddbbf4fe9dd7099a690f6ed89f817b9208210c91d81cb55d3a268067",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1556,7 +1556,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1574,7 +1574,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "759a65489158c4aa55c8b91381cefd0b9070c63707068ac0b341043877dcef94",
+      "cell_sha256": "0fdc3cd089b6bb6b56951450d316a2db4fc48d5b28ffa49605ca32161c1ba9bf",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1595,7 +1595,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1613,7 +1613,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "4fdcca2633feb86eeeb03d39acd46018f340631c8d62aa717514e9795b04d6b5",
+      "cell_sha256": "a63ac66f0bd8d7033bdeb9dcb90faacfb623a2872bb7d95768486b90e1c86759",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1634,7 +1634,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1652,7 +1652,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "06484a47e4b991e62695c2c0790fa7f7fbb69586d31d731b56176f06cf7f2de8",
+      "cell_sha256": "f56ccef29d59cef73861dae62ea28aa3c53eaf58e527a13931695b4c0d7acad5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1673,7 +1673,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1691,7 +1691,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "fccc1102dec384115cb82dcad4935f2db439a8c4dfc62c20352312b2ff73b4ce",
+      "cell_sha256": "e28dd65570d2fc060c872c28d705f1d2c948533b03792bae7dbf61f7a6e424b2",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1712,7 +1712,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1730,7 +1730,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "e1018921bf6041db5ad3ce294cb94fdfb48620f124351de1073fca633148f834",
+      "cell_sha256": "3f46a2ba93e827d1cb3ebb6c157aacb80858bc6dcade3e2a2d819aab82751b78",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1751,7 +1751,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1769,7 +1769,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "7a1d3f1d09b44376049d5301703358b824c0ff3b3789ddfb75d125db93794f1a",
+      "cell_sha256": "6e90e5aa7af890c31f9bab0d832c995da5182689ce67a966cd23f42ae1bbb6d5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1790,7 +1790,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1808,7 +1808,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "5e9743a135d0175a896003cacef43afa908c510060a7777e140f26b774fe377b",
+      "cell_sha256": "7de8553e242961e8ec6a7325fb18dca55fa26f3a3ff8e16ef4586d8f6bb63ac7",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1829,7 +1829,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1847,7 +1847,7 @@
         "task": "idh1"
       },
       "cell_id": "tcga_lgg__idh1__titan__titan__s42__preprint-v5",
-      "cell_sha256": "e536effa829ac17c2bed08bffc25e16670e198c004803d2b4fcb9534cd1cf4c4",
+      "cell_sha256": "7ae164dae691185c5222339824d5e65aa8be09ab4b2970df71d540e6ce1ba107",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task idh1 --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -1868,7 +1868,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -1886,7 +1886,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "495c9d84bdc2ac47ec875483fe55e993dbc3ae50fa813e747eca7ba7db5af50d",
+      "cell_sha256": "75780f4e5e4a66006d316d05d89b321062f4c5c77c590330bd69b99ad06e0336",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1907,7 +1907,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1925,7 +1925,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "1e018eb5246073c0c44c2209eebf694a96ae374254653e078d196ec2d9c46b35",
+      "cell_sha256": "ae18fc8cd1e901dedecd8f6c1b7076e9e1ebc4fb100a7fc29aa17c94b10eb4da",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1946,7 +1946,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -1964,7 +1964,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "78a9e971438a53456436a3a951a3e35ddfeaa7becde82cae582406d6d1481830",
+      "cell_sha256": "4b9f1f63b7884991646ac62c4c5906412d259fb08e8e809d5b00235d534164dd",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -1985,7 +1985,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2003,7 +2003,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "cf35121974b1a0a1d08c809d0296c70aeefc0a920630943c0a2050415f52f5bf",
+      "cell_sha256": "e73ef7b80e85b91e8deee0ab0b7ea687ff1fd8f678f40aa187d39df6e90a6393",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2024,7 +2024,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2042,7 +2042,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "2ae97b8e6a374025de270bb807058d406b8d89dde7abcae87aa4df793c02d127",
+      "cell_sha256": "6b4f33dab7021e4feffcb312e53721f7bbef0bc547f1b7bd3e238ae614e73051",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2063,7 +2063,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2081,7 +2081,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "81a8ee7318172afe8d27d7439df1d1bb81eb5edd1ae02fd802e3f3f87e227145",
+      "cell_sha256": "67425d496737427055c44f3fab0be7b9a42c4284fd800f17cf55c8792cb41dea",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2102,7 +2102,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2120,7 +2120,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "a8086add100e2726d7e726fa09ed127537d6542fa69e780985a72d580f0782f7",
+      "cell_sha256": "06e715de407aa50e2cfea42974b318dd523d83b9707043dbb2fa869e147cb32b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2141,7 +2141,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2159,7 +2159,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "4b0045fe49cd7beb04e8ddffa943e39e160b3742c4ed5e3167112987776abbd7",
+      "cell_sha256": "c3f5d9f4503ed39f5dc7fdf1168aaf966762111c995b75ca7b3820abb38991b7",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2180,7 +2180,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2198,7 +2198,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "35a9b4fdbec3922cb8493c269148a869ca38780cb3e770863250b8284eb50f01",
+      "cell_sha256": "c83cbb194f9fc26de360324073b1de8c676bf2f5fad09dcf0ab6033e2c95d802",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2219,7 +2219,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2237,7 +2237,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "6a4417c9f4f5420727105e7e9082e4a121aabf4db59644cdae79673c160b0d0d",
+      "cell_sha256": "96f2ecd694f484b111ebf25be71eb72af424d146eb4b01de0d12e709863c17cb",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2258,7 +2258,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2276,7 +2276,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "8978cbfa64c1b8c3c99fde2d51499244c07145ef8721c78b867112669bd2c43c",
+      "cell_sha256": "207e5b18f760453f8a0096c4f9898f231484e78f14d5393244a6a80a9af58d93",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2297,7 +2297,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2315,7 +2315,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "da04197220e42219d9fed64617503a660c0433196a8014bdf9f5b689aa573341",
+      "cell_sha256": "a15ba90aba9e544b03583243ff20602025b5715859d656a037925e77001b9164",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2336,7 +2336,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2354,7 +2354,7 @@
         "task": "os"
       },
       "cell_id": "tcga_lgg__os__titan__titan__s42__preprint-v5",
-      "cell_sha256": "8e6da0d4aa9e8f745695e1a5237bd4bb9a9d5b923e35fa9be24afa0ef3bf15bd",
+      "cell_sha256": "81d214379be586b713f0f76bb8227f82cc44fa0d9f1ddf2b2b2f2adf88d33299",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_lgg --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2375,7 +2375,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/tcga_lgg/automil/config.yaml",
-      "policy_template_sha256": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
+      "policy_template_sha256": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -2393,7 +2393,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "2bd1e7e07e72013f48c22e2f6990bcee781bc3ee8dcf4c764697e3fef79967bb",
+      "cell_sha256": "6fc428a3cf5779d6609907dee44fde3a609112c4abe68c3be02962eb45c2e431",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2414,7 +2414,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2432,7 +2432,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "dda3df008a7e817b7a9f75e5d3f4c3ab13ecbce15e5a173a6741f4a4a878eedd",
+      "cell_sha256": "7d0244db7c15aaa81439c1055235f27e372a7aed620954233d6c6a8f3eededdb",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2453,7 +2453,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2471,7 +2471,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "cc64b4be7d3acf5f4adebd36119c8eb4909d7717c08387d36fc104447233886c",
+      "cell_sha256": "09dd49d8b69c50c767cab863d5bbcab7b667633d897fa285ce4e5ca00c87d1d2",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2492,7 +2492,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2510,7 +2510,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "56b2a6ff313dc3e6ceb72a16d6f24c0e3ec0340d485a9b650cc8282b218dfd95",
+      "cell_sha256": "4799ba71f10daadeb60b4a88e51d22b851f4d0437ef3048496f7507fde9c16df",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2531,7 +2531,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2549,7 +2549,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "c8057f1182d9507fa65ce9cf57932127e16d934312cd0a6898f8d36d501d8344",
+      "cell_sha256": "d63fcada38048426c36bb2549f2f529dd3ffe2bdf8e1ec432bec58a9c3cbf1e5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2570,7 +2570,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2588,7 +2588,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "40e176516c2a3d7c41075579792c390cd3dde4eaf98a8d29e24a61ec65b37100",
+      "cell_sha256": "8ed939b6f0159d9d9e4000e5817201ed91ad5a88e713f1cbe9c1d879602df623",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2609,7 +2609,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2627,7 +2627,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "7edeefcd0c4610b34ef0028c6c1622a9407543ad4c377cd79a73b1c87565aa58",
+      "cell_sha256": "559ce376b6b28993225dc1758d57af25bbb382d9ffc226229b8e77cdc5f6d1c8",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2648,7 +2648,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2666,7 +2666,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "ad38fdcb1f6f357a73b9476e6e8117a982cab24722285f8d2b8d820de3411330",
+      "cell_sha256": "0ec23b01da13f1fb185c6b1cd22251f043586c370a8dfe97188e075448f1417c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2687,7 +2687,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2705,7 +2705,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "ae3f582ee3d0704cd16d885159bcaa22c1de8d15a39e4d4c6b2d46f956ad7122",
+      "cell_sha256": "15753391ea772efc877fa15dd09b6b66f51660b11eef2bef1ccc525259182494",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2726,7 +2726,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2744,7 +2744,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "deb2965af5b762e79bd8c6205f6c6500ef6d0bf1d7fc30f40c6b24aaa183ee23",
+      "cell_sha256": "f226c465115943d9af8fa00f23d8fd64c1c7d6f7ad376ff902ccbff4b55cb33b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2765,7 +2765,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2783,7 +2783,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "0bc2273c852ef8b93a8d85655c11dd670e9a515c2818d58de310a20adb417576",
+      "cell_sha256": "2d16151e85d7705b8d7c83f4639d9bc76f9351be8d044055f330d75dc97fa626",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2804,7 +2804,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2822,7 +2822,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "ee7523a9ca6948f006c052b961e09c977016917518aa422f7ae5ab5d774e1082",
+      "cell_sha256": "18e093766a7d6edc83058608adaac06b19dc8e66ff4faa8dcf467d290495caab",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2843,7 +2843,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2861,7 +2861,7 @@
         "task": "tp53"
       },
       "cell_id": "cptac_gbm__tp53__titan__titan__s42__preprint-v5",
-      "cell_sha256": "c3f10b11623689f48d0cd2876720228f33c4c7da07d47676163c0fffb9cbb571",
+      "cell_sha256": "63074f744abf19c89905082fc80675e791e853d2af14635621e54a6ba19b6aab",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task tp53 --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -2882,7 +2882,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -2900,7 +2900,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "cbb6401a8e4e2dffcb0e64e7a0469dd8d6fd9e3346b27f1587f17204cdb38884",
+      "cell_sha256": "ab4e26348d0425f5134ee114d76528efb85388b2a5373259e198590f32941240",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2921,7 +2921,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2939,7 +2939,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "bb260e471e81e997b653ed1ea6ebc6c91b70893ac9476e3ba26fe0d5a62accb7",
+      "cell_sha256": "c51a22163df4be8bd164141323ad34007402b366cd5a2fe311d1cf3e6272326e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2960,7 +2960,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -2978,7 +2978,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "986ec3d524aad7d188bee85c264a712097d235e5d5cdda9ef58ca8cc49a2181f",
+      "cell_sha256": "ee87e084ce32bb5ac7405685ff7a03e6c17cea5d276b575b707c66232b7d9703",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -2999,7 +2999,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3017,7 +3017,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "3da0908bb292e4684b7c0fd2b3dd57c6d5a67d41fcb62e5a564e98b3daedfedd",
+      "cell_sha256": "77c84a026534749bf88f2eaf54d9207823d003ab6dc1371d68cd686e8a2d8410",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3038,7 +3038,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3056,7 +3056,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "e38a53329767d6723a3eed92ec7511d820815665d20bd76caaa7d0261d815a6e",
+      "cell_sha256": "1a466e61dead058196663fcb2a5b70ab8b540700420110466d7ec4341fddc3ca",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3077,7 +3077,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3095,7 +3095,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "edd1b5295df08b44555bf9c6d078edea27767fa180409445cf0cdc65b5a9ef88",
+      "cell_sha256": "5605db7d1c46d11d4a5eb960d5ca988eca778dd4bc94057aa989c8c08b7286b3",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3116,7 +3116,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3134,7 +3134,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "1c4bbf736b655458ebb252619fa416662a5c10b8f376000ee0b6947cdb0056db",
+      "cell_sha256": "27626a869ba7905dc961f58bff5dfa904f4c6fb75a281ef880353934e0cbfcfe",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3155,7 +3155,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3173,7 +3173,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "cf5442182079796c8ed48765159177efbc091aaafe7f4aa9c6fa2f906bd2f4cf",
+      "cell_sha256": "4581a0ce5d147e7f201f10d8d86c0788df858bf8fcc3c7e61de59389d9cfaddb",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3194,7 +3194,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3212,7 +3212,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "ab17f3ff84dde00b887889445e1caaed41e2fe6868ea274e4c291ca0f5774254",
+      "cell_sha256": "b81dc3d5ec172d7977dadcf2d918477ba2018d7d85886482e3f6d7fe0ccab89a",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3233,7 +3233,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3251,7 +3251,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "398d06d89c9523df28a75a516deff0fca28e934a9479a44ed291742fa82c5157",
+      "cell_sha256": "7077464283871897575221dc9ef392e8744b2d863ec2f4381965b108669b9f03",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3272,7 +3272,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3290,7 +3290,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "fc6e3e20e1ced2611eb65c0bf32ceb98310387030567a02fb7fa389acc5acd16",
+      "cell_sha256": "ab50467dde0e2d3aedaa76601c04ffc56cbd530bcecb33a6e1f6388290a8ee7d",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3311,7 +3311,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3329,7 +3329,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "8471297a07dc0509d7aa4346438aa3afca7c82dafb0332765ad0fb1b9f151758",
+      "cell_sha256": "e88db41a5456dc6de93ed229ccbb5114f4f0f0c278cfea960672ad16f07e2c21",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3350,7 +3350,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3368,7 +3368,7 @@
         "task": "os"
       },
       "cell_id": "cptac_gbm__os__titan__titan__s42__preprint-v5",
-      "cell_sha256": "46f5c8d308d651fd0d6565752ba02c36c96ab42ee8fa0d82d0be20382881a7c1",
+      "cell_sha256": "c2e48e96cec759165a18417193beb2a60efd9fa7870446bed48297f720c20d6c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_gbm --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3389,7 +3389,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/cptac_gbm/automil/config.yaml",
-      "policy_template_sha256": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
+      "policy_template_sha256": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -3407,7 +3407,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "271bc66a97df94c99955be8004302613463607c53cf5804afccf774ae32067a0",
+      "cell_sha256": "ab2d5de1c84596021f7ae12999b6354359c3c9b4943cc8a5d05e9fcfacf66494",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3428,7 +3428,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3446,7 +3446,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "f2e274e29022f06410382a8c7790a39f5dfd0f8bc6b9e8d445a718b5501ba866",
+      "cell_sha256": "6b9e7307ac6257f320b0d439fcc2d57fdf63bc3b27ac7f89aa12692d94b8c634",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3467,7 +3467,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3485,7 +3485,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "7d2df40a459cc1548e6d32d2a9489e823a2d98732ee1e5ed197da7210856dc2c",
+      "cell_sha256": "5c1239d73e8c0ff90171443b8b649da733ae84c8caab8cdbde46a175001c2128",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3506,7 +3506,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3524,7 +3524,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "76101de3ea5ed8f27264eb40e0bdb3b74ec9a4d0d3f92580add554268c6b4aee",
+      "cell_sha256": "d619b6a8f80652be341cf869f6cde7450aaf3652a1ff6d9d18c13a5adc6e6bf7",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3545,7 +3545,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3563,7 +3563,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "4fb72f5eaa38ec414e85f1e32ee8a2caba1cc198fb890dfee9dd741d605ed7bf",
+      "cell_sha256": "be6bbba7c94bdb52b22073b2bd66e5245debb5c10b68b189945beb9d1e38654b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3584,7 +3584,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3602,7 +3602,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "67c08d6a2cb36301aca466820fcd8c4b7d3da87e1dcf8a336891a9bf3598ddf1",
+      "cell_sha256": "1e7cac3a47870cd6e94f8f8c606639f7af57b05081d3b04bcb314603c5a65b20",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3623,7 +3623,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3641,7 +3641,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "1770353d9c32b2b789636cf892c111860db61258fe72588866f4d92663f9bde4",
+      "cell_sha256": "a9ffd11ef3e61998540a6987c64305b837fee3de99b592507df56b785d2570f5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3662,7 +3662,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3680,7 +3680,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "6d5f5f196385ca984c6636dd5ee9d10c977afab3efe1a78f9ee4bb44083da8b1",
+      "cell_sha256": "6c9882e5024de8a75c04d4ffae1dda94c869a26bafdeb8b25a7a7aea0eeeaa41",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3701,7 +3701,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3719,7 +3719,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "21261d5b4b8e6459a6d14155861414b9447cbb6a1ceb26abc4b90b5f3f020e1e",
+      "cell_sha256": "acd2522ffb7f805345ec4ebc285489c0a23f3826f617f2ba9654410148319949",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3740,7 +3740,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3758,7 +3758,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "ac6dfdb1f8be0935ad970b51b3bcc9ed6a30a4e451f15ca014559a32835cc5d3",
+      "cell_sha256": "86670e1bd313c6d24589ae2f2d7d14bf2e3d442e66381815a1503596bf36e39c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3779,7 +3779,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3797,7 +3797,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "baeb39c96bb3133c5257ae0f3d43a91147893250e9491e7a0825f171d426fda5",
+      "cell_sha256": "d9b1793349d0dbd13db1cd02cce0512d272e0ebdabd37b0152535948a3faedba",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3818,7 +3818,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3836,7 +3836,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "e65130a3c3988dba6e168972f688ff7950d054f30ff4f7e3db6ff56004f1c5d7",
+      "cell_sha256": "c271c4fee95cadd1b0aa21d9534351fdd360ef5dcd9363ac23286052a3a207f0",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3857,7 +3857,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3875,7 +3875,7 @@
         "task": "immune_class"
       },
       "cell_id": "cptac_pdac__immune_class__titan__titan__s42__preprint-v5",
-      "cell_sha256": "3b03c806e36ce539d11faf3d12a174bf67cb85987bc7672027c498319352b171",
+      "cell_sha256": "207a103e2e6681a147606e0c14444b52f8e5ebf7a5dcc42128d167218dc707dc",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task immune_class --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -3896,7 +3896,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -3914,7 +3914,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "0eb5e65bc1737fab870e326872d948b90e91555364483c39577117222705f43e",
+      "cell_sha256": "f04a9a88d543ee2331a6ff167c4ad54c97f8a744d1b24ac35f924405d2f2f094",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3935,7 +3935,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3953,7 +3953,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "a1d02d67b8b9ccf1479477e6b0882064d849edd1b63aa30261f2f0b134fc26a0",
+      "cell_sha256": "936f4379ccf3dca4568cdeeaf0435be0e5fc38c02e8369213e1cda329fdcf15e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -3974,7 +3974,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -3992,7 +3992,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "a235fb0c083aeed7e455519f65dce2fafa06d865561f5529a2c762b92c23fa86",
+      "cell_sha256": "825b04c558c94224ce70b626851cc8201289baa05e45ecab765d4d2198ffaa7e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4013,7 +4013,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4031,7 +4031,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "ac58f587e9c2af0c1d87b94b80dd49e89e39b9f37850496e445f9e72d970fa08",
+      "cell_sha256": "d11501c819c0a380e5d7683cb5138ee1e6c3e4e0761a48aabca2983751529f59",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4052,7 +4052,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4070,7 +4070,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "fe07fad9cc4557d2360adab470aec1f98a4169f70e919d535fe0170454a70de3",
+      "cell_sha256": "497d04c40d1cc4949bc2ea13e8b9357cb28f4af22e977a4440e17ee5084b6916",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4091,7 +4091,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4109,7 +4109,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "38e868d8a80dd65911176b342579ba6a210d10094fd6282d3de2aaac5da06131",
+      "cell_sha256": "766633559b8bf250391b255d8a9163ac5a3f4b08d6b8aa2e817f26a5c5d5c63b",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4130,7 +4130,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4148,7 +4148,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "086bedaecd054db33a6f13aee76b3f437993f4ecd1feff68aa7933b4cde71ae9",
+      "cell_sha256": "6be6838a338c2ef399987545c80da5d549149cb654f18915bab74a1e6ff5a326",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4169,7 +4169,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4187,7 +4187,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "7eee92cf366fdb31975114816d0e85e71bbf676754173792950ef6187adb34de",
+      "cell_sha256": "e5a93eaf3ff7da3d1a936e0ca3813e980db81a452b2ae0fba2544b34afddb582",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4208,7 +4208,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4226,7 +4226,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "298617690b0f158bce1981096e860b7e6b31880c94b4851d14e7fa6eaf8ff809",
+      "cell_sha256": "13979431af5f7e00f99d7d64895f1c1a0ee11dff17cec68a34046ca81e70e283",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4247,7 +4247,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4265,7 +4265,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "03f8ecc27d31db181ed9e4a7c4dce6514bfaf4931eacc79ca9827aefce38f9b3",
+      "cell_sha256": "271981eaca052fc388915e303e2550f8b7140df701ad814ebd38dac2b66b6634",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4286,7 +4286,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4304,7 +4304,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "b61501d4896540949a87fdc696ddbf4554fab0156b0c5783b31cacadb755e065",
+      "cell_sha256": "f93402d5c0cbb24c877760eb24a490e2eb6d770f3ecb8ee754a03d66e6d06d31",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4325,7 +4325,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4343,7 +4343,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "0794e098f195e2918ea194ed283733a4e14058cd5446ba8209b672e97bafbb5c",
+      "cell_sha256": "f107c1a3c89d1d68899ad7b2502f212dc81145ae13d4689062bff90ed3b2f4fd",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4364,7 +4364,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4382,7 +4382,7 @@
         "task": "os"
       },
       "cell_id": "cptac_pdac__os__titan__titan__s42__preprint-v5",
-      "cell_sha256": "0b291ab44c1bbec6c0f884f59d44a237fbf178021aa1108d011af29913f99702",
+      "cell_sha256": "c5ffb461e0ce25c539b514ddabb8b44c739cf865f48e9960519becaa2a99b799",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset cptac_pdac --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -4403,7 +4403,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/cptac_pdac/automil/config.yaml",
-      "policy_template_sha256": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
+      "policy_template_sha256": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -4421,7 +4421,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "8b6edbeb96d39e3ac9be07656f1381050a92deea436e1d9ef860e30ee7689e07",
+      "cell_sha256": "05148d8b24fd7768178baae27857108e3a8484396f6dfcb77c117478a1b251d2",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -4474,7 +4474,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4492,7 +4492,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "53bd09f595734520f8d3365924a8b1b5a3f997b738c2e28beea7cc725a2e9f06",
+      "cell_sha256": "ef8ef047e875fb68120c554949ed0e14aff908efd499e381683a30e0e849af40",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -4545,7 +4545,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4563,7 +4563,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "b11a42f83e41eb7d2f9c86879846661a406bfe7653e88e56859da57fc597e353",
+      "cell_sha256": "b91e773a61ba33fe528c27c93c6d8d904a30897549abaf212e195b45ed5d7814",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -4616,7 +4616,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4634,7 +4634,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "6c334320a6eccb18317706b3503f103bb2302eb98d58718a110c185554a75b50",
+      "cell_sha256": "25cff5e354c55b75ed10579f491f1f779febdb89c2040c9073d4c442333b1123",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -4687,7 +4687,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4705,7 +4705,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "101bf55256b61372d2a0b475052d00527903f0224dc62e417cc7f37e124493ff",
+      "cell_sha256": "66e736a63e6683908f882dfb6e90d287ff2c8263ff757dcfc4f7a61277e52fae",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -4758,7 +4758,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4776,7 +4776,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "24dc57714165d97d6540aaa59d6763ba577145425e16013cc828f9ace71a32ad",
+      "cell_sha256": "894893c6a177faf58129710de6a0f24f3d6c0394163662fc08b1aa7aea903a7c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -4829,7 +4829,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4847,7 +4847,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "877748a57dc1dc343c3a85860c4dfd71e25c3d64c9dcb0ed474572554ec0557a",
+      "cell_sha256": "b02f70e3b6b66ea263328bca2a95df95102540ec1643371a99317195eba453a6",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -4900,7 +4900,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4918,7 +4918,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "0d3556c9462f94f3a697502a3c6d47dd81ed40ad6ce2f43735137e9b08b0cb5a",
+      "cell_sha256": "fe4a35162c5832565fe78c4bc11048a08ff008575c0d69ffcda96266494dee14",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -4971,7 +4971,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -4989,7 +4989,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "29583014a4e8cd8b63b3dd791345296aed89e857b07c72d068285950f93f15b7",
+      "cell_sha256": "3254d9acfe44f944bfa3b9aea18a8f716ff9ef79509d1c93bad377f81cd583a9",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -5042,7 +5042,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5060,7 +5060,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "166d48f713ef615bb9ed4b35f144f5551e6759b32ceace3a7d1b7489e699e1a1",
+      "cell_sha256": "fc5a0b242fcb4f9188202c024d1e0af646e2bf3322741faafe2f1f76174d1b28",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -5113,7 +5113,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5131,7 +5131,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "0a7e6e0d7f8baee8363505e1bba7e178efd07b52b3838d93867a7ba8a3751cce",
+      "cell_sha256": "a08de44c10c05dca64294b57cb2c94db83e0a263f4bffd462f98b62575a9d61a",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -5184,7 +5184,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5202,7 +5202,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "4446e6bc5ef9acbe7d957dd0932a2e9bfe969fc0ee543efd535faab1219ecba6",
+      "cell_sha256": "cc40701cd67a3d7e93fc3865c75c35d6cc97d00bae9659d31c955b56de834f3e",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -5255,7 +5255,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5273,7 +5273,7 @@
         "task": "grade"
       },
       "cell_id": "tcga_hnsc__grade__titan__titan__s42__preprint-v5",
-      "cell_sha256": "5fa933729c8933a8ae2a4291cc0d736d0ac8ad1a29c2549322cbd33669cf745f",
+      "cell_sha256": "688c6a204339ee6154cfc430be2295036a24cc6d99c8536a5bd426e1d51c2ee4",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task grade --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb"
@@ -5326,7 +5326,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -5344,7 +5344,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__uni_v2__clam__s42__preprint-v5",
-      "cell_sha256": "76bb71533c429ee1a9446c57ec1dfe89dd8d8ea779c88e1643f0a923814b8b29",
+      "cell_sha256": "1837fc6df8366e648daea2884dfa80cebc0abd5d2f17d235c0cd5ad1d5f7e7f3",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder uni_v2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5365,7 +5365,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5383,7 +5383,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__virchow2__clam__s42__preprint-v5",
-      "cell_sha256": "549e7637261cc2a0c413b9994d2e355d0fd0a664f09fba4baaf398c578aae8c9",
+      "cell_sha256": "0e17154bea26eb9133defb6f3a2a0dcd880ad7378dc4b43764504927c4220204",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder virchow2 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5404,7 +5404,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5422,7 +5422,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__hoptimus1__clam__s42__preprint-v5",
-      "cell_sha256": "7094aab5654199a6c7543b4e395ccb45dc9da609909c4c509acf46f31596df82",
+      "cell_sha256": "8f7941740936d056c01ede6b1f8755d99752a74159910cac0f1e22ade7f98db5",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder hoptimus1 --model clam_mb --framework clam --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5443,7 +5443,7 @@
       },
       "model": "clam_mb",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5461,7 +5461,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__uni_v2__nnmil__s42__preprint-v5",
-      "cell_sha256": "6bbef772c1f68e0b442780749ff2ba2f1aaa8337405480b91facba8aa85b363f",
+      "cell_sha256": "456c2b952f67818c6e7bc9a74e4ab73938ba3a9056966db6e44fecf96955bdd0",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder uni_v2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5482,7 +5482,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5500,7 +5500,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__virchow2__nnmil__s42__preprint-v5",
-      "cell_sha256": "f713dcd441c350b8565fa050039d282b44d22a56b122e14aa0376bdb8f63e128",
+      "cell_sha256": "ae6b645df36c880296f31f48390e09fcace8e8d35dc95388d516f17cb5bafa70",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder virchow2 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5521,7 +5521,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5539,7 +5539,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__hoptimus1__nnmil__s42__preprint-v5",
-      "cell_sha256": "0b7e7d59e7e0b9f9c642acd40a521060021b4bdd65769ebbcc4ec477172e1f62",
+      "cell_sha256": "50df765fdf07d56fc061a3c6ae76faec91257aaee470121d29a1b4046075eb62",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder hoptimus1 --model simple_mil --framework nnmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5560,7 +5560,7 @@
       },
       "model": "simple_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5578,7 +5578,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__uni_v2__abmil__s42__preprint-v5",
-      "cell_sha256": "3cfa554fccd6f927d4f683d824dc66b8e7364cbac8026115629a348b986c30c1",
+      "cell_sha256": "d9dabad3119b49ff79db3a1a3e2eb1fac515f230349cdc73992703bcf21f8171",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder uni_v2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5599,7 +5599,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5617,7 +5617,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__virchow2__abmil__s42__preprint-v5",
-      "cell_sha256": "8dacc4c4f043f4ea71331292942b3165e906235029ef81ed03d53b88fdea9773",
+      "cell_sha256": "59225b0a757e32dda4cd4a98bfeb1644e2325efb5faf47ca22670dfbbaf61bb9",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder virchow2 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5638,7 +5638,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5656,7 +5656,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__hoptimus1__abmil__s42__preprint-v5",
-      "cell_sha256": "4bcf7479a10a2fb15412b021957042240539f725722f3d748d737dfdcd1bd823",
+      "cell_sha256": "74996a6efef8e16714915e06b9669e76766ffdf21b84dfb4cd551fbd78aa3372",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder hoptimus1 --model abmil --framework abmil --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5677,7 +5677,7 @@
       },
       "model": "abmil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5695,7 +5695,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__uni_v2__dtfd__s42__preprint-v5",
-      "cell_sha256": "75eb4c97aebd3ee23bfb87f209861884219f0cd7785dbcda6cf994eae53d4446",
+      "cell_sha256": "fc687648790946def916cc8c9bd2779f6ce4598ef89802dbaeb28f0dd4d5768c",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder uni_v2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5716,7 +5716,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5734,7 +5734,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__virchow2__dtfd__s42__preprint-v5",
-      "cell_sha256": "8fd97e698016ff175c090c571db4cfeca338ac25bfdc932b0a46c978aab7d6d9",
+      "cell_sha256": "26221210ed1c56bf593d2b960d6eb3d8d0766501a49a59a0da788f4d6c0f2b11",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder virchow2 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5755,7 +5755,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5773,7 +5773,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__hoptimus1__dtfd__s42__preprint-v5",
-      "cell_sha256": "472c8c3aeb05eabd436fb9f921756f00abc9540c08d3d85b9f489807e53b7b42",
+      "cell_sha256": "00105a7e0c01f9d77b5818978c6b4603637851813afd13090e7e0b2847420fe7",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder hoptimus1 --model dtfd_mil --framework dtfd --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5794,7 +5794,7 @@
       },
       "model": "dtfd_mil",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "tile",
       "seed": 42,
       "strategy": "devcv",
@@ -5812,7 +5812,7 @@
         "task": "os"
       },
       "cell_id": "tcga_hnsc__os__titan__titan__s42__preprint-v5",
-      "cell_sha256": "c9bed6b84836ccc13222724e89cce7acce877ddf95abce977d7acf50b67b44ee",
+      "cell_sha256": "63851db973c262cc7b94774693707343e0fb94d68de85bc90e9d0bd0376feed8",
       "commands": {
         "baseline": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb",
         "discovery": "python benchmarks/scripts/run_experiment.py --dataset tcga_hnsc --task os --encoder titan --model titan --framework titan --strategy devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --survival_loss nllsurv --no_wandb"
@@ -5833,7 +5833,7 @@
       },
       "model": "titan",
       "policy_template": "benchmarks/experiments/tcga_hnsc/automil/config.yaml",
-      "policy_template_sha256": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
+      "policy_template_sha256": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
       "regime": "slide",
       "seed": 42,
       "strategy": "devcv",
@@ -5855,11 +5855,11 @@
     "sha256": "fcff8f3b3a2f041eeb96b9082651bce3bedf5a66d2cd8476ae51ff18a6dd3e1a"
   },
   "policy_sources": {
-    "benchmarks/experiments/cptac_gbm/automil/config.yaml": "004d9f20cb1bef944cd6d221519192d93821bdf74f783052ced02ce3efb79010",
-    "benchmarks/experiments/cptac_pdac/automil/config.yaml": "f398a3a1259ed4b78aa7184fcba55a7e27c850900a2e40a828942a5e528e9c38",
-    "benchmarks/experiments/tcga_hnsc/automil/config.yaml": "4388b8f56f5ce1caa1af169a81543e6d09e59175fa15f801b2e4e621020e45d8",
-    "benchmarks/experiments/tcga_lgg/automil/config.yaml": "e71215c6d77e90792bfaf8f0e5cca2561083fd71cd85452c915a6c2db668e933",
-    "benchmarks/experiments/tcga_luad/automil/config.yaml": "009d2f0383f2564b013fe15d86714857f7a25b257930192221753a8ebaca05d4"
+    "benchmarks/experiments/cptac_gbm/automil/config.yaml": "9757875581c43625d7ea86070f92d8b1eb9963466758b1ee447cdd83c4221bed",
+    "benchmarks/experiments/cptac_pdac/automil/config.yaml": "a9cce036c0bea9b2f108daca511fdf072e3334f9233ac28c6e98f8c227fc0ac4",
+    "benchmarks/experiments/tcga_hnsc/automil/config.yaml": "5daf963f08af5744ad0ce3191acb4420e84acf321a39b26e28c57c6eb8623b41",
+    "benchmarks/experiments/tcga_lgg/automil/config.yaml": "f2d76aeebc2a5873df2e6c04a82e736b2c5f0a741990add5da308722a7212af6",
+    "benchmarks/experiments/tcga_luad/automil/config.yaml": "a3476561c5a28eb76c51c2e8f670de5b1c08be9e32e7e2fa950312c3208d4e0e"
   },
   "protocol": {
     "agent_time_accounting": {

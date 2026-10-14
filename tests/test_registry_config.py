@@ -138,3 +138,22 @@ def test_no_autobench_defaults_d49():
     assert "benchmarks" not in str(cfg.protected)
     assert "AUTOBENCH" not in str(cfg.protected)
     assert "ccrcc" not in str(cfg.protected)
+
+
+def test_policy_method_imports_absent_leaves_methods_open(tmp_path):
+    from automil.registry.config import load_registry_config
+    assert load_registry_config(_write_config(tmp_path, "registry: {}\n")).policy_method_imports is None
+
+
+def test_policy_method_imports_declared_list_seals_methods(tmp_path):
+    from automil.registry.config import load_registry_config
+    adir = _write_config(tmp_path, "registry:\n  policy_method_imports: [torch, math]\n")
+    assert load_registry_config(adir).policy_method_imports == ("torch", "math")
+    adir = _write_config(tmp_path, "registry:\n  policy_method_imports: []\n")
+    assert load_registry_config(adir).policy_method_imports == ()
+
+
+def test_policy_method_imports_must_be_a_list(tmp_path):
+    from automil.registry.config import load_registry_config
+    with pytest.raises(TypeError, match="policy_method_imports"):
+        load_registry_config(_write_config(tmp_path, "registry:\n  policy_method_imports: torch\n"))

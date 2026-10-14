@@ -46,6 +46,9 @@ class RegistryConfig:
         identity_locked_hparams: () — scalar keys that may erase model identity
         repro_tolerance: 0.005  — D-39: CCRCC ±0.005 carried as framework default
         identity_constraints: () — D-31: per-project structural rules
+        policy_method_imports: None — the modules a strict policy's methods may
+            import; declaring it also bars file I/O and interpreter escapes
+            inside those methods (None leaves method bodies unchecked)
     """
 
     protected: tuple[str, ...] = ()              # glob patterns (relative to project root)
@@ -56,6 +59,7 @@ class RegistryConfig:
     repro_tolerance: float = 0.005               # D-39: default ±0.005
     identity_constraints: tuple[str, ...] = ()   # D-31: per-project identity rules
     policy_smoke: PolicySmoke | None = None      # submit-time smoke run of variant modules
+    policy_method_imports: tuple[str, ...] | None = None
 
 
 def _coerce_str_tuple(raw: object, key: str) -> tuple[str, ...]:
@@ -166,6 +170,13 @@ def load_registry_config(automil_dir: Path) -> RegistryConfig:
         repro_tolerance=repro_tolerance,
         identity_constraints=identity_constraints,
         policy_smoke=_policy_smoke(registry_section.get("policy_smoke")),
+        policy_method_imports=(
+            _coerce_str_tuple(
+                registry_section["policy_method_imports"],
+                "registry.policy_method_imports",
+            )
+            if "policy_method_imports" in registry_section else None
+        ),
     )
 
 
