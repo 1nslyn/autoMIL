@@ -8,6 +8,32 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Protocol `preprint-v6`: validation on the whole development set, and a
+  training-step seam.** The KRAS long trial (96 attempts per arm on TITAN)
+  showed the standard folds' 47-slide validation folds rank attempts against
+  the held-out slides, while five-fold cross-validation inside one outer
+  fold's 372 development slides ranks them with it. Every cell now trains on
+  the `devcv` split strategy (`pipeline/splits.py`): fold 0 of the standard
+  split, its training and validation slides partitioned by case into five
+  folds (`StratifiedGroupKFold`, seed 1000), each fold testing on fold 0's
+  held-out slides. `prepare_all` prepares the strategies a run asks for, the
+  campaign command passes `--strategy devcv`, and guard margins carry the
+  strategy they were derived from (a guard from other folds is refused).
+  `PolicyVariant.train_step` replaces the never-called `PolicyVariant.step`:
+  each classification trainer hands the runtime its pass (forward, defining
+  loss, backward), optimizer step and gradient reset
+  (`pipeline/policy_step.py`), and a policy may take two passes per step,
+  skip a step, or pass a probability target or per-bag weight to the arm's
+  own cross-entropy. The native body reproduces every arm's predictions bit
+  for bit; CLAM and nnMIL's vendored loops now always receive a runtime. The
+  policy smoke drives each arm's real step (the survival adapters keep their
+  call orders). Policy methods are sealed: with
+  `registry.policy_method_imports` declared (all cohort templates), a policy
+  method may import only those modules and may not open, load or save files,
+  run code from strings, or reach `__globals__`/`__builtins__`. The manifest
+  (cell ids now end in `__preprint-v6`), the rosters, the proposal policy and
+  `agent_protocol.json` are regenerated.
+
 - **Protocol `preprint-v5`: every attempt trains on all five folds, and the
   winner clears a bar set for the best of 30.** The aihub KRAS trial showed
   that the validation lift of three-fold attempts followed by a ten-candidate

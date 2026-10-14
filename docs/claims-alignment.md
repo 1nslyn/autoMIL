@@ -102,6 +102,15 @@ identity locks remove the capacity knobs from the campaign-tunable sets (clam
 shrinking the per-arm scalar counts accordingly. Every other cell is
 unchanged._
 
+_Protocol v6: `PolicyVariant.train_step` closes two more rows on every
+classification arm. A policy recombines the arm's own pass (forward, defining
+loss, backward), optimizer step and gradient reset, so SAM-class two-pass
+optimizers and gradient accumulation are reachable, and a pass may take a
+probability target or a per-bag weight (label smoothing, bag mixing, class
+balance) on the arm's own cross-entropy. The never-called `PolicyVariant.step`
+is gone (C-b). Survival cells still have neither seam; ensembling stays
+forbidden._
+
 Two consequences worth stating plainly:
 
 - The historical feasibility anchors (CCRCC 0.744→0.807, ovarian 0.814→0.851)
@@ -300,7 +309,7 @@ waits.
 | `wrap_criterion_for` policy seam (loss shaping: smoothing/focal/class-balanced) | The anchors' largest single ingredient on every arm → larger expected C2 lifts | Protocol-surface growth under the ship-fast rule. A de-risked **classification-only** design now exists (design-review-approved, recorded here for the journal implementation): ABC identity-default `wrap_criterion_for(criterion, role)` + `PolicyRuntime` guard mirroring `wrap_scheduler`; five bag-criterion sites (`core_utils.py:117-123` — never the instance loss; `abmil/train.py:120`; `dtfd/train.py:187` — wrapper must preserve `reduction="none"`; `titan/train.py:110`; nnmil `classification_trainer.py:186`), all `role="bag"`. Survival stays closed for three verified reasons: 3-arg losses aren't criterion-shaped; the same loss computes `_val_loss` = the selection signal; C4 is a separate regime so uniform closure adds no channel asymmetry. CLAM caveat: the wrapped criterion also computes val_loss (train objective == monitored objective — consistent; document). |
 | `label_smoothing` as a declared scalar (`CrossEntropyLoss` kwarg via `--hparams`) | Cheapest loss-shaping ingredient, rides existing channel machinery | Reviewed *small but not trivial*: two mandatory fail-loud guards (`bag_loss=svm` incompatibility; survival-task rejection) + CLAM smoothed-val_loss semantics caveat + A1 dependency — protocol-surface growth under the ship-fast rule |
 | Sampler / batch-construction seam | Second proposal-allowed family (WeightedRandomSampler beyond CLAM's bool) | Same class of risk; per-arm dataloader construction differs |
-| Closure-passing `step` so SAM-class optimizers become reachable | The CCRCC anchor's SAM ingredient | Requires trainer-loop restructuring (second forward pass); heaviest of the seam items |
+| Closure-passing `step` so SAM-class optimizers become reachable | The CCRCC anchor's SAM ingredient | Shipped in v6 as `train_step` (classification arms) |
 | Matched-budget Optuna / random-mutation / human-recipe arms | Empirical rebuttal of "just Optuna with Claude" (RQ2, proposal §6.2 methods 2–4) | Multiplies campaign compute; RQ2 is explicitly not pre-registered for the preprint |
 | Agent-memory on/off + literature-retrieval on/off ablations | RQ2 ablation row | Additional sessions per cell |
 | Regression task axis (CPTAC-PDAC continuous infiltration score, if recoverable) | Third task family; PLAN.md §4's own open check | New task type end-to-end |

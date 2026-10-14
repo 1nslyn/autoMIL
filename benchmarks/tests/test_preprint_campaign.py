@@ -223,6 +223,7 @@ def test_materializer_rejects_policy_boundary_drift(tmp_path):
 #: trainers that call it: the agent may write the policy, never these.
 POLICY_SEAMS_AND_ARM_TRAINERS = (
     "benchmarks/src/autobench/pipeline/policy_dispatch.py",
+    "benchmarks/src/autobench/pipeline/policy_step.py",
     "benchmarks/src/autobench/pipeline/policy_smoke.py",
     "benchmarks/src/autobench/pipeline/ema.py",
     "benchmarks/src/autobench/pipeline/clam/train.py",

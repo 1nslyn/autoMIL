@@ -44,6 +44,12 @@ overridable anywhere. Never edit `automil/config.yaml`: its campaign
 identity is revalidated against the frozen manifest at submit and launch,
 and any boundary drift fails the campaign audit.
 
+The five folds come from one development set: the training and validation
+slides of fold 0 of the cohort's standard split. Each fold trains on four
+fifths of that set and validates on the remaining fifth, so every
+development slide is validated exactly once across the five folds. The
+held-out slides are one fixed set that no fold trains or validates on.
+
 Open to you — the entire legal action surface:
 
 1. **Declared hyperparameters** via
@@ -267,17 +273,19 @@ policy variant can only adapt what is handed to it:
 
 - `wrap_optimizer(opt)` — **required**; live on every arm. Single-point
   strategies work: Lookahead, gradient clipping, per-group learning rates,
-  custom schedules inside a wrapped `step()`. The trainers call the wrapped
-  optimizer in three different orders and your wrapper must survive all
-  three: TITAN, nnMIL and the non-DTFD survival trainers call `zero_grad`
-  BEFORE the forward pass; ABMIL classification and both DTFD tiers call it
-  BETWEEN the forward and the backward pass (anything that changes
-  parameters in place inside `zero_grad` trips autograd's version check on
-  the backward); CLAM calls it AFTER `step()`. `automil submit` runs every
-  policy file through all three orders and the stopping seam the way your
-  arm drives it, plus the two DTFD roles and their schedulers on a DTFD
-  cell, on a tiny model before accepting it (`registry.policy_smoke`); a
-  failure there is refused for free and names the order that broke.
+  custom schedules inside a wrapped `step()`. Every classification trainer
+  trains each batch through `train_step` (below), whose native body calls
+  `zero_grad` BEFORE the forward pass, then the pass, then `step()`. The
+  survival trainers step on their own: TITAN, nnMIL and the non-DTFD
+  survival trainers call `zero_grad` BEFORE the forward pass; both DTFD
+  survival tiers call it BETWEEN the forward and the backward pass
+  (anything that changes parameters in place inside `zero_grad` trips
+  autograd's version check on the backward). `automil submit` runs every
+  policy file through the step your arm takes and the stopping seam the
+  way your arm drives it, plus the two DTFD roles and their schedulers on
+  a DTFD cell, on a tiny model before accepting it
+  (`registry.policy_smoke`); a failure there is refused for free and names
+  the step that broke.
 - `wrap_scheduler(sched)` — live **only on the DTFD arm** (both tasks). On
   clam, abmil, titan, and nnmil no scheduler object is ever passed; a
   scheduler wrapper there is silently inert. Do not spend attempts
@@ -298,6 +306,30 @@ policy variant can only adapt what is handed to it:
   `generator`, a private CPU generator seeded per fold, and never modify the
   input in place: both are checked and refused. CLAM needs at least 8
   instances left in a bag.
+- `train_step(step)` — live on every classification arm; it trains one
+  batch from the trainer's own pieces. `step.backward_on(features=None, *,
+  target=None, weight=None)` runs the forward pass, the arm's own loss and
+  the backward pass, adds to the gradients already held, and returns the
+  detached `(logits, loss)`; `step.step()` applies the gradients with the
+  arm's optimizer step and `step.zero_grad()` resets them. The native body
+  is `zero_grad()`, `backward_on()`, `step()`. What it reaches: a second
+  pass at perturbed weights before one step (sharpness-aware
+  minimization), a batch that ends without a step (gradient accumulation),
+  a probability `target` per bag (label smoothing; mixing two bags'
+  features with matching target weights), a non-negative `weight` per bag
+  (class balance), and skipping a batch. The batch is one bag on ABMIL,
+  CLAM and DTFD (`step.labels` has one entry and an int `target` works),
+  and several bags on TITAN and nnMIL (a `target` is a tensor with one
+  entry or row per bag, and replacement features keep the batch's shape).
+  CLAM's instance branches cluster on the target's most likely class and
+  the weight scales its combined loss; a second DTFD pass reuses the first
+  pass's pseudo-bag split, so it needs a bag of the same size; nnMIL's
+  gradients carry its loss scale (`step.grad_scale`). Also readable:
+  `step.features`, `step.n_classes`, `step.epoch`, and `step.generator`,
+  the only source of randomness. At most two passes and one optimizer step
+  per batch; never modify `step.features` in place; return `None`. A second
+  pass doubles the training time of every fold, and the attempt timeout
+  still applies.
 - `before_validation(*, epoch)` — live on every classification arm, called
   right before each validated epoch's evaluation, and must return `None`;
   `should_stop` is called right after the same evaluation. Together they can
@@ -306,18 +338,27 @@ policy variant can only adapt what is handed to it:
   tested helper `autobench.pipeline.ema.WeightAverage` (import it inside a
   method) implements weight averaging on these seams; its docstring shows
   the three methods to write.
-- `transform_bag` and `before_validation` are not wired on survival cells:
-  a policy that defines either is refused at submit there.
-- `step(loss, opt)` — invoked by **no** shipped trainer. Dead code here.
-- SAM-class two-pass optimizers are out of reach through this seam (no
-  closure re-evaluates the loss). Loss shaping and ensembling are not
-  reachable and not permitted.
+- `transform_bag`, `train_step` and `before_validation` are not wired on
+  survival cells: a policy that defines any of them is refused at submit
+  there.
+- Forbidden even where reachable: a target taken from a model's own or
+  another model's predictions (self-distillation, teacher or consistency
+  targets), any auxiliary loss term, averaging the weights of more than one
+  training run (averaging one run's weights, as `WeightAverage` does, is
+  allowed), freezing or re-initialising a module of the published model,
+  and ensembling.
 
 Module rules (statically enforced before launch): top-level imports only
 `automil.registry`, `__future__`, `typing`, `collections.abc` — numerical
 imports go inside methods; exactly one `@register`-decorated class per
 file, a direct `PolicyVariant` subclass; module-level assignments must be
-immutable literals; no top-level I/O. The filename must not start with
+immutable literals; no top-level I/O. Inside methods, import only `torch`
+(and its submodules), `numpy`, `math`, `autobench.pipeline.ema`,
+`collections`, `itertools`, `functools`, `copy` and `typing`, and never
+read or write a file (`open`, `torch.load`/`save`, numpy's
+`load`/`save`/`fromfile`), run code from a string (`exec`, `eval`,
+`compile`) or reach the interpreter's internals (`__globals__`,
+`__builtins__`, `globals()`, `vars()`). The filename must not start with
 `_` (underscore-prefixed files are skipped by the variant scanner, so the
 attempt would launch and fail as unregistered — a charged waste). Minimal
 legal shape:

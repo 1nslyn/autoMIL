@@ -158,6 +158,12 @@ def train_titan_fold(
     tracker = SelectionTracker(head_cfg.patience)
     best_state = copy.deepcopy(model.state_dict())  # kept when no epoch is ever selected
 
+    def backward_on(embeddings, objective):
+        logits = model(embeddings)
+        loss = objective.loss(criterion, logits)
+        loss.backward()
+        return logits, loss
+
     start = time.time()
     for _epoch in range(exp_cfg.train.max_epochs):
         model.train()
@@ -168,12 +174,11 @@ def train_titan_fold(
             embeddings = _transform_slide_vectors(
                 policy_runtime, embeddings, targets, _epoch,
             )
-
-            optimizer.zero_grad()
-            logits = model(embeddings)
-            loss = criterion(logits, labels)
-            loss.backward()
-            optimizer.step()
+            policy_runtime.train_step(
+                embeddings, labels, epoch=_epoch, n_classes=n_classes,
+                backward_on=backward_on, step=optimizer.step,
+                zero_grad=optimizer.zero_grad, keep_shape=True,
+            )
 
         policy_runtime.before_validation(epoch=_epoch)
         val_metrics, y_true_v, y_probs_v = _evaluate(

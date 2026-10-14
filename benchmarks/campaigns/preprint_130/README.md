@@ -47,6 +47,21 @@ run the two seams); and the companion guard margins are re-derived over five
 folds (`guard_margins.json`). The trial result behind these changes is
 recorded in the changelog entry.
 
+Protocol `preprint-v6` (2026-10-14) adds, from the KRAS long trial: every cell
+trains on the `devcv` split strategy, five folds inside the development slides
+of fold 0 of the standard split (its training and validation slides,
+partitioned by case with `StratifiedGroupKFold`, seed 1000), so every
+development slide is validated exactly once and every fold tests on fold 0's
+held-out slides; the guard margins are derived from the `devcv` counts and a
+guard derived from other folds is refused (LUAD KRAS and HNSC grade are
+derived; LGG, GBM and PDAC are derived on fir before their cells are
+materialized). Train-only policies gain `train_step`, which recombines the
+arm's own pass, optimizer step and gradient reset on every classification arm
+(two passes per step, gradient accumulation, probability targets and per-bag
+weights on the arm's own loss), and their methods are sealed: the cohort
+templates declare `registry.policy_method_imports`, and a policy method may
+import nothing else and may not read or write files or reach the interpreter.
+
 There is no final retraining. Crashes, partial runs, and launch failures
 consume discovery attempts — an attempt is billed exactly once, when its spec
 is archived. An attempt that does not complete all five folds cannot win. The

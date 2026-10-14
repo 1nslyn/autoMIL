@@ -141,12 +141,6 @@ def test_the_hook_acts_on_the_weights_the_validation_then_scores(tmp_path, capsy
     assert shifted[0] != native[0]
 
 
-def test_a_trainer_without_a_runtime_trains_like_one_with_a_native_runtime(tmp_path):
-    _, bare = _train(tmp_path / "bare", None)
-    _, native = _train(tmp_path / "native", fold_runtime())
-    assert bare == native
-
-
 def test_a_policy_that_changes_the_bag_changes_the_run(tmp_path):
     _, native = _train(tmp_path / "native", fold_runtime())
     log: list = []

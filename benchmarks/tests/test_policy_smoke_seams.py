@@ -210,11 +210,11 @@ class TestTheBagTransformIsDrivenOnEachArmsBag:
 
     @pytest.mark.parametrize("body, message", [
         ("features.mul_(2.0)\nreturn features\n", "modified a training bag in place"),
-        ("return features.tolist()\n", "must return a tensor"),
-        ("return None\n", "must return a tensor"),
-        ("return features.double()\n", "must return a tensor"),
-        ("return features[:, :4]\n", "must return a tensor"),
-        ("return features.sum(dim=0)\n", "must return a tensor"),
+        ("return features.tolist()\n", "bag must be a tensor"),
+        ("return None\n", "bag must be a tensor"),
+        ("return features.double()\n", "bag must be a tensor"),
+        ("return features[:, :4]\n", "bag must be a tensor"),
+        ("return features.sum(dim=0)\n", "bag must be a tensor"),
     ], ids=["in_place", "list", "none", "dtype", "width", "rank"])
     def test_a_bag_the_runtime_rejects_is_refused(self, tmp_path, body, message):
         path = _write(tmp_path, "bad_return", _transform_policy("bad_return", body))

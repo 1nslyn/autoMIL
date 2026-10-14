@@ -2,33 +2,39 @@
 
 Run by ``automil submit`` (``registry.policy_smoke`` in the cell config) before
 an attempt is charged. The policy is instantiated through the same
-``PolicyRuntime`` the trainers use and driven over a tiny model under each
-call order that exists in the trainers: TITAN, nnMIL and the non-DTFD survival
-adapters zero the gradients before the forward pass; ABMIL classification and
-both DTFD tiers zero them between the forward and the backward pass; CLAM zeros
-them after the step; nnMIL's order is also driven through a ``GradScaler`` as
-on CUDA. Then the stopping seam exactly as the cell's arm drives it
-(``--arm``: the arm's metrics dict, its first validated epoch, and on DTFD
-after both tiers and their schedulers exist on the same runtime) for the
-cell's task family (``--task-family classification`` or ``survival``), and,
-for DTFD or an unspecified arm, the DTFD seam: both tier optimizers wrapped,
-then both ``MultiStepLR`` schedulers built on the targets the trainer
-resolves and wrapped, before either tier trains.
+``PolicyRuntime`` the trainers use and driven over a tiny model the way the
+cell's trainer drives it. A classification trainer trains every batch through
+the runtime's ``train_step`` (the policy's, or the native zero_grad, pass,
+step), on the batch its arm steps on (``--arm``): one bag (ABMIL; CLAM, which
+keeps eight instances), a batch of slide vectors (TITAN), a padded batch
+through a ``GradScaler`` as on CUDA (nnMIL), or both DTFD tiers on one bag.
+The survival adapters step without ``train_step``, under the call orders
+they use: every non-DTFD adapter zeroes before the forward pass, both DTFD
+tiers between the forward and the backward pass, nnMIL's through a
+``GradScaler``. Then the stopping seam exactly as the cell's arm drives it
+(the arm's metrics dict, its first validated epoch, and on DTFD after both
+tiers and their schedulers exist on the same runtime) for the cell's task
+family (``--task-family classification`` or ``survival``), and, for DTFD or an
+unspecified arm, the DTFD seam: both tier optimizers wrapped, then both
+``MultiStepLR`` schedulers built on the targets the trainer resolves and
+wrapped, before either tier trains.
 
 Every check runs on the device the trainers train on (CUDA when the host has
 it), so a policy that mixes a CPU tensor into a GPU bag or parameter fails
 here as it would fail in the run.
 
-A policy that overrides ``transform_bag`` or ``before_validation`` has those
-seams driven too. The bag transform runs through the runtime the trainers use,
-seeded as a fold's is, on the bag the arm hands it (CLAM: eight instances must
-survive; TITAN: one vector per slide, shape kept); it must give the same bags
-on two runs and draw nothing from the global RNGs. The survival trainers call
-neither seam, so overriding one there is refused: the cell would run without it.
+A policy that overrides ``transform_bag``, ``train_step`` or
+``before_validation`` has those seams driven too, through the runtime the
+trainers use, seeded as a fold's is: the bag transform on the bag the arm
+hands it (CLAM: eight instances must survive; TITAN: one vector per slide,
+shape kept), the training step on the arm's batch. Each must give the same
+result on two runs and draw nothing from the global RNGs. The survival
+trainers call none of these seams, so overriding one there is refused: the
+cell would run without it.
 
 Exit codes: 0 the policy passed; 1 it failed a seam (the diagnostics name the
-call order or the role); 2 usage (missing file, unknown task family or arm, no
-PolicyVariant subclass in the module).
+batch, the call order or the role); 2 usage (missing file, unknown task family
+or arm, no PolicyVariant subclass in the module).
 
 Usage: python -m autobench.pipeline.policy_smoke [--task-family FAMILY] [--arm ARM] <path/to/policy.py>
 """
@@ -40,19 +46,22 @@ import traceback
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+#: How the survival adapters step (no ``train_step`` there): every non-DTFD
+#: adapter zeroes before the forward pass, DTFD's tiers between the forward
+#: and the backward pass.
 CALL_ORDERS: tuple[str, ...] = (
     "zero_grad -> forward -> backward -> step",
     "forward -> zero_grad -> backward -> step",
-    "forward -> backward -> step -> zero_grad",
 )
 STEPS_PER_ORDER = 3
 ROLES = ("tier1", "tier2")
 TASK_FAMILIES = ("classification", "survival")
 ARMS = ("abmil", "clam", "dtfd", "nnmil", "titan")
-#: The train-only data seams of PolicyVariant, none of them wired into the survival trainers.
-SEAMS = ("transform_bag", "before_validation")
+#: The train-only seams of PolicyVariant that no survival trainer calls.
+SEAMS = ("transform_bag", "train_step", "before_validation")
 BAG_INSTANCES = 16
 BAG_WIDTH = 8
+N_CLASSES = 2
 #: CLAM's instance-level loss samples ``ModelConfig.B`` instances per class branch.
 CLAM_MIN_INSTANCES = 8
 #: The bag each arm's classification trainer hands the bag transform: what it
@@ -64,19 +73,28 @@ BAG_CASES = {
     "titan": ("a TITAN slide vector, shape kept", 1, {"keep_shape": True}),
 }
 ARM_BAG_CASE = {"abmil": "bag", "dtfd": "bag", "nnmil": "bag", "clam": "clam", "titan": "titan"}
-#: The call order each arm's CLASSIFICATION trainer uses between two stopping
-#: decisions; every non-DTFD survival adapter zeroes before the forward pass.
-ARM_ORDER = {
-    "titan": CALL_ORDERS[0], "nnmil": CALL_ORDERS[0],
-    "abmil": CALL_ORDERS[1], "dtfd": CALL_ORDERS[1],
-    "clam": CALL_ORDERS[2],
+#: The batch each arm's classification trainer trains on through ``train_step``:
+#: what it is, its shape, and what the arm's model needs back. DTFD steps one
+#: bag through both tiers (``_run_dtfd_tiers``).
+STEP_CASES = {
+    "bag": (f"one bag of {BAG_INSTANCES} instances", (BAG_INSTANCES, BAG_WIDTH), {}),
+    "clam": (f"one CLAM bag of {BAG_INSTANCES} instances, {CLAM_MIN_INSTANCES} kept",
+             (BAG_INSTANCES, BAG_WIDTH), {"min_instances": CLAM_MIN_INSTANCES}),
+    "titan": ("a batch of 8 TITAN slide vectors, shape kept", (8, BAG_WIDTH), {"keep_shape": True}),
+    "nnmil": (f"a padded nnMIL batch of 4 bags of {BAG_INSTANCES} through a GradScaler, shape kept",
+              (4, BAG_INSTANCES, BAG_WIDTH), {"keep_shape": True}),
 }
+ARM_STEP_CASE = {"abmil": "bag", "clam": "clam", "titan": "titan", "nnmil": "nnmil"}
 
 
-def _stop_order(arm: str | None, family: str) -> str:
-    if family == "survival" and arm != "dtfd":
-        return CALL_ORDERS[0]
-    return ARM_ORDER.get(arm, CALL_ORDERS[0])
+def _step_cases(arm: str | None) -> tuple[str, ...]:
+    if arm is None:
+        return tuple(STEP_CASES)
+    return (ARM_STEP_CASE[arm],) if arm in ARM_STEP_CASE else ()
+
+
+def _survival_order(arm: str | None) -> str:
+    return CALL_ORDERS[1] if arm == "dtfd" else CALL_ORDERS[0]
 
 
 class SmokeFailure(Exception):
@@ -113,36 +131,64 @@ def _device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _model_and_batch():
+def _two_layers(hidden: int = 4):
+    """Two layers so the second layer's weight is saved for backward: an
+    in-place change of it between forward and backward trips autograd's
+    version check, which is how the rehearsal crash surfaced. Seeded, and
+    built without moving the global RNGs, which the step checks watch."""
     import torch
     from torch import nn
 
-    torch.manual_seed(0)
-    # Two layers so the second layer's weight is saved for backward: an
-    # in-place change of it between forward and backward trips autograd's
-    # version check, which is how the rehearsal crash surfaced.
-    model = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2))
-    features = torch.randn(8, 4)
-    labels = torch.randint(0, 2, (8,))
-    device = _device()
-    return model.to(device), features.to(device), labels.to(device)
+    devices = [torch.cuda.current_device()] if torch.cuda.is_available() else []
+    with torch.random.fork_rng(devices=devices):
+        torch.manual_seed(0)
+        model = nn.Sequential(
+            nn.Linear(BAG_WIDTH, hidden), nn.ReLU(), nn.Linear(hidden, N_CLASSES),
+        )
+    return model.to(_device())
+
+
+def _model():
+    return _two_layers()
+
+
+def _batch(shape: tuple[int, ...], n_labels: int):
+    import torch
+
+    generator = torch.Generator().manual_seed(0)
+    features = torch.randn(*shape, generator=generator)
+    labels = torch.randint(0, N_CLASSES, (n_labels,), generator=generator)
+    return features.to(_device()), labels.to(_device())
+
+
+def _model_and_batch():
+    """The survival adapters' step: a batch of 8 rows, one label each."""
+    return (_model(), *_batch((8, BAG_WIDTH), 8))
+
+
+def _logits(model, features, case: str):
+    """The arm's forward: a bag pools to one row, a padded batch to one row per bag."""
+    if case in ("bag", "clam"):
+        return model(features).mean(dim=0, keepdim=True)
+    if case == "nnmil":
+        return model(features).mean(dim=1)
+    return model(features)
 
 
 def _run_order(order: str, policy_cls: type, *, scaled: bool = False) -> None:
-    """One call order for a few steps; ``scaled`` drives the step through a
-    ``GradScaler`` as nnMIL does on CUDA (the scaler unscales the gradients it
-    finds through the wrapper's ``param_groups``, so a wrapper that hands it
-    copies fails here as it fails there)."""
+    """A survival adapter's call order for a few steps; ``scaled`` drives the
+    step through a ``GradScaler`` as nnMIL's survival trainers do on CUDA (the
+    scaler unscales the gradients it finds through the wrapper's
+    ``param_groups``, so a wrapper that hands it copies fails here as it fails
+    there)."""
     import torch
     from torch import nn
 
-    from autobench.pipeline.policy_dispatch import PolicyRuntime
-
     model, features, labels = _model_and_batch()
-    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
+    runtime = _fold_runtime(policy_cls)
     raw = torch.optim.Adam(model.parameters(), lr=1e-2)
     optimizer = runtime.wrap_optimizer(raw)
-    scaler = torch.amp.GradScaler("cpu", enabled=True) if scaled else None
+    scaler = torch.amp.GradScaler(_device().type, enabled=True) if scaled else None
     criterion = nn.CrossEntropyLoss()
     for _ in range(STEPS_PER_ORDER):
         loss = _train_step(order, model, optimizer, criterion, features, labels, scaler)
@@ -170,6 +216,102 @@ def _train_step(order, model, optimizer, criterion, features, labels, scaler=Non
     if order.endswith("zero_grad"):
         optimizer.zero_grad()
     return loss
+
+
+def _policy_step(runtime, model, optimizer, features, labels, case: str, *, epoch: int, scaler=None):
+    """One classification step as the arm's trainer takes it: through ``train_step``."""
+    from torch import nn
+
+    criterion = nn.CrossEntropyLoss()
+    # nnMIL reads the learning rate off the wrapper every epoch; every
+    # scheduler the trainers attach mutates the same param_groups.
+    optimizer.param_groups[0]["lr"]
+
+    def backward_on(batch, objective):
+        logits = _logits(model, batch, case)
+        loss = objective.loss(criterion, logits)
+        (loss if scaler is None else scaler.scale(loss)).backward()
+        return logits, loss
+
+    def step():
+        if scaler is None:
+            optimizer.step()
+        else:
+            scaler.step(optimizer)
+            scaler.update()
+
+    return runtime.train_step(
+        features, labels, epoch=epoch, n_classes=N_CLASSES, backward_on=backward_on,
+        step=step, zero_grad=optimizer.zero_grad,
+        grad_scale=None if scaler is None else scaler.get_scale, **STEP_CASES[case][2],
+    )
+
+
+def _fold_runtime(policy_cls: type):
+    from autobench.pipeline.policy_dispatch import PolicyRuntime
+
+    return PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold(
+        seed=0, fold=0,
+    )
+
+
+def _arm_stepper(runtime, case: str) -> Callable[[int], float | None]:
+    """The arm's classification step on a fresh model; each call returns the
+    step's loss (None when the policy skipped the batch)."""
+    import torch
+
+    model = _model()
+    shape = STEP_CASES[case][1]
+    features, labels = _batch(shape, 1 if case in ("bag", "clam") else shape[0])
+    optimizer = runtime.wrap_optimizer(torch.optim.Adam(model.parameters(), lr=1e-2))
+    scaler = torch.amp.GradScaler(_device().type) if case == "nnmil" else None
+
+    def step(epoch: int) -> float | None:
+        loss = _policy_step(
+            runtime, model, optimizer, features, labels, case, epoch=epoch, scaler=scaler,
+        )
+        return None if loss is None else float(loss)
+
+    return step
+
+
+def _run_steps(policy_cls: type, case: str) -> list[float | None]:
+    step = _arm_stepper(_fold_runtime(policy_cls), case)
+    return [step(epoch) for epoch in range(STEPS_PER_ORDER)]
+
+
+def _same_losses(first: list[float | None], second: list[float | None]) -> bool:
+    import math
+
+    return all(
+        a == b or (a is not None and b is not None and math.isnan(a) and math.isnan(b))
+        for a, b in zip(first, second)
+    )
+
+
+def _check_steps(policy_cls: type, run: Callable[[], list[float | None]], what: str) -> None:
+    """The steps stay finite; an overriding policy's are reproducible and leave
+    the global RNGs where they were."""
+    import math
+
+    from autobench.pipeline.policy_dispatch import defines_seam
+
+    before = _global_rng_state()
+    first = run()
+    if defines_seam(policy_cls, "train_step"):
+        second = run()
+        if _global_rng_state() != before:
+            raise SmokeFailure("train_step() drew from a global RNG; draw from step.generator")
+        if not _same_losses(first, second):
+            raise SmokeFailure(
+                "train_step() is not reproducible: two runs seeded alike trained differently"
+            )
+    if any(loss is not None and not math.isfinite(loss) for loss in first):
+        raise SmokeFailure(f"loss became non-finite on {what}")
+
+
+def _run_train_step(policy_cls: type, case: str) -> None:
+    _check_steps(policy_cls, lambda: _run_steps(policy_cls, case), STEP_CASES[case][0])
 
 
 def _stop_metrics(
@@ -215,7 +357,7 @@ def _first_stop_epoch(arm: str | None, family: str) -> int:
     return 0
 
 
-def _dtfd_tiers(runtime, features, labels):
+def _dtfd_tiers(runtime, device):
     """Both DTFD tiers as the trainer builds them: two parameter sets, both
     optimizers wrapped, then both ``MultiStepLR`` schedulers built on the
     targets the trainer resolves and wrapped, before either tier trains (one
@@ -227,8 +369,9 @@ def _dtfd_tiers(runtime, features, labels):
     # Two layers on each tier, so a weight the backward pass needs is saved
     # on both: an in-place change between forward and backward trips
     # autograd's version check whichever role it targets.
-    tier1 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2)).to(features.device)
-    tier2 = nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 3)).to(features.device)
+    # The tiers' parameters differ in shape, as DTFD's do, so state a policy
+    # carries from one tier's wrap into the other's fails here as it does there.
+    tier1, tier2 = _two_layers(4).to(device), _two_layers(3).to(device)
     raws = [torch.optim.Adam(module.parameters(), lr=1e-2) for module in (tier1, tier2)]
     optimizers = [runtime.wrap_optimizer(raw, role=role) for role, raw in zip(ROLES, raws)]
     schedulers = [
@@ -242,6 +385,7 @@ def _dtfd_tiers(runtime, features, labels):
 
 
 def _step_dtfd_tiers(tiers, features, labels) -> None:
+    """The DTFD survival adapter: each tier forward, zero_grad, backward, step."""
     from torch import nn
 
     criterion = nn.CrossEntropyLoss()
@@ -253,52 +397,101 @@ def _step_dtfd_tiers(tiers, features, labels) -> None:
         scheduler.step()
 
 
-def _run_dtfd_tiers(policy_cls: type) -> None:
-    from autobench.pipeline.policy_dispatch import PolicyRuntime
+def _dtfd_policy_stepper(runtime) -> Callable[[int], float | None]:
+    """The DTFD classification trainer: one bag, both tiers in one ``train_step``
+    (both reset, both passes, both steps), then both schedulers."""
+    from torch import nn
 
-    _, features, labels = _model_and_batch()
-    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
-    tiers = _dtfd_tiers(runtime, features, labels)
-    for _ in range(STEPS_PER_ORDER):
-        _step_dtfd_tiers(tiers, features, labels)
+    tiers = _dtfd_tiers(runtime, _device())
+    features, labels = _batch(STEP_CASES["bag"][1], 1)
+    criterion = nn.CrossEntropyLoss()
+
+    def zero_grad():
+        for _, optimizer, _ in tiers:
+            optimizer.zero_grad()
+
+    def backward_on(bag, objective):
+        for module, _, _ in tiers:
+            logits = module(bag).mean(dim=0, keepdim=True)
+            loss = objective.loss(criterion, logits)
+            loss.backward()
+        return logits, loss
+
+    def step():
+        for _, optimizer, _ in tiers:
+            optimizer.step()
+
+    def run(epoch: int) -> float | None:
+        loss = runtime.train_step(
+            features, labels, epoch=epoch, n_classes=N_CLASSES, backward_on=backward_on,
+            step=step, zero_grad=zero_grad,
+        )
+        for _, _, scheduler in tiers:
+            scheduler.step()
+        return None if loss is None else float(loss)
+
+    return run
+
+
+def _run_dtfd_tiers(policy_cls: type, family: str) -> None:
+    if family == "survival":
+        _, features, labels = _model_and_batch()
+        tiers = _dtfd_tiers(_fold_runtime(policy_cls), features.device)
+        for _ in range(STEPS_PER_ORDER):
+            _step_dtfd_tiers(tiers, features, labels)
+        return
+
+    def run() -> list[float | None]:
+        step = _dtfd_policy_stepper(_fold_runtime(policy_cls))
+        return [step(epoch) for epoch in range(STEPS_PER_ORDER)]
+
+    _check_steps(policy_cls, run, "both DTFD tiers on one bag")
 
 
 def _run_stopping(policy_cls: type, arm: str | None, family: str) -> None:
-    """The stopping seam as the arm's trainer drives it: the arm's own call
-    order between two decisions (what a policy arms in ``should_stop`` and
-    performs in the next ``zero_grad`` lands where the trainer puts that
-    call), on DTFD after both tiers and their schedulers exist on the same
-    runtime (a policy may hold its scheduler and read it here), from the
-    arm's first validated epoch, with the arm's metrics."""
+    """The stopping seam as the arm's trainer drives it: the arm's own step
+    between two decisions (what a policy arms in ``should_stop`` and performs
+    in the next ``zero_grad`` lands where the trainer puts that call), on DTFD
+    after both tiers and their schedulers exist on the same runtime (a policy
+    may hold its scheduler and read it here), from the arm's first validated
+    epoch, with the arm's metrics."""
     import torch
     from torch import nn
 
-    from autobench.pipeline.policy_dispatch import PolicyRuntime
+    runtime = _fold_runtime(policy_cls)
+    last = {"loss": 0.7}
+    if family == "classification":
+        stepper = (
+            _dtfd_policy_stepper(runtime) if arm == "dtfd"
+            else _arm_stepper(runtime, ARM_STEP_CASE.get(arm, "bag"))
+        )
 
-    model, features, labels = _model_and_batch()
-    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold()
-    if arm == "dtfd":
-        tiers = _dtfd_tiers(runtime, features, labels)
-        step = lambda: _step_dtfd_tiers(tiers, features, labels)  # noqa: E731
-        loss_value = lambda: 0.7  # noqa: E731
+        def step(epoch: int) -> None:
+            loss = stepper(epoch)
+            if loss is not None:
+                last["loss"] = loss
+    elif arm == "dtfd":
+        _, features, labels = _model_and_batch()
+        tiers = _dtfd_tiers(runtime, features.device)
+
+        def step(epoch: int) -> None:
+            _step_dtfd_tiers(tiers, features, labels)
     else:
-        order = _stop_order(arm, family)
+        model, features, labels = _model_and_batch()
         optimizer = runtime.wrap_optimizer(torch.optim.Adam(model.parameters(), lr=1e-2))
         criterion = nn.CrossEntropyLoss()
-        last = {"loss": 0.7}
 
-        def step() -> None:
-            last["loss"] = float(
-                _train_step(order, model, optimizer, criterion, features, labels).detach()
-            )
+        def step(epoch: int) -> None:
+            last["loss"] = float(_train_step(
+                _survival_order(arm), model, optimizer, criterion, features, labels,
+            ).detach())
 
-        loss_value = lambda: last["loss"]  # noqa: E731
     first = _first_stop_epoch(arm, family)
     for epoch in range(first, first + STEPS_PER_ORDER):
-        step()
+        step(epoch)
         # The middle epoch carries the arm's undefined-metric values.
         metrics = _stop_metrics(
-            arm, family, epoch, loss_value(), undefined=(epoch == first + 1),
+            arm, family, epoch, last["loss"], undefined=(epoch == first + 1),
         )
         try:
             runtime.should_stop(False, epoch=epoch, metrics=metrics)
@@ -331,12 +524,8 @@ def _transform_bags(policy_cls: type, rows: int, constraints: dict) -> list:
     """Three epochs of one bag through a fresh fold runtime, as a trainer drives it."""
     import torch
 
-    from autobench.pipeline.policy_dispatch import PolicyRuntime
-
     bag = torch.randn(rows, BAG_WIDTH, generator=torch.Generator().manual_seed(0)).to(_device())
-    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold(
-        seed=0, fold=0,
-    )
+    runtime = _fold_runtime(policy_cls)
     return [
         runtime.transform_bag(bag, label=epoch % 2, epoch=epoch, **constraints)
         for epoch in range(STEPS_PER_ORDER)
@@ -363,18 +552,11 @@ def _run_transform_bag(policy_cls: type, rows: int, constraints: dict) -> None:
 def _run_before_validation(policy_cls: type, arm: str | None) -> None:
     """The hook after the optimizer is wrapped and a step has run, as a classification
     trainer calls it (the survival trainers never do)."""
-    import torch
-    from torch import nn
-
-    from autobench.pipeline.policy_dispatch import PolicyRuntime
-
-    model, features, labels = _model_and_batch()
-    runtime = PolicyRuntime(name=policy_cls.__name__, policy_factory=policy_cls).for_fold(
-        seed=0, fold=0,
-    )
-    optimizer = runtime.wrap_optimizer(torch.optim.Adam(model.parameters(), lr=1e-2))
-    order = _stop_order(arm, "classification")
-    _train_step(order, model, optimizer, nn.CrossEntropyLoss(), features, labels)
+    runtime = _fold_runtime(policy_cls)
+    if arm == "dtfd":
+        _dtfd_policy_stepper(runtime)(0)
+    else:
+        _arm_stepper(runtime, ARM_STEP_CASE.get(arm, "bag"))(0)
     runtime.before_validation(epoch=0)
 
 
@@ -387,7 +569,8 @@ def _refuse_survival(seam: str) -> None:
 def _seam_checks(
     policy_cls: type, arm: str | None, family: str,
 ) -> list[tuple[str, Callable[[], None]]]:
-    """One check per data seam the policy overrides."""
+    """One check per data seam the policy overrides (the training step runs
+    for every policy, with its own checks)."""
     from autobench.pipeline.policy_dispatch import defines_seam
 
     checks: list[tuple[str, Callable[[], None]]] = []
@@ -405,7 +588,7 @@ def _seam_checks(
                         policy_cls, rows, constraints,
                     ),
                 ))
-        else:
+        elif seam == "before_validation":
             checks.append((
                 "before_validation seam",
                 lambda: _run_before_validation(policy_cls, arm),
@@ -413,17 +596,31 @@ def _seam_checks(
     return checks
 
 
+def _step_checks(policy_cls: type, arm: str | None, family: str) -> list[tuple[str, Callable[[], None]]]:
+    """How the cell's trainer steps: ``train_step`` on the arm's batch for
+    classification, the adapters' call orders for survival."""
+    if family == "survival":
+        orders = CALL_ORDERS if arm is None else (_survival_order(arm),)
+        checks = [(order, lambda order=order: _run_order(order, policy_cls)) for order in orders]
+        if arm in (None, "nnmil"):
+            checks.append((f"{CALL_ORDERS[0]} through a GradScaler (nnMIL on CUDA)",
+                           lambda: _run_order(CALL_ORDERS[0], policy_cls, scaled=True)))
+        return checks
+    return [
+        (f"train_step on {STEP_CASES[case][0]}", lambda case=case: _run_train_step(policy_cls, case))
+        for case in _step_cases(arm)
+    ]
+
+
 def _checks(policy_cls: type, arm: str | None, family: str) -> Sequence[tuple[str, Callable[[], None]]]:
     checks = [
-        *[(order, lambda order=order: _run_order(order, policy_cls)) for order in CALL_ORDERS],
-        (f"{CALL_ORDERS[0]} through a GradScaler (nnMIL on CUDA)",
-         lambda: _run_order(CALL_ORDERS[0], policy_cls, scaled=True)),
+        *_step_checks(policy_cls, arm, family),
         (f"stopping seam ({arm or 'generic'} {family} metrics)",
          lambda: _run_stopping(policy_cls, arm, family)),
     ]
     if arm in (None, "dtfd"):
         checks.append(("DTFD tiers tier1/tier2 with MultiStepLR schedulers",
-                       lambda: _run_dtfd_tiers(policy_cls)))
+                       lambda: _run_dtfd_tiers(policy_cls, family)))
     checks.extend(_seam_checks(policy_cls, arm, family))
     return tuple(checks)
 
@@ -479,8 +676,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         for failure in failures:
             print(f"  {failure}", file=sys.stderr)
         return 1
-    print(f"policy_smoke: {path.name} passed {len(CALL_ORDERS)} call orders and the "
-          f"{arm or 'generic'} {family} stopping seam"
+    print(f"policy_smoke: {path.name} passed the {arm or 'generic'} {family} training "
+          "steps and stopping seam"
           + (" and the DTFD tiers with their schedulers" if arm in (None, "dtfd") else ""))
     return 0
 

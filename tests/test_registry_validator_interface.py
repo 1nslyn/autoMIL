@@ -53,8 +53,10 @@ class TestPolicy(PolicyVariant):
     def wrap_optimizer(self, opt):
         return opt
 
-    def step(self, loss, opt):
-        opt.step()
+    def train_step(self, step):
+        step.zero_grad()
+        step.backward_on()
+        step.step()
 '''
 
 MISSING_FORWARD = '''

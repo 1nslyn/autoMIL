@@ -42,28 +42,32 @@ def _train_one_epoch(
     py_rng: random.Random,
     policy_runtime: PolicyRuntime,
     epoch: int,
+    num_classes: int,
 ) -> float:
     """Run one training epoch; return mean loss over slides."""
     model.train()
     order = list(range(len(slides)))
     py_rng.shuffle(order)
 
+    def backward_on(bag, objective):
+        logits = model(bag.unsqueeze(0))["logits"]  # [1, N, in_dim] -> [1, C]
+        loss = objective.loss(ce_cri, logits)
+        loss.backward()
+        return logits, loss
+
     losses: list[float] = []
     for i in order:
         slide = slides[i]
         bag = _read_bag(slide.h5_path).to(device)  # [N, in_dim]
         bag = policy_runtime.transform_bag(bag, label=slide.label, epoch=epoch)
-        features = bag.unsqueeze(0)  # [1, N, in_dim]
         label_t = torch.LongTensor([slide.label]).to(device)
 
-        out = model(features)
-        loss = ce_cri(out["logits"], label_t)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        losses.append(float(loss.item()))
+        loss = policy_runtime.train_step(
+            bag, label_t, epoch=epoch, n_classes=num_classes, backward_on=backward_on,
+            step=optimizer.step, zero_grad=optimizer.zero_grad,
+        )
+        if loss is not None:
+            losses.append(float(loss.item()))
 
     return float(np.mean(losses)) if losses else float("nan")
 
@@ -168,7 +172,7 @@ def train_abmil_fold(
         for _epoch in range(cfg.max_epochs):
             _train_one_epoch(
                 model, train_slides, ce_cri, optimizer, device, py_rng,
-                policy_runtime, _epoch,
+                policy_runtime, _epoch, num_classes,
             )
 
             if val_slides:

@@ -2,11 +2,12 @@
 before an attempt is charged for it.
 
 Two of the five rehearsal cells lost an attempt (plus a retry) to policy
-files that crashed on the seam's call order: the ABMIL trainer calls
+files that crashed on the seam's call order: the ABMIL trainer then called
 ``zero_grad`` between the forward and the backward pass, so a policy that
 restored weights in place inside ``zero_grad`` tripped autograd's version
-check. The harness runs a policy through a tiny model under each of the
-three call orders the trainers use, through the same ``PolicyRuntime`` the
+check. The harness runs a policy through a tiny model the way the cell's
+trainer steps (``train_step`` on the arm's batch for classification, the
+adapters' call orders for survival), through the same ``PolicyRuntime`` the
 trainers use, plus the scheduler and stopping seams.
 """
 from __future__ import annotations
@@ -66,7 +67,8 @@ LOOKAHEAD = HEADER.format(name="lookahead") + '''class Lookahead(PolicyVariant):
 
 RESTORE_IN_ZERO_GRAD = HEADER.format(name="ema_in_place") + '''class EmaInPlace(PolicyVariant):
     """The rehearsal crash: weights restored IN PLACE inside zero_grad, which
-    the ABMIL trainer calls between the forward and the backward pass."""
+    the ABMIL trainer then called between the forward and the backward pass
+    (the DTFD survival adapter still does)."""
 
     def wrap_optimizer(self, opt):
         class _Wrapped:
@@ -314,8 +316,9 @@ STATEFUL_FROM_EPOCH_ZERO = HEADER.format(name="stateful_from_zero") + '''class S
 SYNC_ARMED_BY_STOP = HEADER.format(name="sync_armed_by_stop") + '''class SyncArmedByStop(PolicyVariant):
     """Epoch-based Lookahead: should_stop arms a slow-weight sync that the
     next zero_grad performs in place. Legal where zero_grad precedes the
-    forward pass; on ABMIL zero_grad sits between forward and backward, so
-    the in-place sync trips autograd on the following backward."""
+    forward pass; on the DTFD survival adapter zero_grad sits between forward
+    and backward, so the in-place sync trips autograd on the following
+    backward."""
 
     def wrap_optimizer(self, opt):
         import torch
@@ -457,9 +460,12 @@ class TestHarnessVerdicts:
     def test_a_lookahead_style_wrapper_passes(self, tmp_path):
         assert policy_smoke.main([str(_write(tmp_path, "lookahead", LOOKAHEAD))]) == 0
 
-    def test_the_rehearsal_crash_is_caught(self, tmp_path, capsys):
-        code = policy_smoke.main([str(_write(tmp_path, "ema_in_place", RESTORE_IN_ZERO_GRAD))])
-        assert code == 1
+    def test_the_rehearsal_crash_is_caught_where_its_call_order_still_runs(self, tmp_path, capsys):
+        """Every classification trainer resets the gradients before the
+        forward pass (``train_step``), so the in-place restore is legal there."""
+        path = str(_write(tmp_path, "ema_in_place", RESTORE_IN_ZERO_GRAD))
+        assert _main([path]) == 0
+        assert _main(["--task-family", "survival", path]) == 1
         err = capsys.readouterr().err
         assert "forward -> zero_grad -> backward -> step" in err
         assert "inplace" in err.lower() or "in-place" in err.lower() or "modified" in err.lower()
@@ -513,7 +519,9 @@ class TestTheStoppingSeamIsJudgedByTaskFamily:
     def test_the_stopping_run_uses_the_arms_own_call_order(self, tmp_path, capsys):
         path = str(_write(tmp_path, "sync_armed_by_stop", SYNC_ARMED_BY_STOP))
         assert _main(["--arm", "titan", path]) == 0          # zero_grad before forward
-        assert _main(["--arm", "abmil", path]) == 1          # zero_grad between forward and backward
+        assert _main(["--arm", "abmil", path]) == 0          # train_step: zero_grad before forward
+        # the DTFD survival adapter: zero_grad between forward and backward
+        assert _main(["--arm", "dtfd", "--task-family", "survival", path]) == 1
         err = capsys.readouterr().err
         assert "stopping seam" in err and "inplace" in err.lower() or "modified" in err.lower()
         # the ABMIL survival adapter zeroes before the forward pass: legal there
@@ -575,7 +583,9 @@ class TestTheSchedulerSeamIsDTFDs:
         assert "tier" in capsys.readouterr().err
 
     def test_an_in_place_restore_aimed_at_tier2_is_refused(self, tmp_path, capsys):
-        assert _main(["--arm", "dtfd", str(_write(tmp_path, "restores_tier2", RESTORES_TIER2_IN_ZERO_GRAD))]) == 1
+        path = str(_write(tmp_path, "restores_tier2", RESTORES_TIER2_IN_ZERO_GRAD))
+        assert _main(["--arm", "dtfd", path]) == 0            # train_step resets before the forward pass
+        assert _main(["--arm", "dtfd", "--task-family", "survival", path]) == 1
         err = capsys.readouterr().err
         assert "inplace" in err.lower() or "modified" in err.lower()
 
@@ -599,7 +609,7 @@ class TestTheSeamsRunOnTheTrainersDevice:
     def wrap_optimizer(self, opt):
         return opt
 '''
-        assert _main(["--arm", "dtfd", str(_write(tmp_path, "device_recorder", source))]) == 0
+        assert _main([str(_write(tmp_path, "device_recorder", source))]) == 0
         roles = {line.split()[0]: line.split()[1] for line in log.read_text().splitlines()}
         assert roles == {"main": TRAINERS_DEVICE, "tier1": TRAINERS_DEVICE, "tier2": TRAINERS_DEVICE}
 
@@ -610,16 +620,19 @@ class TestTheSeamsRunOnTheTrainersDevice:
 
 
 class TestHarnessCoverage:
-    @pytest.mark.parametrize("arm, family, stop_keys", [
-        (None, "classification", "val_auc,val_loss"), (None, "survival", "val_c_index,val_loss"),
-        ("dtfd", "classification", "val_auc,val_loss"),
-        ("nnmil", "classification", "val_auc,val_bacc,val_f1,val_loss"),
-        ("clam", "classification", "val_auc,val_error,val_loss"),
+    @pytest.mark.parametrize("arm, family, stop_keys, main_wraps", [
+        # every classification batch shape, plus the stopping run
+        (None, "classification", "val_auc,val_loss", len(policy_smoke.STEP_CASES) + 1),
+        # both survival call orders, the scaled one, plus the stopping run
+        (None, "survival", "val_c_index,val_loss", len(policy_smoke.CALL_ORDERS) + 2),
+        ("dtfd", "classification", "val_auc,val_loss", 0),  # two tiers, no main optimizer
+        ("nnmil", "classification", "val_auc,val_bacc,val_f1,val_loss", 2),
+        ("clam", "classification", "val_auc,val_error,val_loss", 2),
     ])
-    def test_every_call_order_and_seam_is_exercised(self, tmp_path, arm, family, stop_keys):
-        """A policy that records what the harness did: all three call orders,
-        the stopping seam with the family's metrics, and the DTFD tiers each
-        with their MultiStepLR scheduler."""
+    def test_every_step_and_seam_is_exercised(self, tmp_path, arm, family, stop_keys, main_wraps):
+        """A policy that records what the harness did: the arm's training
+        steps, the stopping seam with the family's metrics, and the DTFD tiers
+        each with their MultiStepLR scheduler."""
         recorder = tmp_path / "record.txt"
         source = HEADER.format(name="recorder") + f'''class Recorder(PolicyVariant):
     def wrap_optimizer_for(self, opt, *, role):
@@ -644,9 +657,7 @@ class TestHarnessCoverage:
         argv = ["--task-family", family, path] + (["--arm", arm] if arm else [])
         assert policy_smoke.main(argv) == 0
         lines = recorder.read_text().splitlines()
-        # one wrap per call order, one for the scaled order, plus the stopping
-        # run (which on DTFD wraps the tiers instead of a main optimizer)
-        assert lines.count("optimizer:main") == len(policy_smoke.CALL_ORDERS) + (1 if arm == "dtfd" else 2)
+        assert lines.count("optimizer:main") == main_wraps
         dtfd = [line for line in lines if line.endswith(":tier1") or line.endswith(":tier2")
                 or ":tier1:" in line or ":tier2:" in line]
         wrap_order = ["optimizer:tier1", "optimizer:tier2",

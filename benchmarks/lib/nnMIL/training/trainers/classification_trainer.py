@@ -208,8 +208,10 @@ class ClassificationTrainer(BaseTrainer):
             {"params": gain_or_bias_params, "weight_decay": 0.0},
             {"params": rest_params, "weight_decay": self.config.get('weight_decay', 0.01)}
         ], lr=self.config.get('learning_rate', 3e-4))
-        if self.policy_runtime is not None:
-            optimizer = self.policy_runtime.wrap_optimizer(optimizer)
+        # autobench's train-only policy seams (a native runtime when no policy
+        # is selected; the adapter sets it before training)
+        runtime = self.policy_runtime
+        optimizer = runtime.wrap_optimizer(optimizer)
         
         loss_fn = nn.CrossEntropyLoss()
         
@@ -262,41 +264,54 @@ class ClassificationTrainer(BaseTrainer):
                 bag_sizes = bag_sizes.to(self.device)
                 labels = labels.to(self.device)
                 
-                if self.policy_runtime is not None:
-                    # vision_transformer attends over per-instance coordinates the
-                    # policy never sees: it may change a bag's features, not its size.
-                    features, bag_sizes = transform_training_bags(
-                        self.policy_runtime, features, bag_sizes, labels, epoch=epoch,
-                        keep_shape=self.model_type == 'vision_transformer',
-                    )
+                # vision_transformer attends over per-instance coordinates the
+                # policy never sees: it may change a bag's features, not its size.
+                features, bag_sizes = transform_training_bags(
+                    runtime, features, bag_sizes, labels, epoch=epoch,
+                    keep_shape=self.model_type == 'vision_transformer',
+                )
 
-                optimizer.zero_grad()
-                
-                with torch.amp.autocast(device_type, dtype=torch.bfloat16):
-                    if self.model_type == 'vision_transformer':
-                        mask = create_mask_from_bag_sizes(features, bag_sizes)
-                        output = self.model(features, coords=coords, mask=mask)
-                    else:
-                        output = self.model(features)
+                def backward_on(batch_features, objective):
+                    with torch.amp.autocast(device_type, dtype=torch.bfloat16):
+                        if self.model_type == 'vision_transformer':
+                            mask = create_mask_from_bag_sizes(batch_features, bag_sizes)
+                            output = self.model(batch_features, coords=coords, mask=mask)
+                        else:
+                            output = self.model(batch_features)
+                        
+                        if isinstance(output, dict):
+                            logits = output['logits']
+                        else:
+                            logits = output
+                        loss = objective.loss(loss_fn, logits)
                     
-                    if isinstance(output, dict):
-                        logits = output['logits']
+                    if fp16_scaler is not None:
+                        fp16_scaler.scale(loss).backward()
                     else:
-                        logits = output
-                    loss = loss_fn(logits, labels)
-                
-                if fp16_scaler is not None:
-                    fp16_scaler.scale(loss).backward()
-                    fp16_scaler.step(optimizer)
-                    fp16_scaler.update()
-                else:
-                    loss.backward()
-                    optimizer.step()
+                        loss.backward()
+                    return logits, loss
+
+                def step():
+                    if fp16_scaler is not None:
+                        fp16_scaler.step(optimizer)
+                        fp16_scaler.update()
+                    else:
+                        optimizer.step()
+
+                # A policy batch keeps the padded shape: bag sizes, masks and
+                # coordinates belong to these bags.
+                loss = runtime.train_step(
+                    features, labels, epoch=epoch, n_classes=self.num_classes,
+                    backward_on=backward_on, step=step, zero_grad=optimizer.zero_grad,
+                    grad_scale=fp16_scaler.get_scale if fp16_scaler is not None else None,
+                    keep_shape=True,
+                )
                 
                 lr_scheduler(global_step)
                 global_step += 1
-                epoch_loss += loss.item()
-                epoch_steps += 1
+                if loss is not None:
+                    epoch_loss += loss.item()
+                    epoch_steps += 1
                 
                 pbar.set_postfix({'loss': loss.item()})
             
@@ -308,8 +323,7 @@ class ClassificationTrainer(BaseTrainer):
                 self.writer.add_scalar('Train/Loss', avg_loss, epoch)
             
             # Validation
-            if self.policy_runtime is not None:
-                self.policy_runtime.before_validation(epoch=epoch)
+            runtime.before_validation(epoch=epoch)
             self.model.eval()
             torch.set_grad_enabled(False)
             val_metrics = self.evaluate('val')
@@ -335,17 +349,16 @@ class ClassificationTrainer(BaseTrainer):
             
             early_stopping(val_auc, self.model, epoch=epoch)
             default_stop = early_stopping.early_stop
-            if self.policy_runtime is not None:
-                default_stop = self.policy_runtime.should_stop(
-                    default_stop,
-                    epoch=epoch,
-                    metrics={
-                        'val_loss': val_loss,
-                        'val_bacc': val_bacc,
-                        'val_f1': val_f1,
-                        'val_auc': val_auc,
-                    },
-                )
+            default_stop = runtime.should_stop(
+                default_stop,
+                epoch=epoch,
+                metrics={
+                    'val_loss': val_loss,
+                    'val_bacc': val_bacc,
+                    'val_f1': val_f1,
+                    'val_auc': val_auc,
+                },
+            )
             if default_stop:
                 self.logger.info(f"Early stopping triggered at epoch {epoch+1}")
                 break
@@ -373,10 +386,7 @@ class ClassificationTrainer(BaseTrainer):
         # Protocol v5: the fold's score is the validation AUC averaged over the
         # epochs around the restored one; None when nothing was selected. The
         # adapter (autobench nnmil/train.py) reads it from the trainer.
-        val_auc_smooth = (
-            self.policy_runtime.smoothed(early_stopping.best_epoch, 'val_auc')
-            if self.policy_runtime is not None else None
-        )
+        val_auc_smooth = runtime.smoothed(early_stopping.best_epoch, 'val_auc')
         print(f"[smoothed] epoch={early_stopping.best_epoch} "
               f"val_auc_smooth={val_auc_smooth}", flush=True)
         self.smoothed_selection = val_auc_smooth

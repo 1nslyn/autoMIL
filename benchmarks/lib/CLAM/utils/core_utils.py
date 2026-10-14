@@ -195,9 +195,9 @@ def train(datasets, cur, args):
 
     print('\nInit optimizer ...', end=' ')
     optimizer = get_optim(model, args)
-    policy_runtime = getattr(args, 'policy_runtime', None)
-    if policy_runtime is not None:
-        optimizer = policy_runtime.wrap_optimizer(optimizer)
+    # autobench's train-only policy seams (a native runtime when no policy is selected)
+    policy_runtime = args.policy_runtime
+    optimizer = policy_runtime.wrap_optimizer(optimizer)
     print('Done!')
 
     print('\nInit Loaders...', end=' ')
@@ -228,24 +228,21 @@ def train(datasets, cur, args):
         last_epoch = epoch
         if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:
             train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn, policy_runtime)
-            if policy_runtime is not None:
-                policy_runtime.before_validation(epoch=epoch)
+            policy_runtime.before_validation(epoch=epoch)
             stop, val_metrics = validate_clam(cur, epoch, model, val_loader, args.n_classes,
                 early_stopping, writer, loss_fn, args.results_dir)
 
         else:
             train_loop(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn, policy_runtime)
-            if policy_runtime is not None:
-                policy_runtime.before_validation(epoch=epoch)
+            policy_runtime.before_validation(epoch=epoch)
             stop, val_metrics = validate(cur, epoch, model, val_loader, args.n_classes,
                 early_stopping, writer, loss_fn, args.results_dir)
 
         if not args.early_stopping:
             # Flag off = run every epoch; the tracker above still checkpoints.
             stop = False
-        if policy_runtime is not None:
-            # A2 (claims-alignment): validation metrics, same as every other arm.
-            stop = policy_runtime.should_stop(stop, epoch=epoch, metrics=val_metrics)
+        # A2 (claims-alignment): validation metrics, same as every other arm.
+        stop = policy_runtime.should_stop(stop, epoch=epoch, metrics=val_metrics)
         if stop:
             break
 
@@ -273,12 +270,8 @@ def train(datasets, cur, args):
     # current weights, no restore (source=final; epoch=-1 when max_epochs == 0).
     print('[selected] epoch={} source={}'.format(selected_epoch, selected_source), flush=True)
     # Protocol v5: the fold's score is the validation AUC averaged over the
-    # epochs around the selected one (None when nothing was selected, or when
-    # no policy runtime recorded the epochs).
-    val_auc_smooth = (
-        policy_runtime.smoothed(selected_epoch, 'val_auc')
-        if policy_runtime is not None else None
-    )
+    # epochs around the selected one (None when nothing was selected).
+    val_auc_smooth = policy_runtime.smoothed(selected_epoch, 'val_auc')
     print('[smoothed] epoch={} val_auc_smooth={}'.format(selected_epoch, val_auc_smooth), flush=True)
 
     _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
@@ -306,7 +299,7 @@ def train(datasets, cur, args):
     return results_dict, test_auc, val_auc, 1-test_error, 1-val_error, val_auc_smooth
 
 
-def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writer = None, loss_fn = None, policy_runtime = None):
+def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writer, loss_fn, policy_runtime):
     model.train()
     acc_logger = Accuracy_Logger(n_classes=n_classes)
     inst_logger = Accuracy_Logger(n_classes=n_classes)
@@ -319,39 +312,48 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
     print('\n')
     for batch_idx, (data, label) in enumerate(loader):
         data, label = data.to(device), label.to(device)
-        if policy_runtime is not None:
-            # instance-level training samples k_sample instances per class branch
-            data = policy_runtime.transform_bag(data, label=int(label), epoch=epoch, min_instances=model.k_sample)
-        logits, Y_prob, Y_hat, _, instance_dict = model(data, label=label, instance_eval=True)
+        # instance-level training samples k_sample instances per class branch
+        data = policy_runtime.transform_bag(data, label=int(label), epoch=epoch, min_instances=model.k_sample)
+        seen = {}
 
+        def backward_on(bag, objective):
+            # the instance branches cluster on one class per bag: the policy
+            # target's most likely class, or the label itself
+            logits, Y_prob, Y_hat, _, instance_dict = model(bag, label=objective.classes, instance_eval=True)
+            loss = objective.loss(loss_fn, logits)
+            instance_loss = instance_dict['instance_loss']
+            total_loss = objective.weighted(bag_weight * loss + (1-bag_weight) * instance_loss)
+            total_loss.backward()
+            if not seen:
+                seen.update(Y_hat=Y_hat, loss=loss.item(), instance_loss=instance_loss.item(),
+                            total_loss=total_loss.item(), instance_dict=instance_dict, bag_size=bag.size(0))
+            return logits, total_loss
+
+        policy_runtime.train_step(
+            data, label, epoch=epoch, n_classes=n_classes, backward_on=backward_on,
+            step=optimizer.step, zero_grad=optimizer.zero_grad, min_instances=model.k_sample,
+        )
+        if not seen:
+            continue  # the policy skipped this bag
+
+        Y_hat = seen['Y_hat']
         acc_logger.log(Y_hat, label)
-        loss = loss_fn(logits, label)
-        loss_value = loss.item()
-
-        instance_loss = instance_dict['instance_loss']
+        loss_value = seen['loss']
         inst_count+=1
-        instance_loss_value = instance_loss.item()
+        instance_loss_value = seen['instance_loss']
         train_inst_loss += instance_loss_value
-        
-        total_loss = bag_weight * loss + (1-bag_weight) * instance_loss 
 
-        inst_preds = instance_dict['inst_preds']
-        inst_labels = instance_dict['inst_labels']
+        inst_preds = seen['instance_dict']['inst_preds']
+        inst_labels = seen['instance_dict']['inst_labels']
         inst_logger.log_batch(inst_preds, inst_labels)
 
         train_loss += loss_value
         if (batch_idx + 1) % 20 == 0:
-            print('batch {}, loss: {:.4f}, instance_loss: {:.4f}, weighted_loss: {:.4f}, '.format(batch_idx, loss_value, instance_loss_value, total_loss.item()) + 
-                'label: {}, bag_size: {}'.format(label.item(), data.size(0)))
+            print('batch {}, loss: {:.4f}, instance_loss: {:.4f}, weighted_loss: {:.4f}, '.format(batch_idx, loss_value, instance_loss_value, seen['total_loss']) + 
+                'label: {}, bag_size: {}'.format(label.item(), seen['bag_size']))
 
         error = calculate_error(Y_hat, label)
         train_error += error
-        
-        # backward pass
-        total_loss.backward()
-        # step
-        optimizer.step()
-        optimizer.zero_grad()
 
     # calculate loss and error for epoch
     train_loss /= len(loader)
@@ -376,7 +378,7 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
         writer.add_scalar('train/error', train_error, epoch)
         writer.add_scalar('train/clustering_loss', train_inst_loss, epoch)
 
-def train_loop(epoch, model, loader, optimizer, n_classes, writer = None, loss_fn = None, policy_runtime = None):
+def train_loop(epoch, model, loader, optimizer, n_classes, writer, loss_fn, policy_runtime):
     model.train()
     acc_logger = Accuracy_Logger(n_classes=n_classes)
     train_loss = 0.
@@ -385,27 +387,34 @@ def train_loop(epoch, model, loader, optimizer, n_classes, writer = None, loss_f
     print('\n')
     for batch_idx, (data, label) in enumerate(loader):
         data, label = data.to(device), label.to(device)
-        if policy_runtime is not None:
-            data = policy_runtime.transform_bag(data, label=int(label), epoch=epoch)
+        data = policy_runtime.transform_bag(data, label=int(label), epoch=epoch)
+        seen = {}
 
-        logits, Y_prob, Y_hat, _, _ = model(data)
-        
+        def backward_on(bag, objective):
+            logits, Y_prob, Y_hat, _, _ = model(bag)
+            loss = objective.loss(loss_fn, logits)
+            loss.backward()
+            if not seen:
+                seen.update(Y_hat=Y_hat, loss=loss.item(), bag_size=bag.size(0))
+            return logits, loss
+
+        policy_runtime.train_step(
+            data, label, epoch=epoch, n_classes=n_classes, backward_on=backward_on,
+            step=optimizer.step, zero_grad=optimizer.zero_grad,
+        )
+        if not seen:
+            continue  # the policy skipped this bag
+
+        Y_hat = seen['Y_hat']
         acc_logger.log(Y_hat, label)
-        loss = loss_fn(logits, label)
-        loss_value = loss.item()
-        
+        loss_value = seen['loss']
+
         train_loss += loss_value
         if (batch_idx + 1) % 20 == 0:
-            print('batch {}, loss: {:.4f}, label: {}, bag_size: {}'.format(batch_idx, loss_value, label.item(), data.size(0)))
+            print('batch {}, loss: {:.4f}, label: {}, bag_size: {}'.format(batch_idx, loss_value, label.item(), seen['bag_size']))
            
         error = calculate_error(Y_hat, label)
         train_error += error
-        
-        # backward pass
-        loss.backward()
-        # step
-        optimizer.step()
-        optimizer.zero_grad()
 
     # calculate loss and error for epoch
     train_loss /= len(loader)

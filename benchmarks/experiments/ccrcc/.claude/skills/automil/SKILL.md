@@ -118,15 +118,18 @@ source; then `uv run automil reconcile`.
    a. In architecture-preserving mode, add a registered `PolicyVariant` at
       `automil/variants/_policies/<name>.py`, then submit it explicitly with
       `--files automil/variants/_policies/<name>.py --override
-      "--policy-variant <name>"`. The protected consumer loop supplies only
-      optimizer/scheduler/stopping seams; model, defining loss, measurement,
-      and held-out outputs are unavailable through this interface. What the
-      seams genuinely support: single-point optimizer wrappers (Lookahead,
+      "--policy-variant <name>"`. The protected consumer loop supplies the
+      optimizer, scheduler and stopping seams, and where the consumer wires
+      them a training-bag transform, a training-step seam (`train_step`) and
+      a pre-validation hook; model, defining loss, measurement, and held-out
+      outputs are unavailable through this interface. What the seams
+      genuinely support: single-point optimizer wrappers (Lookahead,
       gradient clipping, per-group LR, custom LR schedules inside a wrapped
-      `step()`) and stopping policies driven by the supplied validation
-      metrics. They do NOT support SAM-class two-pass optimizers (no closure
-      re-evaluates the loss), loss shaping, sampling changes, or ensembling —
-      don't spend attempts discovering that. The stopping seam receives the
+      `step()`), stopping policies driven by the supplied validation
+      metrics, and through `train_step` two-pass optimizers such as SAM,
+      gradient accumulation, soft targets and per-bag weights, always on the
+      consumer's own loss. They do NOT support ensembling: don't spend
+      attempts discovering that. The stopping seam receives the
       per-epoch validation metrics on every arm, so a stopping policy doubles
       as a diagnostic probe: print the epoch-by-epoch validation trajectory it
       observes to stdout and read it back from that run's archived `run.log` —

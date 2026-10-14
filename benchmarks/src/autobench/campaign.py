@@ -33,7 +33,7 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 #: campaign, and every cell id and hash already moves with PROTOCOL_VERSION.
 SCHEMA_VERSION = 8
 CAMPAIGN_ID = "automil-preprint-130-v6"
-PROTOCOL_VERSION = "preprint-v5"
+PROTOCOL_VERSION = "preprint-v6"
 #: Every cell trains on the ``devcv`` folds: five-fold cross-validation inside
 #: the development part of standard fold 0, all tested on its test slides
 #: (autobench.pipeline.splits). No test slide is ever a validation slide.

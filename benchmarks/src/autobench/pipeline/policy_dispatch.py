@@ -4,7 +4,7 @@ The autoMIL framework only records and transports a selected policy.  This
 module is the benchmark consumer's single adapter: it resolves that selection,
 instantiates the registered policy, and exposes its guarded operations to all
 five MIL arms: optimizer and scheduler wrapping, stopping, the training-bag
-transform and the pre-validation hook.  Model construction, forward paths,
+transform, the training step (``policy_step``) and the pre-validation hook.  Model construction, forward paths,
 defining losses, validation, and result writing remain in protected trainers
 and are never passed in.
 """
@@ -414,7 +414,7 @@ class PolicyRuntime:
         policy = self._resolved_policy()
         if policy is None or not defines_seam(type(policy), "transform_bag"):
             return features
-        import torch
+        from autobench.pipeline.policy_step import check_bag
 
         version = features._version
         out = policy.transform_bag(
@@ -423,28 +423,52 @@ class PolicyRuntime:
         )
         if features._version != version:
             raise RuntimeError(f"policy {self.name!r} modified a training bag in place")
-        if (
-            not isinstance(out, torch.Tensor)
-            or out.dtype != features.dtype
-            or out.device != features.device
-            or out.ndim != features.ndim
-            or out.shape[1:] != features.shape[1:]
-        ):
-            raise TypeError(
-                f"policy {self.name!r} transform_bag() must return a tensor with the "
-                f"bag's dtype, device and feature shape {tuple(features.shape[1:])}"
-            )
-        if keep_shape and out.shape != features.shape:
-            raise TypeError(
-                f"policy {self.name!r} transform_bag() must keep this arm's bag shape "
-                f"{tuple(features.shape)}"
-            )
-        if out.shape[0] < min_instances:
-            raise ValueError(
-                f"policy {self.name!r} transform_bag() left {out.shape[0]} instances; "
-                f"this arm needs at least {min_instances}"
-            )
-        return out
+        return check_bag(
+            out, features, policy=self.name, seam="transform_bag",
+            keep_shape=keep_shape, min_instances=min_instances,
+        )
+
+    def train_step(
+        self,
+        features: Any,
+        labels: Any,
+        *,
+        epoch: int,
+        n_classes: int,
+        backward_on: Any,
+        step: Any,
+        zero_grad: Any,
+        grad_scale: Any = None,
+        min_instances: int = 1,
+        keep_shape: bool = False,
+    ) -> Any:
+        """Train on one batch through the policy's ``train_step`` or the arm's own step.
+
+        ``backward_on(features, objective)`` is the arm's pass: forward, the
+        arm's loss via ``objective.loss``, backward; it returns ``(logits,
+        loss)``. Without an overriding policy the step is ``zero_grad``, one
+        pass, ``step``, exactly the arm's native order of effects. Returns the
+        first pass's detached loss for the arm's log (None if the policy
+        skipped the batch).
+        """
+        from automil.registry.variants.policy import PolicyVariant
+
+        from autobench.pipeline.policy_step import TrainStep
+
+        policy = self._resolved_policy()
+        ctx = TrainStep(
+            features, labels, n_classes=n_classes, epoch=epoch, policy=self.name,
+            backward_on=backward_on, step=step, zero_grad=zero_grad,
+            generator=lambda: self._generator("train_step"), grad_scale=grad_scale,
+            keep_shape=keep_shape, min_instances=min_instances,
+        )
+        version = features._version
+        seam = PolicyVariant.train_step if policy is None else type(policy).train_step
+        if seam(policy, ctx) is not None:
+            raise TypeError(f"policy {self.name!r} train_step() must return None")
+        if features._version != version:
+            raise RuntimeError(f"policy {self.name!r} modified a training batch in place")
+        return ctx.loss
 
     def before_validation(self, *, epoch: int) -> None:
         """Run the policy's pre-validation hook, if it defines one."""

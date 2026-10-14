@@ -120,6 +120,7 @@ registry:
     - "benchmarks/src/autobench/pipeline/selection.py"     # the one selection primitive (v4)
     # --- the policy seams (v5): what a train-only policy may reach ---
     - "benchmarks/src/autobench/pipeline/policy_dispatch.py"
+    - "benchmarks/src/autobench/pipeline/policy_step.py"
     - "benchmarks/src/autobench/pipeline/policy_smoke.py"
     - "benchmarks/src/autobench/pipeline/*/survival_train.py"  # survival selection loops
     - "benchmarks/lib/nnMIL/training/trainers/classification_trainer.py"

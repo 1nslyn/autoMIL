@@ -1,9 +1,8 @@
 """nllsurv-only survival training for DTFD-MIL's two-tier pseudo-bag distillation.
 
 Preserves DTFD's defining trick: each random pseudo-bag is supervised with
-the SAME target as the slide it was split from (mirrors
-``dtfd/train.py::_pseudo_bag_forward`` repeating the slide's classification
-label into ``sub_labels``). For nllsurv, that target is the slide's
+the SAME target as the slide it was split from (mirrors ``dtfd/train.py``,
+which repeats the slide's classification label over its pseudo-bags). For nllsurv, that target is the slide's
 discretized (bin_idx, censor) pair -- a valid per-slide analog since nllsurv
 is a discrete time-bin classification problem in disguise. ``NLLSurvLoss``
 replaces ``CrossEntropyLoss`` at both tiers; everything else about the
@@ -86,7 +85,7 @@ def _pseudo_bag_forward_survival(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """One slide's tier-1 forward -> (sub_preds, sub_bins, sub_censor, pseudo_feats).
 
-    Identical pseudo-bag split to ``dtfd.train._pseudo_bag_forward``; the only
+    Identical pseudo-bag split to ``dtfd.train._pseudo_bag_chunks``; the only
     difference is repeating the slide's (bin_idx, censor) survival pair
     instead of its classification label.
     """

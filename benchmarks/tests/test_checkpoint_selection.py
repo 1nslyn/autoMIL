@@ -820,6 +820,7 @@ def _scripted(rows):
 
 class TestNnMILTrainersFeedThePrimaryMetric:
     def _classification_trainer(self, tmp_path, rows, num_epochs):
+        from autobench.pipeline.policy_dispatch import PolicyRuntime
         from training.trainers.classification_trainer import ClassificationTrainer
         batches = [(torch.randn(2, 5, 8), torch.zeros(2, 5, 2), torch.tensor([5, 5]),
                     torch.tensor([0, 1]))]
@@ -828,6 +829,7 @@ class TestNnMILTrainersFeedThePrimaryMetric:
             config={"num_epochs": num_epochs, "warmup_epochs": 0, "patience": 10,
                     "learning_rate": 1e-3},
             model=_MeanBagModel(), batches=batches, evaluate=_scripted(rows),
+            policy_runtime=PolicyRuntime(), num_classes=2,
         )
 
     def test_classification_hands_val_auc_to_the_callback(self, monkeypatch, tmp_path):

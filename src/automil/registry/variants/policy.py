@@ -3,17 +3,16 @@
 Policies wrap the optimizer / scheduler to implement single-point strategies —
 Lookahead, gradient clipping, per-group learning rates, custom schedules inside
 a wrapped ``step()`` — and refine stopping decisions from supplied validation
-metrics. Two honesty notes (claims-alignment C-b): ``step`` is a
-consumer-optional part of the contract that none of the shipped benchmark
-trainers currently invoke (they call the wrapped optimizer's ``step()``
-directly), and SAM-class two-pass optimizers are out of reach through this
-seam regardless — no closure re-evaluates the loss at the perturbed point.
+metrics.
 
-Two further seams reach the training data and the validation pass without
-reaching the model: ``transform_bag`` sees each training bag before the forward
-pass (instance dropout, subsampling, feature noise), and ``before_validation``
-runs just before each epoch's validation pass (swapping in averaged weights).
-Both default to doing nothing, so a policy that does not override them leaves a
+Three further seams reach the training data, the training step and the
+validation pass without reaching the model: ``transform_bag`` sees each
+training bag before the forward pass (instance dropout, subsampling, feature
+noise), ``train_step`` arranges one batch's passes and optimizer step from the
+trainer's own pieces (sharpness-aware minimization, gradient accumulation, soft
+targets, per-bag weights), and ``before_validation`` runs just before each
+epoch's validation pass (swapping in averaged weights). Each defaults to the
+trainer's native behaviour, so a policy that does not override them leaves a
 run exactly as it was.
 """
 from __future__ import annotations
@@ -96,15 +95,26 @@ class PolicyVariant(ABC):
         """
         return None
 
-    def step(self, loss: Any, opt: Any) -> None:
-        """Default step: delegate to opt.step() after backward.
+    def train_step(self, step: Any) -> None:
+        """Train on one batch from the trainer's own pieces.
 
-        Consumer-optional: a trainer MAY route its step through this hook
-        (e.g. for gradient accumulation or loss-aware stepping), but none of
-        the shipped benchmark trainers do — they call the wrapped optimizer's
-        ``step()`` directly, so policies must not rely on this being invoked.
-        Note SAM-style two-step optimization is unreachable either way: this
-        hook receives the loss tensor, not a closure, so the loss cannot be
-        re-evaluated at the perturbed point.
+        ``step.backward_on(features=None, *, target=None, weight=None)`` runs
+        the forward pass, the arm's own defining loss and backward, adding to
+        the gradients already held, and returns the detached ``(logits,
+        loss)``. ``features`` defaults to this batch (``step.features``); a
+        replacement keeps the batch's dtype, device and feature width.
+        ``target`` is a class index per bag or a probability row per bag
+        (label smoothing, mixing two bags); ``weight`` is a non-negative
+        weight per bag. ``step.step()`` applies the gradients with the arm's
+        optimizer step, ``step.zero_grad()`` resets them. At most two passes
+        and one optimizer step per batch; a batch may end without a step, so
+        gradients carry into the next. Also readable: ``step.labels``,
+        ``step.n_classes``, ``step.epoch``, ``step.generator`` (a CPU
+        generator private to this seam and fold) and ``step.grad_scale``.
+        Never modify ``step.features`` in place.
+
+        Default: the trainer's native step.
         """
-        opt.step()
+        step.zero_grad()
+        step.backward_on()
+        step.step()

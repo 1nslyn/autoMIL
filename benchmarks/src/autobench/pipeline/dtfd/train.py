@@ -40,28 +40,29 @@ from autobench.pipeline.selection import SelectionTracker
 from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 
-def _pseudo_bag_forward(
-    bundle: DTFDBundle,
-    features: torch.Tensor,
-    label_t: torch.Tensor,
-    cfg: DTFDConfig,
-    device: torch.device,
-    py_rng: random.Random,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """One slide's tier-1 forward → (sub_preds, sub_labels, pseudo_feats).
-
-    ``sub_preds`` is ``numGroup x num_cls`` (tier-1 pseudo-bag logits),
-    ``sub_labels`` is ``numGroup`` (slide label repeated), ``pseudo_feats`` is
-    ``numGroup x mDim`` (AFS distilled features fed to tier-2).
-    """
-    n = features.shape[0]
+def _pseudo_bag_chunks(
+    n: int, cfg: DTFDConfig, py_rng: random.Random,
+) -> list[list[int]]:
+    """Split a bag's ``n`` instances into at most ``numGroup`` random pseudo-bags."""
     feat_index = list(range(n))
     py_rng.shuffle(feat_index)
     chunks = [c.tolist() for c in np.array_split(np.array(feat_index), cfg.numGroup)]
-    chunks = [c for c in chunks if len(c) > 0]
+    return [c for c in chunks if len(c) > 0]
 
+
+def _pseudo_bag_forward(
+    bundle: DTFDBundle,
+    features: torch.Tensor,
+    chunks: list[list[int]],
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """One slide's tier-1 forward over its pseudo-bags → (sub_preds, pseudo_feats).
+
+    ``sub_preds`` is ``numGroup x num_cls`` (tier-1 pseudo-bag logits) and
+    ``pseudo_feats`` is ``numGroup x mDim`` (AFS distilled features fed to
+    tier-2); each pseudo-bag's label is the slide's.
+    """
     sub_preds: list[torch.Tensor] = []
-    sub_labels: list[torch.Tensor] = []
     pseudo_feats: list[torch.Tensor] = []
 
     for idx in chunks:
@@ -74,14 +75,9 @@ def _pseudo_bag_forward(
         pred = bundle.classifier(att_feat)                           # 1 x num_cls
 
         sub_preds.append(pred)
-        sub_labels.append(label_t)
         pseudo_feats.append(att_feat)  # AFS: attention-feature sum (Main:337)
 
-    return (
-        torch.cat(sub_preds, dim=0),
-        torch.cat(sub_labels, dim=0),
-        torch.cat(pseudo_feats, dim=0),
-    )
+    return torch.cat(sub_preds, dim=0), torch.cat(pseudo_feats, dim=0)
 
 
 def _train_one_epoch(
@@ -95,6 +91,7 @@ def _train_one_epoch(
     py_rng: random.Random,
     policy_runtime: PolicyRuntime,
     epoch: int,
+    num_classes: int,
 ) -> float:
     """Run one training epoch; return mean tier-2 loss over slides.
 
@@ -105,43 +102,59 @@ def _train_one_epoch(
     order = list(range(len(slides)))
     py_rng.shuffle(order)
 
+    def zero_grad():
+        opt0.zero_grad()
+        opt1.zero_grad()
+
+    def step():
+        torch.nn.utils.clip_grad_norm_(bundle.dim_reduction.parameters(), cfg.grad_clip)
+        torch.nn.utils.clip_grad_norm_(bundle.attention.parameters(), cfg.grad_clip)
+        torch.nn.utils.clip_grad_norm_(bundle.classifier.parameters(), cfg.grad_clip)
+        opt0.step()
+        torch.nn.utils.clip_grad_norm_(bundle.att_cls.parameters(), cfg.grad_clip)
+        opt1.step()
+
     tier2_losses: list[float] = []
     for i in order:
         slide = slides[i]
         features = _read_bag(slide.h5_path).to(device)
         features = policy_runtime.transform_bag(features, label=slide.label, epoch=epoch)
         label_t = torch.LongTensor([slide.label]).to(device)
+        # The pseudo-bag split is drawn once per slide, by the first pass; a
+        # second pass (weights perturbed by the policy) reuses it.
+        split: list[list[int]] = []
 
-        sub_preds, sub_labels, pseudo_feats = _pseudo_bag_forward(
-            bundle, features, label_t, cfg, device, py_rng
+        def backward_on(bag, objective):
+            if not split:
+                split.extend(_pseudo_bag_chunks(bag.shape[0], cfg, py_rng))
+            elif bag.shape[0] != sum(map(len, split)):
+                raise ValueError(
+                    "a second DTFD pass must use a bag of the first pass's size "
+                    "(its pseudo-bag split is drawn once per slide)"
+                )
+            sub_preds, pseudo_feats = _pseudo_bag_forward(bundle, bag, split, device)
+            # --- tier 1 ---
+            objective.loss(ce_cri, sub_preds, repeat=len(split)).mean().backward()
+            # --- tier 2 ---
+            # Detach the distilled pseudo-bag features from the tier-1 graph.
+            # The reference (Main:359-365) leaves them attached and relies on
+            # retain_graph, but optimizer1 = Adam(att_cls only) NEVER applies
+            # the tier-1 gradients that loss1 would produce (they are
+            # overwritten by the next optimizer0.zero_grad()), so tier-1 is
+            # updated solely by loss0 and tier-2 solely by loss1. Detaching is
+            # therefore equivalent in applied updates, and it lets both tiers
+            # backpropagate before either optimizer steps.
+            slide_pred = bundle.att_cls(pseudo_feats.detach())           # 1 x num_cls
+            loss1 = objective.loss(ce_cri, slide_pred).mean()
+            loss1.backward()
+            return slide_pred, loss1
+
+        loss1 = policy_runtime.train_step(
+            features, label_t, epoch=epoch, n_classes=num_classes,
+            backward_on=backward_on, step=step, zero_grad=zero_grad,
         )
-
-        # --- tier 1 ---
-        loss0 = ce_cri(sub_preds, sub_labels).mean()
-        opt0.zero_grad()
-        loss0.backward()
-        torch.nn.utils.clip_grad_norm_(bundle.dim_reduction.parameters(), cfg.grad_clip)
-        torch.nn.utils.clip_grad_norm_(bundle.attention.parameters(), cfg.grad_clip)
-        torch.nn.utils.clip_grad_norm_(bundle.classifier.parameters(), cfg.grad_clip)
-        opt0.step()
-
-        # --- tier 2 ---
-        # Detach the distilled pseudo-bag features from the tier-1 graph. The
-        # reference (Main:359-365) leaves them attached and relies on
-        # retain_graph, but optimizer1 = Adam(att_cls only) NEVER applies the
-        # tier-1 gradients that loss1 would produce (they are overwritten by the
-        # next optimizer0.zero_grad()), so tier-1 is updated solely by loss0 and
-        # tier-2 solely by loss1. Detaching is therefore equivalent in applied
-        # updates and avoids the torch>=2.x in-place-version error triggered by
-        # optimizer0.step() mutating tier-1 weights before loss1.backward().
-        slide_pred = bundle.att_cls(pseudo_feats.detach())           # 1 x num_cls
-        loss1 = ce_cri(slide_pred, label_t).mean()
-        opt1.zero_grad()
-        loss1.backward()
-        torch.nn.utils.clip_grad_norm_(bundle.att_cls.parameters(), cfg.grad_clip)
-        opt1.step()
-
-        tier2_losses.append(float(loss1.item()))
+        if loss1 is not None:
+            tier2_losses.append(float(loss1.item()))
 
     return float(np.mean(tier2_losses)) if tier2_losses else float("nan")
 
@@ -228,7 +241,7 @@ def train_dtfd_fold(
         for epoch in range(cfg.max_epochs):
             mean_tier2 = _train_one_epoch(
                 bundle, train_slides, cfg, ce_cri, opt0, opt1, device, py_rng,
-                policy_runtime, epoch,
+                policy_runtime, epoch, num_classes,
             )
             history.append(mean_tier2)
             sched0.step()

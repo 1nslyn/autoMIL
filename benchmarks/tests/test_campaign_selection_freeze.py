@@ -942,7 +942,7 @@ def _active_ids() -> list[str]:
 
 BAD_ROSTERS = {
     "unknown-id": lambda: _roster_with(
-        cell_ids=AIHUB_IDS[:-1] + ["tcga_hnsc__grade__nope__abmil__s42__preprint-v5"],
+        cell_ids=AIHUB_IDS[:-1] + ["tcga_hnsc__grade__nope__abmil__s42__preprint-v6"],
     ),
     "off-roster-id": lambda: _roster_with(cell_ids=AIHUB_IDS[:-1] + [_off_roster_id()]),
     "duplicate-id": lambda: _roster_with(cell_ids=AIHUB_IDS[:-1] + [AIHUB_IDS[0]]),

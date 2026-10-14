@@ -24,6 +24,7 @@ from autobench.pipeline.evaluate import (
     file_sha256_or_none,
     write_predictions_csv,
 )
+from autobench.pipeline.policy_dispatch import PolicyRuntime
 
 # CLAM's core_utils and utils.utils use a module-level ``device`` variable.
 # We patch it to match the device selected by the benchmark runner so that
@@ -86,7 +87,7 @@ def _make_clam_args(
         results_dir=fold_dir,
         log_data=log_data,
         testing=False,
-        policy_runtime=policy_runtime,
+        policy_runtime=policy_runtime or PolicyRuntime(),
     )
 
 

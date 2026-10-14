@@ -24,7 +24,7 @@ from _helpers import full_h100_nvidia_smi, write_reproduction_policy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_operate.py"
-CELL_NAME = "tcga_luad__kras__uni_v2__clam__s42__preprint-v5"
+CELL_NAME = "tcga_luad__kras__uni_v2__clam__s42__preprint-v6"
 BUDGET_CELL_ID = "deadbeefdeadbeef"
 
 

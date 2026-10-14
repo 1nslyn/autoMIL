@@ -84,17 +84,17 @@ def test_policy_wrap_scheduler_default_identity():
     assert p.wrap_scheduler(sched) is sched
 
 
-def test_policy_step_default_delegates_to_opt():
+def test_policy_train_step_default_is_the_trainers_native_step():
     from automil.registry.variants.policy import PolicyVariant
 
     class StubPolicy(PolicyVariant):
         def wrap_optimizer(self, opt):
             return opt
 
-    opt = MagicMock()
-    p = StubPolicy()
-    p.step(loss=None, opt=opt)
-    opt.step.assert_called_once()
+    step = MagicMock()
+    StubPolicy().train_step(step)
+    assert [call[0] for call in step.method_calls] == ["zero_grad", "backward_on", "step"]
+    step.backward_on.assert_called_once_with()
 
 
 def test_policy_transform_bag_default_returns_the_bag_unchanged():
