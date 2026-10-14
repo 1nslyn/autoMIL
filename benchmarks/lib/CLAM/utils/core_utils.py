@@ -306,6 +306,7 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
     
     train_loss = 0.
     train_error = 0.
+    ran = 0
     train_inst_loss = 0.
     inst_count = 0
 
@@ -320,7 +321,7 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
             # the instance branches cluster on one class per bag: the policy
             # target's most likely class, or the label itself
             logits, Y_prob, Y_hat, _, instance_dict = model(bag, label=objective.classes, instance_eval=True)
-            loss = objective.loss(loss_fn, logits)
+            loss = objective.loss(loss_fn, logits, weighted=False)
             instance_loss = instance_dict['instance_loss']
             total_loss = objective.weighted(bag_weight * loss + (1-bag_weight) * instance_loss)
             total_loss.backward()
@@ -335,6 +336,7 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
         )
         if not seen:
             continue  # the policy skipped this bag
+        ran += 1
 
         Y_hat = seen['Y_hat']
         acc_logger.log(Y_hat, label)
@@ -356,8 +358,8 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
         train_error += error
 
     # calculate loss and error for epoch
-    train_loss /= len(loader)
-    train_error /= len(loader)
+    train_loss /= max(ran, 1)
+    train_error /= max(ran, 1)
     
     if inst_count > 0:
         train_inst_loss /= inst_count
@@ -383,6 +385,7 @@ def train_loop(epoch, model, loader, optimizer, n_classes, writer, loss_fn, poli
     acc_logger = Accuracy_Logger(n_classes=n_classes)
     train_loss = 0.
     train_error = 0.
+    ran = 0
 
     print('\n')
     for batch_idx, (data, label) in enumerate(loader):
@@ -404,6 +407,7 @@ def train_loop(epoch, model, loader, optimizer, n_classes, writer, loss_fn, poli
         )
         if not seen:
             continue  # the policy skipped this bag
+        ran += 1
 
         Y_hat = seen['Y_hat']
         acc_logger.log(Y_hat, label)
@@ -417,8 +421,8 @@ def train_loop(epoch, model, loader, optimizer, n_classes, writer, loss_fn, poli
         train_error += error
 
     # calculate loss and error for epoch
-    train_loss /= len(loader)
-    train_error /= len(loader)
+    train_loss /= max(ran, 1)
+    train_error /= max(ran, 1)
 
     print('Epoch: {}, train_loss: {:.4f}, train_error: {:.4f}'.format(epoch, train_loss, train_error))
     for i in range(n_classes):

@@ -322,7 +322,8 @@ policy variant can only adapt what is handed to it:
   and several bags on TITAN and nnMIL (a `target` is a tensor with one
   entry or row per bag, and replacement features keep the batch's shape).
   CLAM's instance branches cluster on the target's most likely class and
-  the weight scales its combined loss; a second DTFD pass reuses the first
+  the weight scales its combined loss; a `target` needs a cross-entropy
+  loss, so CLAM with `bag_loss: svm` refuses it; a second DTFD pass reuses the first
   pass's pseudo-bag split, so it needs a bag of the same size; nnMIL's
   gradients carry its loss scale (`step.grad_scale`). Also readable:
   `step.features`, `step.n_classes`, `step.epoch`, and `step.generator`,

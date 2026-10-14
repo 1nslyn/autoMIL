@@ -85,6 +85,15 @@ step.backward_on(weight=float(torch.rand(1)) + 0.5)
 step.step()
 """)
 
+#: A second pass on half the bag: legal on the batch arms, refused by DTFD,
+#: whose pseudo-bag split is drawn once per slide.
+SMALLER_SECOND_PASS = _policy("smaller_second_pass", """
+step.zero_grad()
+step.backward_on()
+step.backward_on(step.features[: step.features.shape[0] // 2])
+step.step()
+""")
+
 THREE_PASSES = _policy("three_passes", """
 step.zero_grad()
 for _ in range(3):
@@ -134,3 +143,11 @@ def test_a_survival_cell_refuses_a_policy_that_steps_itself(tmp_path, capsys):
 def test_the_step_check_runs_each_arms_batch_once_per_shape():
     labels = [label for label, _ in policy_smoke._step_checks(object, None, "classification")]
     assert labels == [f"train_step on {what}" for what, _, _ in policy_smoke.STEP_CASES.values()]
+
+
+def test_dtfd_refuses_a_second_pass_on_a_bag_of_another_size(tmp_path, capsys):
+    path = str(_write(tmp_path, "stepper", SMALLER_SECOND_PASS))
+    for arm in ("abmil", "clam"):
+        assert _main(["--arm", arm, path]) == 0
+    assert _main(["--arm", "dtfd", path]) == 1
+    assert "first pass's size" in capsys.readouterr().err

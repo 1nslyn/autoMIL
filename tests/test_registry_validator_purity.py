@@ -547,6 +547,8 @@ def test_a_policy_using_only_declared_imports_is_accepted(tmp_path):
     ("x = __import__", "reads or writes files"),
     ("torch.load('/data/bag.pt')", "reads or writes files"),
     ("np.load('/data/bag.npy')", "reads or writes files"),
+    ("from numpy import load", "reads or writes files"),
+    ("reader = np.load", "reads or writes files"),
     ("ctx.features.numpy().tofile('/tmp/x')", "reads or writes files"),
     ("g = self.wrap_optimizer.__globals__", "reaches past the policy"),
     ("b = __builtins__", "reaches past the policy"),

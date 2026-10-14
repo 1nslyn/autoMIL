@@ -41,12 +41,13 @@ _TRUSTED_IMPORTS: frozenset[str] = frozenset({
 })
 
 # Inside a sealed policy's methods (the consumer declares the method-level
-# import allowlist): calls that read or write files or run code, and the
-# attributes that reach the interpreter past the policy's own objects.
+# import allowlist): names that read or write files or run code, the library
+# functions that read or write files (refused however they are reached), and
+# the attributes that reach the interpreter past the policy's own objects.
 _SEALED_BANNED_NAMES: frozenset[str] = frozenset({
     "open", "exec", "eval", "compile", "__import__", "input", "breakpoint",
 })
-_SEALED_BANNED_CALL_ATTRS: frozenset[str] = frozenset({
+_SEALED_FILE_READERS: frozenset[str] = frozenset({
     "load", "save", "open", "fromfile", "tofile", "from_file", "memmap",
     "open_memmap", "loadtxt", "savetxt", "genfromtxt", "fromregex",
     "savez", "savez_compressed", "load_library",
@@ -482,15 +483,17 @@ class PurityValidator:
                     module_path, part,
                     f"policy methods cannot use {part.id}: it reads or writes files or runs code",
                 )
-            if (
-                isinstance(part, ast.Call)
-                and isinstance(part.func, ast.Attribute)
-                and part.func.attr in _SEALED_BANNED_CALL_ATTRS
-            ):
-                self._sealed_error(
-                    module_path, part,
-                    f"policy methods cannot call .{part.func.attr}(): it reads or writes files",
-                )
+            readers = (
+                [part.attr] if isinstance(part, ast.Attribute)
+                else [alias.name for alias in part.names] if isinstance(part, ast.ImportFrom)
+                else []
+            )
+            for reader in readers:
+                if reader in _SEALED_FILE_READERS:
+                    self._sealed_error(
+                        module_path, part,
+                        f"policy methods cannot use {reader}: it reads or writes files",
+                    )
             name = (
                 part.attr if isinstance(part, ast.Attribute)
                 else part.id if isinstance(part, ast.Name)

@@ -312,8 +312,7 @@ class ClassificationTrainer(BaseTrainer):
                 if loss is not None:
                     epoch_loss += loss.item()
                     epoch_steps += 1
-                
-                pbar.set_postfix({'loss': loss.item()})
+                    pbar.set_postfix({'loss': loss.item()})
             
             avg_loss = epoch_loss / max(epoch_steps, 1)
             epoch_time = time.time() - epoch_start_time

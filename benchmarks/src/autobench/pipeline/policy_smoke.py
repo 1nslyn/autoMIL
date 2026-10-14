@@ -410,7 +410,16 @@ def _dtfd_policy_stepper(runtime) -> Callable[[int], float | None]:
         for _, optimizer, _ in tiers:
             optimizer.zero_grad()
 
+    first_size: list[int] = []  # the trainer draws one pseudo-bag split per slide
+
     def backward_on(bag, objective):
+        if not first_size:
+            first_size.append(bag.shape[0])
+        elif bag.shape[0] != first_size[0]:
+            raise ValueError(
+                "a second DTFD pass must use a bag of the first pass's size "
+                "(its pseudo-bag split is drawn once per slide)"
+            )
         for module, _, _ in tiers:
             logits = module(bag).mean(dim=0, keepdim=True)
             loss = objective.loss(criterion, logits)
@@ -422,6 +431,7 @@ def _dtfd_policy_stepper(runtime) -> Callable[[int], float | None]:
             optimizer.step()
 
     def run(epoch: int) -> float | None:
+        first_size.clear()
         loss = runtime.train_step(
             features, labels, epoch=epoch, n_classes=N_CLASSES, backward_on=backward_on,
             step=step, zero_grad=zero_grad,

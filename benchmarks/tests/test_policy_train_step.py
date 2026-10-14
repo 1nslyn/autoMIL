@@ -80,6 +80,42 @@ def test_each_lever_reaches_the_arm(run, body, tmp_path):
     assert run(tmp_path / "policy", fold_runtime(_policy(body))) != native
 
 
+def _first_loss(run, workdir, weight):
+    """The loss the arm trains on for its first batch, at a per-bag weight."""
+    seen: list[float] = []
+
+    def body(self, step):
+        step.zero_grad()
+        _, loss = step.backward_on(weight=weight)
+        seen.append(float(loss))
+        step.step()
+
+    run(workdir, fold_runtime(_policy(body)))
+    return seen[0]
+
+
+@pytest.mark.parametrize("run", _arm_runs())
+def test_a_weight_scales_the_loss_the_arm_trains_on_once(run, tmp_path):
+    """The first batch meets the same weights either way, so the loss scales by the weight
+    exactly (CLAM: its bag and instance terms together, keeping their mixture)."""
+    unit = _first_loss(run, tmp_path / "unit", 1.0)
+    assert _first_loss(run, tmp_path / "half", 0.5) == pytest.approx(0.5 * unit, rel=1e-5)
+
+
+def _every_other_batch(self, step):
+    self.count = getattr(self, "count", 0) + 1
+    if self.count % 2:
+        step.zero_grad()
+        step.backward_on()
+        step.step()
+
+
+@pytest.mark.parametrize("run", _arm_runs())
+def test_a_policy_may_skip_batches_on_every_arm(run, tmp_path):
+    native = run(tmp_path / "native", fold_runtime())
+    assert run(tmp_path / "skipping", fold_runtime(_policy(_every_other_batch))) != native
+
+
 def test_a_second_dtfd_pass_reuses_the_slides_pseudo_bag_split(tmp_path):
     """A second pass draws nothing from the trainer's RNG, so the slide order is unchanged."""
     dtfd = next(arm for arm in ARMS if arm.name == "dtfd")

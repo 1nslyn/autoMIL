@@ -74,10 +74,17 @@ class Objective:
             return self.labels
         return self.target if self.target.ndim == 1 else self.target.argmax(dim=-1)
 
-    def loss(self, loss_fn: Any, logits: torch.Tensor, *, repeat: int = 1) -> torch.Tensor:
-        """The arm's loss on ``logits``; ``repeat`` rows per bag (DTFD's pseudo-bags)."""
+    def loss(
+        self, loss_fn: Any, logits: torch.Tensor, *, repeat: int = 1, weighted: bool = True,
+    ) -> torch.Tensor:
+        """The arm's loss on ``logits``; ``repeat`` rows per bag (DTFD's pseudo-bags).
+
+        ``weighted=False`` leaves the bag weight out, for an arm that weights the
+        loss it combines itself (CLAM, through :meth:`weighted`).
+        """
         labels = self.labels.repeat(repeat) if repeat > 1 else self.labels
-        if self.target is None and self.weight is None:
+        weight = self.weight if weighted else None
+        if self.target is None and weight is None:
             return loss_fn(logits, labels)
         if not isinstance(loss_fn, torch.nn.CrossEntropyLoss) or loss_fn.weight is not None:
             raise TypeError(
@@ -90,8 +97,8 @@ class Objective:
         per_bag = F.cross_entropy(
             logits, target, reduction="none", label_smoothing=loss_fn.label_smoothing,
         )
-        if self.weight is not None:
-            per_bag = per_bag * self.weight.repeat(repeat)
+        if weight is not None:
+            per_bag = per_bag * weight.repeat(repeat)
         if loss_fn.reduction == "mean":
             return per_bag.mean()
         if loss_fn.reduction == "sum":
