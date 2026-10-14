@@ -178,13 +178,13 @@ class TestMarginIsCheckableFromItsOwnCounts:
 
         counts = _committed_guards()["tcga_luad__kras"]["validation_class_counts"]
         assert set(counts) == {str(f) for f in STAGE_FOLDS["discovery"]}
-        five = guard_from_counts(counts)
-        three = guard_from_counts({fold: counts[fold] for fold in ("0", "1", "2")})
+        five = guard_from_counts(counts, "devcv")
+        three = guard_from_counts({fold: counts[fold] for fold in ("0", "1", "2")}, "devcv")
         assert set(five["validation_class_counts"]) == set(counts)
         assert set(three["validation_class_counts"]) == {"0", "1", "2"}
         assert five["margin"] < three["margin"]   # more folds averaged => finer lattice
-        assert five["margin"] == pytest.approx(0.0060, abs=1e-12)
-        assert three["margin"] == pytest.approx(0.0099, abs=1e-12)
+        assert five["margin"] == pytest.approx(0.0038, abs=1e-12)
+        assert three["margin"] == pytest.approx(0.0063, abs=1e-12)
 
     def test_a_missing_fold_refuses_rather_than_averaging_a_subset(self):
         counts = {str(f): {"pos": 17, "neg": 30} for f in range(3)}
@@ -225,11 +225,11 @@ class TestDeclarationFromCounts:
         labels, val = _balanced(per_class)
         benchmark = _cohort(tmp_path, {i: val for i in range(n_folds)}, labels)
         guard = derive_guard(benchmark, "standard", "t", range(n_folds))
-        assert guard_from_counts(guard["validation_class_counts"]) == guard
+        assert guard_from_counts(guard["validation_class_counts"], "standard") == guard
 
     def test_a_ragged_fold_sets_the_step_and_is_named_in_the_basis(self):
         counts = {"0": {"neg": 30, "pos": 17}, "1": {"neg": 30, "pos": 11}}
-        guard = guard_from_counts(counts)
+        guard = guard_from_counts(counts, "devcv")
         assert guard["margin"] == pytest.approx(_grid(1 / (2 * 2 * 11)), abs=1e-9)
         assert "11 slides in the smallest validation class 'pos'" in guard["basis"]
 
@@ -241,7 +241,7 @@ class TestDeclarationFromCounts:
     ], ids=["empty", "class-sets-differ", "one-class", "too-fine-for-the-grid"])
     def test_unusable_counts_refuse(self, counts, message):
         with pytest.raises(GuardMarginError, match=message):
-            guard_from_counts(counts)
+            guard_from_counts(counts, "devcv")
 
 
 class TestDerivationScript:
@@ -272,13 +272,14 @@ class TestDerivationScript:
         counts = {str(f): {"a": 40, "b": 40} for f in range(5)}
         counts["5"] = {"a": 1, "b": 1}      # a fold the gated mean does not average
         rebuilt = script.derive_from_counts(
-            {"x__y": {"validation_class_counts": counts}}
+            {"x__y": {"strategy": "devcv", "validation_class_counts": counts}}
         )["x__y"]
+        assert rebuilt["strategy"] == "devcv"
         assert set(rebuilt["validation_class_counts"]) == {"0", "1", "2", "3", "4"}
         assert rebuilt["margin"] == pytest.approx(_grid(1 / (5 * 2 * 40)), abs=1e-9)
 
     def test_counts_of_another_fold_set_cannot_be_re_derived(self, script):
-        stale = {"x__y": {"validation_class_counts": {
+        stale = {"x__y": {"strategy": "devcv", "validation_class_counts": {
             str(f): {"a": 5, "b": 5} for f in range(3)
         }}}
         with pytest.raises(GuardMarginError, match="the gated mean averages"):
@@ -377,18 +378,19 @@ class TestRealCohort:
         """The number frozen in guard_margins.json, re-derived from the splits."""
         from autobench.campaign import STAGE_FOLDS
 
-        guard = derive_guard(LUAD, "standard", "kras", STAGE_FOLDS["discovery"])
-        assert guard["margin"] == pytest.approx(0.0060, abs=1e-9)
-        for fold in ("0", "1", "2", "3", "4"):
-            assert guard["validation_class_counts"][fold] == {
-                "mutant": 17, "wildtype": 30,
-            }
+        guard = derive_guard(LUAD, "devcv", "kras", STAGE_FOLDS["discovery"])
+        assert guard["margin"] == pytest.approx(0.0038, abs=1e-9)
+        assert guard["validation_class_counts"] == {
+            "0": {"mutant": 28, "wildtype": 47}, "1": {"mutant": 27, "wildtype": 48},
+            "2": {"mutant": 27, "wildtype": 47}, "3": {"mutant": 27, "wildtype": 47},
+            "4": {"mutant": 27, "wildtype": 47},
+        }
 
     def test_frozen_artifact_matches_a_fresh_derivation(self):
         from autobench.campaign import STAGE_FOLDS
 
         assert _committed_guards()["tcga_luad__kras"] == derive_guard(
-            LUAD, "standard", "kras", STAGE_FOLDS["discovery"],
+            LUAD, "devcv", "kras", STAGE_FOLDS["discovery"],
         )
 
     @pytest.mark.skipif(not CANARY_RESULTS.is_dir(),

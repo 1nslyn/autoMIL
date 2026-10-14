@@ -292,6 +292,7 @@ def _prepare_data(cfg: BenchmarkConfig, ds: DatasetConfig) -> None:
         ds=ds,
         seed=cfg.train.seed,
         n_splits=cfg.n_folds,
+        strategies=tuple(cfg.strategies),
     )
 
 

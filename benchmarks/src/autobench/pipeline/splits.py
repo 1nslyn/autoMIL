@@ -16,15 +16,18 @@ import os
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold, train_test_split
 
 from autobench.pipeline.config import StrategyConfig
+
+#: ``devcv`` partitions standard fold 0's train+val slides with this seed.
+DEVCV_PARTITION_SEED = 1000
 
 
 def create_strategy_splits(
     task_csv: str,
     splits_dir: str,
-    strategy_cfg: StrategyConfig | None = None,
+    strategy_cfg: StrategyConfig,
     n_splits: int = 5,
     seed: int = 42,
     stratify_col: str = "label",
@@ -44,10 +47,16 @@ def create_strategy_splits(
     Parameters
     ----------
     strategy_cfg:
-        Only ``standard`` is implemented today. A non-``standard`` value
-        is rejected explicitly so a new strategy added to a dataset YAML
-        doesn't silently produce in-distribution splits while the
-        operator believes they configured a held-out cohort.
+        ``standard`` is patient-stratified k-fold CV: every slide is a test
+        slide exactly once. ``devcv`` keeps standard fold 0's test slides
+        aside as one fixed test set and cross-validates the remaining
+        (development) slides: fold k trains on k-1 of ``n_splits``
+        patient-grouped, class-stratified parts and validates on the k-th,
+        so every development slide is validated exactly once and no test
+        slide is ever validated. Any other value is rejected explicitly so
+        a new strategy added to a dataset YAML doesn't silently produce
+        in-distribution splits while the operator believes they configured
+        a held-out cohort.
 
     Returns a list of paths to the generated split CSVs.
     """
@@ -57,16 +66,14 @@ def create_strategy_splits(
             f"Task CSV {task_csv} is missing required 'case_id' column. "
             "Patient-level stratification cannot proceed."
         )
-    if strategy_cfg is not None:
-        strategy_name = getattr(strategy_cfg, "strategy", None)
-        if strategy_name and strategy_name != "standard":
-            raise NotImplementedError(
-                f"strategy {strategy_name!r} is not implemented; only "
-                "'standard' (patient-stratified k-fold) is supported. "
-                "A held-out cohort split would silently regress to "
-                "in-distribution if we let this fall through — implement "
-                "the strategy branch explicitly before using it."
-            )
+    strategy_name = strategy_cfg.strategy
+    if strategy_name not in _STRATEGIES:
+        raise NotImplementedError(
+            f"strategy {strategy_name!r} is not implemented; supported: "
+            f"{sorted(_STRATEGIES)}. A held-out cohort split would silently "
+            "regress to in-distribution if we let this fall through — "
+            "implement the strategy branch explicitly before using it."
+        )
     if stratify_col not in df.columns:
         raise ValueError(
             f"Task CSV {task_csv} is missing the stratification column "
@@ -74,7 +81,7 @@ def create_strategy_splits(
         )
     os.makedirs(splits_dir, exist_ok=True)
 
-    return _splits_standard_cv(df, splits_dir, n_splits, seed, stratify_col)
+    return _STRATEGIES[strategy_name](df, splits_dir, n_splits, seed, stratify_col)
 
 
 def _splits_standard_cv(
@@ -84,7 +91,59 @@ def _splits_standard_cv(
     seed: int,
     stratify_col: str = "label",
 ) -> list[str]:
+    """Write every standard fold."""
+    split_paths = [
+        _write_split_csv(splits_dir, fold_idx, train_ids, val_ids, test_ids)
+        for fold_idx, (train_ids, val_ids, test_ids)
+        in enumerate(_standard_folds(df, n_splits, seed, stratify_col))
+    ]
+    print(f"  Splits: {splits_dir}  ({n_splits} folds, patient-stratified CV)")
+    return split_paths
+
+
+def _splits_devcv(
+    df: pd.DataFrame,
+    splits_dir: str,
+    n_splits: int,
+    seed: int,
+    stratify_col: str = "label",
+) -> list[str]:
+    """Cross-validate standard fold 0's development slides; test on its test slides.
+
+    The development slides (fold 0's train then val, in that order) are cut
+    into ``n_splits`` parts by a shuffled ``StratifiedGroupKFold`` grouped on
+    ``case_id`` and stratified on ``stratify_col``. Fold k validates on part
+    k and trains on the rest; every fold keeps fold 0's test slides.
+    """
+    train0, val0, test0 = next(iter(_standard_folds(df, n_splits, seed, stratify_col)))
+    development = np.concatenate([train0, val0])
+    slide_rows = df.set_index("slide_id")
+    labels = slide_rows.loc[development, stratify_col].to_numpy()
+    groups = slide_rows.loc[development, "case_id"].to_numpy()
+    parts = StratifiedGroupKFold(
+        n_splits=n_splits, shuffle=True, random_state=DEVCV_PARTITION_SEED,
+    ).split(development, labels, groups)
+    split_paths = []
+    for fold_idx, (train_idx, val_idx) in enumerate(parts):
+        train_ids, val_ids = development[train_idx], development[val_idx]
+        _assert_no_patient_leakage(
+            train_cases=groups[train_idx], val_cases=groups[val_idx],
+            test_cases=slide_rows.loc[test0, "case_id"].to_numpy(), fold_idx=fold_idx,
+        )
+        split_paths.append(_write_split_csv(splits_dir, fold_idx, train_ids, val_ids, test0))
+    print(f"  Splits: {splits_dir}  ({n_splits} development folds inside standard fold 0)")
+    return split_paths
+
+
+def _standard_folds(
+    df: pd.DataFrame,
+    n_splits: int,
+    seed: int,
+    stratify_col: str = "label",
+):
     """Patient-stratified k-fold: dedup to cases, split cases, expand to slides.
+
+    Yields ``(train_ids, val_ids, test_ids)`` slide arrays per fold.
 
     Slides from the same ``case_id`` share a stratification key — the class
     label for classification, or the event indicator (``status``) for
@@ -159,7 +218,6 @@ def _splits_standard_cv(
     case_to_slides = df.groupby("case_id")["slide_id"].apply(list).to_dict()
 
     outer = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-    split_paths: list[str] = []
 
     for fold_idx, (train_val_case_idx, test_case_idx) in enumerate(
         outer.split(case_ids, case_labels)
@@ -183,15 +241,11 @@ def _splits_standard_cv(
             fold_idx=fold_idx,
         )
 
-        train_ids = _expand_cases_to_slides(train_cases, case_to_slides)
-        val_ids = _expand_cases_to_slides(val_cases, case_to_slides)
-        test_ids = _expand_cases_to_slides(test_cases, case_to_slides)
-
-        path = _write_split_csv(splits_dir, fold_idx, train_ids, val_ids, test_ids)
-        split_paths.append(path)
-
-    print(f"  Splits: {splits_dir}  ({n_splits} folds, patient-stratified CV)")
-    return split_paths
+        yield (
+            _expand_cases_to_slides(train_cases, case_to_slides),
+            _expand_cases_to_slides(val_cases, case_to_slides),
+            _expand_cases_to_slides(test_cases, case_to_slides),
+        )
 
 
 def _expand_cases_to_slides(
@@ -246,3 +300,6 @@ def _write_split_csv(
     path = os.path.join(splits_dir, f"splits_{fold_idx}.csv")
     split_df.to_csv(path, index=False)
     return path
+
+
+_STRATEGIES = {"standard": _splits_standard_cv, "devcv": _splits_devcv}

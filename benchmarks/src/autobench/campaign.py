@@ -34,6 +34,10 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 SCHEMA_VERSION = 8
 CAMPAIGN_ID = "automil-preprint-130-v6"
 PROTOCOL_VERSION = "preprint-v5"
+#: Every cell trains on the ``devcv`` folds: five-fold cross-validation inside
+#: the development part of standard fold 0, all tested on its test slides
+#: (autobench.pipeline.splits). No test slide is ever a validation slide.
+SPLIT_STRATEGY = "devcv"
 ANALYSIS_PLAN_PATH = "benchmarks/campaigns/preprint_130/analysis_plan.json"
 #: Per-dataset+task companion-guard margins, derived from the frozen validation
 #: splits by derive_guard_margins.py and checked in so the number in the paper
@@ -352,6 +356,7 @@ PROTOCOL = {
     "protocol_version": PROTOCOL_VERSION,
     "seed": 42,
     "split_folds": 5,
+    "split_strategy": SPLIT_STRATEGY,
     "discovery_attempts": DISCOVERY_ATTEMPTS,
     "discovery_phasing": DISCOVERY_PHASING,
     "se_multiplier": SE_MULTIPLIER,
@@ -621,7 +626,7 @@ def _run_command(cell: Mapping[str, Any], stage: str) -> str:
         "--encoder", str(cell["encoder"]),
         "--model", str(cell["model"]),
         "--framework", str(cell["framework"]),
-        "--strategy", "standard",
+        "--strategy", SPLIT_STRATEGY,
         "--seed", str(PROTOCOL["seed"]),
         "--n_folds", str(PROTOCOL["split_folds"]),
         "--folds", ",".join(str(i) for i in command_folds[stage]),
@@ -676,7 +681,7 @@ def _cell_record(
         "model": model,
         "survival_loss": survival_loss,
         "regime": "slide" if framework == "titan" else "tile",
-        "strategy": "standard",
+        "strategy": SPLIT_STRATEGY,
         "seed": PROTOCOL["seed"],
         "dataset_config": dataset_config,
         "dataset_config_sha256": dataset_config_sha256,
@@ -719,6 +724,12 @@ def _validate_guard(guard: Any, label: str) -> dict[str, Any]:
         raise CampaignManifestError(
             f"{label}: companion-guard declaration is malformed ({guard!r}); "
             f"expected metric {GUARD_METRIC!r} and a margin in (0, 1)"
+        )
+    if guard.get("strategy") != SPLIT_STRATEGY:
+        raise CampaignManifestError(
+            f"{label}: companion-guard counts were derived from the "
+            f"{guard.get('strategy')!r} folds; the campaign trains on "
+            f"{SPLIT_STRATEGY!r} — re-derive them (derive_guard_margins.py)"
         )
     counts = guard.get("validation_class_counts")
     if not counts:

@@ -1,146 +1,62 @@
 {
-  "cptac_gbm__tp53": {
-    "basis": "one validation slide: 1/(5 folds x 2 classes x 6 slides in the smallest validation class 'mutant') = 0.016667, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.0168,
-    "metric": "val_bacc",
-    "validation_class_counts": {
-      "0": {
-        "mutant": 6,
-        "wildtype": 20
-      },
-      "1": {
-        "mutant": 6,
-        "wildtype": 16
-      },
-      "2": {
-        "mutant": 7,
-        "wildtype": 13
-      },
-      "3": {
-        "mutant": 7,
-        "wildtype": 17
-      },
-      "4": {
-        "mutant": 7,
-        "wildtype": 18
-      }
-    }
-  },
-  "cptac_pdac__immune_class": {
-    "basis": "one validation slide: 1/(5 folds x 3 classes x 7 slides in the smallest validation class 'high') = 0.009524, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.0096,
-    "metric": "val_bacc",
-    "validation_class_counts": {
-      "0": {
-        "high": 7,
-        "low": 9,
-        "medium": 14
-      },
-      "1": {
-        "high": 7,
-        "low": 9,
-        "medium": 9
-      },
-      "2": {
-        "high": 10,
-        "low": 10,
-        "medium": 7
-      },
-      "3": {
-        "high": 9,
-        "low": 10,
-        "medium": 13
-      },
-      "4": {
-        "high": 7,
-        "low": 8,
-        "medium": 9
-      }
-    }
-  },
   "tcga_hnsc__grade": {
-    "basis": "one validation slide: 1/(5 folds x 3 classes x 6 slides in the smallest validation class 'g1') = 0.011111, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.0112,
+    "basis": "one validation slide: 1/(5 folds x 3 classes x 8 slides in the smallest validation class 'g1') = 0.008333, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0084,
     "metric": "val_bacc",
+    "strategy": "devcv",
     "validation_class_counts": {
       "0": {
-        "g1": 6,
-        "g2": 26,
-        "g3": 10
+        "g1": 9,
+        "g2": 41,
+        "g3": 16
       },
       "1": {
-        "g1": 6,
-        "g2": 26,
-        "g3": 10
+        "g1": 9,
+        "g2": 41,
+        "g3": 16
       },
       "2": {
-        "g1": 6,
-        "g2": 26,
-        "g3": 10
+        "g1": 8,
+        "g2": 42,
+        "g3": 16
       },
       "3": {
-        "g1": 6,
-        "g2": 26,
-        "g3": 10
+        "g1": 9,
+        "g2": 42,
+        "g3": 16
       },
       "4": {
-        "g1": 6,
-        "g2": 26,
-        "g3": 10
-      }
-    }
-  },
-  "tcga_lgg__idh1": {
-    "basis": "one validation slide: 1/(5 folds x 2 classes x 11 slides in the smallest validation class 'wildtype') = 0.009091, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.0092,
-    "metric": "val_bacc",
-    "validation_class_counts": {
-      "0": {
-        "mutant": 38,
-        "wildtype": 11
-      },
-      "1": {
-        "mutant": 39,
-        "wildtype": 11
-      },
-      "2": {
-        "mutant": 39,
-        "wildtype": 11
-      },
-      "3": {
-        "mutant": 39,
-        "wildtype": 11
-      },
-      "4": {
-        "mutant": 39,
-        "wildtype": 11
+        "g1": 8,
+        "g2": 42,
+        "g3": 16
       }
     }
   },
   "tcga_luad__kras": {
-    "basis": "one validation slide: 1/(5 folds x 2 classes x 17 slides in the smallest validation class 'mutant') = 0.005882, rounded up to the 4-decimal grid the metric is recorded on",
-    "margin": 0.006,
+    "basis": "one validation slide: 1/(5 folds x 2 classes x 27 slides in the smallest validation class 'mutant') = 0.003704, rounded up to the 4-decimal grid the metric is recorded on",
+    "margin": 0.0038,
     "metric": "val_bacc",
+    "strategy": "devcv",
     "validation_class_counts": {
       "0": {
-        "mutant": 17,
-        "wildtype": 30
+        "mutant": 28,
+        "wildtype": 47
       },
       "1": {
-        "mutant": 17,
-        "wildtype": 30
+        "mutant": 27,
+        "wildtype": 48
       },
       "2": {
-        "mutant": 17,
-        "wildtype": 30
+        "mutant": 27,
+        "wildtype": 47
       },
       "3": {
-        "mutant": 17,
-        "wildtype": 30
+        "mutant": 27,
+        "wildtype": 47
       },
       "4": {
-        "mutant": 17,
-        "wildtype": 30
+        "mutant": 27,
+        "wildtype": 47
       }
     }
   }

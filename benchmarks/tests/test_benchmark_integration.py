@@ -29,6 +29,9 @@ from autobench.pipeline.orchestrator import aggregate_results, run_benchmark
 from autobench.pipeline.clam.prepare import convert_h5_to_pt
 from autobench.pipeline.prepare import create_task_csv
 from autobench.pipeline.splits import create_strategy_splits
+from autobench.pipeline.config import StrategyConfig
+
+STANDARD = StrategyConfig(strategy="standard", train_cohorts=[], test_cohorts=[])
 from autobench.pipeline.clam.runner import run_experiment
 from autobench.config import DatasetConfig, StrategyDef, TaskDef
 from _helpers import make_test_ds
@@ -133,7 +136,7 @@ class TestDataPrepIntegration:
 
         # Create splits (under strategy subdir)
         splits_dir = os.path.join(sb["benchmark_dir"], "splits", "standard", "brca")
-        paths = create_strategy_splits(csv_path, splits_dir, n_splits=2, seed=42)
+        paths = create_strategy_splits(csv_path, splits_dir, STANDARD, n_splits=2, seed=42)
         assert len(paths) == 2
 
         # Convert features
@@ -164,7 +167,7 @@ class TestSingleExperimentIntegration:
             {0: "neg", 1: "pos"}, ds,
         )
         splits_dir = os.path.join(sb["benchmark_dir"], "splits", "standard", "brca")
-        create_strategy_splits(csv_path, splits_dir, n_splits=2, seed=42)
+        create_strategy_splits(csv_path, splits_dir, STANDARD, n_splits=2, seed=42)
         slide_ids = df["slide_id"].tolist()
         h5_dir = os.path.join(sb["features_base_dir"], "features_fake_enc")
         pt_dir = os.path.join(sb["benchmark_dir"], "features", "fake_enc")
@@ -244,7 +247,7 @@ class TestResumability:
         )
         create_strategy_splits(csv_path,
                                  os.path.join(sb["benchmark_dir"], "splits", "standard", "brca"),
-                                 n_splits=2, seed=42)
+                                 STANDARD, n_splits=2, seed=42)
         slide_ids = df["slide_id"].tolist()
         convert_h5_to_pt(
             os.path.join(sb["features_base_dir"], "features_fake_enc"),

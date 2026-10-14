@@ -282,14 +282,14 @@ def derive_guard(
     benchmark_dir: Path | str, strategy: str, task: str, folds,
 ) -> dict:
     """The frozen ``{metric, margin, basis}`` declaration for one cell, from
-    the validation class counts of ``folds`` in the cohort's splits."""
+    the validation class counts of ``folds`` in the cohort's ``strategy`` splits."""
     counts = validation_class_counts(benchmark_dir, strategy, task, folds)
     return guard_from_counts({
         str(fold): block for fold, block in counts.items()
-    })
+    }, strategy)
 
 
-def guard_from_counts(counts: Mapping[str, Mapping[str, int]]) -> dict:
+def guard_from_counts(counts: Mapping[str, Mapping[str, int]], strategy: str) -> dict:
     """The declaration a published ``validation_class_counts`` block implies.
 
     ``basis`` is provenance, not configuration: the framework ignores it, and
@@ -311,6 +311,7 @@ def guard_from_counts(counts: Mapping[str, Mapping[str, int]]) -> dict:
     quantum = _grid_aligned(margin)
     return {
         "metric": GUARD_METRIC,
+        "strategy": strategy,
         "margin": quantum,
         "basis": (
             f"one validation slide: 1/({n_folds} folds x {n_classes} classes x "

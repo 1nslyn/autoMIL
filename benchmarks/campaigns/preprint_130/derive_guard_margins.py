@@ -48,7 +48,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(REPO_ROOT / "benchmarks" / ".env")
 
 from autobench.campaign import (DATASETS,  # noqa: E402
-                                GUARD_MARGINS_PATH, STAGE_FOLDS,
+                                GUARD_MARGINS_PATH, SPLIT_STRATEGY, STAGE_FOLDS,
                                 _dataset_config_path)
 from autobench.guard_margin import (GuardMarginError,  # noqa: E402
                                     derive_guard, guard_from_counts)
@@ -100,7 +100,7 @@ def derive_all() -> tuple[dict[str, dict], list[str]]:
             if (spec or {}).get("task_type", "classification") == "survival":
                 continue   # no balanced accuracy, no guard
             margins[f"{dataset}__{task}"] = derive_guard(
-                benchmark_dir, "standard", task, folds,
+                benchmark_dir, SPLIT_STRATEGY, task, folds,
             )
     return margins, skipped
 
@@ -118,7 +118,7 @@ def derive_from_counts(existing: dict[str, dict]) -> dict[str, dict]:
                 f"averages {sorted(folds)}"
             )
         margins[key] = guard_from_counts(
-            {fold: counts[fold] for fold in sorted(folds)}
+            {fold: counts[fold] for fold in sorted(folds)}, guard["strategy"],
         )
     return margins
 

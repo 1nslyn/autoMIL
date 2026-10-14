@@ -27,10 +27,15 @@ split_strategies:
   standard:
     train_cohorts: []
     test_cohorts: []
+  # Five-fold CV inside standard fold 0's development slides, all tested on
+  # its test slides (autobench.pipeline.splits); the campaign trains on it.
+  devcv:
+    train_cohorts: []
+    test_cohorts: []
 
 task_strategy_feasibility:
-  tp53: ["standard"]
-  os: ["standard"]
+  tp53: ["standard", "devcv"]
+  os: ["standard", "devcv"]
 
 slide_id_column: "slide_id"
 slide_id_transform: null

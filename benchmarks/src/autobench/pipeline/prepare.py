@@ -20,6 +20,7 @@ from autobench.config import DatasetConfig
 _SPLIT_FILE_RE = re.compile(r"splits_\d+\.csv")
 from autobench.data import load_all_slides
 from autobench.pipeline.manifest_guard import check_manifest_fingerprint
+from autobench.pipeline.config import StrategyConfig
 from autobench.pipeline.splits import create_strategy_splits
 
 
@@ -196,6 +197,116 @@ def _is_numeric_labels(series: pd.Series) -> bool:
         return False
 
 
+def _prepare_splits(
+    benchmark_dir: str,
+    task_name: str,
+    tdef,
+    task_df: pd.DataFrame,
+    csv_path: str,
+    strategy_def,
+    n_splits: int,
+    seed: int,
+) -> None:
+    """Create, or verify the cached, split folds of one task under one strategy."""
+    splits_dir = os.path.join(benchmark_dir, "splits", strategy_def.name, task_name)
+    # Look for ANY cached fold file, not just splits_0.csv. Keying on
+    # splits_0 alone leaves a hole: delete just that file (a natural way to
+    # "force a regenerate") and this branch regenerates folds 0..n-1 while
+    # stale higher-numbered folds survive alongside them. The immediate run
+    # is fine, but the directory is left holding a mix — and a later run at
+    # the *higher* fold count would match on total and silently train on
+    # part-new, part-stale splits.
+    # Match ONLY `splits_<int>.csv`, and only real files. A `startswith`
+    # test also catches CLAM's own `splits_0_bool.csv` /
+    # `splits_0_descriptor.csv` companions (lib/CLAM/create_splits_seq.py),
+    # which would make a perfectly correct directory look wrong — and the
+    # remedy this raises is `rm -rf`, so a false positive destroys good
+    # folds. The isfile check additionally rejects a directory or symlink
+    # named like a fold file, which would otherwise satisfy the set.
+    cached_splits = (
+        {f for f in os.listdir(splits_dir)
+         if _SPLIT_FILE_RE.fullmatch(f)
+         and os.path.isfile(os.path.join(splits_dir, f))
+         and not os.path.islink(os.path.join(splits_dir, f))}
+        if os.path.isdir(splits_dir) else set()
+    )
+    if not cached_splits:
+        print(f"[prep] Creating splits: {task_name}")
+        stratify_col = "status" if tdef.task_type == "survival" else "label"
+        create_strategy_splits(
+            csv_path, splits_dir,
+            StrategyConfig(
+                strategy=strategy_def.name,
+                train_cohorts=list(strategy_def.train_cohorts),
+                test_cohorts=list(strategy_def.test_cohorts),
+            ),
+            n_splits=n_splits,
+            seed=seed, stratify_col=stratify_col,
+        )
+    else:
+        # A cached splits directory is reused wholesale, so `n_splits` would
+        # otherwise be silently ignored: a 5-fold request trains on whatever
+        # fold count happens to be on disk. These directories still hold
+        # legacy 10-fold splits from the phase-1 runs, which would halve the
+        # validation set and change the train/val/test proportions without
+        # any message. Verify the count and fail loudly — and, as with the
+        # task CSV above, deliberately do NOT self-heal: this path runs
+        # concurrently against a shared benchmark_dir.
+        # Require the EXACT set {splits_0..n-1}. A bare count would accept a
+        # directory holding the right number of files with the wrong indices
+        # — e.g. folds 0-4 regenerated next to stale folds 5-9 totals 10 and
+        # would pass a 10-fold request while being half stale.
+        expected = {f"splits_{i}.csv" for i in range(n_splits)}
+        if cached_splits != expected:
+            extra = sorted(cached_splits - expected)
+            missing = sorted(expected - cached_splits)
+            detail = []
+            if extra:
+                detail.append(f"unexpected: {extra[:6]}{'...' if len(extra) > 6 else ''}")
+            if missing:
+                detail.append(f"missing: {missing[:6]}{'...' if len(missing) > 6 else ''}")
+            raise ValueError(
+                f"Cached splits for task {task_name!r} do not match a "
+                f"{n_splits}-fold run ({len(cached_splits)} file(s) on disk; "
+                f"{'; '.join(detail)}).\n"
+                f"  dir: {splits_dir}\n"
+                "Reusing them would change the train/val/test proportions (and "
+                "the validation-set size that model selection depends on), or "
+                "mix freshly-generated folds with stale ones. Purge and re-run "
+                "prep:\n"
+                f"  rm -rf {splits_dir}"
+            )
+        # The set check above only proves the fold COUNT is right. It says
+        # nothing about WHICH cohort those folds were built from — so splits
+        # can be silently stale relative to their own task CSV. That is
+        # reachable through the remedy the task-CSV guard prints above: it
+        # removes only the CSV, which is then regenerated fresh while these
+        # folds survive, leaving part-new/part-stale training with no
+        # message. Verify fold 0 covers exactly the CSV's slides.
+        fold0 = pd.read_csv(os.path.join(splits_dir, "splits_0.csv"))
+        split_ids: set[str] = set()
+        for col in ("train", "val", "test"):
+            if col in fold0.columns:
+                split_ids |= set(fold0[col].dropna().astype(str))
+        csv_ids = set(task_df["slide_id"].astype(str))
+        if split_ids != csv_ids:
+            only_splits = len(split_ids - csv_ids)
+            only_csv = len(csv_ids - split_ids)
+            raise ValueError(
+                f"Cached splits for task {task_name!r} were built from a "
+                f"different set of slides than its task CSV.\n"
+                f"  splits dir: {splits_dir}\n"
+                f"  task CSV:   {csv_path}\n"
+                f"  fold 0 covers {len(split_ids)} slides; the CSV has "
+                f"{len(csv_ids)} ({only_splits} only in splits, "
+                f"{only_csv} only in the CSV).\n"
+                "The CSV was regenerated after these splits (labels or the "
+                "manifest changed). Purge the splits and re-run prep:\n"
+                f"  rm -rf {splits_dir}"
+            )
+        print(f"[prep] Splits already exist: {splits_dir} ({n_splits}-fold)")
+
+
 # ---------------------------------------------------------------------------
 # Full preparation orchestrator
 # ---------------------------------------------------------------------------
@@ -209,11 +320,20 @@ def prepare_all(
     ds: DatasetConfig,
     seed: int = 42,
     n_splits: int = 5,
+    strategies: tuple[str, ...] = ("standard",),
 ) -> None:
     """Run the complete data-preparation pipeline (idempotent).
 
     Uses task definitions from ``DatasetConfig`` instead of hardcoded values.
+    Split folds are prepared under ``splits/<strategy>/<task>/`` for each of
+    ``strategies``, every one of which must be declared in the dataset YAML.
     """
+    undeclared = [s for s in strategies if s not in ds.split_strategies]
+    if undeclared:
+        raise ValueError(
+            f"split strategies {undeclared} are not declared in dataset "
+            f"{ds.name!r} (declared: {sorted(ds.split_strategies)})."
+        )
     # M-10: the per-task schema/coverage checks below (B2, and the splits
     # fold0-vs-csv check) can tell a cached CSV doesn't match ITS OWN task's
     # shape, but neither can tell the MANIFEST it was derived from has since
@@ -225,9 +345,6 @@ def prepare_all(
     check_manifest_fingerprint(dataset_csv_dir, mapping_csv)
 
     all_slide_ids: set[str] = set()
-
-    # Get default strategy (first one defined in the config)
-    default_strategy = list(ds.split_strategies.keys())[0]
 
     for task_name, tdef in ds.tasks.items():
         csv_path = os.path.join(benchmark_dir, "dataset_csv", f"{task_name}.csv")
@@ -269,8 +386,9 @@ def prepare_all(
             # launching concurrent work, rather than letting 8xN experiment
             # processes race to generate the same CSVs and splits.
             expected = {"status", "time"} if tdef.task_type == "survival" else {"label"}
-            stale_splits = os.path.join(
-                benchmark_dir, "splits", default_strategy, task_name
+            stale_splits = " ".join(
+                os.path.join(benchmark_dir, "splits", strategy, task_name)
+                for strategy in ds.split_strategies
             )
             if task_df.empty or not expected.issubset(task_df.columns):
                 why = (
@@ -292,98 +410,11 @@ def prepare_all(
             print(f"[prep] Task CSV already exists: {csv_path}")
         all_slide_ids.update(task_df["slide_id"].tolist())
 
-        splits_dir = os.path.join(benchmark_dir, "splits", default_strategy, task_name)
-        # Look for ANY cached fold file, not just splits_0.csv. Keying on
-        # splits_0 alone leaves a hole: delete just that file (a natural way to
-        # "force a regenerate") and this branch regenerates folds 0..n-1 while
-        # stale higher-numbered folds survive alongside them. The immediate run
-        # is fine, but the directory is left holding a mix — and a later run at
-        # the *higher* fold count would match on total and silently train on
-        # part-new, part-stale splits.
-        # Match ONLY `splits_<int>.csv`, and only real files. A `startswith`
-        # test also catches CLAM's own `splits_0_bool.csv` /
-        # `splits_0_descriptor.csv` companions (lib/CLAM/create_splits_seq.py),
-        # which would make a perfectly correct directory look wrong — and the
-        # remedy this raises is `rm -rf`, so a false positive destroys good
-        # folds. The isfile check additionally rejects a directory or symlink
-        # named like a fold file, which would otherwise satisfy the set.
-        cached_splits = (
-            {f for f in os.listdir(splits_dir)
-             if _SPLIT_FILE_RE.fullmatch(f)
-             and os.path.isfile(os.path.join(splits_dir, f))
-             and not os.path.islink(os.path.join(splits_dir, f))}
-            if os.path.isdir(splits_dir) else set()
-        )
-        if not cached_splits:
-            print(f"[prep] Creating splits: {task_name}")
-            stratify_col = "status" if tdef.task_type == "survival" else "label"
-            create_strategy_splits(
-                csv_path, splits_dir,
-                n_splits=n_splits,
-                seed=seed, stratify_col=stratify_col,
+        for strategy in strategies:
+            _prepare_splits(
+                benchmark_dir, task_name, tdef, task_df, csv_path,
+                ds.split_strategies[strategy], n_splits, seed,
             )
-        else:
-            # A cached splits directory is reused wholesale, so `n_splits` would
-            # otherwise be silently ignored: a 5-fold request trains on whatever
-            # fold count happens to be on disk. These directories still hold
-            # legacy 10-fold splits from the phase-1 runs, which would halve the
-            # validation set and change the train/val/test proportions without
-            # any message. Verify the count and fail loudly — and, as with the
-            # task CSV above, deliberately do NOT self-heal: this path runs
-            # concurrently against a shared benchmark_dir.
-            # Require the EXACT set {splits_0..n-1}. A bare count would accept a
-            # directory holding the right number of files with the wrong indices
-            # — e.g. folds 0-4 regenerated next to stale folds 5-9 totals 10 and
-            # would pass a 10-fold request while being half stale.
-            expected = {f"splits_{i}.csv" for i in range(n_splits)}
-            if cached_splits != expected:
-                extra = sorted(cached_splits - expected)
-                missing = sorted(expected - cached_splits)
-                detail = []
-                if extra:
-                    detail.append(f"unexpected: {extra[:6]}{'...' if len(extra) > 6 else ''}")
-                if missing:
-                    detail.append(f"missing: {missing[:6]}{'...' if len(missing) > 6 else ''}")
-                raise ValueError(
-                    f"Cached splits for task {task_name!r} do not match a "
-                    f"{n_splits}-fold run ({len(cached_splits)} file(s) on disk; "
-                    f"{'; '.join(detail)}).\n"
-                    f"  dir: {splits_dir}\n"
-                    "Reusing them would change the train/val/test proportions (and "
-                    "the validation-set size that model selection depends on), or "
-                    "mix freshly-generated folds with stale ones. Purge and re-run "
-                    "prep:\n"
-                    f"  rm -rf {splits_dir}"
-                )
-            # The set check above only proves the fold COUNT is right. It says
-            # nothing about WHICH cohort those folds were built from — so splits
-            # can be silently stale relative to their own task CSV. That is
-            # reachable through the remedy the task-CSV guard prints above: it
-            # removes only the CSV, which is then regenerated fresh while these
-            # folds survive, leaving part-new/part-stale training with no
-            # message. Verify fold 0 covers exactly the CSV's slides.
-            fold0 = pd.read_csv(os.path.join(splits_dir, "splits_0.csv"))
-            split_ids: set[str] = set()
-            for col in ("train", "val", "test"):
-                if col in fold0.columns:
-                    split_ids |= set(fold0[col].dropna().astype(str))
-            csv_ids = set(task_df["slide_id"].astype(str))
-            if split_ids != csv_ids:
-                only_splits = len(split_ids - csv_ids)
-                only_csv = len(csv_ids - split_ids)
-                raise ValueError(
-                    f"Cached splits for task {task_name!r} were built from a "
-                    f"different set of slides than its task CSV.\n"
-                    f"  splits dir: {splits_dir}\n"
-                    f"  task CSV:   {csv_path}\n"
-                    f"  fold 0 covers {len(split_ids)} slides; the CSV has "
-                    f"{len(csv_ids)} ({only_splits} only in splits, "
-                    f"{only_csv} only in the CSV).\n"
-                    "The CSV was regenerated after these splits (labels or the "
-                    "manifest changed). Purge the splits and re-run prep:\n"
-                    f"  rm -rf {splits_dir}"
-                )
-            print(f"[prep] Splits already exist: {splits_dir} ({n_splits}-fold)")
 
     # H5 -> PT for each encoder (CLAM-specific)
     from autobench.pipeline.clam.prepare import convert_h5_to_pt

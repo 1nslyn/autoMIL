@@ -301,6 +301,7 @@ def _write_guard_margins(fake_repo: Path) -> dict[str, dict]:
             }
             margins[f"{dataset}__{task}"] = {
                 "metric": "val_bacc",
+                "strategy": PROTOCOL["split_strategy"],
                 # Self-consistent like a real artifact: the counts cover the
                 # five folds the gated mean averages, and the declared margin
                 # is the one those counts imply.
@@ -723,6 +724,19 @@ def test_manifest_refuses_a_margin_without_its_counts(tmp_path):
     with pytest.raises(CampaignManifestError, match="no validation class counts"):
         build_preprint_manifest(fake_repo)
 
+
+
+def test_manifest_refuses_counts_derived_from_other_folds(tmp_path):
+    """Counts from the standard folds describe a lattice the devcv runs do not have."""
+    fake_repo = tmp_path / "repo"
+    _copy_campaign_sources(fake_repo)
+    path = fake_repo / "benchmarks/campaigns/preprint_130/guard_margins.json"
+    margins = json.loads(path.read_text())
+    margins[next(iter(margins))]["strategy"] = "standard"
+    path.write_text(json.dumps(margins, indent=2, sort_keys=True))
+
+    with pytest.raises(CampaignManifestError, match="derived from the 'standard' folds"):
+        build_preprint_manifest(fake_repo)
 
 def test_audit_rejects_a_hand_edited_frozen_guard(tmp_path):
     """The FROZEN guard is the one that governs every keep/discard.

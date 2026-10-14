@@ -33,6 +33,7 @@ from autobench.pipeline.nnmil.prepare import (
 )
 from autobench.pipeline.nnmil.train import select_nnmil_trainer
 from autobench.pipeline.prepare import create_task_csv
+from autobench.pipeline.config import StrategyConfig
 from autobench.pipeline.splits import create_strategy_splits
 from _helpers import make_test_ds
 
@@ -98,7 +99,9 @@ def survival_benchmark(tmp_path):
 
     splits_dir = os.path.join(bd, "splits", "standard", "os_survival")
     create_strategy_splits(
-        csv_path, splits_dir, n_splits=3, seed=42, stratify_col="status"
+        csv_path, splits_dir,
+        StrategyConfig(strategy="standard", train_cohorts=[], test_cohorts=[]),
+        n_splits=3, seed=42, stratify_col="status",
     )
     return bd, str(h5_dir)
 

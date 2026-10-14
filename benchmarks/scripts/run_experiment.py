@@ -826,6 +826,7 @@ def main() -> None:
             ds=ds,
             seed=train_cfg.seed,
             n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
+            strategies=(exp_cfg.strategy,),
         )
 
     # Run the experiment

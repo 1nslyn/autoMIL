@@ -38,6 +38,11 @@ def make_test_ds(**kwargs):
                 train_cohorts=[],
                 test_cohorts=[],
             ),
+            "devcv": StrategyDef(
+                name="devcv",
+                train_cohorts=[],
+                test_cohorts=[],
+            ),
         },
         task_strategy_feasibility={
             "brca": ["standard"],

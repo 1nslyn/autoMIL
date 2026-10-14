@@ -284,3 +284,73 @@ class TestPatientLevelStratification:
             create_strategy_splits(
                 str(csv_path), splits_dir, strategy_cfg, n_splits=2, seed=42,
             )
+
+
+# ---------------------------------------------------------------------------
+# devcv: cross-validation inside the development part of standard fold 0
+# ---------------------------------------------------------------------------
+
+
+def _fold(splits_dir, k):
+    df = pd.read_csv(os.path.join(splits_dir, f"splits_{k}.csv"))
+    return (set(df["train"].dropna()), set(df["val"].dropna()), set(df["test"].dropna()))
+
+
+class TestDevCV:
+    """devcv keeps standard fold 0's test aside and cross-validates its train+val."""
+
+    @pytest.fixture
+    def both(self, task_csv, tmp_path, registries):
+        std, dev = str(tmp_path / "standard"), str(tmp_path / "devcv")
+        create_strategy_splits(task_csv, std, registries.strategy_registry["standard"], n_splits=5, seed=42)
+        create_strategy_splits(task_csv, dev, registries.strategy_registry["devcv"], n_splits=5, seed=42)
+        return std, dev
+
+    def test_every_fold_tests_on_standard_fold_0_test(self, both):
+        std, dev = both
+        _, _, test0 = _fold(std, 0)
+        for k in range(5):
+            assert _fold(dev, k)[2] == test0
+
+    def test_validation_folds_partition_the_development_slides(self, both):
+        std, dev = both
+        train0, val0, _ = _fold(std, 0)
+        development = train0 | val0
+        vals = [_fold(dev, k)[1] for k in range(5)]
+        assert set().union(*vals) == development
+        assert sum(len(v) for v in vals) == len(development)
+        for k in range(5):
+            train, val, _ = _fold(dev, k)
+            assert train == development - val
+
+    def test_no_case_crosses_train_and_validation(self, tmp_path, registries):
+        rows = [
+            {"case_id": f"P{c:03d}", "slide_id": f"P{c:03d}_s{s}", "label": "pos" if c % 2 else "neg"}
+            for c in range(60) for s in range(2)
+        ]
+        csv_path = tmp_path / "multi.csv"
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        dev = str(tmp_path / "devcv")
+        create_strategy_splits(str(csv_path), dev, registries.strategy_registry["devcv"], n_splits=5, seed=42)
+        case = {r["slide_id"]: r["case_id"] for r in rows}
+        for k in range(5):
+            train, val, test = _fold(dev, k)
+            cases = [{case[s] for s in part} for part in (train, val, test)]
+            assert not cases[0] & cases[1] and not cases[0] & cases[2] and not cases[1] & cases[2]
+
+    def test_reproducible(self, task_csv, tmp_path, registries):
+        a, b = str(tmp_path / "a"), str(tmp_path / "b")
+        for d in (a, b):
+            create_strategy_splits(task_csv, d, registries.strategy_registry["devcv"], n_splits=5, seed=42)
+        for k in range(5):
+            assert pd.read_csv(os.path.join(a, f"splits_{k}.csv")).equals(
+                pd.read_csv(os.path.join(b, f"splits_{k}.csv")))
+
+    def test_an_unknown_strategy_is_refused(self, task_csv, tmp_path):
+        from autobench.pipeline.config import StrategyConfig
+        with pytest.raises(NotImplementedError, match="holdout"):
+            create_strategy_splits(
+                task_csv, str(tmp_path / "x"),
+                StrategyConfig(strategy="holdout", train_cohorts=[], test_cohorts=[]),
+                n_splits=5, seed=42,
+            )

@@ -12,6 +12,9 @@ torch = pytest.importorskip("torch")
 from autobench.pipeline.clam.prepare import convert_h5_to_pt
 from autobench.pipeline.prepare import create_task_csv
 from autobench.pipeline.splits import create_strategy_splits
+from autobench.pipeline.config import StrategyConfig
+
+STANDARD = StrategyConfig(strategy="standard", train_cohorts=[], test_cohorts=[])
 from _helpers import make_test_ds
 
 
@@ -155,20 +158,20 @@ class TestCreateStratifiedSplits:
 
     def test_creates_split_files(self, task_csv, tmp_path):
         splits_dir = str(tmp_path / "splits")
-        paths = create_strategy_splits(task_csv, splits_dir, n_splits=3, seed=42)
+        paths = create_strategy_splits(task_csv, splits_dir, STANDARD, n_splits=3, seed=42)
         assert len(paths) == 3
         for p in paths:
             assert os.path.isfile(p)
 
     def test_split_columns(self, task_csv, tmp_path):
         splits_dir = str(tmp_path / "splits")
-        create_strategy_splits(task_csv, splits_dir, n_splits=3, seed=42)
+        create_strategy_splits(task_csv, splits_dir, STANDARD, n_splits=3, seed=42)
         df = pd.read_csv(os.path.join(splits_dir, "splits_0.csv"))
         assert set(df.columns) == {"train", "val", "test"}
 
     def test_no_overlap_between_splits(self, task_csv, tmp_path):
         splits_dir = str(tmp_path / "splits")
-        create_strategy_splits(task_csv, splits_dir, n_splits=3, seed=42)
+        create_strategy_splits(task_csv, splits_dir, STANDARD, n_splits=3, seed=42)
         for fold in range(3):
             df = pd.read_csv(os.path.join(splits_dir, f"splits_{fold}.csv"))
             train = set(df["train"].dropna())
@@ -181,7 +184,7 @@ class TestCreateStratifiedSplits:
     def test_all_slides_appear_in_exactly_one_test_fold(self, task_csv, tmp_path):
         splits_dir = str(tmp_path / "splits")
         n_splits = 3
-        create_strategy_splits(task_csv, splits_dir, n_splits=n_splits, seed=42)
+        create_strategy_splits(task_csv, splits_dir, STANDARD, n_splits=n_splits, seed=42)
         all_test = []
         for fold in range(n_splits):
             df = pd.read_csv(os.path.join(splits_dir, f"splits_{fold}.csv"))
@@ -192,8 +195,8 @@ class TestCreateStratifiedSplits:
     def test_reproducible_with_same_seed(self, task_csv, tmp_path):
         dir1 = str(tmp_path / "splits1")
         dir2 = str(tmp_path / "splits2")
-        create_strategy_splits(task_csv, dir1, n_splits=3, seed=42)
-        create_strategy_splits(task_csv, dir2, n_splits=3, seed=42)
+        create_strategy_splits(task_csv, dir1, STANDARD, n_splits=3, seed=42)
+        create_strategy_splits(task_csv, dir2, STANDARD, n_splits=3, seed=42)
         for fold in range(3):
             df1 = pd.read_csv(os.path.join(dir1, f"splits_{fold}.csv"))
             df2 = pd.read_csv(os.path.join(dir2, f"splits_{fold}.csv"))
@@ -202,8 +205,8 @@ class TestCreateStratifiedSplits:
     def test_different_seed_gives_different_splits(self, task_csv, tmp_path):
         dir1 = str(tmp_path / "splits1")
         dir2 = str(tmp_path / "splits2")
-        create_strategy_splits(task_csv, dir1, n_splits=3, seed=42)
-        create_strategy_splits(task_csv, dir2, n_splits=3, seed=99)
+        create_strategy_splits(task_csv, dir1, STANDARD, n_splits=3, seed=42)
+        create_strategy_splits(task_csv, dir2, STANDARD, n_splits=3, seed=99)
         df1 = pd.read_csv(os.path.join(dir1, "splits_0.csv"))
         df2 = pd.read_csv(os.path.join(dir2, "splits_0.csv"))
         assert not df1.equals(df2)

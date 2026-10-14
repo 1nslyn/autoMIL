@@ -207,7 +207,9 @@ class TestClamRunnerCarriesDataset:
         from autobench.pipeline.clam.prepare import convert_h5_to_pt
         from autobench.pipeline.clam.runner import run_experiment
         from autobench.pipeline.prepare import create_task_csv
+        from autobench.pipeline.config import StrategyConfig
         from autobench.pipeline.splits import create_strategy_splits
+        STANDARD = StrategyConfig(strategy="standard", train_cohorts=[], test_cohorts=[])
 
         n_slides = 30
         feat_dim = 64
@@ -255,7 +257,7 @@ class TestClamRunnerCarriesDataset:
             mapping_csv, csv_path, "BRCA_predict_label", {0: "neg", 1: "pos"}, fake_ds,
         )
         splits_dir = os.path.join(benchmark_dir, "splits", "standard", "brca")
-        create_strategy_splits(csv_path, splits_dir, n_splits=2, seed=42)
+        create_strategy_splits(csv_path, splits_dir, STANDARD, n_splits=2, seed=42)
         slide_ids = df["slide_id"].tolist()
         pt_dir = os.path.join(benchmark_dir, "features", "fake_enc")
         convert_h5_to_pt(str(feat_dir), pt_dir, "fake_enc", slide_ids)
