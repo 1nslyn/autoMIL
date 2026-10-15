@@ -1,0 +1,5 @@
+[
+  {"name": "identity", "parent": "baseline",
+   "desc": "all-off composite recipe: must reproduce the root's predictions (the seam path is identity)",
+   "axis": "identity", "kind": "regularization", "constants": {}, "hparams": {}}
+]
