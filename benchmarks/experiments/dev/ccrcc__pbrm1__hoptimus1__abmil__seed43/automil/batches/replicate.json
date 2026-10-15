@@ -1,0 +1,34 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "ema998",
+  "parent": "baseline",
+  "desc": "EMA 0.998 of the weights (seed replicate)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_nowarm",
+  "parent": "baseline",
+  "desc": "EMA 0.998 + cosine without warmup (seed replicate)",
+  "axis": "schedule",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "COSINE_EPOCHS": 20
+  },
+  "hparams": {}
+ }
+]

@@ -1,0 +1,34 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "ema998",
+  "parent": "baseline",
+  "desc": "EMA 0.998 of both tiers (seed replicate; guard check)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {}
+ },
+ {
+  "name": "d07",
+  "parent": "baseline",
+  "desc": "dropout 0.7 alone (seed replicate)",
+  "axis": "dropout",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "droprate": 0.7,
+   "droprate_2": 0.7
+  }
+ }
+]

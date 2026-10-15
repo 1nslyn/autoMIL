@@ -1,0 +1,11 @@
+{
+  "arm": "abmil",
+  "cell_name": "ccrcc__pbrm1__hoptimus1__abmil__seed43",
+  "dataset": "ccrcc",
+  "encoder": "hoptimus1",
+  "framework": "abmil",
+  "model": "abmil",
+  "seed": 43,
+  "task": "pbrm1",
+  "task_family": "binary"
+}
