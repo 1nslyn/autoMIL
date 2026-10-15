@@ -1,0 +1,117 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "ema998",
+  "parent": "baseline",
+  "desc": "EMA 0.998 of both tiers",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_ls20",
+  "parent": "baseline",
+  "desc": "EMA 0.998 + label smoothing 0.2 on both tiers",
+  "axis": "label_smoothing",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "LS_EPS": 0.2
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_ls20_d07",
+  "parent": "baseline",
+  "desc": "KRAS v6 leader: EMA + LS 0.2 + dropout 0.7 on the pooled features",
+  "axis": "recipe_transfer",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "LS_EPS": 0.2
+  },
+  "hparams": {
+   "droprate": 0.7,
+   "droprate_2": 0.7
+  }
+ },
+ {
+  "name": "ls20_d07",
+  "parent": "baseline",
+  "desc": "LS 0.2 + dropout 0.7, no EMA",
+  "axis": "stack",
+  "kind": "regularization",
+  "constants": {
+   "LS_EPS": 0.2
+  },
+  "hparams": {
+   "droprate": 0.7,
+   "droprate_2": 0.7
+  }
+ },
+ {
+  "name": "d07",
+  "parent": "baseline",
+  "desc": "dropout 0.7 alone",
+  "axis": "dropout",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "droprate": 0.7,
+   "droprate_2": 0.7
+  }
+ },
+ {
+  "name": "ema_ls20_d05",
+  "parent": "baseline",
+  "desc": "EMA + LS 0.2 + dropout 0.5",
+  "axis": "dropout",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "LS_EPS": 0.2
+  },
+  "hparams": {
+   "droprate": 0.5,
+   "droprate_2": 0.5
+  }
+ },
+ {
+  "name": "ema_step9",
+  "parent": "baseline",
+  "desc": "EMA 0.998 + lr x0.2 from epoch 9 (KRAS v5 near-miss)",
+  "axis": "schedule",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {
+   "lr_decay_step": 9
+  }
+ },
+ {
+  "name": "ema_d07",
+  "parent": "baseline",
+  "kind": "regularization",
+  "axis": "dropout",
+  "desc": "EMA 0.998 + dropout 0.7, no label smoothing",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {
+   "droprate": 0.7,
+   "droprate_2": 0.7
+  }
+ }
+]

@@ -1,0 +1,105 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "e95",
+  "parent": "baseline",
+  "desc": "EMA 0.9995 of the weights",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.9995
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ls20",
+  "parent": "baseline",
+  "desc": "label smoothing 0.2",
+  "axis": "label_smoothing",
+  "kind": "regularization",
+  "constants": {
+   "LS_EPS": 0.2
+  },
+  "hparams": {}
+ },
+ {
+  "name": "sub512",
+  "parent": "baseline",
+  "desc": "512 random tiles per training bag",
+  "axis": "bag_subsampling",
+  "kind": "regularization",
+  "constants": {
+   "MAX_TILES": 512
+  },
+  "hparams": {}
+ },
+ {
+  "name": "e95_ls20",
+  "parent": "baseline",
+  "desc": "KRAS v6 leader: EMA 0.9995 + label smoothing 0.2",
+  "axis": "recipe_transfer",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.9995,
+   "LS_EPS": 0.2
+  },
+  "hparams": {}
+ },
+ {
+  "name": "e95_sub512",
+  "parent": "baseline",
+  "desc": "KRAS v6: EMA 0.9995 + 512 random tiles",
+  "axis": "recipe_transfer",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.9995,
+   "MAX_TILES": 512
+  },
+  "hparams": {}
+ },
+ {
+  "name": "e95_ls20_sub512",
+  "parent": "baseline",
+  "desc": "stack: EMA + LS 0.2 + 512 tiles",
+  "axis": "stack",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.9995,
+   "LS_EPS": 0.2,
+   "MAX_TILES": 512
+  },
+  "hparams": {}
+ },
+ {
+  "name": "e95_ls10",
+  "parent": "baseline",
+  "kind": "regularization",
+  "axis": "label_smoothing",
+  "desc": "EMA 0.9995 + label smoothing 0.1 (dose, 6 classes)",
+  "constants": {
+   "EMA_DECAY": 0.9995,
+   "LS_EPS": 0.1
+  },
+  "hparams": {}
+ },
+ {
+  "name": "e95_sub1024",
+  "parent": "baseline",
+  "kind": "regularization",
+  "axis": "bag_subsampling",
+  "desc": "EMA 0.9995 + 1024 random tiles (dose)",
+  "constants": {
+   "EMA_DECAY": 0.9995,
+   "MAX_TILES": 1024
+  },
+  "hparams": {}
+ }
+]
