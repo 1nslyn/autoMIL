@@ -27,6 +27,7 @@ from test_preprint_campaign import AGENT_PROTOCOL, _copy_campaign_sources
 
 from automil.scoring import paired_delta_se
 from autobench.campaign import (
+    PROTOCOL,
     PROTOCOL_VERSION,
     WINNER_FLOOR,
     build_preprint_manifest,
@@ -194,6 +195,67 @@ def test_dev_config_refuses_a_cell_outside_the_repo(dev_cell, tmp_path):
         )
 
 
+# --- seed replicates ---------------------------------------------------------------------
+
+
+def _flag_value(config: dict, flag: str) -> str:
+    """The token the run command passes after ``flag``."""
+    tokens = shlex.split(config["run"]["command"])
+    return tokens[tokens.index(flag) + 1]
+
+
+def _tokens_without_seed(config: dict) -> list[str]:
+    """The run command's tokens with ``--seed`` and its value taken out."""
+    tokens = shlex.split(config["run"]["command"])
+    index = tokens.index("--seed")
+    return [*tokens[:index], *tokens[index + 2:]]
+
+
+def test_a_seed_replicate_has_its_own_cell_folder_and_trains_under_its_seed(dev_cell, tmp_path):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    base, _, base_dir = build_luad_cell(dev_cell, repo)
+    config, spec, cell_dir = build_luad_cell(dev_cell, repo, seed=43)
+
+    assert _flag_value(config, "--seed") == "43"
+    assert cell_dir.name == f"{base_dir.name}__seed43" == "tcga_luad__kras__hoptimus1__abmil__seed43"
+    assert config["project"]["name"] == cell_dir.name
+    assert config["files"]["editable"] == [
+        f"{(DEV_ROOT / cell_dir.name).as_posix()}/automil/variants/_policies/*.py"
+    ]
+    # The seed changes the training only: the replicate reads the protocol cell's folds
+    # and runs the protocol cell's command otherwise.
+    assert config["data"] == base["data"]
+    assert _tokens_without_seed(config) == _tokens_without_seed(base)
+    assert {key for key in config if config[key] != base[key]} == {"project", "files", "run", "viz"}
+
+    dev_cell.write_dev_cell(cell_dir, config, spec.record())
+    assert json.loads((cell_dir / "automil" / "dev_cell.json").read_text())["seed"] == 43
+
+
+def test_replicates_get_their_own_viz_ports_so_they_can_run_side_by_side(dev_cell, tmp_path):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    ports = {seed: build_luad_cell(dev_cell, repo, seed=seed)[0]["viz"]["port"] for seed in (42, 43, 44)}
+    assert len(set(ports.values())) == 3 and all(8500 <= port < 8900 for port in ports.values())
+
+
+def test_the_default_seed_is_the_protocol_seed_and_is_recorded_like_any_other(dev_cell, tmp_path):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    config, spec, cell_dir = build_luad_cell(dev_cell, repo)  # no seed given
+    assert _flag_value(config, "--seed") == str(PROTOCOL["seed"]) == "42"
+    assert cell_dir.name == "tcga_luad__kras__hoptimus1__abmil"  # no suffix
+    assert build_luad_cell(dev_cell, repo, seed=PROTOCOL["seed"]) == (config, spec, cell_dir)
+
+    dev_cell.write_dev_cell(cell_dir, config, spec.record())
+    assert json.loads((cell_dir / "automil" / "dev_cell.json").read_text())["seed"] == 42
+
+
+@pytest.mark.parametrize("seed", [0, -43, True])
+def test_dev_config_refuses_a_seed_that_is_not_a_positive_integer(dev_cell, tmp_path, seed):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    with pytest.raises(dev_cell.DevCellError, match="seed must be a positive integer"):
+        build_luad_cell(dev_cell, repo, seed=seed)
+
+
 # --- the companion guard needs mounted splits -----------------------------------------
 
 
@@ -281,7 +343,7 @@ def test_write_dev_cell_publishes_a_complete_cell_in_one_step_and_never_a_graph(
     assert json.loads((adir / "dev_cell.json").read_text()) == {
         "cell_name": "tcga_luad__kras__hoptimus1__abmil", "dataset": "tcga_luad", "task": "kras",
         "task_family": "binary", "encoder": "hoptimus1", "arm": "abmil",
-        "framework": "abmil", "model": "abmil",
+        "framework": "abmil", "model": "abmil", "seed": 42,
     }
     for name in (".gitignore", "plan.md", "learnings.md", "variants/_policies/.gitkeep"):
         assert (adir / name).is_file(), name
@@ -353,6 +415,46 @@ def test_materialize_cli_refuses_with_a_message_and_exit_status_2(dev_cell, tmp_
                        "--arm", "abmil", "--out", str(repo / DEV_ROOT)])
     assert raised.value.code == 2
     assert "task 'nope'" in capsys.readouterr().err
+    assert not (repo / DEV_ROOT).exists()
+
+
+def test_materialize_cli_writes_a_seed_replicate_beside_the_protocol_cell(
+    dev_cell, tmp_path, monkeypatch, capsys,
+):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    monkeypatch.setattr(dev_cell, "REPO_ROOT", repo)
+    argv = ["materialize", "--dataset", str(repo / LUAD_YAML), "--task", "kras", "--arm", "abmil",
+            "--out", str(repo / DEV_ROOT), "--no-guard"]
+    dev_cell.main(argv)
+    base = repo / DEV_ROOT / "tcga_luad__kras__hoptimus1__abmil"
+    protocol_config = (base / "automil" / "config.yaml").read_bytes()
+    capsys.readouterr()
+
+    dev_cell.main([*argv, "--seed", "43"])
+    replicate = repo / DEV_ROOT / "tcga_luad__kras__hoptimus1__abmil__seed43"
+    assert f"created: {replicate}" in capsys.readouterr().out
+    config = yaml.safe_load((replicate / "automil" / "config.yaml").read_text())
+    assert _flag_value(config, "--seed") == "43"
+    assert json.loads((replicate / "automil" / "dev_cell.json").read_text())["seed"] == 43
+    assert (base / "automil" / "config.yaml").read_bytes() == protocol_config  # protocol cell untouched
+
+    dev_cell.main([*argv, "--seed", "43"])
+    assert f"unchanged: {replicate}" in capsys.readouterr().out
+    dev_cell.main([*argv, "--seed", str(PROTOCOL["seed"])])  # the protocol seed names the protocol cell
+    assert f"unchanged: {base}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("seed", ["0", "-1"])
+def test_materialize_cli_refuses_a_seed_that_is_not_a_positive_integer(
+    dev_cell, tmp_path, monkeypatch, capsys, seed,
+):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    monkeypatch.setattr(dev_cell, "REPO_ROOT", repo)
+    with pytest.raises(SystemExit) as raised:
+        dev_cell.main(["materialize", "--dataset", str(repo / LUAD_YAML), "--task", "kras", "--arm", "abmil",
+                       "--out", str(repo / DEV_ROOT), "--no-guard", "--seed", seed])
+    err = capsys.readouterr().err
+    assert raised.value.code == 2 and "--seed" in err and "positive integer" in err
     assert not (repo / DEV_ROOT).exists()
 
 

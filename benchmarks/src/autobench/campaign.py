@@ -627,7 +627,7 @@ def _run_command(cell: Mapping[str, Any], stage: str) -> str:
         "--model", str(cell["model"]),
         "--framework", str(cell["framework"]),
         "--strategy", SPLIT_STRATEGY,
-        "--seed", str(PROTOCOL["seed"]),
+        "--seed", str(cell["seed"]),
         "--n_folds", str(PROTOCOL["split_folds"]),
         "--folds", ",".join(str(i) for i in command_folds[stage]),
     ]

@@ -5,6 +5,7 @@
   "encoder": "hoptimus1",
   "framework": "clam",
   "model": "clam_mb",
+  "seed": 42,
   "task": "pbrm1",
   "task_family": "binary"
 }

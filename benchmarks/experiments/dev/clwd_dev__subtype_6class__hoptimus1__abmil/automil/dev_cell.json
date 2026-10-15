@@ -5,6 +5,7 @@
   "encoder": "hoptimus1",
   "framework": "abmil",
   "model": "abmil",
+  "seed": 42,
   "task": "subtype_6class",
   "task_family": "multiclass"
 }

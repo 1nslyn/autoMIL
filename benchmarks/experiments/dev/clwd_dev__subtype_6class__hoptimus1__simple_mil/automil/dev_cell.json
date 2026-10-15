@@ -5,6 +5,7 @@
   "encoder": "hoptimus1",
   "framework": "nnmil",
   "model": "simple_mil",
+  "seed": 42,
   "task": "subtype_6class",
   "task_family": "multiclass"
 }
