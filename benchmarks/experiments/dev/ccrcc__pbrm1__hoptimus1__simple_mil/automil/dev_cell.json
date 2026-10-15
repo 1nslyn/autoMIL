@@ -1,0 +1,10 @@
+{
+  "arm": "simple_mil",
+  "cell_name": "ccrcc__pbrm1__hoptimus1__simple_mil",
+  "dataset": "ccrcc",
+  "encoder": "hoptimus1",
+  "framework": "nnmil",
+  "model": "simple_mil",
+  "task": "pbrm1",
+  "task_family": "binary"
+}

@@ -1,0 +1,10 @@
+{
+  "arm": "simple_mil",
+  "cell_name": "clwd_dev__subtype_6class__hoptimus1__simple_mil",
+  "dataset": "clwd_dev",
+  "encoder": "hoptimus1",
+  "framework": "nnmil",
+  "model": "simple_mil",
+  "task": "subtype_6class",
+  "task_family": "multiclass"
+}

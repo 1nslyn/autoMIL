@@ -1,0 +1,120 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "ema998",
+  "parent": "baseline",
+  "desc": "EMA 0.998 of the weights",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {}
+ },
+ {
+  "name": "cos",
+  "parent": "baseline",
+  "desc": "1-epoch (205-step) warmup from 0.1x then per-step cosine to 0 over 20 epochs",
+  "axis": "schedule",
+  "kind": "regularization",
+  "constants": {
+   "WARMUP_STEPS": 205,
+   "COSINE_EPOCHS": 20
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos",
+  "parent": "baseline",
+  "desc": "KRAS v6 leader: EMA 0.998 + warmup + cosine to 0",
+  "axis": "recipe_transfer",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 205,
+   "COSINE_EPOCHS": 20
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_nowarm",
+  "parent": "baseline",
+  "desc": "EMA 0.998 + cosine without warmup",
+  "axis": "schedule",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "COSINE_EPOCHS": 20
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_sub512",
+  "parent": "baseline",
+  "desc": "EMA + warmup/cosine + 512 random tiles",
+  "axis": "stack",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 205,
+   "COSINE_EPOCHS": 20,
+   "MAX_TILES": 512
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_slow_drop06_sub2048",
+  "parent": "baseline",
+  "desc": "HNSC recipe: lr 3e-5 + dropout 0.6 + 2048 tiles, with EMA 0.998",
+  "axis": "recipe_transfer",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "MAX_TILES": 2048
+  },
+  "hparams": {
+   "lr": 3e-05,
+   "dropout": 0.6
+  }
+ },
+ {
+  "name": "ema_cos_bal",
+  "parent": "baseline",
+  "desc": "EMA + warmup/cosine + class-balanced bag weights",
+  "axis": "stack",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 205,
+   "COSINE_EPOCHS": 20,
+   "POSITIVE_SHARE": 0.438
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_unfreeze",
+  "parent": "baseline",
+  "desc": "EMA + warmup/cosine + projection at 0.1x lr to epoch 8, ramp to 1x by 16",
+  "axis": "unfreeze",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 205,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ]
+  },
+  "hparams": {}
+ }
+]

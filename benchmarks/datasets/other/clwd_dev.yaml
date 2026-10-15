@@ -1,0 +1,57 @@
+name: clwd_dev
+description: "CLWD development copy: 6-class growth-pattern subtype on the cases whose slides agree on the label"
+
+# Development cells (benchmarks/scripts/dev_cell.py) train on this copy. The
+# manifest CLWD_dev.csv is CLWD.csv without the five cases whose slides carry
+# two different Benchmark_Label_2021_6class values, which the case-level
+# stratification refuses (benchmarks/scripts/clwd_dev_manifest.py writes it).
+# Prepared files live under benchmark_dev/ so the original benchmark/ tree is
+# untouched; the features are the shared trident output.
+paths:
+  data_root: "${AUTOBENCH_CLWD_ROOT}"
+  wsi_dir: "${data_root}/wsi"
+  mapping_csv: "${data_root}/CLWD_dev.csv"
+  output_dir: "${data_root}/trident_output"
+  benchmark_dir: "${data_root}/benchmark_dev"
+  features_base_dir: "${output_dir}/20x_256px_0px_overlap"
+
+tasks:
+  subtype_6class:
+    label_col: "Benchmark_Label_2021_6class"
+    label_map:
+      0: "Acinar"
+      1: "In situ"
+      2: "Lepidic"
+      3: "Micropapillary"
+      4: "Papillary"
+      5: "Solid"
+    n_classes: 6
+
+split_strategies:
+  standard:
+    train_cohorts: []
+    test_cohorts: []
+  # Five-fold CV inside standard fold 0's development slides, all tested on
+  # its test slides (autobench.pipeline.splits); the dev cells train on it.
+  devcv:
+    train_cohorts: []
+    test_cohorts: []
+
+task_strategy_feasibility:
+  subtype_6class: ["standard", "devcv"]
+
+slide_id_column: "WSI_ID"
+slide_id_transform: null
+wsi_extension: ".svs"
+case_id_column: "SampleNumber"
+status_column: null
+status_value: null
+
+encoders:
+  models:
+    "bioptimus/H-optimus-1": "hoptimus1"
+  dims:
+    hoptimus1: 1536
+
+nnmil_models:
+  - simple_mil

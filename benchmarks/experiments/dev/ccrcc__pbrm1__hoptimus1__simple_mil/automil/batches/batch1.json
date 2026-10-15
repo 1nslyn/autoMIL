@@ -1,0 +1,120 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "ema98",
+  "parent": "baseline",
+  "desc": "EMA 0.98 of the weights, evaluated and selected on the average (EMA here is the bias-corrected constant-decay form; the KRAS v5 policy used decay min(0.98,(1+t)/(10+t)), equal after ~440 steps)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "MIN_EPOCHS": 12
+  },
+  "hparams": {}
+ },
+ {
+  "name": "attn10_b4",
+  "parent": "baseline",
+  "desc": "attention/body lr x0.1, head x1, batch 4",
+  "axis": "attention_lr",
+  "kind": "hp",
+  "constants": {
+   "BODY_LR_SCALE": 0.1,
+   "MIN_EPOCHS": 12
+  },
+  "hparams": {
+   "batch_size": 4
+  }
+ },
+ {
+  "name": "ema_attn10_b4",
+  "parent": "baseline",
+  "desc": "KRAS v5 recipe: EMA 0.98 + body lr x0.1 + batch 4 (EMA here is the bias-corrected constant-decay form; the KRAS v5 policy used decay min(0.98,(1+t)/(10+t)), equal after ~440 steps)",
+  "axis": "recipe_transfer",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "BODY_LR_SCALE": 0.1,
+   "MIN_EPOCHS": 12
+  },
+  "hparams": {
+   "batch_size": 4
+  }
+ },
+ {
+  "name": "ema_attn10_b8",
+  "parent": "baseline",
+  "desc": "EMA 0.98 + body lr x0.1 + batch 8 (EMA here is the bias-corrected constant-decay form; the KRAS v5 policy used decay min(0.98,(1+t)/(10+t)), equal after ~440 steps)",
+  "axis": "recipe_transfer",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "BODY_LR_SCALE": 0.1,
+   "MIN_EPOCHS": 12
+  },
+  "hparams": {
+   "batch_size": 8
+  }
+ },
+ {
+  "name": "ema_attn20_b6",
+  "parent": "baseline",
+  "desc": "EMA 0.98 + body lr x0.2 + batch 6 (EMA here is the bias-corrected constant-decay form; the KRAS v5 policy used decay min(0.98,(1+t)/(10+t)), equal after ~440 steps)",
+  "axis": "recipe_transfer",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "BODY_LR_SCALE": 0.2,
+   "MIN_EPOCHS": 12
+  },
+  "hparams": {
+   "batch_size": 6
+  }
+ },
+ {
+  "name": "b4",
+  "parent": "baseline",
+  "desc": "batch 4 alone",
+  "axis": "batch_size",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "batch_size": 4
+  }
+ },
+ {
+  "name": "ls10",
+  "parent": "baseline",
+  "desc": "label smoothing 0.1",
+  "axis": "label_smoothing",
+  "kind": "regularization",
+  "constants": {
+   "LS_EPS": 0.1
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_attn10_b4_ls10",
+  "parent": "baseline",
+  "desc": "KRAS v5 recipe + label smoothing 0.1 (EMA here is the bias-corrected constant-decay form; the KRAS v5 policy used decay min(0.98,(1+t)/(10+t)), equal after ~440 steps)",
+  "axis": "stack",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "BODY_LR_SCALE": 0.1,
+   "MIN_EPOCHS": 12,
+   "LS_EPS": 0.1
+  },
+  "hparams": {
+   "batch_size": 4
+  }
+ }
+]

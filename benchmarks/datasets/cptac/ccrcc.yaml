@@ -7,7 +7,7 @@ paths:
   mapping_csv: "${data_root}/CCRCC_metadata.csv"
   output_dir: "${data_root}/trident_output"
   benchmark_dir: "${data_root}/benchmark"
-  features_base_dir: "${output_dir}/20x_224px_0px_overlap"
+  features_base_dir: "${output_dir}/20x_256px_0px_overlap"
 
 tasks:
   # Mutation tasks — merged labels: Patho-Bench (103 cases) + GDC (91 more) = 206 cases
@@ -53,14 +53,19 @@ split_strategies:
   standard:
     train_cohorts: []
     test_cohorts: []
+  # Five-fold CV inside standard fold 0's development slides, all tested on
+  # its test slides (autobench.pipeline.splits); the dev cells train on it.
+  devcv:
+    train_cohorts: []
+    test_cohorts: []
 
 task_strategy_feasibility:
-  bap1: ["standard"]
-  pbrm1: ["standard"]
-  vhl: ["standard"]
-  high_grade: ["standard"]
-  advanced_stage: ["standard"]
-  deceased: ["standard"]
+  bap1: ["standard", "devcv"]
+  pbrm1: ["standard", "devcv"]
+  vhl: ["standard", "devcv"]
+  high_grade: ["standard", "devcv"]
+  advanced_stage: ["standard", "devcv"]
+  deceased: ["standard", "devcv"]
 
 slide_id_column: "slide_id"
 slide_id_transform: null

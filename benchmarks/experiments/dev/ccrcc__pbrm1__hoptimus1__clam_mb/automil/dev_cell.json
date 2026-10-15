@@ -1,0 +1,10 @@
+{
+  "arm": "clam_mb",
+  "cell_name": "ccrcc__pbrm1__hoptimus1__clam_mb",
+  "dataset": "ccrcc",
+  "encoder": "hoptimus1",
+  "framework": "clam",
+  "model": "clam_mb",
+  "task": "pbrm1",
+  "task_family": "binary"
+}

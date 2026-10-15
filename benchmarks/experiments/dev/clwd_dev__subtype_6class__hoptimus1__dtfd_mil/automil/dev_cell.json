@@ -1,0 +1,10 @@
+{
+  "arm": "dtfd_mil",
+  "cell_name": "clwd_dev__subtype_6class__hoptimus1__dtfd_mil",
+  "dataset": "clwd_dev",
+  "encoder": "hoptimus1",
+  "framework": "dtfd",
+  "model": "dtfd_mil",
+  "task": "subtype_6class",
+  "task_family": "multiclass"
+}
