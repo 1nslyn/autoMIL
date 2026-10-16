@@ -302,7 +302,8 @@ def build_dev_config(
                          "max_concurrent_per_gpu": max_concurrent_per_gpu},
         "registry": registry,
         "cap": {**DEV_CAP, "eval_budget": eval_budget},
-        "env": {"passthrough": ["AUTOBENCH_ROOT", root_var, "AUTOBENCH_BAG_CACHE", "NNMIL_NUM_WORKERS"],
+        "env": {"passthrough": ["AUTOBENCH_ROOT", root_var, "AUTOBENCH_BAG_CACHE", "NNMIL_NUM_WORKERS",
+                                "OMP_NUM_THREADS", "MKL_NUM_THREADS"],
                 "dotenv_files": ["benchmarks/.env"]},
         "viz": {**(template.get("viz") or {}), "port": _viz_port(spec.cell_name)},
     })

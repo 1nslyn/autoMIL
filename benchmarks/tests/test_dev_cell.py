@@ -148,7 +148,8 @@ def test_dev_config_is_a_plain_project_with_its_own_budget_and_policy_folder(dev
     assert config["project"]["name"] == spec.cell_name == "tcga_luad__kras__hoptimus1__dtfd_mil"
     assert config["orchestrator"]["max_concurrent_per_gpu"] == 4
     assert config["env"] == {
-        "passthrough": ["AUTOBENCH_ROOT", "AUTOBENCH_TCGA_LUAD_ROOT", "AUTOBENCH_BAG_CACHE", "NNMIL_NUM_WORKERS"],
+        "passthrough": ["AUTOBENCH_ROOT", "AUTOBENCH_TCGA_LUAD_ROOT", "AUTOBENCH_BAG_CACHE", "NNMIL_NUM_WORKERS",
+                        "OMP_NUM_THREADS", "MKL_NUM_THREADS"],
         "dotenv_files": ["benchmarks/.env"],
     }
     assert 8500 <= config["viz"]["port"] < 8900

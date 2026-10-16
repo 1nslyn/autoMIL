@@ -165,6 +165,8 @@ env:
   - AUTOBENCH_CLWD_ROOT
   - AUTOBENCH_BAG_CACHE
   - NNMIL_NUM_WORKERS
+  - OMP_NUM_THREADS
+  - MKL_NUM_THREADS
   dotenv_files:
   - benchmarks/.env
 viz:
