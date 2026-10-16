@@ -16,3 +16,7 @@ Root by seed: 0.6044 (42), 0.5994 (43), 0.6051 (44); SD 0.003 across seeds, so D
 - EMA 0.998: +0.0072 (42, guard fail), +0.0023 (43), +0.0012 (44); mean +0.004. val_bacc delta -0.029, -0.007, -0.003: the guard failure was largest under seed 42 and is not systematic in size, but the sign is consistent.
 - Dropout 0.7: +0.0050, -0.0060, +0.0080; mean +0.002, not distinguishable from zero.
 Reading: no piece gives DTFD a measurable gain on this task. Batch 2a (submitted): EMA 0.998 + class-balanced bag weights (does the weighting rescue the guard, as in ema_ls20_d07_bal), EMA 0.995, dropout 0.8, dropout 0.7 + balanced weights.
+
+## 2026-10-16 batch 2a (EMA + balancing, EMA dose, dropout dose)
+
+EMA 0.998 + class-balanced weights -0.0109 ± 0.0092 (guard fail: the weighting does not rescue EMA's bacc drop; batch 1's ema_ls20_d07_bal passed by chance). EMA 0.995 -0.0088 ± 0.0092. Dropout 0.8 +0.0009 ± 0.0225, dropout 0.7 + balanced weights -0.0091 ± 0.0186. Twelve attempts: no piece or pair moves DTFD on this task; the leader remains dropout 0.7 at +0.0050, within noise under three seeds.

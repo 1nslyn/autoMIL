@@ -21,3 +21,7 @@ Root by seed: 0.6115 (42), 0.5720 (43), 0.5632 (44); SD 0.026 across seeds. The 
 - EMA 0.998: +0.0073 (42), +0.0152 (43), +0.0023 (44); mean +0.008, positive under every seed. val_bacc: -0.036, +0.002, -0.055, so EMA also lowers the balanced accuracy at the fixed threshold here (seed 44 would fail the guard).
 - EMA + cosine without warmup: +0.0033, +0.0035, +0.0083; mean +0.005.
 Reading: EMA is a real, small, seed-robust gain on this arm and task (about +0.008); the schedule adds nothing beyond it. Batch 2a (submitted): EMA dose 0.99 / 0.995 / 0.999 and EMA + label smoothing 0.1.
+
+## 2026-10-16 batch 2a (EMA dose, EMA + LS 0.1)
+
+EMA 0.99 +0.0002 ± 0.0101, 0.995 +0.0052 ± 0.0081, 0.998 +0.0073 ± 0.0086 (batch 1), 0.999 -0.0005 ± 0.0084 (guard fail). EMA 0.998 + label smoothing 0.1: +0.0047 ± 0.0214, guard fail. The EMA effect peaks at decay 0.995-0.998 and is the only effect in 12 attempts; nothing stacks on it. Any further ABMIL attempt on this task must run under three seeds to resolve effects of this size (seed SD of the root 0.026).
