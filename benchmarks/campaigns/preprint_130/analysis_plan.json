@@ -1,6 +1,6 @@
 {
   "aggregation": {
-    "cell_metric": "equal-weight arithmetic mean across the five predeclared folds",
+    "cell_metric": "equal-weight arithmetic mean across the fifteen predeclared fold models: the five discovery folds and the five folds of each of the two re-score partitions (devcv_r1, devcv_r2)",
     "primary_by_task_family": {
       "binary": "test_auc",
       "multiclass": "test_auc",
@@ -11,7 +11,7 @@
     "qwk_recording_rule": "quadratic-weighted kappa is recorded clamped at 0 (kappa is defined on [-1, 1] while every sealed consumer requires [0, 1]); the raw value remains recoverable from the sealed summary block and persisted predictions",
     "survival_scale_rule": "aggregate fold-level c-index values; never pool raw risks across independently trained folds"
   },
-  "campaign_id": "automil-preprint-130-v6",
+  "campaign_id": "automil-preprint-130-v7",
   "estimands": {
     "agent_resources": {
       "fields": [
@@ -25,6 +25,11 @@
     },
     "agentic_lift": {
       "contrast": "frozen autoMIL winner minus native baseline within the same cell",
+      "readouts": [
+        "selected validation lift: the deployed attempt's five-fold discovery lift over the baseline (the score it was chosen on)",
+        "re-scored validation lift: the mean of the ten paired fold deltas on the two fresh partitions, computed after the agent session",
+        "held-out lift: the mean of the fifteen paired held-out fold deltas, opened once at certification"
+      ],
       "report_by": [
         "task_family",
         "regime",
@@ -35,12 +40,12 @@
       "unit": "one predeclared cell identified only by dataset, task, encoder, arm, seed, and protocol_version"
     },
     "search_process": {
+      "candidate_class_scope": "failure-inclusive census of the 30 launched and charged attempts; submit-time refusals are not launched attempts and remain framework validation evidence rather than campaign outcomes",
       "candidate_classes": [
         "config-only",
         "train-only-source",
         "inadmissible"
       ],
-      "candidate_class_scope": "failure-inclusive census of the 30 launched and charged attempts; submit-time refusals are not launched attempts and remain framework validation evidence rather than campaign outcomes",
       "discovery_fields": [
         "all 30 charged attempts including failures",
         "terminal status, reason, budget-killed fact, and deterministically derived outcome class",
@@ -62,7 +67,8 @@
       "resource_aggregation": "report the five-fold native baseline and the five-fold discovery attempts as separate strata; elapsed_seconds/3600 is named GPU-attached job-hours (not measured accelerator utilization), and a stratum total is an observed total labelled a lower bound when attempts lack timing",
       "selection_fields": [
         "the distinct complete discovery candidates in validation order with their five-fold validation values (the winner rule's pool)",
-        "the winner rule's pooled fold variance, standard error, leader and its lift, the bar, and the decision"
+        "the winner rule's leader, its lift and the decision (the leader is deployed when its lift is above zero)",
+        "the re-score's per-partition validation folds for the deployed attempt and the baseline"
       ],
       "timing": "process evidence is hashed into the 130-cell selection freeze before any held-out value is opened",
       "unit": "one predeclared cell with exactly 30 five-fold discovery attempts"
@@ -105,7 +111,7 @@
   "missingness": {
     "expected_cells": 130,
     "expected_discovery_attempts_per_cell": 30,
-    "expected_folds_per_baseline_and_winner": 5,
+    "expected_folds_per_baseline_and_winner": 15,
     "imputation": "none",
     "policy": "fail closed; do not emit a publication report from an incomplete or inconsistent campaign"
   },

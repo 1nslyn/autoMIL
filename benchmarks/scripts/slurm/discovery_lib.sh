@@ -29,7 +29,10 @@ DISC_NUDGE_MAX=3
 DISC_WEEKLY_USAGE_MAX_PCT=85
 DISC_WATCH_INTERVAL_S=120
 # Wall reserved after discovery completes for /exit + the finish ladder
-# (freeze -> winner -> finalize; nothing trains).
+# (freeze -> winner -> finalize -> winner re-score). The re-score trains, and
+# one hour does not cover it: if the wall ends it, the cell stays finishable
+# (its session is already finalized) and the finish lane resumes it from a
+# fresh attempt directory.
 DISC_FINISH_RESERVE_H=1
 
 # RUNTIME_NAME selects the cell-root directory under the campaign dir:

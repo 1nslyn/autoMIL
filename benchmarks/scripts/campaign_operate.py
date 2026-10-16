@@ -17,7 +17,8 @@ Subcommands
             activity journal, run open-agent-session with bounded retry
     watch   loop printing budget consumption, phase and the results tail
     fleet   one status row per cell root under a runtime root
-    finish  drive a finished-discovery cell to a finalized winner-frozen state
+    finish  drive a finished-discovery cell to a finalized, re-scored winner
+            (winner-rescored); the re-score trains, on the --gpu it is given
 
 Daemon liveness is decided with the daemon's OWN pid-file semantics
 (``automil.backends.pidfile``), never ad-hoc parsing.
@@ -130,6 +131,16 @@ def _parse_gpu_list(raw: str) -> list[int]:
             f"--gpu indexes must not repeat (got {raw!r})"
         )
     return indexes
+
+
+def _parse_gpu_index(raw: str) -> int:
+    """argparse ``type=`` for a command that trains on ONE physical GPU."""
+    indexes = _parse_gpu_list(raw)
+    if len(indexes) != 1:
+        raise argparse.ArgumentTypeError(
+            f"--gpu must be a single index here (got {raw!r})"
+        )
+    return indexes[0]
 
 
 def _gpu_list_env_value(gpus: list[int]) -> str:
@@ -1009,8 +1020,14 @@ def _finish_selection_ready(cell_root: Path, args: argparse.Namespace) -> None:
     _run_stage("select-winner", cell_root)
 
 
+def _finish_rescore(cell_root: Path, gpu: int) -> None:
+    print(f"finish: run-winner-rescore on GPU {gpu}")
+    _run_or_die(stage_argv("run-winner-rescore", cell_root, "--gpu", str(gpu)))
+
+
 # Phase ladder: iterated in order, re-reading the controller's status once
-# per advance. Phase decides every step; history never does.
+# per advance. Phase decides every step; history never does. It ends at a
+# frozen winner; cmd_finish closes the session and re-scores from there.
 _FINISH_LADDER = (
     ("discovery", _finish_discovery),
     ("selection-ready", _finish_selection_ready),
@@ -1032,8 +1049,15 @@ def cmd_finish(args: argparse.Namespace) -> None:
         status = _stage_status(cell_root)
         phase = status.get("phase")
 
-    if phase == "winner-frozen":
+    if phase in {"winner-frozen", "winner-rescored"}:
+        # The session closes BEFORE the re-score trains: a wall that ends the
+        # re-score leaves a finalized winner-frozen cell, which the scan
+        # offers as finishable and a later finish resumes at the re-score.
+        # A re-scored cell trains nothing again.
         _finalize_session(cell_root, args.usage_json)
+        if phase == "winner-frozen":
+            _finish_rescore(cell_root, args.gpu)
+            status = _stage_status(cell_root)
     elif phase == "certified":
         print("finish: cell is already certified — nothing to do")
     else:
@@ -1082,9 +1106,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     finish = sub.add_parser(
         "finish",
-        help="drive a finished-discovery cell to a finalized frozen winner",
+        help="drive a finished-discovery cell to a finalized, re-scored winner",
     )
     finish.add_argument("cell_root")
+    finish.add_argument("--gpu", type=_parse_gpu_index, required=True,
+                        help="physical GPU index the winner re-score trains on")
     finish.add_argument(
         "--usage-json", default=None,
         help="path to a runtime usage JSON block, passed verbatim into the "

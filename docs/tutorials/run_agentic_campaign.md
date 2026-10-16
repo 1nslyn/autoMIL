@@ -103,7 +103,7 @@ Your 26 = 13 classification + 13 survival, where 13 = (4 aggregators × 3 tile
 encoders) + 1 TITAN arm. Cell ids look like:
 
 ```
-tcga_luad__kras__uni_v2__clam__s42__preprint-v6
+tcga_luad__kras__uni_v2__clam__s42__preprint-v7
 ```
 
 ---
@@ -225,7 +225,7 @@ Claude session and every command run after `cd` must resolve the same workspace:
 
 ```bash
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
-export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v6"
+export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v7"
 ```
 
 The day-to-day driver is the operator CLI, `campaign_operate.py`. It adds
@@ -260,7 +260,7 @@ before the formal session can start:
   another cell's live daemon claims `--gpu N`**. This cell's own daemon is
   exempt.
 - **tmux session** named from the full cell id, sanitized for tmux (e.g.
-  `tcga_luad__kras__uni_v2__clam__s42__preprint-v6`), with three windows:
+  `tcga_luad__kras__uni_v2__clam__s42__preprint-v7`), with three windows:
   `baseline`, `orch`, `agent`.
 - **`baseline` window**: the manifest-locked five-fold native baseline
   (outside the 30-attempt budget; it takes a lock, so a duplicate refuses).
@@ -359,13 +359,14 @@ missing. Do not leave Claude open while continuing.
 ### 4f. Finish the cell
 
 ```bash
-uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_operate.py" finish "$CELL"
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_operate.py" finish "$CELL" --gpu 0
 ```
 
-`finish` drives everything after discovery through the audited controllers,
-in order, consulting the controller's phase first and skipping transitions
-that are already done (it is fully re-entrant — safe to re-run after any
-interruption):
+`--gpu` is required: it names the GPU the winner re-score (step 5) trains on,
+normally the one `up` used for this cell. `finish` drives everything after
+discovery through the audited controllers, in order, consulting the
+controller's phase first and skipping transitions that are already done (it is
+fully re-entrant — safe to re-run after any interruption):
 
 1. **Session-end precondition.** If the journal lacks `SessionEnd`, finish
    refuses. If the session's exporter is still serving, the runbook step is
@@ -385,7 +386,17 @@ interruption):
    shape. **Report usage honestly — if a number is unavailable, say
    unavailable. Never write a zero.** The analysis plan treats a coerced
    zero as a data-integrity failure.
-5. Prints the final controller status JSON — validation only, as always.
+5. Re-scores the frozen winner and the baseline on the two fresh development
+   partitions (four training runs at once on `--gpu`, validation evidence
+   only), which moves the cell to `winner-rescored`. This is the one step of
+   `finish` that trains, and it runs after the session is finalized: if it
+   fails or the wall ends it, the cell stays at `winner-frozen` with a
+   finalized session, and re-running `finish` resumes here from a fresh
+   attempt directory. On a re-scored cell it verifies the recorded evidence
+   and trains nothing.
+6. Prints the final controller status JSON — validation only, as always.
+
+`freeze-selections` accepts only `winner-rescored` cells.
 
 Then set that cell's `Stage` to `W` in the tracker Sheet, with today's date.
 
@@ -443,7 +454,7 @@ obstacle — **do not work around it.**
 | `native baseline is already running` | A lock is held | Wait; check for an orphaned process before retrying |
 | `open the campaign agent session before the first submit` | Step 4c was skipped | Open the session, then restart the agent |
 | `SessionEnd ... required before winner selection` | Claude is still open or its final native sample was not saved | Exit Claude normally; verify the SessionEnd hook succeeded; do not hand-edit the journal |
-| Claude died and cannot re-exit (no SessionEnd recorded) | The runtime was killed before its hook ran | `finish "$CELL" --attest "runtime died before SessionEnd: <cause>"`, which runs `automil activity close` (see 4f and A.5); disclose in `termination_reason` |
+| Claude died and cannot re-exit (no SessionEnd recorded) | The runtime was killed before its hook ran | `finish "$CELL" --gpu 0 --attest "runtime died before SessionEnd: <cause>"`, which runs `automil activity close` (see 4f and A.5); disclose in `termination_reason` |
 | attempts ≠ 30 at freeze | Budget not exhausted, or over-run | Report it — do not hand-edit state |
 | `agent session finalization is immutable` | Already finalized with different content | Stop; tell Leo |
 | candidate marked `inadmissible` | The agent touched a protected path | Expected and healthy. It is archived as a violation and does not enter the leaderboard |
@@ -512,7 +523,7 @@ Everything `campaign_operate.py` does is a sequence of these commands, and
 they remain the supported way to drive a single transition by hand — after an
 interruption, when a refusal needs investigating, or when you want to see
 exactly what the operator CLI would run. The order below is the protocol
-order; `finish` executes the freeze of A.5, A.6 and A.7 for you.
+order; `finish` executes the freeze of A.5, A.6, A.7 and A.8 for you.
 
 ### A.1. Check where the cell is
 
@@ -524,9 +535,10 @@ This is your main instrument. It reports the phase, attempts charged against the
 budget, complete candidates, and the winner — **validation only**. It will never
 print a held-out value. Run it between every step.
 
-The phase order is `discovery → selection-ready → winner-frozen → certified`.
-The winner is the native baseline unless the best candidate clears the winner
-bar (campaign README §5).
+The phase order is `discovery → selection-ready → winner-frozen →
+winner-rescored → certified`.
+The winner is the native baseline unless the best candidate's validation lift
+is above zero (campaign README §5).
 
 ### A.2. Run the native baseline
 
@@ -647,9 +659,8 @@ uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/
 
 One winner, chosen on the five-fold **validation** values. Each distinct
 complete candidate's lift is its five-fold mean minus the baseline's, paired
-fold by fold; the leader replaces the baseline only if its lift exceeds
-`max(0.01, 2.93 × paired SE)`, with the SE pooled over the candidates, and
-otherwise the baseline stays. Immutable once written. Still no test data
+fold by fold; the leader replaces the baseline when its lift is above zero,
+and otherwise the baseline stays. Immutable once written. Still no test data
 anywhere.
 
 ### A.7. Finalize the session attestation
@@ -668,7 +679,19 @@ zero.** The analysis plan treats a coerced zero as a data-integrity failure.
 
 Then set that cell's `Stage` to `W` in the tracker Sheet, with today's date.
 
-### A.8. Shortcut
+### A.8. Re-score the winner
+
+```bash
+uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" run-winner-rescore --cell-root "$CELL" --gpu 0
+```
+
+Trains the frozen winner and the baseline again on the two fresh development
+partitions (four runs at once on `--gpu`, validation evidence only) and moves
+the cell from `winner-frozen` to `winner-rescored`. A failed run leaves the
+phase at `winner-frozen`; on a re-scored cell the command verifies the
+recorded evidence and trains nothing.
+
+### A.9. Shortcut
 
 ```bash
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" advance --cell-root "$CELL"

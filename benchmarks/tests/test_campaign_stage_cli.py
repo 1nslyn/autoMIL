@@ -91,7 +91,9 @@ def test_advance_runs_exactly_the_next_stage_transition(
     assert ran == [(transition, root)]
 
 
-@pytest.mark.parametrize("phase", ["winner-frozen", "certified"])
+@pytest.mark.parametrize(
+    "phase", ["winner-frozen", "winner-rescored", "certified"],
+)
 def test_advance_stops_once_the_winner_is_frozen(tmp_path, monkeypatch, phase):
     module = _load_cli()
     root, state = _state(tmp_path)
@@ -102,6 +104,79 @@ def test_advance_stops_once_the_winner_is_frozen(tmp_path, monkeypatch, phase):
         )
 
     assert module.advance(root)["phase"] == phase
+
+
+def test_public_status_shows_the_rescore_validation_lift_and_nothing_sealed(
+    tmp_path,
+):
+    module = _load_cli()
+    _, state = _state(tmp_path)
+    rescored = {
+        **state,
+        "phase": "winner-rescored",
+        "rescore": {
+            "commit": "e" * 40,
+            "validation_lift": 0.0125,
+            "completed_at": "2026-08-04T03:00:00+00:00",
+            "strategies": {"devcv_r1": {"baseline": {"archive": "x"}}},
+        },
+    }
+
+    rendered = module.public_status(rescored)
+
+    assert rendered["phase"] == "winner-rescored"
+    assert rendered["rescore"] == {
+        "commit": "e" * 40,
+        "validation_lift": 0.0125,
+        "completed_at": "2026-08-04T03:00:00+00:00",
+    }
+    assert "held" not in json.dumps(rendered).lower()
+    assert "test" not in json.dumps(rendered).lower()
+
+
+def test_public_status_has_no_rescore_before_the_winner_is_re_scored(tmp_path):
+    module = _load_cli()
+    _, state = _state(tmp_path)
+
+    assert module.public_status(state)["rescore"] is None
+
+
+def test_run_winner_rescore_cli_forwards_physical_gpu(
+    tmp_path, monkeypatch, capsys,
+):
+    module = _load_cli()
+    root, state = _state(tmp_path)
+    observed = {}
+    monkeypatch.setattr(module, "_cell_root", lambda *_: root)
+
+    def fake_rescore(cell_root, *, repo_root, gpu_id):
+        observed.update({
+            "cell_root": cell_root, "repo_root": repo_root, "gpu_id": gpu_id,
+        })
+        return {**state, "phase": "winner-rescored"}
+
+    monkeypatch.setattr(module, "run_winner_rescore", fake_rescore)
+    module.main(["run-winner-rescore", "--cell-root", "ignored", "--gpu", "2"])
+
+    assert observed["cell_root"] == root
+    assert observed["gpu_id"] == 2
+    out = capsys.readouterr().out
+    status, _ = json.JSONDecoder().raw_decode(out)
+    assert status["phase"] == "winner-rescored"
+    assert "re-scored" in out
+
+
+def test_advance_tells_the_operator_to_re_score_a_frozen_winner(
+    tmp_path, monkeypatch, capsys,
+):
+    module = _load_cli()
+    root, state = _state(tmp_path)
+    _write_phase(root, state, "winner-frozen")
+    monkeypatch.setattr(module, "_cell_root", lambda *_: root)
+
+    module.main(["advance", "--cell-root", "ignored"])
+
+    assert "run-winner-rescore" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("action", ["materialize-promotion", "freeze-promotion"])

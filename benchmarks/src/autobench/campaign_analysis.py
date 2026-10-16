@@ -15,7 +15,8 @@ from autobench.campaign import (
     ANALYSIS_PLAN_PATH,
     ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
-    CERTIFICATION_FOLDS,
+    CERTIFICATION_PARTITIONS,
+    CERTIFICATION_SOURCES,
     DISCOVERY_ATTEMPTS,
     ENCODERS,
     HELD_OUT_SCHEMA_BY_FAMILY,
@@ -102,19 +103,28 @@ def _metric_mean(folds: list[dict[str, Any]], key: str, label: str) -> float:
 
 
 def _ordered_folds(raw: object, label: str) -> list[dict[str, Any]]:
-    if not isinstance(raw, list) or len(raw) != len(CERTIFICATION_FOLDS):
-        raise CampaignAnalysisError(f"{label} must contain exactly five folds")
-    by_fold: dict[int, dict[str, Any]] = {}
+    if not isinstance(raw, list) or len(raw) != len(CERTIFICATION_SOURCES):
+        raise CampaignAnalysisError(
+            f"{label} must contain exactly {len(CERTIFICATION_SOURCES)} folds"
+        )
+    by_source: dict[tuple[str, int], dict[str, Any]] = {}
     for row in raw:
         if not isinstance(row, dict) or not isinstance(row.get("held_out"), dict):
             raise CampaignAnalysisError(f"{label} contains a malformed fold")
-        fold = row.get("fold_index")
-        if isinstance(fold, bool) or not isinstance(fold, int) or fold in by_fold:
+        partition, fold = row.get("partition"), row.get("fold_index")
+        if (
+            not isinstance(partition, str)
+            or isinstance(fold, bool)
+            or not isinstance(fold, int)
+            or (partition, fold) in by_source
+        ):
             raise CampaignAnalysisError(f"{label} fold identity is invalid")
-        by_fold[fold] = row
-    if set(by_fold) != set(CERTIFICATION_FOLDS):
-        raise CampaignAnalysisError(f"{label} fold roster differs from 0..4")
-    return [by_fold[fold] for fold in CERTIFICATION_FOLDS]
+        by_source[(partition, fold)] = row
+    if set(by_source) != set(CERTIFICATION_SOURCES):
+        raise CampaignAnalysisError(
+            f"{label} fold roster differs from the certification sources"
+        )
+    return [by_source[source] for source in CERTIFICATION_SOURCES]
 
 
 def _primary_values(
@@ -177,6 +187,20 @@ def _primary_values(
                     f"{cell_id}.{aggregate_key}.{key} disagrees with its folds"
                 )
     return values[0], values[1]
+
+
+def _lift_by_partition(deltas: list[float]) -> dict[str, float]:
+    """The mean paired held-out delta of each certification partition, in
+    partition order; ``deltas`` follow CERTIFICATION_SOURCES."""
+    by_partition: dict[str, list[float]] = {
+        partition: [] for partition in CERTIFICATION_PARTITIONS
+    }
+    for (partition, _), delta in zip(CERTIFICATION_SOURCES, deltas, strict=True):
+        by_partition[partition].append(delta)
+    return {
+        partition: math.fsum(values) / len(values)
+        for partition, values in by_partition.items()
+    }
 
 
 def _average_ranks_desc(values: Mapping[str, float]) -> dict[str, float]:
@@ -704,6 +728,10 @@ def build_publication_report(
         )
         baseline_primary = math.fsum(baseline_folds) / len(baseline_folds)
         winner_primary = math.fsum(winner_folds) / len(winner_folds)
+        paired_deltas = [
+            winner - baseline
+            for baseline, winner in zip(baseline_folds, winner_folds, strict=True)
+        ]
         cells.append({
             "cell_id": cell_id,
             "dataset": cell["dataset"],
@@ -718,13 +746,15 @@ def build_publication_report(
             "winner_kind": (bundle.get("winner") or {}).get("kind"),
             "baseline_primary_folds": baseline_folds,
             "winner_primary_folds": winner_folds,
-            "paired_primary_deltas": [
-                winner - baseline
-                for baseline, winner in zip(baseline_folds, winner_folds, strict=True)
-            ],
+            "paired_primary_deltas": paired_deltas,
             "baseline_primary": baseline_primary,
             "winner_primary": winner_primary,
+            "selected_validation_lift": (
+                bundle["validation_mean"] - bundle["baseline"]["validation_mean"]
+            ),
+            "rescored_validation_lift": bundle["rescore_validation_lift"],
             "primary_lift": winner_primary - baseline_primary,
+            "primary_lift_by_partition": _lift_by_partition(paired_deltas),
             "bundle_sha256": recorded_bundle_hash,
             "agent_usage": agent_usage,
             "search_process": search_process,

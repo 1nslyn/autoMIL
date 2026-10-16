@@ -13,15 +13,19 @@ from autobench.campaign import (
     ACTIVE_ROSTER,
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
+    CERTIFICATION_PARTITIONS,
+    CERTIFICATION_SOURCES,
     DISCOVERY_ATTEMPTS,
     PROTOCOL_VERSION,
+    RESCORE_STRATEGIES,
+    SPLIT_STRATEGY,
     STAGE_FOLDS,
     VALIDATION_SCHEMA_BY_FAMILY,
     content_sha256,
-    max_lift_winner,
     file_sha256,
     load_manifest,
     unique_complete_sources,
+    val_best_winner,
 )
 from autobench.campaign_analysis import (
     CampaignAnalysisError,
@@ -33,6 +37,7 @@ from autobench.campaign_analysis import (
     write_publication_report,
 )
 from autobench.campaign_stages import (
+    CERTIFICATION_BUNDLE_SCHEMA_VERSION,
     CampaignStageError,
     SELECTION_FREEZE_SCHEMA_VERSION,
     _outcome_sha256,
@@ -75,17 +80,60 @@ def _mean_metrics(folds: list[dict]) -> dict[str, float]:
 def _folds(task_family: str, primary: float) -> list[dict]:
     # Fold evidence in the family's exact held-out schema
     # (HELD_OUT_SCHEMA_BY_FAMILY); the family's primary key carries `value`.
+    # One row per certification source: folds 0..4 of every partition.
     rows = []
-    for fold in range(5):
-        value = primary + fold / 1000
+    for index, (partition, fold) in enumerate(CERTIFICATION_SOURCES):
+        value = primary + index / 1000
         if task_family == "survival":
             held_out = {"test_c_index": value}
         else:
             held_out = {"test_auc": value + 0.01, "test_bacc": value - 0.01}
             if task_family == "ordinal":
                 held_out = {"test_qwk": value, **held_out}
-        rows.append({"fold_index": fold, "held_out": held_out})
+        rows.append(
+            {"partition": partition, "fold_index": fold, "held_out": held_out}
+        )
     return rows
+
+
+def _paired_deltas(baseline: list[dict], winner: list[dict]) -> list[dict]:
+    return [
+        {
+            "partition": base["partition"],
+            "fold_index": base["fold_index"],
+            "held_out_delta": {
+                key: win["held_out"][key] - base["held_out"][key]
+                for key in base["held_out"]
+            },
+        }
+        for base, win in zip(baseline, winner, strict=True)
+    ]
+
+
+def _lift_fields(baseline: list[dict], winner: list[dict]) -> dict:
+    """The bundle's aggregates, recomputed from its 15 fold rows."""
+    lift_by_partition = {
+        partition: {
+            key: _mean_metrics(
+                [row for row in winner if row["partition"] == partition]
+            )[key]
+            - _mean_metrics(
+                [row for row in baseline if row["partition"] == partition]
+            )[key]
+            for key in baseline[0]["held_out"]
+        }
+        for partition in CERTIFICATION_PARTITIONS
+    }
+    return {
+        "baseline_held_out": _mean_metrics(baseline),
+        "held_out": _mean_metrics(winner),
+        "paired_fold_deltas": _paired_deltas(baseline, winner),
+        "held_out_lift": {
+            key: _mean_metrics(winner)[key] - _mean_metrics(baseline)[key]
+            for key in baseline[0]["held_out"]
+        },
+        "held_out_lift_by_partition": lift_by_partition,
+    }
 
 
 def _missing_resources(count: int) -> dict:
@@ -182,7 +230,7 @@ def _search_process(cell_id: str) -> dict:
             "resources": _missing_resources(DISCOVERY_ATTEMPTS),
         },
         # No attempt completed: the pool is empty and the rule keeps the baseline.
-        "selection": max_lift_winner(BASELINE_FOLD_VALUES, []),
+        "selection": val_best_winner(BASELINE_FOLD_VALUES, []),
     }
 
 
@@ -198,7 +246,7 @@ def _selection_over(attempts: list[dict], node_ids: list[str]) -> dict:
     """The winner rule's own record over ``node_ids`` in that order, each a
     run whose every fold sits at its attempt's validation mean."""
     by_node = {row["node_id"]: row for row in attempts}
-    return max_lift_winner(BASELINE_FOLD_VALUES, [
+    return val_best_winner(BASELINE_FOLD_VALUES, [
         {
             "candidate_id": node_id,
             "candidate_sha256": by_node[node_id]["candidate_sha256"],
@@ -279,6 +327,16 @@ def _eligible_process(
     return process
 
 
+def _partition_hashes(anchors: dict, partition: str) -> dict[str, str]:
+    """One partition's sealed-fold hashes, keyed by file name as the ledger
+    records them."""
+    return {
+        key.split("/", 1)[1]: record["sha256"]
+        for key, record in anchors.items()
+        if key.split("/", 1)[0] == partition
+    }
+
+
 def _write_certified_state(
     runtime_root: Path, cell: dict, freeze_entry: dict, bundle: dict,
 ) -> None:
@@ -320,10 +378,9 @@ def _write_certified_state(
         "validation_folds": validation_folds(
             freeze_entry["baseline_validation_mean"]
         ),
-        "sealed_fold_sha256": {
-            filename: record["sha256"]
-            for filename, record in freeze_entry["baseline_source_folds"].items()
-        },
+        "sealed_fold_sha256": _partition_hashes(
+            freeze_entry["baseline_source_folds"], SPLIT_STRATEGY,
+        ),
         "result_status": process["baseline"]["result_status"],
         "resources": process["baseline"]["resources"],
     }
@@ -375,12 +432,28 @@ def _write_certified_state(
         "validation_folds": validation_folds(
             freeze_entry["winner_validation_mean"]
         ),
-        "sealed_fold_sha256": {
-            filename: record["sha256"]
-            for filename, record in freeze_entry["winner_source_folds"].items()
-        },
+        "sealed_fold_sha256": _partition_hashes(
+            freeze_entry["winner_source_folds"], SPLIT_STRATEGY,
+        ),
         "selection": process["selection"],
         "selection_sha256": freeze_entry["selection_sha256"],
+    }
+    state["rescore"] = {
+        "strategies": {
+            strategy: {
+                state["winner"]["candidate_id"]: {
+                    "sealed_fold_sha256": _partition_hashes(
+                        freeze_entry["winner_source_folds"], strategy,
+                    ),
+                },
+                "baseline": {
+                    "sealed_fold_sha256": _partition_hashes(
+                        freeze_entry["baseline_source_folds"], strategy,
+                    ),
+                },
+            }
+            for strategy in RESCORE_STRATEGIES
+        },
     }
     state["certification"] = {
         "bundle": "certification/certify.json",
@@ -463,12 +536,13 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
         ):
             anchors = {}
             source_dir = runtime_root / cell["cell_id"] / "source" / label
-            source_dir.mkdir(parents=True)
             for fold in folds:
+                partition = fold["partition"]
                 filename = f"fold_{fold['fold_index']}_result.json"
-                path = source_dir / filename
+                path = source_dir / partition / filename
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(json.dumps(fold))
-                anchors[filename] = {
+                anchors[f"{partition}/{filename}"] = {
                     "path": path.relative_to(runtime_root).as_posix(),
                     "sha256": file_sha256(path),
                 }
@@ -565,7 +639,7 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
             + framework_lift[cell["framework"]],
         )
         bundle = {
-            "schema_version": 3,
+            "schema_version": CERTIFICATION_BUNDLE_SCHEMA_VERSION,
             "campaign_id": CAMPAIGN_ID,
             "cell_id": cell["cell_id"],
             "selection_freeze_sha256": freeze_hash,
@@ -586,8 +660,8 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
             },
             "baseline_held_out_folds": baseline,
             "held_out_folds": winner,
-            "baseline_held_out": _mean_metrics(baseline),
-            "held_out": _mean_metrics(winner),
+            **_lift_fields(baseline, winner),
+            "rescore_validation_lift": 0.02,
             "source_fold_sha256": {
                 filename: record["sha256"]
                 for filename, record in frozen_by_cell[cell["cell_id"]][
@@ -599,21 +673,6 @@ def _certified_campaign(runtime_root: Path) -> dict[str, Path]:
                 for filename, record in frozen_by_cell[cell["cell_id"]][
                     "baseline_source_folds"
                 ].items()
-            },
-            "paired_fold_deltas": [
-                {
-                    "fold_index": fold,
-                    "held_out_delta": {
-                        key: winner[fold]["held_out"][key]
-                        - baseline[fold]["held_out"][key]
-                        for key in baseline[fold]["held_out"]
-                    },
-                }
-                for fold in range(5)
-            ],
-            "held_out_lift": {
-                key: _mean_metrics(winner)[key] - _mean_metrics(baseline)[key]
-                for key in _mean_metrics(baseline)
             },
             "retrained": False,
             "certified_at": "2026-08-04T00:00:00+00:00",
@@ -728,6 +787,74 @@ def test_report_contains_complete_lift_and_cross_arm_ranking_estimands(tmp_path)
         for block in report["tile_ranking_blocks"]
     )
     assert (runtime_root / "publication_report.json").is_file()
+
+
+def test_report_pairs_all_fifteen_certification_folds_per_cell(tmp_path):
+    runtime_root = tmp_path / "runtime"
+    _certified_campaign(runtime_root)
+
+    report = write_publication_report(
+        runtime_root=runtime_root, manifest_path=MANIFEST, repo_root=REPO_ROOT,
+    )
+
+    for cell in report["cells"]:
+        assert len(cell["baseline_primary_folds"]) == len(CERTIFICATION_SOURCES)
+        assert len(cell["winner_primary_folds"]) == len(CERTIFICATION_SOURCES)
+        assert len(cell["paired_primary_deltas"]) == len(CERTIFICATION_SOURCES)
+        # The cell's lift is the mean of all 15 paired deltas.
+        assert cell["primary_lift"] == pytest.approx(
+            math.fsum(cell["paired_primary_deltas"])
+            / len(CERTIFICATION_SOURCES)
+        )
+
+
+def test_report_carries_the_three_readouts_the_plan_declares(tmp_path):
+    """Selected validation lift, re-scored validation lift, and the held-out
+    lift with its per-partition breakdown (analysis_plan agentic_lift.readouts)."""
+    runtime_root = tmp_path / "runtime"
+    _certified_campaign(runtime_root)
+
+    report = write_publication_report(
+        runtime_root=runtime_root, manifest_path=MANIFEST, repo_root=REPO_ROOT,
+    )
+
+    for cell in report["cells"]:
+        bundle = json.loads(
+            (runtime_root / cell["cell_id"] / "certification/certify.json").read_text()
+        )
+        assert cell["selected_validation_lift"] == pytest.approx(
+            bundle["validation_mean"] - bundle["baseline"]["validation_mean"]
+        )
+        assert cell["rescored_validation_lift"] == bundle["rescore_validation_lift"]
+        by_partition = cell["primary_lift_by_partition"]
+        assert list(by_partition) == list(CERTIFICATION_PARTITIONS)
+        for partition, lift in by_partition.items():
+            deltas = [
+                delta for (source, delta) in zip(
+                    CERTIFICATION_SOURCES, cell["paired_primary_deltas"], strict=True,
+                )
+                if source[0] == partition
+            ]
+            assert lift == pytest.approx(math.fsum(deltas) / len(deltas))
+        assert math.fsum(by_partition.values()) / len(by_partition) == pytest.approx(
+            cell["primary_lift"]
+        )
+
+
+def test_report_refuses_a_bundle_that_lacks_a_rescore_partition(tmp_path):
+    runtime_root = tmp_path / "runtime"
+    paths = _certified_campaign(runtime_root)
+    bundle = json.loads(next(iter(paths.values())).read_text())
+    five_folds = [
+        row for row in bundle["held_out_folds"] if row["partition"] == "devcv"
+    ]
+
+    with pytest.raises(CampaignAnalysisError, match="exactly 15 folds"):
+        _primary_values(
+            {**bundle, "held_out_folds": five_folds},
+            "binary" if "test_auc" in bundle["held_out"] else "survival",
+            bundle["cell_id"],
+        )
 
 
 def test_report_summarizes_the_search_by_baseline_and_discovery_stage_only(tmp_path):
@@ -895,22 +1022,9 @@ def test_resigned_held_out_metric_drift_is_rejected_everywhere(tmp_path):
     )
     bundle = json.loads(bundle_path.read_text())
     bundle["held_out_folds"][0]["held_out"]["test_auc"] += 0.1
-    bundle["held_out"] = _mean_metrics(bundle["held_out_folds"])
-    bundle["paired_fold_deltas"] = [
-        {
-            "fold_index": fold,
-            "held_out_delta": {
-                key: bundle["held_out_folds"][fold]["held_out"][key]
-                - bundle["baseline_held_out_folds"][fold]["held_out"][key]
-                for key in bundle["held_out"]
-            },
-        }
-        for fold in range(5)
-    ]
-    bundle["held_out_lift"] = {
-        key: bundle["held_out"][key] - bundle["baseline_held_out"][key]
-        for key in bundle["held_out"]
-    }
+    bundle.update(_lift_fields(
+        bundle["baseline_held_out_folds"], bundle["held_out_folds"],
+    ))
     _resign_bundle_and_index(runtime_root, bundle_path, bundle)
 
     with pytest.raises(CampaignStageError, match="anchored source folds"):
@@ -935,7 +1049,7 @@ def test_coherent_downstream_rehash_cannot_override_certified_state(tmp_path):
     freeze_entry = next(
         row for row in freeze["cells"] if row["cell_id"] == target_id
     )
-    source_record = freeze_entry["winner_source_folds"]["fold_0_result.json"]
+    source_record = freeze_entry["winner_source_folds"]["devcv/fold_0_result.json"]
     source_path = runtime_root / source_record["path"]
     source = json.loads(source_path.read_text())
     source["held_out"]["test_auc"] += 0.1
@@ -955,33 +1069,21 @@ def test_coherent_downstream_rehash_cannot_override_certified_state(tmp_path):
         if cell_id == target_id:
             winner_folds = [
                 json.loads((runtime_root / record["path"]).read_text())
-                for _, record in sorted(
-                    freeze_entry["winner_source_folds"].items()
+                for record in (
+                    freeze_entry["winner_source_folds"][
+                        f"{partition}/fold_{fold}_result.json"
+                    ]
+                    for partition, fold in CERTIFICATION_SOURCES
                 )
             ]
             bundle["held_out_folds"] = winner_folds
-            bundle["held_out"] = _mean_metrics(winner_folds)
             bundle["source_fold_sha256"] = {
-                filename: record["sha256"]
-                for filename, record in freeze_entry[
-                    "winner_source_folds"
-                ].items()
+                key: record["sha256"]
+                for key, record in freeze_entry["winner_source_folds"].items()
             }
-            bundle["paired_fold_deltas"] = [
-                {
-                    "fold_index": fold,
-                    "held_out_delta": {
-                        key: winner_folds[fold]["held_out"][key]
-                        - bundle["baseline_held_out_folds"][fold]["held_out"][key]
-                        for key in bundle["held_out"]
-                    },
-                }
-                for fold in range(5)
-            ]
-            bundle["held_out_lift"] = {
-                key: bundle["held_out"][key] - bundle["baseline_held_out"][key]
-                for key in bundle["held_out"]
-            }
+            bundle.update(_lift_fields(
+                bundle["baseline_held_out_folds"], winner_folds,
+            ))
         bundle["bundle_sha256"] = content_sha256({
             key: value for key, value in bundle.items()
             if key != "bundle_sha256"
@@ -1219,6 +1321,9 @@ def test_certification_bundle_rejects_false_baseline_winner_lift(tmp_path):
         "candidate_id": "baseline",
         "candidate_sha256": bundle["baseline"]["candidate_sha256"],
     }
+    # A baseline winner re-scores to a lift of exactly zero; what is left to
+    # refuse is that its evidence is not the baseline comparator's.
+    bundle["rescore_validation_lift"] = 0.0
     bundle["bundle_sha256"] = content_sha256({
         key: value for key, value in bundle.items() if key != "bundle_sha256"
     })

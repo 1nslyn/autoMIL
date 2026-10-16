@@ -25,7 +25,7 @@ def _setup(tmp_path):
         features_base_dir=str(tmp_path / "features"),
         tasks={"brca": TaskDef(name="brca", label_col="BRCA_predict_label",
                                label_map={0: "neg", 1: "pos"}, n_classes=2)},
-        task_strategy_feasibility={"brca": ["standard", "devcv"]},
+        task_strategy_feasibility={"brca": ["standard", "devcv", "devcv_r1", "devcv_r2"]},
     )
     return ds, mapping_csv, benchmark_dir
 
@@ -44,6 +44,16 @@ def test_a_devcv_run_prepares_devcv_folds_only(tmp_path):
     devcv = os.path.join(benchmark_dir, "splits", "devcv", "brca")
     assert sorted(os.listdir(devcv)) == [f"splits_{k}.csv" for k in range(5)]
     assert not os.path.exists(os.path.join(benchmark_dir, "splits", "standard"))
+
+
+def test_a_devcv_repartition_run_prepares_its_own_folds_only(tmp_path):
+    ds, mapping_csv, benchmark_dir = _setup(tmp_path)
+    _prepare(ds, mapping_csv, benchmark_dir, ("devcv_r1", "devcv_r2"))
+    splits = os.path.join(benchmark_dir, "splits")
+    assert sorted(os.listdir(splits)) == ["devcv_r1", "devcv_r2"]
+    for strategy in ("devcv_r1", "devcv_r2"):
+        folds = os.path.join(splits, strategy, "brca")
+        assert sorted(os.listdir(folds)) == [f"splits_{k}.csv" for k in range(5)]
 
 
 def test_devcv_folds_share_one_test_set_that_is_never_validated(tmp_path):

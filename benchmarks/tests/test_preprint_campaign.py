@@ -169,13 +169,18 @@ def test_protocol_uses_all_five_validation_folds_without_final_retraining(manife
         "metric_source": "validation",
         "pool": "unique-complete-discovery-candidates",
         "statistic": "paired-fold-lift-over-baseline",
-        "rule": "sidak-max-lift",
-        "floor": 0.01,
-        "se_multiplier": 2.93,
+        "rule": "val-best",
         "folds": list(CERTIFICATION_FOLDS),
+    }
+    assert protocol["winner_rescore"] == {
+        "after": "agent-session",
+        "candidates": ["winner", "baseline"],
+        "strategies": ["devcv_r1", "devcv_r2"],
+        "metric_source": "validation",
     }
     assert protocol["certification"] == {
         "mode": "unseal-existing-held-out",
+        "partitions": ["devcv", "devcv_r1", "devcv_r2"],
         "folds": list(CERTIFICATION_FOLDS),
         "retrain": False,
     }

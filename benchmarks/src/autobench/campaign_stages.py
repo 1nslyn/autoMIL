@@ -16,11 +16,12 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 import yaml
 from dotenv import dotenv_values
@@ -41,6 +42,7 @@ from automil.cells import (
 )
 from automil.cells.state import read_cell
 from automil.launch_binding import LaunchBindingError, validate_launch_binding
+from automil.runner import Runner
 from automil.runtime_helpers import atomic_write_text, group_mkdtemp
 
 from autobench.campaign import (
@@ -51,20 +53,24 @@ from autobench.campaign import (
     ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
+    CERTIFICATION_PARTITIONS,
+    CERTIFICATION_SOURCES,
     DISCOVERY_ATTEMPTS,
     HELD_OUT_SCHEMA_BY_FAMILY,
     VALIDATION_SCHEMA_BY_FAMILY,
     PROTOCOL_VERSION,
     REPRODUCTION_POLICY_PATH,
+    RESCORE_STRATEGIES,
+    SPLIT_STRATEGY,
     STAGE_FOLDS,
     SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
     TRAINING_TREE_PATHS,
     classify_attempt_outcome,
     content_sha256,
-    max_lift_winner,
     file_sha256,
     load_manifest,
     unique_complete_sources,
+    val_best_winner,
     validate_agent_protocol,
 )
 from autobench.campaign_gpu import CampaignGpuError, require_declared_gpu
@@ -86,6 +92,7 @@ CAMPAIGN_CELL_COUNT = ACTIVE_CELL_COUNT
 PUBLICATION_SET = "runtime"
 SET_ROSTER_FIELDS = frozenset({"purpose", "note", "cohorts", "cells", "cell_ids"})
 SELECTION_FREEZE_SCHEMA_VERSION = 5
+CERTIFICATION_BUNDLE_SCHEMA_VERSION = 4
 #: The legal held-out fold shapes, derived from the one schema authority.
 #: Context-free validators check membership here; the FAMILY-exact lock is
 #: enforced at both ends of the evidence chain — bundle build
@@ -951,6 +958,57 @@ def _load_execution_identity(path: Path) -> dict[str, Any]:
     }
 
 
+#: ``git worktree add`` and ``remove`` rewrite the repository's shared
+#: worktree registry; the re-score runs four executors at once, so those two
+#: calls take turns.
+_WORKTREE_LOCK = threading.Lock()
+
+
+def _stage_manifest_files(
+    archive: Path, manifest: Mapping[str, str], staging: Path,
+) -> None:
+    """Copy exactly the files an overlay manifest claims out of ``archive``.
+
+    A finished attempt's archive also holds run artifacts (sealed folds,
+    logs) that must never land in a worktree. A claimed file that is missing
+    is left for the overlay runner's digest check to name.
+    """
+    for relative in sorted(manifest):
+        parts = PurePosixPath(relative).parts
+        if not parts or PurePosixPath(relative).is_absolute() or ".." in parts:
+            raise CampaignStageError(
+                f"overlay manifest path {relative!r} escapes the archive"
+            )
+        source = archive.joinpath(*parts)
+        if not source.is_file():
+            continue
+        destination = staging.joinpath(*parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination, follow_symlinks=False)
+
+
+def _apply_archived_overlay(
+    *,
+    repo_root: Path,
+    cell_root: Path,
+    worktree: Path,
+    scratch: Path,
+    archive: Path,
+    manifest: Mapping[str, str],
+    deletions: Sequence[str],
+) -> None:
+    """Apply a submitted candidate's overlay with the orchestrator's own runner.
+
+    Only the manifest-claimed files are staged, so the runner's sha256 check
+    is the same enforcement point the daemon applies at launch.
+    """
+    staging = Path(group_mkdtemp(dir=str(scratch), prefix="overlay-"))
+    _stage_manifest_files(archive, manifest, staging)
+    Runner(repo_root, cell_root / "automil").apply_overlay(
+        worktree, staging, deletions=list(deletions), manifest=dict(manifest),
+    )
+
+
 def _execute_frozen_command(
     *,
     cell_root: Path,
@@ -964,6 +1022,8 @@ def _execute_frozen_command(
     archive_dir: Path,
     inject_worktree_pythonpath: bool,
     extra_env: Mapping[str, str] | None = None,
+    overlay: tuple[Path, Mapping[str, str], Sequence[str]] | None = None,
+    extra_args: Sequence[str] = (),
 ) -> str:
     """Run one frozen manifest command in a detached worktree at HEAD.
 
@@ -974,6 +1034,11 @@ def _execute_frozen_command(
     baseline resolves both packages from the worktree, while loop-parity
     execution leaves PYTHONPATH alone so ``automil`` resolves from the
     installed environment exactly as it does under the orchestrator daemon.
+
+    ``overlay`` is ``(archive dir, overlay_manifest, deletions)`` of a
+    submitted candidate, applied on top of the checkout by the daemon's own
+    overlay runner. ``extra_args`` are appended after the manifest command's
+    tokens, as the daemon appends a candidate's ``run_command_override``.
     """
     tokens = shlex.split(str(command_string))
     if len(tokens) < 2 or tokens[1] != "benchmarks/scripts/run_experiment.py":
@@ -988,21 +1053,33 @@ def _execute_frozen_command(
     worktree_added = False
     returncode: int | None = None
     try:
-        subprocess.run(
-            [
-                "git", "worktree", "add", "--detach", str(worktree),
-                "HEAD",
-            ],
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        with _WORKTREE_LOCK:
+            subprocess.run(
+                [
+                    "git", "worktree", "add", "--detach", str(worktree),
+                    "HEAD",
+                ],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
         worktree_added = True
+        if overlay is not None:
+            _apply_archived_overlay(
+                repo_root=repo_root,
+                cell_root=cell_root,
+                worktree=worktree,
+                scratch=worktree_parent,
+                archive=overlay[0],
+                manifest=overlay[1],
+                deletions=overlay[2],
+            )
         command = [
             sys.executable,
             str(worktree / "benchmarks/scripts/run_experiment.py"),
             *tokens[2:],
+            *extra_args,
         ]
         env = os.environ.copy()
         for key, value in dotenv_values(repo_root / "benchmarks/.env").items():
@@ -1039,16 +1116,17 @@ def _execute_frozen_command(
         public_result = worktree / "result.json"
         if returncode == 0 and public_result.is_file():
             shutil.copy2(public_result, archive_dir / "result.json")
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         raise CampaignStageError(f"cannot execute {node_id}: {exc}") from exc
     finally:
         if worktree_added:
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", str(worktree)],
-                cwd=repo_root,
-                check=False,
-                capture_output=True,
-            )
+            with _WORKTREE_LOCK:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(worktree)],
+                    cwd=repo_root,
+                    check=False,
+                    capture_output=True,
+                )
         shutil.rmtree(worktree_parent, ignore_errors=True)
 
     if returncode != 0:
@@ -2105,14 +2183,14 @@ def _winner_selection(
 
     Each candidate carries ``candidate_id``, ``candidate_sha256`` and
     ``validation_folds``; the rule pairs their fold primary values with the
-    baseline's (:func:`autobench.campaign.max_lift_winner`).
+    baseline's (:func:`autobench.campaign.val_best_winner`).
     """
     for folds in (baseline_folds, *(c["validation_folds"] for c in candidates)):
         if [fold["fold_index"] for fold in folds] != list(CERTIFICATION_FOLDS):
             raise CampaignStageError(
                 "winner selection requires exact five-fold evidence"
             )
-    return max_lift_winner(
+    return val_best_winner(
         [fold["primary_value"] for fold in baseline_folds],
         [{
             "candidate_id": candidate["candidate_id"],
@@ -2128,9 +2206,15 @@ def _same_fold_evidence(left: list[Mapping[str, Any]], right: list[Mapping[str, 
     return content_sha256(left) == content_sha256(right)
 
 
+def _source_key(partition: str, fold: int) -> str:
+    """The name one certification source goes by in anchors and hash maps."""
+    return f"{partition}/fold_{fold}_result.json"
+
+
 def _searched_winner_sources(
     cell_root: Path, state: Mapping[str, Any], winner: Mapping[str, Any],
-) -> dict[int, Path]:
+) -> dict[tuple[str, int], Path]:
+    """The searched winner's discovery-partition sealed folds, verified."""
     source = next((
         candidate for candidate in state["discovery"]["candidates"]
         if candidate["candidate_id"] == winner["candidate_id"]
@@ -2167,13 +2251,13 @@ def _searched_winner_sources(
     if not _same_fold_evidence(folds, winner["validation_folds"]):
         raise CampaignStageError("winner five-fold validation evidence changed")
     sources = {
-        fold: archive / "certify" / f"fold_{fold}_result.json"
+        (SPLIT_STRATEGY, fold): archive / "certify" / f"fold_{fold}_result.json"
         for fold in CERTIFICATION_FOLDS
     }
     expected_hashes = winner.get("sealed_fold_sha256")
     if not isinstance(expected_hashes, dict):
         raise CampaignStageError("frozen searched winner lacks sealed-fold hashes")
-    for fold, path in sources.items():
+    for (_, fold), path in sources.items():
         filename = f"fold_{fold}_result.json"
         if (
             not path.is_file()
@@ -2185,49 +2269,109 @@ def _searched_winner_sources(
     return sources
 
 
-def _winner_sealed_sources(
-    cell_root: Path, state: Mapping[str, Any], winner: Mapping[str, Any],
-) -> dict[int, Path]:
-    if winner["kind"] == "baseline":
-        baseline = state.get("baseline")
-        if not isinstance(baseline, dict):
-            raise CampaignStageError("native baseline is not registered")
-        _verify_baseline_unchanged(cell_root, state, baseline)
-        archive = (cell_root / baseline["archive"]).resolve()
-        return {
-            fold: archive / "certify" / f"fold_{fold}_result.json"
-            for fold in CERTIFICATION_FOLDS
-        }
-    return _searched_winner_sources(cell_root, state, winner)
+def _rescored_sources(
+    cell_root: Path, state: Mapping[str, Any], candidate_id: str,
+) -> dict[tuple[str, int], Path]:
+    """One candidate's sealed folds on the re-score partitions, each hashed
+    against what the re-score recorded."""
+    rescore = state.get("rescore")
+    if not isinstance(rescore, Mapping):
+        raise CampaignStageError(
+            "the winner has not been re-scored; run run-winner-rescore first"
+        )
+    root = cell_root.resolve()
+    sources: dict[tuple[str, int], Path] = {}
+    for strategy in RESCORE_STRATEGIES:
+        record = ((rescore.get("strategies") or {}).get(strategy) or {}).get(
+            candidate_id
+        )
+        if not isinstance(record, Mapping) or not isinstance(
+            record.get("sealed_fold_sha256"), Mapping,
+        ):
+            raise CampaignStageError(
+                f"the re-score recorded nothing for {candidate_id} on {strategy}"
+            )
+        archive = (cell_root / str(record["archive"])).resolve()
+        if not archive.is_relative_to(root):
+            raise CampaignStageError("re-score archive escapes the cell")
+        for fold in CERTIFICATION_FOLDS:
+            filename = f"fold_{fold}_result.json"
+            path = archive / "certify" / filename
+            if (
+                not path.is_file()
+                or record["sealed_fold_sha256"].get(filename) != file_sha256(path)
+            ):
+                raise CampaignStageError(
+                    f"re-score sealed artifact changed: {strategy}/{filename}"
+                )
+            sources[(strategy, fold)] = path
+    return sources
 
 
 def _baseline_sealed_sources(
     cell_root: Path, state: Mapping[str, Any],
-) -> dict[int, Path]:
+) -> dict[tuple[str, int], Path]:
     baseline = state.get("baseline")
     if not isinstance(baseline, dict):
         raise CampaignStageError("native baseline is not registered")
     _verify_baseline_unchanged(cell_root, state, baseline)
     archive = (cell_root / str(baseline["archive"])).resolve()
-    return {
-        fold: archive / "certify" / f"fold_{fold}_result.json"
+    discovery = {
+        (SPLIT_STRATEGY, fold): archive / "certify" / f"fold_{fold}_result.json"
         for fold in CERTIFICATION_FOLDS
+    }
+    return {**discovery, **_rescored_sources(cell_root, state, "baseline")}
+
+
+def _winner_sealed_sources(
+    cell_root: Path, state: Mapping[str, Any], winner: Mapping[str, Any],
+) -> dict[tuple[str, int], Path]:
+    """Every certification source of the frozen winner: its discovery folds
+    and its re-score folds, 15 in all."""
+    if winner["kind"] == "baseline":
+        return _baseline_sealed_sources(cell_root, state)
+    return {
+        **_searched_winner_sources(cell_root, state, winner),
+        **_rescored_sources(cell_root, state, winner["candidate_id"]),
     }
 
 
+def _recorded_source_hashes(
+    state: Mapping[str, Any], candidate_id: str,
+    discovery_hashes: Mapping[str, str],
+) -> dict[str, str]:
+    """What the ledger recorded for every source of one candidate, keyed like
+    the anchors: the discovery folds' hashes and the re-score's."""
+    hashes = {
+        _source_key(SPLIT_STRATEGY, fold): discovery_hashes[
+            f"fold_{fold}_result.json"
+        ]
+        for fold in CERTIFICATION_FOLDS
+        if f"fold_{fold}_result.json" in discovery_hashes
+    }
+    strategies = (state.get("rescore") or {}).get("strategies") or {}
+    for strategy in RESCORE_STRATEGIES:
+        record = (strategies.get(strategy) or {}).get(candidate_id) or {}
+        for filename, digest in (record.get("sealed_fold_sha256") or {}).items():
+            hashes[f"{strategy}/{filename}"] = digest
+    return hashes
+
+
 def _source_fold_anchors(
-    runtime_root: Path, sources: Mapping[int, Path],
+    runtime_root: Path, sources: Mapping[tuple[str, int], Path],
 ) -> dict[str, dict[str, str]]:
     root = runtime_root.resolve()
-    if set(sources) != set(CERTIFICATION_FOLDS):
-        raise CampaignStageError("source fold roster differs from 0..4")
+    if set(sources) != set(CERTIFICATION_SOURCES):
+        raise CampaignStageError(
+            "source fold roster differs from folds 0..4 of "
+            f"{', '.join(CERTIFICATION_PARTITIONS)}"
+        )
     anchors: dict[str, dict[str, str]] = {}
-    for fold in CERTIFICATION_FOLDS:
-        path = sources[fold].resolve()
+    for partition, fold in CERTIFICATION_SOURCES:
+        path = sources[(partition, fold)].resolve()
         if not path.is_file() or not path.is_relative_to(root):
             raise CampaignStageError("source fold path escapes the campaign runtime")
-        filename = f"fold_{fold}_result.json"
-        anchors[filename] = {
+        anchors[_source_key(partition, fold)] = {
             "path": path.relative_to(root).as_posix(),
             "sha256": file_sha256(path),
         }
@@ -2237,13 +2381,15 @@ def _source_fold_anchors(
 def _validate_source_fold_anchors_artifact(
     raw: object, *, label: str, expected_cell_id: str | None = None,
 ) -> dict[str, dict[str, str]]:
-    expected = {f"fold_{fold}_result.json" for fold in CERTIFICATION_FOLDS}
+    expected = {
+        _source_key(partition, fold) for partition, fold in CERTIFICATION_SOURCES
+    }
     if not isinstance(raw, dict) or set(raw) != expected:
         raise CampaignStageError(f"{label} source-fold roster is invalid")
     normalized: dict[str, dict[str, str]] = {}
     paths: set[str] = set()
-    for filename in sorted(expected):
-        record = raw[filename]
+    for key in sorted(expected):
+        record = raw[key]
         if not isinstance(record, Mapping) or set(record) != {"path", "sha256"}:
             raise CampaignStageError(f"{label} source-fold record is invalid")
         path = record.get("path")
@@ -2254,7 +2400,7 @@ def _validate_source_fold_anchors_artifact(
             or relative.is_absolute()
             or ".." in relative.parts
             or relative.as_posix() != path
-            or relative.name != filename
+            or relative.name != PurePosixPath(key).name
             or (
                 expected_cell_id is not None
                 and (
@@ -2267,7 +2413,7 @@ def _validate_source_fold_anchors_artifact(
         ):
             raise CampaignStageError(f"{label} source-fold anchor is invalid")
         paths.add(path)
-        normalized[filename] = {
+        normalized[key] = {
             "path": path,
             "sha256": str(record["sha256"]),
         }
@@ -2307,22 +2453,24 @@ def _read_held_out_fold(path: Path, expected_fold: int) -> dict[str, Any]:
 
 
 def _read_certification_evidence(
-    sources: Mapping[int, Path],
+    sources: Mapping[tuple[str, int], Path],
 ) -> tuple[list[dict[str, Any]], dict[str, float], dict[str, str]]:
-    """Read one pre-frozen five-fold sealed evidence set exactly once."""
+    """Read one pre-frozen set of sealed evidence, all 15 folds, exactly once."""
     held_out_folds: list[dict[str, Any]] = []
     source_hashes: dict[str, str] = {}
     metric_keys: set[str] | None = None
-    for fold in CERTIFICATION_FOLDS:
-        path = sources[fold]
+    for partition, fold in CERTIFICATION_SOURCES:
+        path = sources[(partition, fold)]
         metrics = _read_held_out_fold(path, fold)
         keys = set(metrics)
         if metric_keys is None:
             metric_keys = keys
         elif keys != metric_keys:
             raise CampaignStageError("held-out metric keys differ across folds")
-        held_out_folds.append({"fold_index": fold, "held_out": metrics})
-        source_hashes[f"fold_{fold}_result.json"] = file_sha256(path)
+        held_out_folds.append({
+            "partition": partition, "fold_index": fold, "held_out": metrics,
+        })
+        source_hashes[_source_key(partition, fold)] = file_sha256(path)
     aggregate = {
         key: math.fsum(fold["held_out"][key] for fold in held_out_folds)
         / len(held_out_folds)
@@ -2758,7 +2906,7 @@ def finalize_agent_session(
     """Close the pre-bound session and attach its resource attestation."""
     with _stage_lock(cell_root):
         state = load_stage_state(cell_root)
-        if state.get("phase") != "winner-frozen":
+        if state.get("phase") not in {"winner-frozen", "winner-rescored"}:
             raise CampaignStageError("agent session finalization requires a frozen winner")
         protocol_sha256 = _cell_agent_protocol_sha256(cell_root, state)
         target = cell_root / AGENT_SESSION_FILE
@@ -3485,7 +3633,7 @@ def _validate_process_selection(
         )]
         for value in values:
             _process_unit_interval(value, f"{cell_id}.selection.fold_value")
-        expected = max_lift_winner(baseline_values, [{
+        expected = val_best_winner(baseline_values, [{
             "candidate_id": entry["candidate_id"],
             "candidate_sha256": entry["candidate_sha256"],
             "fold_values": entry["fold_values"],
@@ -3832,7 +3980,8 @@ def _validated_selection_freeze(runtime_root: Path) -> dict[str, Any]:
 
 
 def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
-    """Validate the exact self-consistent five-fold certification bundle."""
+    """Validate the exact self-consistent certification bundle: the winner and
+    the baseline on folds 0..4 of every certification partition."""
     top_fields = {
         "schema_version", "campaign_id", "cell_id", "winner",
         "selection_sha256", "selection_freeze_sha256",
@@ -3840,7 +3989,9 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
         "held_out_folds", "held_out", "source_fold_sha256",
         "baseline_held_out_folds", "baseline_held_out",
         "baseline_source_fold_sha256", "paired_fold_deltas",
-        "held_out_lift", "retrained", "certified_at", "bundle_sha256",
+        "held_out_lift", "held_out_lift_by_partition",
+        "rescore_validation_lift", "retrained", "certified_at",
+        "bundle_sha256",
     }
     if not isinstance(artifact, dict) or set(artifact) != top_fields:
         raise CampaignStageError("certification bundle field set is not exact")
@@ -3851,7 +4002,7 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
     winner = artifact.get("winner")
     baseline = artifact.get("baseline")
     if (
-        artifact.get("schema_version") != 3
+        artifact.get("schema_version") != CERTIFICATION_BUNDLE_SCHEMA_VERSION
         or artifact.get("campaign_id") != CAMPAIGN_ID
         or not isinstance(artifact.get("cell_id"), str)
         or not artifact["cell_id"]
@@ -3906,17 +4057,20 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
         raise CampaignStageError("certification timestamp lacks a timezone")
 
     def validated_folds(raw: object, label: str) -> tuple[list[dict[str, Any]], set[str]]:
-        if not isinstance(raw, list) or len(raw) != len(CERTIFICATION_FOLDS):
-            raise CampaignStageError(f"{label} must contain exactly five folds")
-        by_fold: dict[int, dict[str, Any]] = {}
+        if not isinstance(raw, list) or len(raw) != len(CERTIFICATION_SOURCES):
+            raise CampaignStageError(
+                f"{label} must contain exactly {len(CERTIFICATION_SOURCES)} folds"
+            )
+        by_source: dict[tuple[str, int], dict[str, Any]] = {}
         metric_keys: set[str] | None = None
         for row in raw:
             if (
                 not isinstance(row, dict)
-                or set(row) != {"fold_index", "held_out"}
+                or set(row) != {"partition", "fold_index", "held_out"}
+                or not isinstance(row.get("partition"), str)
                 or not isinstance(row.get("fold_index"), int)
                 or isinstance(row.get("fold_index"), bool)
-                or row["fold_index"] in by_fold
+                or (row["partition"], row["fold_index"]) in by_source
                 or not isinstance(row.get("held_out"), dict)
             ):
                 raise CampaignStageError(f"{label} fold schema is invalid")
@@ -3936,10 +4090,15 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
                     or not 0 <= float(value) <= 1
                 ):
                     raise CampaignStageError(f"{label}.{key} is outside [0, 1]")
-            by_fold[row["fold_index"]] = row
-        if set(by_fold) != set(CERTIFICATION_FOLDS):
-            raise CampaignStageError(f"{label} fold roster differs from 0..4")
-        return [by_fold[fold] for fold in CERTIFICATION_FOLDS], metric_keys or set()
+            by_source[(row["partition"], row["fold_index"])] = row
+        if set(by_source) != set(CERTIFICATION_SOURCES):
+            raise CampaignStageError(
+                f"{label} fold roster differs from folds 0..4 of every partition"
+            )
+        return (
+            [by_source[source] for source in CERTIFICATION_SOURCES],
+            metric_keys or set(),
+        )
 
     baseline_folds, baseline_keys = validated_folds(
         artifact.get("baseline_held_out_folds"), "baseline held-out",
@@ -3979,7 +4138,9 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
     winner_aggregate = validate_aggregate(
         artifact.get("held_out"), winner_folds, "winner held-out",
     )
-    hash_keys = {f"fold_{fold}_result.json" for fold in CERTIFICATION_FOLDS}
+    hash_keys = {
+        _source_key(partition, fold) for partition, fold in CERTIFICATION_SOURCES
+    }
     for label in ("source_fold_sha256", "baseline_source_fold_sha256"):
         hashes = artifact.get(label)
         if (
@@ -3988,6 +4149,15 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
             or any(not _is_sha256(value) for value in hashes.values())
         ):
             raise CampaignStageError(f"certification {label} is invalid")
+    rescore_lift = artifact.get("rescore_validation_lift")
+    if (
+        isinstance(rescore_lift, bool)
+        or not isinstance(rescore_lift, (int, float))
+        or not math.isfinite(float(rescore_lift))
+        or not -1 <= float(rescore_lift) <= 1
+        or (winner["kind"] == "baseline" and float(rescore_lift) != 0.0)
+    ):
+        raise CampaignStageError("certification rescore_validation_lift is invalid")
     if winner["kind"] == "baseline" and (
         not math.isclose(
             float(artifact["validation_mean"]),
@@ -4004,18 +4174,20 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
             "baseline winner evidence differs from its baseline comparator"
         )
     paired = artifact.get("paired_fold_deltas")
-    if not isinstance(paired, list) or len(paired) != len(CERTIFICATION_FOLDS):
+    if not isinstance(paired, list) or len(paired) != len(CERTIFICATION_SOURCES):
         raise CampaignStageError("certification paired deltas are incomplete")
-    for fold, row in enumerate(paired):
+    for index, row in enumerate(paired):
+        partition, fold = CERTIFICATION_SOURCES[index]
         expected_delta = {
-            key: float(winner_folds[fold]["held_out"][key])
-            - float(baseline_folds[fold]["held_out"][key])
+            key: float(winner_folds[index]["held_out"][key])
+            - float(baseline_folds[index]["held_out"][key])
             for key in sorted(baseline_keys)
         }
         observed_delta = row.get("held_out_delta") if isinstance(row, dict) else None
         if (
             not isinstance(row, dict)
-            or set(row) != {"fold_index", "held_out_delta"}
+            or set(row) != {"partition", "fold_index", "held_out_delta"}
+            or row.get("partition") != partition
             or row.get("fold_index") != fold
             or not isinstance(observed_delta, dict)
             or set(observed_delta) != baseline_keys
@@ -4043,6 +4215,32 @@ def validate_certification_bundle_artifact(artifact: object) -> dict[str, Any]:
             or not math.isclose(float(value), expected, rel_tol=0.0, abs_tol=1e-12)
         ):
             raise CampaignStageError(f"certification held-out lift {key} is inconsistent")
+    by_partition = artifact.get("held_out_lift_by_partition")
+    if not isinstance(by_partition, dict) or set(by_partition) != set(
+        CERTIFICATION_PARTITIONS
+    ):
+        raise CampaignStageError("certification per-partition lift is invalid")
+    for partition in CERTIFICATION_PARTITIONS:
+        rows = [
+            row for row, (name, _) in zip(paired, CERTIFICATION_SOURCES)
+            if name == partition
+        ]
+        entry = by_partition[partition]
+        if not isinstance(entry, dict) or set(entry) != baseline_keys:
+            raise CampaignStageError("certification per-partition lift is invalid")
+        for key in sorted(baseline_keys):
+            expected = math.fsum(
+                row["held_out_delta"][key] for row in rows
+            ) / len(rows)
+            value = entry[key]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isclose(float(value), expected, rel_tol=0.0, abs_tol=1e-12)
+            ):
+                raise CampaignStageError(
+                    f"certification {partition} lift {key} is inconsistent"
+                )
     return json.loads(json.dumps(artifact))
 
 
@@ -4157,10 +4355,9 @@ def validate_certification_source_bindings(
                 expected_cell_id if isinstance(expected_cell_id, str) else None
             ),
         )
-        sources: dict[int, Path] = {}
-        for fold in CERTIFICATION_FOLDS:
-            filename = f"fold_{fold}_result.json"
-            record = anchors[filename]
+        sources: dict[tuple[str, int], Path] = {}
+        for partition, fold in CERTIFICATION_SOURCES:
+            record = anchors[_source_key(partition, fold)]
             path = (root / Path(*PurePosixPath(record["path"]).parts)).resolve()
             if (
                 not path.is_relative_to(root)
@@ -4170,11 +4367,11 @@ def validate_certification_source_bindings(
                 raise CampaignStageError(
                     f"{label} source fold differs from the selection freeze"
                 )
-            sources[fold] = path
+            sources[(partition, fold)] = path
         folds, aggregate, hashes = _read_certification_evidence(sources)
         expected_hashes = {
-            filename: record["sha256"]
-            for filename, record in anchors.items()
+            key: record["sha256"]
+            for key, record in anchors.items()
         }
         if hashes != expected_hashes:
             raise CampaignStageError(
@@ -4236,23 +4433,28 @@ def validate_certified_runtime_binding(
     )
     process = _process_evidence(cell_root, state)
     winner_hashes = {
-        filename: record["sha256"]
-        for filename, record in _validate_source_fold_anchors_artifact(
+        key: record["sha256"]
+        for key, record in _validate_source_fold_anchors_artifact(
             freeze_entry.get("winner_source_folds"),
             label="winner", expected_cell_id=cell_id,
         ).items()
     }
     baseline_hashes = {
-        filename: record["sha256"]
-        for filename, record in _validate_source_fold_anchors_artifact(
+        key: record["sha256"]
+        for key, record in _validate_source_fold_anchors_artifact(
             freeze_entry.get("baseline_source_folds"),
             label="baseline", expected_cell_id=cell_id,
         ).items()
     }
     state_winner_hashes = (
-        baseline.get("sealed_fold_sha256")
+        _recorded_source_hashes(
+            state, "baseline", baseline.get("sealed_fold_sha256") or {},
+        )
         if winner.get("kind") == "baseline"
-        else winner.get("sealed_fold_sha256")
+        else _recorded_source_hashes(
+            state, str(winner.get("candidate_id")),
+            winner.get("sealed_fold_sha256") or {},
+        )
     )
     session_record = session.get("session")
     if (
@@ -4280,7 +4482,9 @@ def validate_certified_runtime_binding(
         or baseline.get("validation_mean")
         != freeze_entry.get("baseline_validation_mean")
         or state_winner_hashes != winner_hashes
-        or baseline.get("sealed_fold_sha256") != baseline_hashes
+        or _recorded_source_hashes(
+            state, "baseline", baseline.get("sealed_fold_sha256") or {},
+        ) != baseline_hashes
         or session.get("attestation_sha256")
         != freeze_entry.get("agent_session_sha256")
         or session.get("binding_sha256")
@@ -4475,12 +4679,13 @@ def freeze_campaign_selections(
             state = load_stage_state(runtime_root / cell_id)
             winner = state.get("winner")
             if (
-                state.get("phase") != "winner-frozen"
+                state.get("phase") != "winner-rescored"
                 or state.get("certification") is not None
                 or not isinstance(winner, dict)
             ):
                 raise CampaignStageError(
-                    f"{cell_id}: all winners must be frozen before certification"
+                    f"{cell_id}: all winners must be frozen and re-scored "
+                    "before certification"
                 )
             if (
                 state.get("manifest_sha256") != manifest_sha256
@@ -4741,7 +4946,8 @@ def certify_campaign(
 
 
 def certify_winner(cell_root: Path) -> dict[str, Any]:
-    """Reveal exactly the already-frozen winner's existing five sealed folds."""
+    """Reveal exactly the already-frozen, re-scored winner's existing sealed folds:
+    folds 0..4 of the discovery partition and of each re-score partition."""
     with _stage_lock(cell_root):
         return _certify_winner_unlocked(cell_root)
 
@@ -4792,8 +4998,11 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
             cell_root.parent, selection_freeze, freeze_entry, bundle,
         )
         return state
-    if state["phase"] != "winner-frozen" or not isinstance(state.get("winner"), dict):
-        raise CampaignStageError("certification requires an immutable validation winner")
+    if state["phase"] != "winner-rescored" or not isinstance(state.get("winner"), dict):
+        raise CampaignStageError(
+            "certification requires an immutable validation winner that has "
+            f"been re-scored (phase winner-rescored, got {state['phase']!r})"
+        )
     winner = state["winner"]
     target = cell_root / "certification"
     if target.exists():
@@ -4844,9 +5053,12 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
     for winner_fold, baseline_fold in zip(
         held_out_folds, baseline_folds, strict=True,
     ):
-        if winner_fold["fold_index"] != baseline_fold["fold_index"]:
+        if (winner_fold["partition"], winner_fold["fold_index"]) != (
+            baseline_fold["partition"], baseline_fold["fold_index"],
+        ):
             raise CampaignStageError("winner and baseline held-out folds are not paired")
         paired_fold_deltas.append({
+            "partition": winner_fold["partition"],
             "fold_index": winner_fold["fold_index"],
             "held_out_delta": {
                 key: winner_fold["held_out"][key] - baseline_fold["held_out"][key]
@@ -4859,9 +5071,19 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         ) / len(paired_fold_deltas)
         for key in sorted(aggregate)
     }
+    held_out_lift_by_partition = {
+        partition: {
+            key: math.fsum(
+                fold["held_out_delta"][key] for fold in paired_fold_deltas
+                if fold["partition"] == partition
+            ) / len(CERTIFICATION_FOLDS)
+            for key in sorted(aggregate)
+        }
+        for partition in CERTIFICATION_PARTITIONS
+    }
     certified_at = _utc_now()
     bundle: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": CERTIFICATION_BUNDLE_SCHEMA_VERSION,
         "campaign_id": CAMPAIGN_ID,
         "cell_id": state["cell_id"],
         "winner": {
@@ -4886,6 +5108,8 @@ def _certify_winner_unlocked(cell_root: Path) -> dict[str, Any]:
         "baseline_source_fold_sha256": baseline_source_hashes,
         "paired_fold_deltas": paired_fold_deltas,
         "held_out_lift": held_out_lift,
+        "held_out_lift_by_partition": held_out_lift_by_partition,
+        "rescore_validation_lift": state["rescore"]["validation_lift"],
         "retrained": False,
         "certified_at": certified_at,
     }

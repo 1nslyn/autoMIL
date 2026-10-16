@@ -16,17 +16,20 @@ from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
     ATTEMPT_OUTCOME_CLASSES,
     CAMPAIGN_ID,
+    CERTIFICATION_PARTITIONS,
+    CERTIFICATION_SOURCES,
     DISCOVERY_ATTEMPTS,
     PROTOCOL_VERSION,
     content_sha256,
-    max_lift_winner,
     file_sha256,
     load_manifest,
     unique_complete_sources,
+    val_best_winner,
 )
 from autobench.campaign_stages import (
     BASELINE_ATTESTATION_FILE,
     CAMPAIGN_CELL_COUNT,
+    CERTIFICATION_BUNDLE_SCHEMA_VERSION,
     SELECTION_FREEZE_SCHEMA_VERSION,
     CampaignStageError,
     certify_campaign,
@@ -35,6 +38,8 @@ from autobench.campaign_stages import (
     initialize_stage_state,
     validate_selection_freeze_artifact,
 )
+
+from _helpers import write_fake_rescore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "benchmarks/campaigns/preprint_130/manifest.json"
@@ -122,7 +127,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         {"fold_index": fold, "primary_value": 0.5, "metrics": {}}
         for fold in range(5)
     ]
-    state["phase"] = "winner-frozen"
+    state["phase"] = "winner-rescored"
     state["baseline"] = {
         "candidate_sha256": candidate_sha256,
         "archive": "baseline/archive",
@@ -171,7 +176,7 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
     })
     # No attempt completed, so the pool is empty and the rule keeps the
     # baseline; the record is the rule's own, never written by hand.
-    selection = max_lift_winner(
+    selection = val_best_winner(
         [fold["primary_value"] for fold in baseline_folds], [],
     )
     state["winner"] = {
@@ -187,6 +192,11 @@ def _freeze_ready_state(runtime_root: Path, cell: dict, manifest_hash: str) -> P
         "selection_sha256": content_sha256(selection),
         "selected_at": "2026-08-04T01:00:00+00:00",
     }
+    state["rescore"] = write_fake_rescore(
+        cell_root, state,
+        held_out=lambda strategy, candidate_id, fold: held_out,
+        task_family=cell["task_family"],
+    )
     state["state_sha256"] = content_sha256({
         key: value for key, value in state.items() if key != "state_sha256"
     })
@@ -262,6 +272,24 @@ def test_campaign_freeze_fails_closed_until_all_roster_winners_exist(tmp_path):
     assert len(artifact["cells"]) == CAMPAIGN_CELL_COUNT
 
 
+def test_campaign_freeze_refuses_a_cell_whose_winner_is_not_re_scored(tmp_path):
+    runtime_root = tmp_path / "runtime"
+    roots = _materialize_frozen_roster(runtime_root)
+    state_path = roots[0] / "campaign_state.json"
+    state = json.loads(state_path.read_text())
+    unscored = {
+        key: value for key, value in state.items()
+        if key not in {"rescore", "state_sha256"}
+    }
+    unscored["phase"] = "winner-frozen"
+    unscored["state_sha256"] = content_sha256(unscored)
+    state_path.write_text(json.dumps(unscored, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(CampaignStageError, match="frozen and re-scored"):
+        freeze_campaign_selections(runtime_root, MANIFEST)
+    assert not (runtime_root / "selection_freeze.json").exists()
+
+
 def test_campaign_freeze_validates_before_atomic_publication(tmp_path, monkeypatch):
     runtime_root = tmp_path / "runtime"
     _materialize_frozen_roster(runtime_root)
@@ -293,8 +321,8 @@ def test_selection_freeze_rejects_noncanonical_or_cross_cell_source_paths(
     _materialize_frozen_roster(runtime_root)
     artifact = freeze_campaign_selections(runtime_root, MANIFEST)
     entry = artifact["cells"][0]
-    winner_record = entry["winner_source_folds"]["fold_0_result.json"]
-    baseline_record = entry["baseline_source_folds"]["fold_0_result.json"]
+    winner_record = entry["winner_source_folds"]["devcv_r1/fold_0_result.json"]
+    baseline_record = entry["baseline_source_folds"]["devcv_r1/fold_0_result.json"]
     original = winner_record["path"]
     if mutation == "dot":
         mutated = original.replace("/certify/", "/certify/./", 1)
@@ -367,13 +395,14 @@ def test_certify_campaign_indexes_exactly_the_frozen_roster_bundles(
         zero_delta = {key: 0.0 for key in held_out}
         held_out_folds = [
             {
+                "partition": partition,
                 "fold_index": fold,
                 "held_out": held_out,
             }
-            for fold in range(5)
+            for partition, fold in CERTIFICATION_SOURCES
         ]
         bundle = {
-            "schema_version": 3,
+            "schema_version": CERTIFICATION_BUNDLE_SCHEMA_VERSION,
             "campaign_id": state["campaign_id"],
             "cell_id": state["cell_id"],
             "selection_freeze_sha256": freeze["freeze_sha256"],
@@ -408,12 +437,17 @@ def test_certify_campaign_indexes_exactly_the_frozen_roster_bundles(
             },
             "paired_fold_deltas": [
                 {
+                    "partition": partition,
                     "fold_index": fold,
                     "held_out_delta": zero_delta,
                 }
-                for fold in range(5)
+                for partition, fold in CERTIFICATION_SOURCES
             ],
             "held_out_lift": zero_delta,
+            "held_out_lift_by_partition": {
+                partition: zero_delta for partition in CERTIFICATION_PARTITIONS
+            },
+            "rescore_validation_lift": 0.0,
             "retrained": False,
             "certified_at": freeze["frozen_at"],
         }
@@ -614,7 +648,7 @@ def _searched_process(session_id: str, binding: str) -> dict:
         for index in range(DISCOVERY_ATTEMPTS)
     ]
     means = {row["node_id"]: row["validation_mean"] for row in attempts}
-    selection = max_lift_winner(
+    selection = val_best_winner(
         [BASELINE_VALUE] * 5,
         [
             {
@@ -701,11 +735,13 @@ def _searched_freeze_artifact() -> dict:
 
     def anchors(label: str) -> dict:
         return {
-            f"fold_{fold}_result.json": {
-                "path": f"{cell_id}/{label}/fold_{fold}_result.json",
-                "sha256": content_sha256({"label": label, "fold": fold}),
+            f"{partition}/fold_{fold}_result.json": {
+                "path": f"{cell_id}/{label}/{partition}/fold_{fold}_result.json",
+                "sha256": content_sha256(
+                    {"label": label, "partition": partition, "fold": fold}
+                ),
             }
-            for fold in range(5)
+            for partition, fold in CERTIFICATION_SOURCES
         }
 
     entry = {
@@ -868,7 +904,7 @@ def _materialize_rehearsal_set(
 
 def _certification_untouched(cell_root: Path) -> bool:
     state = json.loads((cell_root / "campaign_state.json").read_text())
-    return state["phase"] == "winner-frozen" and not (
+    return state["phase"] == "winner-rescored" and not (
         cell_root / "certification"
     ).exists()
 
@@ -942,7 +978,7 @@ def _active_ids() -> list[str]:
 
 BAD_ROSTERS = {
     "unknown-id": lambda: _roster_with(
-        cell_ids=AIHUB_IDS[:-1] + ["tcga_hnsc__grade__nope__abmil__s42__preprint-v6"],
+        cell_ids=AIHUB_IDS[:-1] + ["tcga_hnsc__grade__nope__abmil__s42__preprint-v7"],
     ),
     "off-roster-id": lambda: _roster_with(cell_ids=AIHUB_IDS[:-1] + [_off_roster_id()]),
     "duplicate-id": lambda: _roster_with(cell_ids=AIHUB_IDS[:-1] + [AIHUB_IDS[0]]),

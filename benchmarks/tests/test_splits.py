@@ -1,5 +1,6 @@
 """Tests for strategy-aware splits."""
 
+import hashlib
 import os
 
 import numpy as np
@@ -354,3 +355,117 @@ class TestDevCV:
                 StrategyConfig(strategy="holdout", train_cohorts=[], test_cohorts=[]),
                 n_splits=5, seed=42,
             )
+
+
+# ---------------------------------------------------------------------------
+# devcv_r1 / devcv_r2: fresh partitions of the same development slides
+# ---------------------------------------------------------------------------
+
+#: sha256 over splits_0..4.csv each devcv strategy writes on ``multi_slide_csv``.
+#: ``devcv``'s was taken BEFORE the partition seed became a per-strategy
+#: parameter, so it proves that refactor left the campaign's splits untouched;
+#: the other two pin partition seeds 1001 and 1002.
+SPLITS_SHA256 = {
+    "devcv": "4c19824ebd09d7f1f0d00e8b2a6abe4d0c4609bbce14a91df63a4ed7c34e4433",
+    "devcv_r1": "eae733b4461414e9f91740c947dbaaf4a8cdc5cd380057a7e9ab3ec8d2a21f48",
+    "devcv_r2": "d73f48249a18fb560bc2ef239eaa08f44665318a4be421ca19108fbf9881417d",
+}
+
+REPARTITIONS = ["devcv_r1", "devcv_r2"]
+
+
+@pytest.fixture
+def multi_slide_csv(tmp_path):
+    rows = [
+        {"case_id": f"P{c:03d}", "slide_id": f"P{c:03d}_s{s}", "label": "pos" if c % 2 else "neg"}
+        for c in range(60) for s in range(2)
+    ]
+    csv_path = tmp_path / "multi.csv"
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    return str(csv_path)
+
+
+def _digest(splits_dir):
+    h = hashlib.sha256()
+    for k in range(5):
+        with open(os.path.join(splits_dir, f"splits_{k}.csv"), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
+def _vals(splits_dir):
+    return [_fold(splits_dir, k)[1] for k in range(5)]
+
+
+@pytest.mark.parametrize("name", sorted(SPLITS_SHA256))
+def test_devcv_strategy_output_matches_its_snapshot(multi_slide_csv, tmp_path, registries, name):
+    out = str(tmp_path / name)
+    create_strategy_splits(
+        multi_slide_csv, out, registries.strategy_registry[name], n_splits=5, seed=42,
+    )
+    assert _digest(out) == SPLITS_SHA256[name]
+
+
+class TestDevCVRepartitions:
+    """devcv_r1 / devcv_r2 re-cut the slides devcv cuts, with their own seed."""
+
+    @pytest.fixture
+    def written(self, multi_slide_csv, tmp_path, registries):
+        out = {}
+        for name in ("standard", "devcv", *REPARTITIONS):
+            out[name] = str(tmp_path / name)
+            create_strategy_splits(
+                multi_slide_csv, out[name], registries.strategy_registry[name],
+                n_splits=5, seed=42,
+            )
+        return out
+
+    @pytest.mark.parametrize("name", REPARTITIONS)
+    def test_writes_five_folds(self, written, name):
+        assert sorted(os.listdir(written[name])) == [f"splits_{k}.csv" for k in range(5)]
+
+    @pytest.mark.parametrize("name", REPARTITIONS)
+    def test_validation_parts_partition_the_slides_devcv_partitions(self, written, name):
+        devcv_vals = _vals(written["devcv"])
+        development = set().union(*devcv_vals)
+        train0, val0, _ = _fold(written["standard"], 0)
+        assert development == train0 | val0
+        vals = _vals(written[name])
+        assert set().union(*vals) == development
+        assert sum(len(v) for v in vals) == len(development)
+        for k in range(5):
+            assert _fold(written[name], k)[0] == development - vals[k]
+
+    @pytest.mark.parametrize("name", REPARTITIONS)
+    def test_every_fold_tests_on_standard_fold_0_test(self, written, name):
+        _, _, test0 = _fold(written["standard"], 0)
+        for k in range(5):
+            assert _fold(written[name], k)[2] == test0
+
+    @pytest.mark.parametrize("name", REPARTITIONS)
+    def test_no_case_crosses_train_validation_and_test(self, written, multi_slide_csv, name):
+        case = dict(zip(*pd.read_csv(multi_slide_csv)[["slide_id", "case_id"]].to_numpy().T))
+        for k in range(5):
+            cases = [{case[s] for s in part} for part in _fold(written[name], k)]
+            assert not cases[0] & cases[1]
+            assert not cases[0] & cases[2]
+            assert not cases[1] & cases[2]
+
+    @pytest.mark.parametrize("name", REPARTITIONS)
+    def test_byte_reproducible(self, multi_slide_csv, tmp_path, registries, name):
+        digests = []
+        for run in ("a", "b"):
+            out = str(tmp_path / run)
+            create_strategy_splits(
+                multi_slide_csv, out, registries.strategy_registry[name], n_splits=5, seed=42,
+            )
+            digests.append(_digest(out))
+        assert digests[0] == digests[1]
+
+    def test_the_three_partitions_differ_from_each_other(self, written):
+        digests = {name: _digest(written[name]) for name in ("devcv", *REPARTITIONS)}
+        assert len(set(digests.values())) == 3
+        parts = {name: _vals(written[name]) for name in ("devcv", *REPARTITIONS)}
+        assert parts["devcv_r1"] != parts["devcv"]
+        assert parts["devcv_r2"] != parts["devcv"]
+        assert parts["devcv_r1"] != parts["devcv_r2"]

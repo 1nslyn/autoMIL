@@ -1,15 +1,15 @@
 # Preprint 130-cell campaign operations
 
 This directory contains the immutable manifest and the operator entry points for
-the full `automil-preprint-130-v6` campaign. The controller enforces the frozen
+the full `automil-preprint-130-v7` campaign. The controller enforces the frozen
 protocol independently for every cell:
 
 - native five-fold baseline on folds `0,1,2,3,4`;
 - exactly 30 charged discovery attempts, each trained and validated on all
   five folds `0,1,2,3,4`, with a 12-hour agent-active safety cap per cell;
 - winner selection by the paired five-fold validation lift over the baseline:
-  the best attempt replaces the baseline only if its lift exceeds
-  `max(0.01, 2.93 x paired SE)` (Section 5);
+  the best attempt replaces the baseline whenever its lift is above zero
+  (Section 5);
 - one freeze of the final grid's 78 validation winners before any held-out
   read (a rehearsal set is frozen and certified on its own, Section 6);
 - paired baseline-and-winner reveal of the already sealed five-fold held-out
@@ -62,10 +62,20 @@ weights on the arm's own loss), and their methods are sealed: the cohort
 templates declare `registry.policy_method_imports`, and a policy method may
 import nothing else and may not read or write files or reach the interpreter.
 
+Protocol `preprint-v7` (2026-10-15) changes only the winner rule and the
+readout: the cell deploys the distinct complete attempt with the largest
+paired five-fold validation lift whenever that lift is above zero
+(`campaign.val_best_winner`, no significance gate). After the session the
+finish ladder re-scores that attempt and the baseline on two fresh partitions
+of the same development slides (`devcv_r1`, `devcv_r2`, seeds 1001 and 1002),
+records the re-scored validation lift, and moves the cell to
+`winner-rescored`; certification averages fifteen fold models per candidate
+(the five discovery folds and the ten re-score folds).
+
 There is no final retraining. Crashes, partial runs, and launch failures
 consume discovery attempts — an attempt is billed exactly once, when its spec
 is archived. An attempt that does not complete all five folds cannot win. The
-native baseline stays unless the leader's lift exceeds the bar; ties between
+native baseline stays unless the leader's lift is above zero; ties between
 searched candidates use the stable node ID.
 
 ## 1. Preflight
@@ -385,9 +395,11 @@ each as long as its slowest attempt (twice the baseline's time for the same
 five folds and never under 15 minutes; measured 0.84-2.24 times on the
 2026-10 trial cells), one of them running into the 17 h attempt timeout
 (aihub's DTFD cell ran into the 10 h timeout of the three-fold attempts in
-its third batch on 2026-10-02), and 2 h for setup and the agent's planning.
-A finish-only recovery takes one GPU for 24 h: the freeze, the winner and the
-session close train nothing. Claims are once-only tombstones:
+its third batch on 2026-10-02), then the winner re-score (four five-fold runs
+at once on the GPU, as long as one attempt), and 2 h for setup and the agent's
+planning. A finish-only recovery takes one GPU for the shorter of those walls
+that holds the re-score and the 2 h: the freeze, the winner and the session
+close train nothing. Claims are once-only tombstones:
 a queued job holds its claim; a dead job's claim is replaced only after a
 successful cluster-wide `squeue` shows it gone. `--dry-run` prints the
 classification and every cell's shape without submitting; `--cell` picks a
@@ -406,7 +418,9 @@ written by freeze-discovery only), then scrapes the session's own exporter
 for token and cost counters (`operator/usage.json`, passed to
 `finish --usage-json`), captures `/usage` before and after
 (`operator/usage_before.txt`, `usage_after.txt`), ends the
-session with `/exit`, runs the finish ladder, normalizes
+session with `/exit`, runs the finish ladder (freeze, winner, session close,
+then the winner re-score on its first GPU; a wall that ends the re-score
+leaves the cell finishable and the next finish job resumes it), normalizes
 the cell's files to group read/write, and submits the next cell as the same
 user (`--no-chain` at submission stops after the one cell: rehearsals and
 member tests). Failures land in `logs/discovery_cells/FAILED.tsv`; a stranded
@@ -549,10 +563,8 @@ settings. Every login on one plan draws on the same weekly window.
 
 Every distinct complete discovery attempt is a candidate. Each candidate's lift
 is its five-fold validation mean minus the baseline's, paired fold by fold. The
-leader, the candidate with the highest lift, replaces the baseline only if its
-lift exceeds `max(0.01, 2.93 x paired SE)`, with the SE pooled over the
-candidates; 2.93 is Sidak's one-sided 5% value for the best of 30 attempts.
-Otherwise the cell keeps its native baseline. Once the discovery session has
+leader, the candidate with the highest lift, replaces the baseline whenever
+its lift is above zero. Otherwise the cell keeps its native baseline. Once the discovery session has
 ended (Section 4), select the winner:
 
 ```bash
@@ -585,6 +597,17 @@ uv run python benchmarks/scripts/campaign_stage.py finalize-agent-session \
   --agent-session /path/to/agent_session_end.json
 ```
 
+Then re-score the frozen winner and the baseline on the two fresh partitions
+(validation evidence only; the cell moves to `winner-rescored`):
+
+```bash
+uv run python benchmarks/scripts/campaign_stage.py run-winner-rescore \
+  --cell-root "$CAMPAIGN_CELL_ROOT" --gpu 0
+```
+
+`campaign_operate.py finish --gpu N` runs the freeze, the winner, the session
+close and this re-score in order.
+
 Repeat Sections 3–5 for every manifest cell, using a distinct fresh runtime
 session identifier each time. Session opening rejects an identifier already
 reserved by a sibling cell, and the global freeze rechecks uniqueness across
@@ -594,7 +617,7 @@ No cell may be certified early.
 
 ## 6. Freeze all selections, then certify
 
-After every cell of a set reports `winner-frozen`, atomically bind their
+After every cell of a set reports `winner-rescored`, atomically bind their
 validation selections into one artifact for the set. For the final grid,
 `runtime/`:
 

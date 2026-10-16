@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from autobench.campaign_rescore import run_winner_rescore
 from autobench.campaign_stages import (
     CampaignStageError,
     certify_winner,
@@ -34,6 +35,7 @@ def _cell_root(raw: str, repo_root: Path) -> Path:
 def public_status(state: dict[str, Any]) -> dict[str, Any]:
     """Return a validation-only status surface; certification values stay separate."""
     winner = state.get("winner") or {}
+    rescore = state.get("rescore") or {}
     certification = state.get("certification") or {}
     return {
         "campaign_id": state["campaign_id"],
@@ -75,6 +77,11 @@ def public_status(state: dict[str, Any]) -> dict[str, Any]:
             "lift_over_baseline": winner.get("lift_over_baseline"),
             "selection_sha256": winner.get("selection_sha256"),
         } if winner else None),
+        "rescore": ({
+            "commit": rescore.get("commit"),
+            "validation_lift": rescore.get("validation_lift"),
+            "completed_at": rescore.get("completed_at"),
+        } if rescore else None),
         "certification": ({
             "bundle": certification.get("bundle"),
             "bundle_sha256": certification.get("bundle_sha256"),
@@ -97,7 +104,7 @@ def advance(cell_root: Path) -> dict[str, Any]:
         return freeze_discovery(cell_root)
     if phase == "selection-ready":
         return select_winner(cell_root)
-    if phase in {"winner-frozen", "certified"}:
+    if phase in {"winner-frozen", "winner-rescored", "certified"}:
         return state
     raise CampaignStageError(f"unknown campaign phase {phase!r}")
 
@@ -111,7 +118,7 @@ def main(argv: list[str] | None = None) -> None:
         choices=(
             "status", "register-baseline", "freeze-discovery", "select-winner",
             "certify", "baseline-command", "run-baseline",
-            "run-baseline-reproduction", "advance",
+            "run-baseline-reproduction", "run-winner-rescore", "advance",
             "open-agent-session", "finalize-agent-session",
         ),
     )
@@ -119,8 +126,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--gpu", type=int, default=0,
         help=(
-            "Physical GPU id used by run-baseline and "
-            "run-baseline-reproduction (default: 0)."
+            "Physical GPU id used by run-baseline, "
+            "run-baseline-reproduction and run-winner-rescore (default: 0)."
         ),
     )
     parser.add_argument(
@@ -176,6 +183,10 @@ def main(argv: list[str] | None = None) -> None:
                 cell_root, repo_root=repo_root, gpu_id=args.gpu,
                 measure=args.measure, force=args.force,
             )
+        elif args.action == "run-winner-rescore":
+            state = run_winner_rescore(
+                cell_root, repo_root=repo_root, gpu_id=args.gpu,
+            )
         elif args.action in {"open-agent-session", "finalize-agent-session"}:
             if not args.agent_session:
                 parser.error(f"{args.action} requires --agent-session")
@@ -205,8 +216,16 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(public_status(state), indent=2, sort_keys=True))
         if args.action == "advance" and state["phase"] == "winner-frozen":
             print(
-                "Winner is frozen. Held-out data remains sealed until every "
-                f"cell of {cell_root.parent.name} is frozen by "
+                "Winner is frozen. Re-score it on the fresh partitions with "
+                "campaign_stage.py run-winner-rescore."
+            )
+        if (
+            args.action in {"advance", "run-winner-rescore"}
+            and state["phase"] == "winner-rescored"
+        ):
+            print(
+                "Winner is frozen and re-scored. Held-out data remains sealed "
+                f"until every cell of {cell_root.parent.name} is frozen by "
                 "campaign_manifest.py freeze-selections."
             )
     except CampaignStageError as exc:

@@ -6,16 +6,19 @@ must import nothing from the workspace packages.
 
 Classes (mutually exclusive, in evaluation order):
 
-- ``done``        phase ``certified``, or ``winner-frozen`` with a finalized session
+- ``done``        phase ``certified``, or ``winner-rescored`` with a finalized
+                  session
 - ``claimed``     a ``.discovery_claim`` whose holder is a live SLURM job (or is
                   this job); an UNREADABLE state file also lands here, because a
                   cell that another member is driving right now is the one case
                   where a read can fail mid-write, and refusing to touch it is
                   the safe answer
-- ``finishable``  session ended cleanly after the full 30-attempt budget (the
-                  orchestrator's live budget-cell census until freeze-discovery
-                  writes the ledger) with nothing queued or running; the finish
-                  ladder is idempotent and may be resumed by anyone
+- ``finishable``  a ``winner-frozen`` cell with a finalized session, whose
+                  winner re-score is still to run; or a session that ended
+                  cleanly after the full 30-attempt budget (the orchestrator's
+                  live budget-cell census until freeze-discovery writes the
+                  ledger) with nothing queued or running; the finish ladder is
+                  idempotent and may be resumed by anyone
 - ``stranded``    any other session evidence (live elsewhere, or dead mid-run)
 - ``blocked``     reproduction gate recorded ``verdict: fail``, or no baseline
                   is registered yet (a set whose baseline job is still queued)
@@ -142,7 +145,9 @@ def classify_cell(
     phase = state.get("phase")
     session = _read_json(root / "agent_session.json")
     session_status = session.get("status") if session else None
-    if phase == "certified" or (phase == "winner-frozen" and session_status == "finalized"):
+    if phase == "certified" or (
+        phase == "winner-rescored" and session_status == "finalized"
+    ):
         return "done", ""
     claim = root / ".discovery_claim"
     if claim.is_file():
@@ -153,6 +158,8 @@ def classify_cell(
         stale = alive is not None and holder and holder not in alive and holder != job_id
         if not stale:
             return "claimed", f"held by {holder or '?'}"
+    if phase == "winner-frozen" and session_status == "finalized":
+        return "finishable", ""
     if _has_session_evidence(root):
         drained = pending_work(root) == (0, 0)
         if (_session_ended(root / "automil" / ".activity.jsonl")

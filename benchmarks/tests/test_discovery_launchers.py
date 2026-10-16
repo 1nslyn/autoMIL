@@ -189,10 +189,10 @@ def _fits_wall(tmp_path: Path, hours_left: int, elapsed_total: float | None):
 
 
 def test_a_cell_that_would_outlast_its_wall_is_refused(tmp_path):
-    """A KRAS CLAM baseline of 4.3 h on the RTX predicts 49.3 h on three
+    """A KRAS CLAM baseline of 4.3 h on the RTX predicts 58.0 h on three
     GPUs (five-fold attempts, four batches one after another, one of them at
-    the 17 h attempt timeout): a 48 h wall would end the session
-    mid-discovery and strand it."""
+    the 17 h attempt timeout, then the winner re-score): a 48 h wall would end
+    the session mid-discovery and strand it."""
     refused = _fits_wall(tmp_path, 48, 15600.0)
     assert refused.returncode != 0
     assert "exceeds 85% of the wall" in refused.stdout
@@ -201,7 +201,7 @@ def test_a_cell_that_would_outlast_its_wall_is_refused(tmp_path):
 def test_a_cell_that_fits_its_wall_starts(tmp_path):
     result = _fits_wall(tmp_path, 72, 15600.0)
     assert result.returncode == 0, result.stdout
-    assert "predicted 49.3 h on 3 GPU" in result.stdout
+    assert "predicted 58.0 h on 3 GPU" in result.stdout
 
 
 def test_a_cell_without_a_baseline_time_is_refused(tmp_path):
@@ -210,13 +210,17 @@ def test_a_cell_without_a_baseline_time_is_refused(tmp_path):
     assert "no baseline time" in refused.stdout
 
 
-def _job_function(name: str) -> str:
-    """One function's text out of the job script, which starts a cell the
+def _script_function(script: Path, name: str) -> str:
+    """One function's text out of a launcher script, which starts its work the
     moment it is sourced."""
-    lines = JOB.read_text().splitlines()
+    lines = script.read_text().splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith(f"{name}() {{"))
     end = next(i for i in range(start, len(lines)) if lines[i] == "}")
     return "\n".join(lines[start:end + 1])
+
+
+def _job_function(name: str) -> str:
+    return _script_function(JOB, name)
 
 
 def _finish_arguments(tmp_path: Path, usage: bool) -> list[str]:
@@ -230,7 +234,7 @@ def _finish_arguments(tmp_path: Path, usage: bool) -> list[str]:
         (opdir / "usage.json").write_text("{}")
     snippet = (
         f'source "{LIB}"; operate() {{ printf "%s\\n" "$@"; }}; '
-        f'RUNTIME=/runtime; OPDIR="{opdir}"; LOG="{log}"; GPU_LIST=0,1; '
+        f'RUNTIME=/runtime; OPDIR="{opdir}"; LOG="{log}"; GPU_LIST=2,3; '
         f'{_job_function("finish_cell")}; finish_cell some_cell'
     )
     result = _run(["bash", "-c", snippet], _env())
@@ -240,8 +244,9 @@ def _finish_arguments(tmp_path: Path, usage: bool) -> list[str]:
 
 @pytest.mark.parametrize("usage", [False, True], ids=["no-usage", "with-usage"])
 def test_the_job_finishes_a_cell_with_arguments_the_operator_accepts(tmp_path, usage):
-    """Finish trains nothing and starts no daemon, so the job gives it no GPU:
-    a cell that ran its whole session must not strand on a refused argument."""
+    """Finish re-scores the winner on the first GPU of the job, the one the
+    reproduction gate uses: a cell that ran its whole session must not strand
+    on a refused argument."""
     spec = importlib.util.spec_from_file_location(
         "campaign_operate_under_test", SCRIPTS / "campaign_operate.py",
     )
@@ -253,7 +258,72 @@ def test_the_job_finishes_a_cell_with_arguments_the_operator_accepts(tmp_path, u
 
     assert parsed.command == "finish"
     assert parsed.cell_root == "/runtime/some_cell"
+    assert parsed.gpu == 2
     assert parsed.usage_json == (str(tmp_path / "operator" / "usage.json") if usage else None)
+
+
+def _shape_for(
+    tmp_path: Path, mode: str, elapsed_total: float, *,
+    e5_seconds: str = "", cached_folds: int = 0,
+):
+    """The wrapper's ``shape_for`` for one cell with a five-fold baseline of
+    ``elapsed_total`` seconds (``cached_folds`` of them loaded from the cache,
+    as a retried baseline's log records), run for real against the real
+    predictor."""
+    runtime = tmp_path / "runtime-ws"
+    cell = runtime / "cell"
+    cell.mkdir(parents=True)
+    (cell / "campaign_state.json").write_text(json.dumps({"baseline": {
+        "resources": {"elapsed_seconds": {"total": elapsed_total}},
+        "validation_folds": [{"fold_index": k} for k in range(5)],
+    }}))
+    if cached_folds:
+        log = cell / "baseline-execution" / "archive" / "run.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("".join(
+            f"    [fold {k}] Already completed, loading from disk\n"
+            for k in range(cached_folds)
+        ))
+    snippet = (
+        f'pyrun() {{ "{sys.executable}" "$@"; }}; RUNTIME="{runtime}"; '
+        f'E5_SECONDS="{e5_seconds}"; {_script_function(WRAPPER, "shape_for")}; '
+        f'shape_for {mode} cell'
+    )
+    return _run(["bash", "-c", snippet], _env(), cwd=REPO_ROOT)
+
+
+def test_a_finish_only_recovery_is_shaped_from_its_cells_baseline(tmp_path):
+    """The finish lane re-scores the winner, so the wrapper sizes it like a
+    full cell: from the baseline time, through the same predictor."""
+    result = _shape_for(tmp_path, "finish", 3.0 * 3600)
+    assert result.returncode == 0, result.stderr
+    gpus, wall, cpus, mem, predicted, e5, source = result.stdout.split()
+    assert (gpus, wall, cpus, mem) == ("1", "24", "12", "128")
+    assert float(predicted) == pytest.approx(8.0)   # re-score 6 h + overhead 2 h
+    assert float(e5) == pytest.approx(3.0 * 3600)
+    assert source == "ledger"
+
+    full = _shape_for(tmp_path / "full", "full", 3.0 * 3600)
+    assert full.stdout.split()[1] == "72"            # the whole cell needs the long wall
+
+
+def test_a_finish_only_recovery_whose_rescore_fits_no_wall_is_not_shaped(tmp_path):
+    result = _shape_for(tmp_path, "finish", 1000 * 3600.0)
+    assert result.returncode != 0
+    assert "exceeds every wall" in result.stderr + result.stdout
+
+
+def test_the_operator_time_reaches_the_finish_lane_predictor(tmp_path):
+    """--e5-hours must shape a finish-only recovery the way it shapes a full
+    cell: a baseline whose retry cached every fold carries no timing."""
+    refused = _shape_for(tmp_path / "bare", "finish", 10.0, cached_folds=5)
+    assert refused.returncode != 0
+
+    result = _shape_for(
+        tmp_path / "timed", "finish", 10.0, cached_folds=5, e5_seconds=str(3.5 * 3600),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split()[6] == "operator"
 
 
 @pytest.mark.skipif(

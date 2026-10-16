@@ -43,6 +43,16 @@ def make_test_ds(**kwargs):
                 train_cohorts=[],
                 test_cohorts=[],
             ),
+            "devcv_r1": StrategyDef(
+                name="devcv_r1",
+                train_cohorts=[],
+                test_cohorts=[],
+            ),
+            "devcv_r2": StrategyDef(
+                name="devcv_r2",
+                train_cohorts=[],
+                test_cohorts=[],
+            ),
         },
         task_strategy_feasibility={
             "brca": ["standard"],
@@ -177,3 +187,90 @@ def full_h100_nvidia_smi(command):
         f"{index}, {DECLARED_GPU['name']}, Disabled\n" for index in range(4)
     )
     return SimpleNamespace(returncode=0, stdout=listing, stderr="")
+
+
+def write_fake_rescore(
+    cell_root,
+    state,
+    *,
+    held_out,
+    task_family="binary",
+    validation=None,
+    commit="e" * 40,
+    attempt="rescore/attempt-fixture",
+):
+    """Write the archives of a finished winner re-score and return the
+    ``rescore`` block ``run_winner_rescore`` would have recorded for them.
+
+    ``held_out(strategy, candidate_id, fold)`` is the held-out metrics of one
+    sealed fold file; ``validation(strategy, candidate_id, fold)`` is that
+    fold's primary validation value. Fixtures that need a winner-rescored
+    state commit the block themselves.
+    """
+    import hashlib
+    import json
+    import math
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from autobench.campaign import (
+        CERTIFICATION_FOLDS,
+        RESCORE_STRATEGIES,
+        VALIDATION_SCHEMA_BY_FAMILY,
+    )
+
+    winner = state["winner"]
+    baseline_wins = winner["kind"] == "baseline"
+    candidate_ids = ["baseline"] + ([] if baseline_wins else [winner["candidate_id"]])
+    validation = validation or (lambda strategy, candidate_id, fold: 0.60 + fold / 100)
+    metric_keys = VALIDATION_SCHEMA_BY_FAMILY[task_family]
+    strategies: dict = {}
+    for strategy in RESCORE_STRATEGIES:
+        strategies[strategy] = {}
+        for candidate_id in candidate_ids:
+            archive = Path(cell_root) / attempt / strategy / candidate_id / "archive"
+            sealed = archive / "certify"
+            sealed.mkdir(parents=True)
+            folds, hashes = [], {}
+            for fold in CERTIFICATION_FOLDS:
+                value = validation(strategy, candidate_id, fold)
+                folds.append({
+                    "fold_index": fold,
+                    "metrics": {key: value for key in metric_keys},
+                    "primary_value": value,
+                })
+                path = sealed / f"fold_{fold}_result.json"
+                path.write_text(json.dumps({
+                    "fold_index": fold,
+                    "held_out": held_out(strategy, candidate_id, fold),
+                }))
+                hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+            mean = math.fsum(fold["primary_value"] for fold in folds) / len(folds)
+            (archive / "result.json").write_text(json.dumps({
+                "status": "completed",
+                "primary_value": mean,
+                "metrics": {key: mean for key in metric_keys},
+                "validation_folds": folds,
+            }))
+            strategies[strategy][candidate_id] = {
+                "archive": f"{attempt}/{strategy}/{candidate_id}/archive",
+                "validation_folds": folds,
+                "validation_mean": mean,
+                "sealed_fold_sha256": hashes,
+            }
+    deltas = [] if baseline_wins else [
+        fold["primary_value"] - base["primary_value"]
+        for per_candidate in strategies.values()
+        for fold, base in zip(
+            per_candidate[winner["candidate_id"]]["validation_folds"],
+            per_candidate["baseline"]["validation_folds"],
+            strict=True,
+        )
+    ]
+    return {
+        "attempt": attempt,
+        "commit": commit,
+        "strategies": strategies,
+        "validation_lift": math.fsum(deltas) / len(deltas) if deltas else 0.0,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }

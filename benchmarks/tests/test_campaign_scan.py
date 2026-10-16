@@ -73,6 +73,64 @@ def test_classes_are_mutually_exclusive_and_ordered(scan_mod, tmp_path, monkeypa
     assert result["squeue_ok"] is True
 
 
+def _freeze(runtime: Path, name: str, phase: str, session_status: str | None) -> None:
+    (runtime / name / "campaign_state.json").write_text(
+        json.dumps({"phase": phase, "baseline": {}}))
+    if session_status is not None:
+        (runtime / name / "agent_session.json").write_text(
+            json.dumps({"status": session_status}))
+
+
+def test_a_re_scored_winner_with_a_finalized_session_is_done(scan_mod, tmp_path, monkeypatch):
+    names = ["tcga_luad__a__e__m__s42__v", "tcga_luad__b__e__m__s42__v"]
+    runtime, roster = _runtime(tmp_path, names)
+    _freeze(runtime, names[0], "winner-rescored", "finalized")
+    _freeze(runtime, names[1], "winner-rescored", "open")
+    monkeypatch.setattr(scan_mod, "live_job_ids", lambda: set())
+
+    result = scan_mod.scan(runtime, roster, "999")
+
+    assert result["done"] == [names[0]]
+    assert result["stranded"] == [names[1]]
+
+
+def test_a_frozen_winner_with_a_finalized_session_awaits_its_re_score(
+    scan_mod, tmp_path, monkeypatch,
+):
+    """The finish ladder resumes at the re-score, so the cell is finishable
+    and not done; one whose session is still open is not."""
+    names = ["tcga_luad__a__e__m__s42__v", "tcga_luad__b__e__m__s42__v"]
+    runtime, roster = _runtime(tmp_path, names)
+    _freeze(runtime, names[0], "winner-frozen", "finalized")
+    _freeze(runtime, names[1], "winner-frozen", "open")
+    monkeypatch.setattr(scan_mod, "live_job_ids", lambda: set())
+
+    result = scan_mod.scan(runtime, roster, "999")
+
+    assert result["finishable"] == [names[0]]
+    assert result["done"] == []
+    assert result["stranded"] == [names[1]]
+
+
+def test_a_re_score_a_live_job_is_running_is_claimed_not_finishable(
+    scan_mod, tmp_path, monkeypatch,
+):
+    """A live job holds the claim while it trains the re-score; once the job
+    is gone the same cell is finishable again."""
+    names = ["tcga_luad__a__e__m__s42__v"]
+    runtime, roster = _runtime(tmp_path, names)
+    _freeze(runtime, names[0], "winner-frozen", "finalized")
+    (runtime / names[0] / ".discovery_claim").write_text("111\n")
+
+    monkeypatch.setattr(scan_mod, "live_job_ids", lambda: {"111"})
+    assert scan_mod.scan(runtime, roster, "999")["claimed"] == names
+
+    monkeypatch.setattr(scan_mod, "live_job_ids", lambda: set())
+    result = scan_mod.scan(runtime, roster, "999")
+    assert result["finishable"] == names
+    assert (runtime / names[0] / ".discovery_claim").is_file()
+
+
 def _live_counter(root: Path, consumed: int, budget_id: str = "f90a61fd281e9f73") -> None:
     """The orchestrator's budget-cell census, the only live 'charged' source."""
     (root / "automil" / "campaign_cell.json").write_text(json.dumps(

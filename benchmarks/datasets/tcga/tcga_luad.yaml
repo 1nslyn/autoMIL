@@ -32,10 +32,17 @@ split_strategies:
   devcv:
     train_cohorts: []
     test_cohorts: []
+  # The same development slides cut again with other partition seeds.
+  devcv_r1:
+    train_cohorts: []
+    test_cohorts: []
+  devcv_r2:
+    train_cohorts: []
+    test_cohorts: []
 
 task_strategy_feasibility:
-  kras: ["standard", "devcv"]
-  os: ["standard", "devcv"]
+  kras: ["standard", "devcv", "devcv_r1", "devcv_r2"]
+  os: ["standard", "devcv", "devcv_r1", "devcv_r2"]
 
 slide_id_column: "slide_name"
 slide_id_transform: "strip_svs"

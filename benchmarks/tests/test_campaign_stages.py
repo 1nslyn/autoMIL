@@ -13,8 +13,13 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+import autobench.campaign_rescore as campaign_rescore
 import autobench.campaign_stages as campaign_stages
-from _helpers import full_h100_nvidia_smi, write_reproduction_policy
+from _helpers import (
+    full_h100_nvidia_smi,
+    write_fake_rescore,
+    write_reproduction_policy,
+)
 from automil.admissibility import load_candidate_policy
 from automil.cells.activity import (
     ACTIVITY_SAMPLES_FILENAME,
@@ -29,20 +34,22 @@ from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
     CAMPAIGN_ID,
     CERTIFICATION_FOLDS,
+    CERTIFICATION_SOURCES,
     DISCOVERY_ATTEMPTS,
     PROTOCOL_VERSION,
+    SPLIT_STRATEGY,
     STAGE_FOLDS,
     SUBMIT_CLOCK_SKEW_TOLERANCE_SECONDS,
-    WINNER_FLOOR,
-    WINNER_SE_MULTIPLIER,
     content_sha256,
-    max_lift_winner,
     file_sha256,
     unique_complete_sources,
+    val_best_winner,
 )
 from autobench.campaign_stages import (
     BASELINE_ATTESTATION_FILE,
     CAMPAIGN_CELL_COUNT,
+    CERTIFICATION_BUNDLE_SCHEMA_VERSION,
+    EXECUTION_IDENTITY_FILE,
     SELECTION_FREEZE_FILE,
     SELECTION_FREEZE_SCHEMA_VERSION,
     CampaignStageError,
@@ -66,6 +73,9 @@ from autobench.campaign_stages import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAMPAIGN_DIR = REPO_ROOT / "benchmarks/campaigns/preprint_130"
+#: The commit a fixture baseline trained at; every fixture attempt branches
+#: from it, which is what the winner re-score requires of a searched winner.
+EXECUTION_COMMIT = "e" * 40
 
 
 def _folds(indices, base=0.6, *, ordinal=False):
@@ -134,7 +144,10 @@ AGENT_PROTOCOL = {
 }
 
 
-def _make_staged_cell(tmp_path, *, task_family: str = "binary", guard: dict | None = None):
+def _make_staged_cell(
+    tmp_path, *, task_family: str = "binary", guard: dict | None = None,
+    discovery_command: str | None = None,
+):
     cell_root = tmp_path / "dataset__arm__task"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
@@ -164,10 +177,12 @@ def _make_staged_cell(tmp_path, *, task_family: str = "binary", guard: dict | No
         },
         "commands": {
             "baseline": (
-                "python benchmarks/scripts/run_experiment.py --folds 0,1,2,3,4"
+                "python benchmarks/scripts/run_experiment.py "
+                "--strategy devcv --folds 0,1,2,3,4"
             ),
-            "discovery": (
-                "python benchmarks/scripts/run_experiment.py --folds 0,1,2,3,4"
+            "discovery": discovery_command or (
+                "python benchmarks/scripts/run_experiment.py "
+                "--strategy devcv --folds 0,1,2,3,4"
             ),
         },
         "budget_identity": {
@@ -297,6 +312,12 @@ def _baseline(
     }
     attestation["attestation_sha256"] = content_sha256(attestation)
     (archive / BASELINE_ATTESTATION_FILE).write_text(json.dumps(attestation))
+    (archive / EXECUTION_IDENTITY_FILE).write_text(json.dumps({
+        "commit": EXECUTION_COMMIT,
+        "clean": True,
+        "training_tree_paths": ["src", "benchmarks/src", "benchmarks/scripts"],
+        "recorded_at": "2026-08-01T00:00:00+00:00",
+    }))
     return archive
 
 
@@ -389,7 +410,11 @@ def _attempts(
         verdict = policy.classify(candidate_paths, override=override)
         spec = {
             "id": node_id,
-            "base_commit": "d" * 40,
+            "base_commit": EXECUTION_COMMIT,
+            "base_run_command_sha256": hashlib.sha256(
+                yaml.safe_load((adir / "config.yaml").read_text())["run"]["command"]
+                .encode()
+            ).hexdigest(),
             "overlay_manifest": overlay_manifest,
             "deletions": [],
             "framework_overlay_files": [],
@@ -1542,7 +1567,7 @@ def _selected(staged_cell, lifts=None, *, completed=12, source_at=None):
 
 def _rule_on_state(state):
     """The winner rule run on exactly the evidence the state froze."""
-    return max_lift_winner(
+    return val_best_winner(
         [fold["primary_value"] for fold in state["baseline"]["validation_folds"]],
         [{
             "candidate_id": candidate["candidate_id"],
@@ -1554,25 +1579,10 @@ def _rule_on_state(state):
     )
 
 
-def _fold_noise(lift, amplitude=0.07):
-    """Per-fold deltas that alternate in sign and average to ``lift``."""
-    return [
-        lift - amplitude / len(CERTIFICATION_FOLDS) + amplitude * (-1) ** fold
-        for fold in CERTIFICATION_FOLDS
-    ]
-
-
-def _noise_pool_lifts():
-    """Twelve candidates, every one with alternating-sign per-fold deltas.
-    Eleven differ from one another by at most 0.01 in mean lift; node_0004
-    is the best of the twelve at 0.075."""
-    others = [f"node_{index:04d}" for index in range(1, 13) if index != 4]
-    lifts = {
-        node_id: _fold_noise(0.001 * (position - 5))
-        for position, node_id in enumerate(others)
-    }
-    lifts["node_0004"] = _fold_noise(0.075)
-    return lifts
+#: Every completed candidate sits below the baseline on every fold: the
+#: _attempts defaults trail it by 0.11 down to 0.00, and node_0012 (the
+#: default leader, level with the baseline) is dropped 0.005 below it.
+TRAILING_POOL_LIFTS = {"node_0012": -0.005}
 
 
 #: One candidate 0.05 above the baseline on every fold, in a pool whose other
@@ -1582,16 +1592,16 @@ CLEAR_WINNER_LIFTS = {"node_0007": 0.05}
 #: The two pools every selection check runs on: a leader the rule accepts, and
 #: a leader it refuses.
 POOLS = pytest.mark.parametrize(
-    "lifts", [CLEAR_WINNER_LIFTS, _noise_pool_lifts()],
-    ids=["clear-winner", "fold-noise"],
+    "lifts", [CLEAR_WINNER_LIFTS, TRAILING_POOL_LIFTS],
+    ids=["clear-winner", "trailing-pool"],
 )
 
 
 def test_a_clearly_better_candidate_becomes_the_searched_winner(staged_cell):
     """One candidate beats the baseline by the same 0.05 on every fold, so
-    its lead carries no fold noise and clears the floor: it is the frozen
-    winner, and its five sealed folds are the ones in its own discovery
-    archive."""
+    its lift is above zero: it is the frozen winner. Its certification sources
+    are its own discovery archive's five sealed folds plus the five of each
+    re-score partition."""
     cell_root, adir, _, _, _ = staged_cell
     state = _selected(staged_cell, CLEAR_WINNER_LIFTS)
 
@@ -1603,51 +1613,69 @@ def test_a_clearly_better_candidate_becomes_the_searched_winner(staged_cell):
     record = winner["selection"]
     assert record["leader"] == "node_0007"
     assert record["accepted"] is True
-    assert record["leader_lift"] > WINNER_FLOOR
-    # The premise: the same lift on every fold, so no fold noise.
-    assert record["standard_error"] == pytest.approx(0.0, abs=1e-9)
+    assert record["leader_lift"] == pytest.approx(0.05)
     assert "promotion_node_id" not in winner and "selection_audit" not in winner
+
+    # Until the winner is re-scored there are no 15 sources to certify.
+    with pytest.raises(CampaignStageError, match="has not been re-scored"):
+        _winner_sealed_sources(cell_root, state, winner)
+    state = _rescored(cell_root)
+    winner = state["winner"]
 
     archive = (adir / "orchestrator/archive/node_0007").resolve()
     sources = _winner_sealed_sources(cell_root, state, winner)
-    assert sorted(sources) == list(CERTIFICATION_FOLDS)
-    for fold, path in sources.items():
+    assert sorted(sources) == sorted(CERTIFICATION_SOURCES)
+    for (partition, fold), path in sources.items():
         assert path.is_file()
-        assert path.resolve() == archive / "certify" / f"fold_{fold}_result.json"
+        if partition == SPLIT_STRATEGY:
+            assert path.resolve() == archive / "certify" / f"fold_{fold}_result.json"
+        else:
+            assert path.resolve().parent.parent.parent.name == "node_0007"
+            assert path.resolve().parent.parent.parent.parent.name == partition
     anchors = _source_fold_anchors(cell_root.parent, sources)
+    assert sorted(anchors) == sorted(
+        f"{partition}/fold_{fold}_result.json"
+        for partition, fold in CERTIFICATION_SOURCES
+    )
     assert all(
         record["path"].startswith(
             f"{cell_root.name}/automil/orchestrator/archive/node_0007/certify/"
         )
-        for record in anchors.values()
+        for key, record in anchors.items() if key.startswith(f"{SPLIT_STRATEGY}/")
+    )
+    assert all(
+        record["path"].startswith(f"{cell_root.name}/rescore/")
+        for key, record in anchors.items() if not key.startswith(f"{SPLIT_STRATEGY}/")
     )
     assert winner["sealed_fold_sha256"] == {
-        filename: record["sha256"] for filename, record in anchors.items()
+        key.split("/", 1)[1]: record["sha256"]
+        for key, record in anchors.items() if key.startswith(f"{SPLIT_STRATEGY}/")
     }
 
 
-def test_a_lead_inside_the_noise_of_the_search_keeps_the_baseline(staged_cell):
-    """Every candidate's per-fold deltas alternate in sign, so the paired SE
-    is wide. The leader's lift would clear a two-SE bar for one attempt, but
-    not the bar for the best of thirty attempts, so the baseline stays."""
-    state = _selected(staged_cell, _noise_pool_lifts())
+def test_a_tiny_positive_lead_is_the_searched_winner(staged_cell):
+    """No significance gate: a leader 0.001 above the baseline on every fold
+    is deployed."""
+    state = _selected(staged_cell, {"node_0003": 0.001})
 
-    for candidate in state["discovery"]["candidates"]:
-        deltas = [
-            fold["primary_value"] - base for fold, base in zip(
-                candidate["validation_folds"], BASELINE_FOLD_VALUES,
-            )
-        ]
-        assert all(a * b < 0 for a, b in zip(deltas, deltas[1:]))
+    winner = state["winner"]
+    assert winner["kind"] == "searched"
+    assert winner["candidate_id"] == "node_0003"
+    assert winner["lift_over_baseline"] == pytest.approx(0.001)
+    assert winner["selection"]["accepted"] is True
+
+
+def test_a_leader_below_the_baseline_keeps_the_baseline(staged_cell):
+    state = _selected(staged_cell, TRAILING_POOL_LIFTS)
+
     winner = state["winner"]
     record = winner["selection"]
     assert winner["kind"] == "baseline"
     assert winner["candidate_id"] == "baseline"
     assert winner["sealed_fold_sha256"] is None
     assert winner["lift_over_baseline"] == pytest.approx(0.0)
-    assert record["leader"] == "node_0004"
-    assert 2 * record["standard_error"] < record["leader_lift"] < record["bar"]
-    assert record["bar"] == WINNER_SE_MULTIPLIER * record["standard_error"] > WINNER_FLOOR
+    assert record["leader"] == "node_0012"
+    assert record["leader_lift"] == pytest.approx(-0.005)
     assert record["accepted"] is False and record["winner"] == "baseline"
 
 
@@ -1723,7 +1751,7 @@ def _validate_process(process):
 
 def _reissued(selection):
     """The record the rule gives on a record's own, possibly edited, inputs."""
-    return max_lift_winner(
+    return val_best_winner(
         selection["baseline_fold_values"], selection["pool"],
     )
 
@@ -1884,7 +1912,7 @@ def test_the_selection_freeze_rechecks_every_pool_candidate_against_the_archive(
         _write_global_selection_freeze(cell_root)
 
     assert not (cell_root.parent / SELECTION_FREEZE_FILE).exists()
-    assert load_stage_state(cell_root)["phase"] == "winner-frozen"
+    assert load_stage_state(cell_root)["certification"] is None
 
 
 def test_a_candidate_missing_a_sealed_fold_is_excluded_at_the_discovery_freeze(
@@ -1973,9 +2001,38 @@ def _write_searched_sealed_folds(
         ).write_text("selected-not-json")
 
 
-def _write_global_selection_freeze(cell_root: Path) -> None:
-    """Build a full-roster freeze fixture around this isolated unit-test cell."""
+def _held_out_for(candidate_id: str, fold: int) -> dict:
+    """The held-out metrics a fixture seals for one fold: the baseline's, as
+    _baseline writes them, or a searched candidate's, as _attempts writes them."""
+    value = (0.5 if candidate_id == "baseline" else 0.70) + fold / 100
+    return {"test_auc": value, "test_bacc": value}
+
+
+def _rescored(cell_root: Path, *, held_out=None, validation=None) -> dict:
+    """Record a finished winner re-score on a winner-frozen cell, as
+    run_winner_rescore would, and return the winner-rescored state. The re-score
+    folds default to the values of the discovery folds, so a certified bundle's
+    means stay those of the fixture's discovery evidence."""
     state = load_stage_state(cell_root)
+    block = write_fake_rescore(
+        cell_root, state,
+        held_out=held_out or (
+            lambda strategy, candidate_id, fold: _held_out_for(candidate_id, fold)
+        ),
+        task_family=campaign_stages._cell_task_family(cell_root, state),
+        validation=validation,
+        commit=EXECUTION_COMMIT,
+    )
+    return campaign_rescore._record(cell_root, state, block)
+
+
+def _write_global_selection_freeze(cell_root: Path, **rescore) -> None:
+    """Build a full-roster freeze fixture around this isolated unit-test cell.
+
+    A cell still at winner-frozen is re-scored first, with ``rescore`` options."""
+    state = load_stage_state(cell_root)
+    if state["phase"] == "winner-frozen" and state.get("rescore") is None:
+        state = _rescored(cell_root, **rescore)
     winner = state["winner"]
     usage = {
         "status": "exact",
@@ -2488,7 +2545,8 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
         adir, cell["budget_identity"]["cell_id"], DISCOVERY_ATTEMPTS,
     )
     freeze_discovery(cell_root)
-    winner_frozen = select_winner(cell_root)
+    select_winner(cell_root)
+    rescored = _rescored(cell_root)
     _write_global_selection_freeze(cell_root)
 
     state = certify_winner(cell_root)
@@ -2496,7 +2554,7 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     bundle = json.loads(bundle_path.read_text())
     assert state["phase"] == "certified"
     assert state["certification"]["selection_state_sha256"] == (
-        winner_frozen["state_sha256"]
+        rescored["state_sha256"]
     )
     assert bundle["winner"]["kind"] == "baseline"
     assert bundle["held_out"]["test_auc"] == pytest.approx(0.52)
@@ -2512,7 +2570,7 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
     # Recover the narrow crash window after atomic bundle publication but
     # before the stage-state commit, without reading/revealing another winner.
     (cell_root / "campaign_state.json").write_text(
-        json.dumps(winner_frozen, indent=2, sort_keys=True) + "\n"
+        json.dumps(rescored, indent=2, sort_keys=True) + "\n"
     )
     recovered = certify_winner(cell_root)
     assert recovered["phase"] == "certified"
@@ -2520,11 +2578,11 @@ def test_baseline_winner_certification_unseals_existing_folds_once(staged_cell):
 
 
 def test_a_baseline_winner_over_a_populated_pool_certifies(staged_cell):
-    """Twelve candidates, none accepted: the freeze carries the whole pool and
-    its record, the baseline is the winner, and its sealed folds are the ones
-    certified."""
+    """Twelve candidates, none above the baseline: the freeze carries the
+    whole pool and its record, the baseline is the winner, and its sealed
+    folds are the ones certified."""
     cell_root, _, _, _, _ = staged_cell
-    selected = _selected(staged_cell, _noise_pool_lifts())
+    selected = _selected(staged_cell, TRAILING_POOL_LIFTS)
     assert selected["winner"]["kind"] == "baseline"
     assert selected["discovery"]["unique_complete_candidates"] == 12
     _write_global_selection_freeze(cell_root)
@@ -2814,7 +2872,7 @@ def test_searched_certification_reads_winner_and_never_losers(staged_cell):
     state = certify_winner(cell_root)
     bundle = json.loads((cell_root / "certification/certify.json").read_text())
     assert state["phase"] == "certified"
-    assert bundle["schema_version"] == 3
+    assert bundle["schema_version"] == CERTIFICATION_BUNDLE_SCHEMA_VERSION
     assert bundle["winner"] == {
         "kind": "searched",
         "candidate_id": "node_0012",
@@ -2828,8 +2886,8 @@ def test_searched_certification_reads_winner_and_never_losers(staged_cell):
         row["held_out_delta"]["test_auc"] == pytest.approx(0.20)
         for row in bundle["paired_fold_deltas"]
     )
-    assert len(bundle["source_fold_sha256"]) == 5
-    assert len(bundle["baseline_source_fold_sha256"]) == 5
+    assert len(bundle["source_fold_sha256"]) == 15
+    assert len(bundle["baseline_source_fold_sha256"]) == 15
 
 
 def test_searched_certification_rejects_baseline_comparator_drift(staged_cell):
@@ -2852,7 +2910,7 @@ def test_selected_sealed_corruption_blocks_certification(staged_cell):
 
     with pytest.raises(CampaignStageError, match="sealed artifact changed"):
         _write_global_selection_freeze(cell_root)
-    assert load_stage_state(cell_root)["phase"] == "winner-frozen"
+    assert load_stage_state(cell_root)["certification"] is None
     assert not (cell_root.parent / SELECTION_FREEZE_FILE).exists()
     assert not (cell_root / "certification").exists()
 
@@ -2949,7 +3007,7 @@ def test_first_certification_rejects_clock_before_selection_freeze(
     with pytest.raises(CampaignStageError, match="freeze/bundle/index order"):
         certify_winner(cell_root)
     assert not (cell_root / "certification").exists()
-    assert load_stage_state(cell_root)["phase"] == "winner-frozen"
+    assert load_stage_state(cell_root)["phase"] == "winner-rescored"
 
 
 def test_existing_certification_rejects_rehashed_winner_identity(staged_cell):

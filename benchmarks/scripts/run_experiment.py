@@ -35,6 +35,7 @@ uv run --package autobench python benchmarks/scripts/run_experiment.py \
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import math
 import os
@@ -79,11 +80,20 @@ def parse_args() -> argparse.Namespace:
             "directory instead of the dataset YAML's default benchmark_dir."
         ),
     )
-    p.add_argument(
+    prep_mode = p.add_mutually_exclusive_group()
+    prep_mode.add_argument(
         "--skip-prep", "--skip_prep", dest="skip_prep", action="store_true",
         help=(
             "Use an already prepared benchmark root without creating or updating "
             "dataset_csv, splits, features, nnmil, or titan artifacts."
+        ),
+    )
+    prep_mode.add_argument(
+        "--prepare-only", "--prepare_only", dest="prepare_only", action="store_true",
+        help=(
+            "Run the data preparation this experiment would run (splits, "
+            "features, and the arm's own artifacts), then exit without training "
+            "or writing results."
         ),
     )
     p.add_argument(
@@ -671,6 +681,70 @@ def summary_to_result_json(
     return result
 
 
+def _prepare_data(exp_cfg, ds, benchmark_dir: str) -> None:
+    """Prepare everything one experiment trains from: the shared split/feature
+    artifacts, then the arm's own (TITAN manifest or nnMIL-family plan).
+
+    The single call site for normal runs and ``--prepare-only``, so the two
+    cannot prepare with different arguments. TITAN skips the tile-encoder
+    H5->PT step (no "features" key), so it passes no encoder_keys.
+
+    Runs hold an exclusive lock on the benchmark root while they prepare:
+    split and plan files are not written atomically, and two runs preparing
+    a strategy for the first time at once (parallel re-scores of two cells)
+    would otherwise let one read a file the other is still writing.
+    """
+    os.makedirs(benchmark_dir, exist_ok=True)
+    with open(os.path.join(benchmark_dir, ".prepare.lock"), "a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        _prepare_data_locked(exp_cfg, ds, benchmark_dir)
+
+
+def _prepare_data_locked(exp_cfg, ds, benchmark_dir: str) -> None:
+    from autobench.pipeline.prepare import prepare_all
+
+    framework = exp_cfg.framework
+    prepare_all(
+        benchmark_dir=benchmark_dir,
+        mapping_csv=ds.mapping_csv,
+        features_base_dir=ds.features_base_dir,
+        encoder_keys=[] if framework == Framework.TITAN else [exp_cfg.encoder_key],
+        ds=ds,
+        seed=exp_cfg.train.seed,
+        n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
+        strategies=(exp_cfg.strategy,),
+    )
+    task_cfg = exp_cfg.task
+    if framework == Framework.TITAN:
+        # TITAN is a frozen per-slide embedding -- its own prep, no H5-bag step.
+        from autobench.pipeline.titan.prepare import prepare_titan_experiment
+        prepare_titan_experiment(
+            benchmark_dir=benchmark_dir,
+            task_name=task_cfg.name,
+            features_base_dir=ds.features_base_dir,
+        )
+    elif framework != Framework.CLAM:
+        from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
+        prepare_nnmil_experiment(
+            benchmark_dir=benchmark_dir,
+            task_name=task_cfg.name,
+            encoder_key=exp_cfg.encoder_key,
+            strategy=exp_cfg.strategy,
+            label_col=task_cfg.label_col,
+            label_dict=task_cfg.label_dict,
+            embed_dim=exp_cfg.embed_dim,
+            features_base_dir=ds.features_base_dir,
+            dataset_name=ds.name,
+            seed=exp_cfg.train.seed,
+            n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
+            task_type=task_cfg.task_type,
+            event_col=task_cfg.event_col,
+            time_col=task_cfg.time_col,
+            survival_loss=exp_cfg.survival_loss,
+            nll_bins=task_cfg.nll_bins,
+        )
+
+
 def main() -> None:
     # CAP-03 / D-121: install SIGTERM handler BEFORE any DataLoader/multiprocessing setup.
     # The handler aggregates archive/<node>/fold_*_result.json into a partial result.json
@@ -814,20 +888,12 @@ def main() -> None:
         automil_results_dir = os.path.join(automil_results_dir, "results")
         os.makedirs(automil_results_dir, exist_ok=True)
 
-    # Ensure data is prepared. TITAN skips the tile-encoder H5->PT step (no
-    # "features" key), so pass no encoder_keys.
+    # Ensure data is prepared (arm-specific artifacts included).
     if not args.skip_prep:
-        from autobench.pipeline.prepare import prepare_all
-        prepare_all(
-            benchmark_dir=benchmark_dir,
-            mapping_csv=ds.mapping_csv,
-            features_base_dir=ds.features_base_dir,
-            encoder_keys=[] if framework == Framework.TITAN else [args.encoder],
-            ds=ds,
-            seed=train_cfg.seed,
-            n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
-            strategies=(exp_cfg.strategy,),
-        )
+        _prepare_data(exp_cfg, ds, benchmark_dir)
+    if args.prepare_only:
+        print(f"  --prepare-only: data preparation complete under {benchmark_dir}; no training run.")
+        return
 
     # Run the experiment
     if framework == Framework.CLAM:
@@ -839,39 +905,12 @@ def main() -> None:
         )
     elif framework == Framework.TITAN:
         # TITAN is a frozen per-slide embedding -- its own prep/runner, no H5-bag step.
-        from autobench.pipeline.titan.prepare import prepare_titan_experiment
         from autobench.pipeline.titan.runner import run_titan_experiment
-        if not args.skip_prep:
-            prepare_titan_experiment(
-                benchmark_dir=benchmark_dir,
-                task_name=args.task,
-                features_base_dir=ds.features_base_dir,
-            )
         summary = run_titan_experiment(
             exp_cfg, benchmark_dir, device=str(device),
             results_dir=automil_results_dir,  # CR-5: isolate per-experiment results
         )
     else:
-        from autobench.pipeline.nnmil.prepare import prepare_nnmil_experiment
-        if not args.skip_prep:
-            prepare_nnmil_experiment(
-                benchmark_dir=benchmark_dir,
-                task_name=args.task,
-                encoder_key=args.encoder,
-                strategy=args.strategy,
-                label_col=task_cfg.label_col,
-                label_dict=task_cfg.label_dict,
-                embed_dim=embed_dim,
-                features_base_dir=ds.features_base_dir,
-                dataset_name=ds.name,
-                seed=train_cfg.seed,
-                n_splits=exp_cfg.n_folds,  # CFG-01: use resolved value, not args.n_folds (may be None)
-                task_type=task_cfg.task_type,
-                event_col=task_cfg.event_col,
-                time_col=task_cfg.time_col,
-                survival_loss=survival_loss,
-                nll_bins=task_cfg.nll_bins,
-            )
         if framework == Framework.ABMIL:
             from autobench.pipeline.abmil.runner import run_abmil_experiment
             summary = run_abmil_experiment(exp_cfg, benchmark_dir, device=str(device),

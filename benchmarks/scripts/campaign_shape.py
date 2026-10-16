@@ -5,10 +5,12 @@ For each cell root under a campaign runtime directory, this script reads the
 registered baseline's five-fold elapsed time from ``campaign_state.json`` and
 predicts how long the cell's job takes (see ``predict_hours``: the serial
 gate attempt, the discovery batches one after another with one of them
-running into the attempt timeout, plus a fixed overhead). Every job takes
-one GPU, because a whole batch runs on one; the
+running into the attempt timeout, the winner re-score, plus a fixed
+overhead). Every job takes one GPU, because a whole batch runs on one; the
 wall is the shorter of ``WALL_OPTIONS_H`` whose ``FIT_FRACTION`` holds the
-prediction.
+prediction. With ``--finish`` the same inputs size the finish-only recovery
+lane, which resumes after the discovery freeze and so trains only the
+re-score.
 
 Cells without a registered baseline (``baseline`` is ``None``), with
 malformed or missing state, or whose predicted time exceeds every wall are
@@ -22,6 +24,7 @@ autobench/automil.
 Usage:
     campaign_shape.py --runtime <dir> [--cells a,b,...] [--json]
     campaign_shape.py --runtime <dir> --cell <id> --field gpus
+    campaign_shape.py --runtime <dir> --cells <id> --finish --json
 """
 from __future__ import annotations
 
@@ -151,37 +154,45 @@ def discovery_hours(e5_seconds: float, gpus: int) -> float:
     )
 
 
+def rescore_hours(e5_seconds: float) -> float:
+    """The winner re-score: the winner and the baseline trained on two fresh
+    partitions, four five-fold runs at once on the job's one GPU. The round
+    lasts as long as its slowest run, one dilated five-fold attempt."""
+    return attempt_hours(e5_seconds, DISCOVERY_FOLDS)
+
+
 def predict_hours(e5_seconds: float, gpus: int) -> float:
     """Predict a cell's job wall time (hours) on ``gpus`` GPUs.
 
     ``e5_seconds`` is the 5-fold baseline's total elapsed time, as recorded
     in ``baseline.resources.elapsed_seconds.total``.
     """
-    return discovery_hours(e5_seconds, gpus) + OVERHEAD_H
+    return discovery_hours(e5_seconds, gpus) + rescore_hours(e5_seconds) + OVERHEAD_H
 
 
-def _job_shape(wall_hours: int, predicted_hours: float) -> Shape:
-    return Shape(
-        gpus=JOB_GPUS, wall_hours=wall_hours, cpus=JOB_CORES, mem_gb=JOB_MEM_GB,
-        predicted_hours=predicted_hours,
-    )
+def _fit_wall(predicted_hours: float) -> Shape | None:
+    """The shorter wall whose ``FIT_FRACTION`` holds ``predicted_hours``;
+    ``None`` if neither does."""
+    for wall_hours in WALL_OPTIONS_H:
+        if predicted_hours <= FIT_FRACTION * wall_hours:
+            return Shape(
+                gpus=JOB_GPUS, wall_hours=wall_hours, cpus=JOB_CORES,
+                mem_gb=JOB_MEM_GB, predicted_hours=predicted_hours,
+            )
+    return None
 
 
-def finish_shape() -> Shape:
-    """The finish-only recovery lane, on the shorter wall: the discovery
-    freeze, the winner and the session close train nothing, so it needs no
-    baseline time."""
-    return _job_shape(WALL_OPTIONS_H[0], 0.0)
+def finish_shape(e5_seconds: float) -> Shape | None:
+    """The finish-only recovery lane: it resumes after the discovery freeze,
+    so the freeze, the winner and the session close train nothing and only
+    the re-score does. ``None`` if no wall holds it."""
+    return _fit_wall(rescore_hours(e5_seconds) + OVERHEAD_H)
 
 
 def choose_shape(e5_seconds: float) -> Shape | None:
     """The shorter wall whose ``FIT_FRACTION`` holds the predicted job time;
     ``None`` if neither does."""
-    predicted = predict_hours(e5_seconds, JOB_GPUS)
-    for wall_hours in WALL_OPTIONS_H:
-        if predicted <= FIT_FRACTION * wall_hours:
-            return _job_shape(wall_hours, predicted)
-    return None
+    return _fit_wall(predict_hours(e5_seconds, JOB_GPUS))
 
 
 def _read_campaign_state(
@@ -265,6 +276,7 @@ def _prediction_input(
 
 def _shape_one_cell(
     runtime: Path, cell_id: str, e5_override: float | None = None,
+    finish: bool = False,
 ) -> ShapeReport:
     state, reason = _read_campaign_state(runtime, cell_id)
     if reason is not None:
@@ -284,7 +296,7 @@ def _shape_one_cell(
     if reason is not None:
         return ShapeReport(cell_id=cell_id, shape=None, reason=reason, cached_folds=cached)
 
-    shape = choose_shape(e5_seconds)
+    shape = (finish_shape if finish else choose_shape)(e5_seconds)
     if shape is None:
         return ShapeReport(
             cell_id=cell_id, shape=None,
@@ -301,6 +313,7 @@ def _shape_one_cell(
 
 def shape_cells(
     runtime: Path, cell_ids: Sequence[str], e5_override: float | None = None,
+    finish: bool = False,
 ) -> Mapping[str, ShapeReport]:
     """Predict a SLURM shape for each cell root under ``runtime``.
 
@@ -308,10 +321,12 @@ def shape_cells(
     carries a ``reason`` instead of a ``shape``. ``e5_override`` (seconds)
     is the operator-supplied five-fold time for a baseline whose retry
     loaded every fold from cache; it is refused for a baseline that carries
-    its own timing.
+    its own timing. ``finish`` sizes the finish-only recovery lane instead
+    of the whole cell.
     """
     return {
-        cell_id: _shape_one_cell(runtime, cell_id, e5_override) for cell_id in cell_ids
+        cell_id: _shape_one_cell(runtime, cell_id, e5_override, finish)
+        for cell_id in cell_ids
     }
 
 
@@ -371,7 +386,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
     parser.add_argument(
         "--finish", action="store_true",
-        help="print the finish-only recovery lane shape as JSON and exit",
+        help="size the finish-only recovery lane (the re-score and the "
+             "overhead) instead of the whole cell",
     )
     parser.add_argument(
         "--e5-seconds", type=float, default=None,
@@ -389,6 +405,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _run_cell_field(
     runtime: Path, cell_id: str, field: str | None, e5_override: float | None,
+    finish: bool,
 ) -> int:
     if not field:
         print("campaign_shape: --field is required with --cell", file=sys.stderr)
@@ -396,7 +413,7 @@ def _run_cell_field(
     if not (runtime / cell_id).is_dir():
         print(f"campaign_shape: unknown cell id: {cell_id}", file=sys.stderr)
         return 2
-    report = _shape_one_cell(runtime, cell_id, e5_override)
+    report = _shape_one_cell(runtime, cell_id, e5_override, finish)
     if report.shape is None:
         print(
             f"campaign_shape: cell {cell_id} is unshaped: {report.reason}",
@@ -409,6 +426,7 @@ def _run_cell_field(
 
 def _run_sweep(
     runtime: Path, cells_arg: str | None, as_json: bool, e5_override: float | None,
+    finish: bool,
 ) -> int:
     cell_ids = _resolve_cell_ids(runtime, cells_arg)
     unknown = _first_unknown_cell(runtime, cell_ids)
@@ -416,7 +434,7 @@ def _run_sweep(
         print(f"campaign_shape: unknown cell id: {unknown}", file=sys.stderr)
         return 2
 
-    reports = shape_cells(runtime, cell_ids, e5_override)
+    reports = shape_cells(runtime, cell_ids, e5_override, finish)
     if as_json:
         payload = {cell_id: _report_to_json(reports[cell_id]) for cell_id in reports}
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -427,9 +445,6 @@ def _run_sweep(
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    if args.finish:
-        print(json.dumps(asdict(finish_shape()), sort_keys=True))
-        return 0
     if args.runtime is None:
         print("campaign_shape: --runtime is required", file=sys.stderr)
         return 2
@@ -445,8 +460,8 @@ def main(argv: list[str] | None = None) -> int:
         print("campaign_shape: --e5-seconds needs --cell or --cells", file=sys.stderr)
         return 2
     if args.cell is not None:
-        return _run_cell_field(runtime, args.cell, args.field, args.e5_seconds)
-    return _run_sweep(runtime, args.cells, args.json, args.e5_seconds)
+        return _run_cell_field(runtime, args.cell, args.field, args.e5_seconds, args.finish)
+    return _run_sweep(runtime, args.cells, args.json, args.e5_seconds, args.finish)
 
 
 if __name__ == "__main__":

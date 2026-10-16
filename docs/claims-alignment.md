@@ -29,7 +29,7 @@ behavior were updated to the contract shape.
 PR #39 (native Claude active-time metering) and PR #40 (campaign operator
 runbook). The campaign protocol is now `preprint-v4`: **30 charged attempts
 + 12h natively-metered agent-active time** per cell
-(`automil-preprint-130-v6` manifest). Where a row below cites 60 attempts
+(`automil-preprint-130-v7` manifest). Where a row below cites 60 attempts
 or a 6h/7d time stance, that is the audited pre-merge state; the A10 and
 C-i rows record their post-merge supersession explicitly, and A9's
 bill-at-archive invariant now lives inside #39's fail-closed admission
@@ -234,15 +234,16 @@ optimizer-wrapper route would remain live on CLAM):
   deltas came from recipe knobs alone: optimizer, epochs, checkpoint policy).
 - The pre-registered C2 is **descriptive and sign-based** — it does not promise
   anchor-sized lifts, and the campaign's design (five-fold validation of every
-  attempt, parent-SE margin, a winner bar set for the best of 30 attempts,
+  attempt, parent-SE margin, deploying the validation-best attempt,
   sealed paired reveal, no p-values) makes a modest true lift honestly
   reportable and a null result survivable (the proposal's §8 pivot: "recipe
   bias is modest under architecture-preserving constraints among
   defaults-tuned arms" — still a publishable audit finding).
 - The residual risk is **effect size on the two small cohorts** (≈10 val
-  patients/fold): the winner bar, 2.93 × the paired SE of the five folds,
-  widens with that noise; expect visible val→test shrinkage and pre-commit to
-  showing it (the census already captures the val trajectory per attempt).
+  patients/fold): the validation-best attempt is deployed whenever it beats the
+  baseline, so the best of 30 is biased upward by that noise; expect visible
+  val→test shrinkage and pre-commit to showing it (the census already captures
+  the val trajectory per attempt).
 
 So: **yes, conditionally** — the condition being the P0 list, which is exactly
 what §4 ships. Under the ship-fast constraint (no protocol-surface growth at

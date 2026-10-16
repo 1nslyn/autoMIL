@@ -14,8 +14,9 @@
 #      be driven: finish-only recoveries first, then pending cells in roster
 #      order;
 #   3. fit the job to the cell (campaign_shape.py: one GPU, 12 cores and
-#      128 GB; the shorter of a 24 h and a 72 h wall that holds the cell) —
-#      a cell that fits no wall is reported, never submitted;
+#      128 GB; the shorter of a 24 h and a 72 h wall that holds the cell, or,
+#      for a finish-only recovery, its winner re-score) — a cell that fits no
+#      wall is reported, never submitted;
 #   4. sbatch the job, then claim the cell with the NEW job id (O_EXCL). If a
 #      concurrent submitter won the claim first, the fresh job is cancelled
 #      (it has no queue age to lose) and the next cell is tried.
@@ -82,21 +83,22 @@ SCAN=$(disc_scan) || { echo "ERROR: cell scan failed"; exit 1; }
 disc_scan_report "$SCAN"
 
 # One predictor call per cell: "gpus wall cpus mem predicted e5 source".
-# A finish-only recovery takes the predictor's finish lane (one GPU, the
-# shorter wall: the finish ladder trains nothing).
+# A finish-only recovery takes the predictor's finish lane: the same cell
+# inputs (and operator time), sized for the winner re-score the lane trains.
 shape_for() {
     local mode="$1" cell="$2" args shape_json
-    if [ "$mode" = "finish" ]; then args="--finish"; else args="--runtime $RUNTIME --cells $cell --json${E5_SECONDS:+ --e5-seconds $E5_SECONDS}"; fi
+    args="--runtime $RUNTIME --cells $cell --json${E5_SECONDS:+ --e5-seconds $E5_SECONDS}"
+    [ "$mode" = "finish" ] && args="--finish $args"
     shape_json=$(pyrun benchmarks/scripts/campaign_shape.py $args) || return 1
-    SHAPE_JSON="$shape_json" pyrun - "$cell" "$mode" <<'PYEOF'
+    SHAPE_JSON="$shape_json" pyrun - "$cell" <<'PYEOF'
 import json, os, sys
-payload = json.loads(os.environ["SHAPE_JSON"]); cell, mode = sys.argv[1:3]
-shape = payload if mode == "finish" else payload[cell]
+cell = sys.argv[1]
+shape = json.loads(os.environ["SHAPE_JSON"])[cell]
 if "unshaped" in shape:
     sys.exit(f"{cell}: {shape['unshaped']}")
 print(shape["gpus"], shape["wall_hours"], shape["cpus"], shape["mem_gb"],
-      shape["predicted_hours"], shape.get("baseline_elapsed_seconds", 0),
-      shape.get("baseline_elapsed_source") or "finish-lane")
+      shape["predicted_hours"], shape["baseline_elapsed_seconds"],
+      shape["baseline_elapsed_source"])
 PYEOF
 }
 

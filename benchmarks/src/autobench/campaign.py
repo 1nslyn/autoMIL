@@ -32,8 +32,8 @@ from automil.cells.state import make_cell_id, normalize_mil_model
 #: deliberately does NOT move with the schema: it is the same 130-cell
 #: campaign, and every cell id and hash already moves with PROTOCOL_VERSION.
 SCHEMA_VERSION = 8
-CAMPAIGN_ID = "automil-preprint-130-v6"
-PROTOCOL_VERSION = "preprint-v6"
+CAMPAIGN_ID = "automil-preprint-130-v7"
+PROTOCOL_VERSION = "preprint-v7"
 #: Every cell trains on the ``devcv`` folds: five-fold cross-validation inside
 #: the development part of standard fold 0, all tested on its test slides
 #: (autobench.pipeline.splits). No test slide is ever a validation slide.
@@ -80,6 +80,16 @@ TILE_ARMS = (
     ("dtfd", "dtfd_models"),
 )
 CERTIFICATION_FOLDS = (0, 1, 2, 3, 4)
+#: The winner and the baseline are trained again on these two fresh cuts of the
+#: same development slides (autobench.pipeline.splits.DEVCV_PARTITION_SEEDS),
+#: so certification reads three partitions of five folds, 15 fold models each.
+RESCORE_STRATEGIES = ("devcv_r1", "devcv_r2")
+CERTIFICATION_PARTITIONS = (SPLIT_STRATEGY, *RESCORE_STRATEGIES)
+CERTIFICATION_SOURCES = tuple(
+    (partition, fold)
+    for partition in CERTIFICATION_PARTITIONS
+    for fold in CERTIFICATION_FOLDS
+)
 #: v5 judges every discovery attempt on all five folds, so the evidence an
 #: attempt is searched on is the evidence the winner is selected on.
 STAGE_FOLDS = {"discovery": CERTIFICATION_FOLDS}
@@ -262,16 +272,9 @@ DISCOVERY_PHASING = {
     "reserve_neighbours_min": 2,
 }
 assert sum(DISCOVERY_PHASING["batches"]) == DISCOVERY_ATTEMPTS
-# The winner rule's bar: the leader's paired lift must clear both a fixed
-# floor and this many paired standard errors (max_lift_winner). 2.93 is
-# Sidak's one-sided 5% critical value for the best of the 30 attempts a cell
-# launches, NormalDist().inv_cdf(0.95 ** (1 / 30)) = 2.9275, rounded up. It is
-# written out so the bar never depends on a platform's libm.
-WINNER_FLOOR = 0.01
-WINNER_SE_MULTIPLIER = 2.93
 
 
-def max_lift_winner(
+def val_best_winner(
     baseline_fold_values: Sequence[float],
     pool: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -282,41 +285,18 @@ def max_lift_winner(
     "candidate_sha256", "fold_values"}`` with one value per fold, paired
     fold by fold with ``baseline_fold_values``. A candidate's lift is its
     mean minus the baseline mean; the leader has the highest lift (ties keep
-    pool order).
-
-    The best of many lifts is biased upward, so the leader must clear a bar
-    set for the maximum of the whole search: ``max(WINNER_FLOOR,
-    WINNER_SE_MULTIPLIER * se)``, where ``se`` is the standard error of one
-    candidate's lift, from the paired fold variance pooled over the
-    candidates. The leader replaces the baseline iff its lift exceeds the
-    bar. An empty pool keeps the baseline.
+    pool order). The leader replaces the baseline iff its lift is above
+    zero. An empty pool keeps the baseline.
 
     Pure and deterministic: the selection freeze and certification re-run it
     on the recorded inputs and require the identical record. Every step is a
-    correctly rounded IEEE operation (a square is a product, never ``**``,
-    which goes through the platform's ``pow``), so the record is the same on
-    every machine.
+    correctly rounded IEEE operation (``fsum`` and a division), so the record
+    is the same on every machine.
     """
     baseline = [float(value) for value in baseline_fold_values]
     folds = len(baseline)
     if folds < 2:
         raise CampaignManifestError("the winner rule needs at least two paired folds")
-    record: dict[str, Any] = {
-        "rule": "sidak-max-lift",
-        "floor": WINNER_FLOOR,
-        "se_multiplier": WINNER_SE_MULTIPLIER,
-        "baseline_fold_values": baseline,
-        "pool": [],
-        "fold_variance": None,
-        "standard_error": None,
-        "leader": None,
-        "leader_lift": None,
-        "bar": None,
-        "accepted": False,
-        "winner": "baseline",
-    }
-    if not pool:
-        return record
     baseline_mean = math.fsum(baseline) / folds
     entries: list[dict[str, Any]] = []
     for candidate in pool:
@@ -326,31 +306,27 @@ def max_lift_winner(
                 f"candidate {candidate['candidate_id']} has {len(values)} fold "
                 f"values; the baseline has {folds}"
             )
-        lift = math.fsum(values) / folds - baseline_mean
-        residuals = [value - base - lift for value, base in zip(values, baseline)]
         entries.append({
             "candidate_id": str(candidate["candidate_id"]),
             "candidate_sha256": str(candidate["candidate_sha256"]),
             "fold_values": values,
-            "lift": lift,
-            "fold_variance": math.fsum(r * r for r in residuals) / (folds - 1),
+            "lift": math.fsum(values) / folds - baseline_mean,
         })
-    fold_variance = math.fsum(entry["fold_variance"] for entry in entries) / len(entries)
-    standard_error = math.sqrt(fold_variance / folds)
-    leader = entries[max(range(len(entries)), key=lambda index: entries[index]["lift"])]
-    bar = max(WINNER_FLOOR, WINNER_SE_MULTIPLIER * standard_error)
-    accepted = leader["lift"] > bar
-    record.update({
+    leader = (
+        entries[max(range(len(entries)), key=lambda index: entries[index]["lift"])]
+        if entries else None
+    )
+    accepted = leader is not None and leader["lift"] > 0.0
+    return {
+        "rule": "val-best",
+        "baseline_fold_values": baseline,
         "pool": entries,
-        "fold_variance": fold_variance,
-        "standard_error": standard_error,
-        "leader": leader["candidate_id"],
-        "leader_lift": leader["lift"],
-        "bar": bar,
+        "leader": leader["candidate_id"] if leader else None,
+        "leader_lift": leader["lift"] if leader else None,
         "accepted": accepted,
         "winner": leader["candidate_id"] if accepted else "baseline",
-    })
-    return record
+    }
+
 
 PROTOCOL = {
     "protocol_version": PROTOCOL_VERSION,
@@ -380,13 +356,22 @@ PROTOCOL = {
         "metric_source": "validation",
         "pool": "unique-complete-discovery-candidates",
         "statistic": "paired-fold-lift-over-baseline",
-        "rule": "sidak-max-lift",
-        "floor": WINNER_FLOOR,
-        "se_multiplier": WINNER_SE_MULTIPLIER,
+        "rule": "val-best",
         "folds": list(CERTIFICATION_FOLDS),
+    },
+    # v7: after the agent session the deployed attempt and the baseline are
+    # trained again on two fresh partitions of the development slides; the
+    # re-score records validation only, and certification reads all fifteen
+    # fold models of each.
+    "winner_rescore": {
+        "after": "agent-session",
+        "candidates": ["winner", "baseline"],
+        "strategies": list(RESCORE_STRATEGIES),
+        "metric_source": "validation",
     },
     "certification": {
         "mode": "unseal-existing-held-out",
+        "partitions": list(CERTIFICATION_PARTITIONS),
         "folds": list(CERTIFICATION_FOLDS),
         "retrain": False,
     },

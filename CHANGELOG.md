@@ -8,6 +8,38 @@ autoMIL: F2-readiness framework refactor.
 
 ## Unreleased
 
+- **Protocol `preprint-v7`: deploy the validation-best attempt, re-score it on
+  fresh partitions, and read the test on fifteen fold models.** On 372
+  validation slides about ±0.009 of an attempt's ±0.0125 validation noise
+  comes from the slides themselves and does not shrink with repeats, so no
+  keep-margin with 5% false acceptance confirms a gain below about +0.022, and
+  the Sidak bar of `preprint-v5` kept baselines whose leaders carried real but
+  small gains. The winner rule is now `campaign.val_best_winner`: the distinct
+  complete attempt with the largest paired five-fold validation lift is
+  deployed when that lift is above zero (`WINNER_FLOOR`,
+  `WINNER_SE_MULTIPLIER` and the pooled-SE fields of the selection record are
+  removed). The deployed attempt's selected lift is biased upward by the
+  choice, so after the agent session the new stage `run-winner-rescore`
+  (`campaign_rescore.py`) rebuilds it exactly from its archived spec (base
+  commit, hash-checked overlay, frozen command and override) and trains it and
+  the baseline on two fresh partitions of the same development slides,
+  `devcv_r1` and `devcv_r2` (`StratifiedGroupKFold` seeds 1001 and 1002). The
+  mean of the ten paired validation deltas is the cell's re-scored validation
+  lift, recorded before any held-out value is opened, and the phase becomes
+  `winner-rescored`. Certification averages fifteen single-model fold readouts
+  per candidate (the five discovery folds and the ten re-score folds, each
+  labelled with its partition), so the test lift no longer rests on one
+  training draw. `campaign_operate.py finish --gpu N` runs the re-score after
+  it closes the session; `campaign_scan.py` counts a cell as done only at
+  `winner-rescored`, so a finalized `winner-frozen` cell is finishable again
+  and a wall-killed re-score resumes from a fresh attempt directory; and
+  `campaign_shape.py` sizes the full and the finish-only lanes with the
+  re-score round. `run_experiment.py --prepare-only` prepares one strategy's
+  data without training, so concurrent re-score runs never write the same
+  split files. The manifest (cell ids now end in `__preprint-v7`), the rosters,
+  the analysis plan, the proposal policy and `agent_protocol.json` are
+  regenerated.
+
 - **Protocol `preprint-v6`: validation on the whole development set, and a
   training-step seam.** The KRAS long trial (96 attempts per arm on TITAN)
   showed the standard folds' 47-slide validation folds rank attempts against

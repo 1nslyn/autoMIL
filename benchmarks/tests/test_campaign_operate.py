@@ -24,7 +24,7 @@ from _helpers import full_h100_nvidia_smi, write_reproduction_policy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "benchmarks" / "scripts" / "campaign_operate.py"
-CELL_NAME = "tcga_luad__kras__uni_v2__clam__s42__preprint-v6"
+CELL_NAME = "tcga_luad__kras__uni_v2__clam__s42__preprint-v7"
 BUDGET_CELL_ID = "deadbeefdeadbeef"
 
 
@@ -377,25 +377,49 @@ def test_up_gpu_argparse_rejects_non_integer(operate, tmp_path, capsys):
     assert "--gpu" in capsys.readouterr().err
 
 
-def test_finish_parses_with_just_the_cell_root(operate, tmp_path):
-    """Finish trains nothing, so it takes no GPU: the cell root alone, and the
-    two session options that default to none."""
+def test_finish_parses_the_cell_root_and_the_gpu_of_its_re_score(operate, tmp_path):
+    """The winner re-score trains, so finish takes the GPU to train it on, and
+    the two session options that default to none."""
     parser = operate.build_parser()
-    args = parser.parse_args(["finish", str(tmp_path / "cell")])
+    args = parser.parse_args(["finish", str(tmp_path / "cell"), "--gpu", "2"])
     assert args.cell_root == str(tmp_path / "cell")
+    assert args.gpu == 2
     assert args.usage_json is None
     assert args.attest is None
 
 
-@pytest.mark.parametrize("flag", [["--gpu", "0"], ["--accept-missing"]])
-def test_finish_refuses_a_flag_only_a_promotion_run_needed(
-    operate, tmp_path, capsys, flag,
-):
+def test_finish_refuses_to_run_without_a_gpu(operate, tmp_path, monkeypatch, capsys):
+    """No default GPU: an omitted --gpu must not quietly train on device 0."""
+    cell = make_cell(tmp_path)
+    append_journal(cell, session_open_event())
+    append_journal(cell, session_end_event())
+    write_agent_session(cell, status="finalized")
+    boundary = FakeBoundary(operate, statuses=[])
+    boundary.install(monkeypatch)
+
+    with pytest.raises(SystemExit) as excinfo:
+        operate.main(["finish", str(cell)])
+
+    assert excinfo.value.code == 2
+    assert "--gpu" in capsys.readouterr().err
+    assert boundary.captures == [] and boundary.run_or_die == []
+
+
+@pytest.mark.parametrize("gpu", ["-1", "a", "0,1", ""])
+def test_finish_gpu_is_one_non_negative_index(operate, tmp_path, capsys, gpu):
+    parser = operate.build_parser()
+    with pytest.raises(SystemExit) as excinfo:
+        parser.parse_args(["finish", str(tmp_path / "cell"), "--gpu", gpu])
+    assert excinfo.value.code == 2
+    assert "--gpu" in capsys.readouterr().err
+
+
+def test_finish_refuses_a_flag_only_a_promotion_run_needed(operate, tmp_path, capsys):
     """A stale invocation must fail loudly, not be ignored: nothing in finish
     starts a daemon or freezes a partial slate any more."""
     parser = operate.build_parser()
     with pytest.raises(SystemExit) as excinfo:
-        parser.parse_args(["finish", str(tmp_path / "cell"), *flag])
+        parser.parse_args(["finish", str(tmp_path / "cell"), "--gpu", "0", "--accept-missing"])
     assert excinfo.value.code == 2
     assert "unrecognized arguments" in capsys.readouterr().err
 
@@ -855,7 +879,7 @@ def test_finish_refuses_without_session_end_while_exporter_serves(
     monkeypatch.setattr(operate, "_port_in_use", lambda port: True)
 
     with pytest.raises(SystemExit):
-        operate.main(["finish", str(cell)])
+        operate.main(["finish", str(cell), "--gpu", "0"])
     err = capsys.readouterr().err
     assert "/exit" in err
     assert "SessionEnd" in err
@@ -870,7 +894,7 @@ def test_finish_requires_attest_when_exporter_dead(
     monkeypatch.setattr(operate, "_port_in_use", lambda port: False)
 
     with pytest.raises(SystemExit):
-        operate.main(["finish", str(cell)])
+        operate.main(["finish", str(cell), "--gpu", "0"])
     err = capsys.readouterr().err
     assert "--attest" in err
     assert "activity close" in err
@@ -884,7 +908,7 @@ def test_finish_runs_activity_close_with_operator_attestation(
     write_agent_session(cell, status="finalized")
     monkeypatch.setattr(operate, "_port_in_use", lambda port: False)
 
-    boundary = FakeBoundary(operate, statuses=[{"phase": "winner-frozen"}])
+    boundary = FakeBoundary(operate, statuses=[{"phase": "winner-rescored"}])
     attest = "runtime died before SessionEnd: power loss"
 
     def do_close(argv):
@@ -895,34 +919,101 @@ def test_finish_runs_activity_close_with_operator_attestation(
     ] = do_close
     boundary.install(monkeypatch)
 
-    operate.main(["finish", str(cell), "--attest", attest])
+    operate.main(["finish", str(cell), "--gpu", "0", "--attest", attest])
     assert ("automil", ("activity", "close", "--session", "sess-1", "--attest", attest)) in actions(boundary.run_or_die)
 
 
 # ---------------------------------------------------------------------------
 # finish — phase-based state machine
 # ---------------------------------------------------------------------------
-def test_finish_winner_frozen_finalized_session_only_reports(
+def test_finish_resumes_a_finalized_winner_frozen_cell_at_the_re_score(
+    operate, tmp_path, monkeypatch, capsys,
+):
+    """A wall that ended the re-score leaves the session finalized: the next
+    finish re-scores on the GPU it is given and closes nothing again."""
+    cell = make_cell(tmp_path)
+    append_journal(cell, session_open_event())
+    append_journal(cell, session_end_event())
+    write_agent_session(cell, status="finalized")
+
+    boundary = FakeBoundary(operate, statuses=[
+        {"phase": "winner-frozen"}, {"phase": "winner-rescored"},
+    ])
+    boundary.install(monkeypatch)
+    operate.main(["finish", str(cell), "--gpu", "3"])
+
+    assert actions(boundary.run_or_die) == [("stage", "run-winner-rescore")]
+    rescore_argv = boundary.run_or_die[0]
+    assert rescore_argv[rescore_argv.index("--gpu") + 1] == "3"
+    assert rescore_argv[rescore_argv.index("--cell-root") + 1] == str(cell)
+    out = capsys.readouterr().out
+    assert "finish: final status" in out
+    assert '"phase": "winner-rescored"' in out
+
+
+def test_finish_re_run_on_a_re_scored_winner_trains_nothing(
+    operate, tmp_path, monkeypatch, capsys,
+):
+    """finish stays safe to repeat after the winner re-score has run."""
+    cell = make_cell(tmp_path)
+    append_journal(cell, session_open_event())
+    append_journal(cell, session_end_event())
+    write_agent_session(cell, status="finalized")
+
+    boundary = FakeBoundary(operate, statuses=[{"phase": "winner-rescored"}])
+    boundary.install(monkeypatch)
+    operate.main(["finish", str(cell), "--gpu", "0"])
+
+    assert boundary.run_or_die == []
+    out = capsys.readouterr().out
+    assert '"phase": "winner-rescored"' in out
+
+
+def test_finish_closes_the_session_of_a_winner_re_scored_by_hand(
+    operate, tmp_path, monkeypatch,
+):
+    """A re-score run through campaign_stage.py before the session was closed
+    leaves a re-scored cell with an open session: finish closes it and
+    trains nothing."""
+    cell = make_cell(tmp_path)
+    append_journal(cell, session_open_event())
+    append_journal(cell, session_end_event())
+    write_agent_session(cell, status="open")
+
+    boundary = FakeBoundary(operate, statuses=[{"phase": "winner-rescored"}])
+    boundary.install(monkeypatch)
+    operate.main(["finish", str(cell), "--gpu", "0"])
+
+    assert actions(boundary.run_or_die) == [("stage", "finalize-agent-session")]
+
+
+def test_finish_stops_at_a_failed_re_score(
     operate, tmp_path, monkeypatch, capsys,
 ):
     cell = make_cell(tmp_path)
     append_journal(cell, session_open_event())
     append_journal(cell, session_end_event())
     write_agent_session(cell, status="finalized")
+    refusal = "campaign-stage error: winner re-score failed and recorded nothing\n"
 
     boundary = FakeBoundary(operate, statuses=[{"phase": "winner-frozen"}])
+
+    def refuse(argv):
+        import sys as _sys
+        _sys.stderr.write(refusal)
+        raise SystemExit(1)
+
+    boundary.behaviors[("stage", "run-winner-rescore")] = refuse
     boundary.install(monkeypatch)
-    operate.main(["finish", str(cell)])
+    with pytest.raises(SystemExit) as excinfo:
+        operate.main(["finish", str(cell), "--gpu", "0"])
 
-    # The final status is printed from the last read already in hand — no
-    # sixth status subprocess.
-    assert boundary.run_or_die == []
-    out = capsys.readouterr().out
-    assert "finish: final status" in out
-    assert '"phase": "winner-frozen"' in out
+    assert excinfo.value.code == 1
+    assert refusal in capsys.readouterr().err
+    assert actions(boundary.run_or_die) == [("stage", "run-winner-rescore")]
 
 
-def test_finish_selection_ready_selects_winner_and_finalizes(
+def test_finish_selection_ready_selects_winner_finalizes_and_re_scores(
     operate, tmp_path, monkeypatch,
 ):
     cell = make_cell(tmp_path)
@@ -933,15 +1024,21 @@ def test_finish_selection_ready_selects_winner_and_finalizes(
     boundary = FakeBoundary(operate, statuses=[
         {"phase": "selection-ready"},
         {"phase": "winner-frozen"},
+        {"phase": "winner-rescored"},
     ])
     boundary.install(monkeypatch)
-    operate.main(["finish", str(cell)])
+    operate.main(["finish", str(cell), "--gpu", "2"])
 
+    # The session closes before the re-score trains, so a wall that ends the
+    # re-score leaves a finalized winner-frozen cell.
     recorded = actions(boundary.run_or_die)
     assert recorded == [
         ("stage", "select-winner"),
         ("stage", "finalize-agent-session"),
+        ("stage", "run-winner-rescore"),
     ]
+    rescore_argv = boundary.run_or_die[2]
+    assert rescore_argv[rescore_argv.index("--gpu") + 1] == "2"
     finalize_argv = boundary.run_or_die[1]
     end_path = Path(finalize_argv[finalize_argv.index("--agent-session") + 1])
     payload = json.loads(end_path.read_text())
@@ -972,9 +1069,11 @@ def test_finish_passes_usage_json_verbatim(operate, tmp_path, monkeypatch):
     usage_path = tmp_path / "usage.json"
     usage_path.write_text(json.dumps(usage))
 
-    boundary = FakeBoundary(operate, statuses=[{"phase": "winner-frozen"}])
+    boundary = FakeBoundary(operate, statuses=[
+        {"phase": "winner-frozen"}, {"phase": "winner-rescored"},
+    ])
     boundary.install(monkeypatch)
-    operate.main(["finish", str(cell), "--usage-json", str(usage_path)])
+    operate.main(["finish", str(cell), "--gpu", "0", "--usage-json", str(usage_path)])
 
     finalize_argv = next(
         argv for argv in boundary.run_or_die
@@ -988,7 +1087,7 @@ def test_finish_discovery_phase_freezes_then_walks_the_chain(
     operate, tmp_path, monkeypatch,
 ):
     """Full walk: discovery -> stop the idle daemon -> freeze -> select-winner
-    -> finalize, each step taken from the controller's own status."""
+    -> finalize -> re-score, each step taken from the controller's own status."""
     cell = make_cell(tmp_path)
     append_journal(cell, session_open_event())
     append_journal(cell, session_end_event())
@@ -1001,6 +1100,7 @@ def test_finish_discovery_phase_freezes_then_walks_the_chain(
         {"phase": "discovery"},
         {"phase": "selection-ready"},
         {"phase": "winner-frozen"},
+        {"phase": "winner-rescored"},
     ])
 
     def stop_daemon(argv):
@@ -1009,19 +1109,21 @@ def test_finish_discovery_phase_freezes_then_walks_the_chain(
     boundary.behaviors[("automil", ("orchestrator", "stop"))] = stop_daemon
     boundary.install(monkeypatch)
 
-    operate.main(["finish", str(cell)])
+    operate.main(["finish", str(cell), "--gpu", "0"])
 
     assert actions(boundary.run_or_die) == [
         ("automil", ("orchestrator", "stop")),
         ("stage", "freeze-discovery"),
         ("stage", "select-winner"),
         ("stage", "finalize-agent-session"),
+        ("stage", "run-winner-rescore"),
     ]
 
 
 def test_finish_reentry_skips_completed_transitions(operate, tmp_path, monkeypatch):
     """A finish re-run on a discovery-frozen cell touches nothing before
-    select-winner: phase decides, not history."""
+    select-winner, and an already finalized session is not closed again:
+    phase decides, not history."""
     cell = make_cell(tmp_path)
     append_journal(cell, session_open_event())
     append_journal(cell, session_end_event())
@@ -1030,11 +1132,15 @@ def test_finish_reentry_skips_completed_transitions(operate, tmp_path, monkeypat
     boundary = FakeBoundary(operate, statuses=[
         {"phase": "selection-ready"},
         {"phase": "winner-frozen"},
+        {"phase": "winner-rescored"},
     ])
     boundary.install(monkeypatch)
-    operate.main(["finish", str(cell)])
+    operate.main(["finish", str(cell), "--gpu", "0"])
 
-    assert actions(boundary.run_or_die) == [("stage", "select-winner")]
+    assert actions(boundary.run_or_die) == [
+        ("stage", "select-winner"),
+        ("stage", "run-winner-rescore"),
+    ]
 
 
 @pytest.mark.parametrize("phase", ["promotion-ready", "promotion"])
@@ -1051,7 +1157,7 @@ def test_finish_refuses_a_phase_the_ladder_no_longer_walks(
     boundary = FakeBoundary(operate, statuses=[{"phase": phase}])
     boundary.install(monkeypatch)
     with pytest.raises(SystemExit) as excinfo:
-        operate.main(["finish", str(cell)])
+        operate.main(["finish", str(cell), "--gpu", "0"])
 
     assert excinfo.value.code == 2
     assert f"does not know how to advance phase {phase!r}" in capsys.readouterr().err
@@ -1081,7 +1187,7 @@ def test_finish_discovery_refuses_while_daemon_still_draining(
     boundary = FakeBoundary(operate, statuses=[{"phase": "discovery"}])
     boundary.install(monkeypatch)
     with pytest.raises(SystemExit) as excinfo:
-        operate.main(["finish", str(cell)])
+        operate.main(["finish", str(cell), "--gpu", "0"])
 
     assert excinfo.value.code == 2
     err = capsys.readouterr().err
@@ -1116,7 +1222,7 @@ def test_finish_discovery_dead_daemon_falls_through_to_controller_refusal(
     boundary.behaviors[("stage", "freeze-discovery")] = refuse
     boundary.install(monkeypatch)
     with pytest.raises(SystemExit) as excinfo:
-        operate.main(["finish", str(cell)])
+        operate.main(["finish", str(cell), "--gpu", "0"])
 
     assert excinfo.value.code == 2
     assert refusal in capsys.readouterr().err
@@ -1234,7 +1340,7 @@ def test_finish_controller_refusal_passes_through_verbatim(
     boundary.install(monkeypatch)
 
     with pytest.raises(SystemExit) as excinfo:
-        operate.main(["finish", str(cell)])
+        operate.main(["finish", str(cell), "--gpu", "0"])
     assert excinfo.value.code == 2
     assert refusal in capsys.readouterr().err
     # Nothing past the refused transition ran.
@@ -1252,6 +1358,6 @@ def test_status_refusal_passes_through_verbatim(operate, tmp_path, monkeypatch, 
 
     monkeypatch.setattr(operate, "_capture", fake_capture)
     with pytest.raises(SystemExit) as excinfo:
-        operate.main(["finish", str(cell)])
+        operate.main(["finish", str(cell), "--gpu", "0"])
     assert excinfo.value.code == 2
     assert refusal in capsys.readouterr().err

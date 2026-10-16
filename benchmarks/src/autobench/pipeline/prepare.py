@@ -381,10 +381,11 @@ def prepare_all(
             # process is already training from. So the operator purges explicitly.
             #
             # Note this only removes the *destructive* race. Creation itself is
-            # still not atomic (`to_csv` truncates then writes), so run
-            # `run_benchmark.py --dataset <cohort> --prep_only` once before
-            # launching concurrent work, rather than letting 8xN experiment
-            # processes race to generate the same CSVs and splits.
+            # still not atomic (`to_csv` truncates then writes); run_experiment.py
+            # prepares under an exclusive lock on the benchmark root, so
+            # concurrent experiments take turns, and other entry points should
+            # run `run_benchmark.py --dataset <cohort> --prep_only` once before
+            # launching concurrent work.
             expected = {"status", "time"} if tdef.task_type == "survival" else {"label"}
             stale_splits = " ".join(
                 os.path.join(benchmark_dir, "splits", strategy, task_name)

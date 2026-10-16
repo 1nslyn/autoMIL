@@ -37,19 +37,19 @@ cs = _load_module()
 
 def test_predict_hours_known_value_one_gpu():
     # e5 = 1 h -> gate 1.0 (undilated), slowest attempt 2*1.0 = 2.0, four
-    # batches 8.0, one batch at the 17 h timeout adds 15.0, overhead 2.0;
-    # nothing trains after discovery
-    assert cs.predict_hours(3600.0, 1) == pytest.approx(26.0, abs=1e-9)
+    # batches 8.0, one batch at the 17 h timeout adds 15.0, the winner
+    # re-score one more attempt round 2.0, overhead 2.0
+    assert cs.predict_hours(3600.0, 1) == pytest.approx(28.0, abs=1e-9)
 
 
 def test_predict_hours_known_value_three_gpus():
     # The workstation's three GPUs shorten nothing: a batch of 8 fits one.
-    assert cs.predict_hours(3600.0, 3) == pytest.approx(26.0, abs=1e-9)
+    assert cs.predict_hours(3600.0, 3) == pytest.approx(28.0, abs=1e-9)
 
 
 def test_more_gpus_do_not_shorten_a_cell():
-    """A batch of 8 fits one GPU and the stages after discovery train
-    nothing, so no further GPU saves a round."""
+    """A batch of 8 fits one GPU and the re-score runs its four five-fold runs
+    at once on one, so no further GPU saves a round."""
     e5_seconds = 2.5 * 3600
     one = cs.predict_hours(e5_seconds, 1)
     for gpus in (2, 3, 4):
@@ -67,8 +67,9 @@ def test_tiny_baselines_pay_the_per_attempt_floor():
     # The TITAN rehearsal cell: e5 = 194 s, attempts still took ~16 min.
     assert cs.attempt_hours(194.0, cs.DISCOVERY_FOLDS) == cs.ATTEMPT_FLOOR_H
     assert cs.fold_hours(194.0, cs.DISCOVERY_FOLDS) == cs.ATTEMPT_FLOOR_H
-    # e5 = 180 s: 0.25 gate + 4*0.25 + (17 - 0.25) + 2
-    assert cs.predict_hours(180.0, 1) == pytest.approx(20.0, abs=1e-9)
+    # e5 = 180 s: 0.25 gate + 4*0.25 + (17 - 0.25) + 0.25 re-score + 2
+    assert cs.predict_hours(180.0, 1) == pytest.approx(20.25, abs=1e-9)
+    assert cs.rescore_hours(180.0) == cs.ATTEMPT_FLOOR_H
 
 
 def test_an_attempt_as_long_as_the_timeout_adds_no_timeout_batch():
@@ -77,6 +78,27 @@ def test_an_attempt_as_long_as_the_timeout_adds_no_timeout_batch():
     assert attempt > cs.ATTEMPT_TIMEOUT_H
     assert cs.discovery_hours(e5_seconds, 1) == pytest.approx(
         cs.fold_hours(e5_seconds, cs.DISCOVERY_FOLDS) + len(cs.DISCOVERY_BATCHES) * attempt
+    )
+
+
+def test_the_rescore_is_one_round_of_four_concurrent_five_fold_runs():
+    """The winner and the baseline on two fresh partitions run at once on the
+    job's GPU, so the round lasts as long as one dilated five-fold run."""
+    from autobench import campaign
+
+    assert len(campaign.RESCORE_STRATEGIES) * 2 == 4
+    assert len(campaign.CERTIFICATION_FOLDS) == cs.DISCOVERY_FOLDS
+    assert cs.rescore_hours(0.71 * 3600) == pytest.approx(
+        cs.attempt_hours(0.71 * 3600, cs.DISCOVERY_FOLDS)
+    )
+    assert cs.rescore_hours(0.71 * 3600) == pytest.approx(2 * 0.71)
+
+
+@pytest.mark.parametrize("e5_hours", [0.05, 1.0, 4.0, 12.0])
+def test_a_cells_job_is_discovery_then_the_rescore_then_the_overhead(e5_hours):
+    e5_seconds = e5_hours * 3600
+    assert cs.predict_hours(e5_seconds, 1) == pytest.approx(
+        cs.discovery_hours(e5_seconds, 1) + cs.rescore_hours(e5_seconds) + cs.OVERHEAD_H
     )
 
 
@@ -124,20 +146,20 @@ def test_every_shape_is_one_gpu_with_a_quarter_node():
 
 def test_the_wall_moves_to_72_hours_past_the_24_hour_fit():
     # The 17 h timeout batch leaves the 24 h wall to the smallest baselines:
-    # 0.19 h predicts 20.39 h (fits 0.85 * 24 = 20.4); 0.2 h predicts 20.45 h.
-    assert cs.choose_shape(0.19 * 3600).wall_hours == 24
-    slow = cs.choose_shape(0.2 * 3600)
+    # 0.14 h predicts 20.37 h (fits 0.85 * 24 = 20.4); 0.15 h predicts 20.45 h.
+    assert cs.choose_shape(0.14 * 3600).wall_hours == 24
+    slow = cs.choose_shape(0.15 * 3600)
     assert (slow.gpus, slow.wall_hours) == (1, 72)
     assert slow.predicted_hours == pytest.approx(20.45)
 
 
-def test_a_seven_hour_baseline_fits_no_wall():
-    # The longest wall holds 0.85 * 72 = 61.2 h: a 5.5 h baseline predicts
-    # 57.5 h and a 7 h one predicts 68 h.
-    held = cs.choose_shape(5.5 * 3600)
+def test_a_five_hour_baseline_fits_no_wall():
+    # The longest wall holds 0.85 * 72 = 61.2 h: a 4.5 h baseline predicts
+    # 59.5 h and a 5 h one predicts 64 h.
+    held = cs.choose_shape(4.5 * 3600)
     assert (held.gpus, held.wall_hours) == (1, 72)
-    assert held.predicted_hours == pytest.approx(57.5)
-    assert cs.choose_shape(7.0 * 3600) is None
+    assert held.predicted_hours == pytest.approx(59.5)
+    assert cs.choose_shape(5.0 * 3600) is None
 
 
 def test_choose_shape_returns_none_when_nothing_fits():
@@ -145,14 +167,37 @@ def test_choose_shape_returns_none_when_nothing_fits():
     assert cs.choose_shape(e5_seconds) is None
 
 
-def test_the_finish_lane_trains_nothing_so_the_overhead_fits_its_short_wall():
-    """The discovery freeze, the winner and the session close run no
-    training: the lane needs no baseline time, and its shorter wall holds the
-    fixed overhead."""
-    lane = cs.finish_shape()
-    assert (lane.gpus, lane.wall_hours) == (1, cs.WALL_OPTIONS_H[0])
-    assert lane.predicted_hours == 0.0
-    assert cs.OVERHEAD_H <= cs.FIT_FRACTION * lane.wall_hours
+def test_the_finish_lane_is_sized_from_the_rescore_it_resumes():
+    """The discovery freeze, the winner and the session close train nothing;
+    the re-score does: one round on one GPU plus the fixed overhead."""
+    lane = cs.finish_shape(3600.0)
+    assert (lane.gpus, lane.cpus, lane.mem_gb) == (1, 12, 128)
+    assert lane.wall_hours == cs.WALL_OPTIONS_H[0]
+    assert lane.predicted_hours == pytest.approx(cs.rescore_hours(3600.0) + cs.OVERHEAD_H)
+    assert lane.predicted_hours == pytest.approx(4.0)
+
+
+def test_the_finish_lane_pays_the_per_attempt_floor():
+    assert cs.finish_shape(194.0).predicted_hours == pytest.approx(
+        cs.ATTEMPT_FLOOR_H + cs.OVERHEAD_H
+    )
+
+
+def test_the_finish_lane_moves_to_72_hours_past_the_24_hour_fit():
+    # The 24 h wall holds 0.85 * 24 = 20.4 h: a 9 h baseline re-scores in 18 h
+    # (20 h with the overhead), a 9.5 h one in 19 h (21 h).
+    assert cs.finish_shape(9.0 * 3600).wall_hours == 24
+    slow = cs.finish_shape(9.5 * 3600)
+    assert (slow.gpus, slow.wall_hours) == (1, 72)
+    assert slow.predicted_hours == pytest.approx(21.0)
+
+
+def test_the_finish_lane_is_none_when_the_rescore_fits_no_wall():
+    # The longest wall holds 61.2 h: a 29 h baseline re-scores in 58 h (60 h
+    # with the overhead), a 30 h one in 60 h (62 h).
+    assert cs.finish_shape(29.0 * 3600).wall_hours == 72
+    assert cs.finish_shape(30.0 * 3600) is None
+    assert cs.finish_shape(1000 * 3600.0) is None
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +242,32 @@ def test_shape_cells_reports_two_shapes_and_one_unshaped(fabricated_runtime):
     assert unshaped[0].reason  # non-empty explanation
     assert reports["cell_a"].shape.wall_hours == 24
     assert reports["cell_b"].shape.wall_hours == 72
+
+
+def test_shape_cells_sizes_the_finish_lane_from_each_cells_baseline(fabricated_runtime):
+    """A 3 h baseline needs the 72 h wall for a whole cell, but only 8 h
+    (re-score plus overhead) to resume after the freeze."""
+    full = cs.shape_cells(fabricated_runtime, ["cell_b"])["cell_b"]
+    lane = cs.shape_cells(fabricated_runtime, ["cell_a", "cell_b", "cell_c"], finish=True)
+
+    assert full.shape.wall_hours == 72
+    assert lane["cell_b"].shape.wall_hours == 24
+    assert lane["cell_b"].shape.predicted_hours == pytest.approx(8.0)
+    assert lane["cell_b"].baseline_elapsed_seconds == pytest.approx(3.0 * 3600)
+    assert lane["cell_b"].baseline_elapsed_source == "ledger"
+    assert lane["cell_a"].shape.predicted_hours == pytest.approx(
+        cs.rescore_hours(0.05 * 3600) + cs.OVERHEAD_H
+    )
+    assert lane["cell_c"].shape is None and lane["cell_c"].reason
+
+
+def test_a_finish_lane_that_fits_no_wall_is_unshaped(tmp_path):
+    runtime = tmp_path / "runtime"; runtime.mkdir()
+    _write_state(runtime, "cell_slow", _baseline_state(1000 * 3600.0))
+    report = cs.shape_cells(runtime, ["cell_slow"], finish=True)["cell_slow"]
+    assert report.shape is None
+    assert "exceeds every wall" in report.reason
+    assert report.baseline_elapsed_seconds == pytest.approx(1000 * 3600.0)
 
 
 def _write_baseline_log(runtime, cell_id, cached_folds):
@@ -360,11 +431,51 @@ def test_cli_default_table_lists_all_cells(fabricated_runtime, capsys):
     assert "cell_c" in out
 
 
-def test_cli_finish_prints_the_finish_shape(capsys):
-    assert cs.main(["--finish"]) == 0
+def test_cli_finish_reports_the_finish_lane_like_the_full_path(fabricated_runtime, capsys):
+    assert cs.main([
+        "--finish", "--runtime", str(fabricated_runtime), "--cells", "cell_b,cell_c", "--json",
+    ]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert (payload["gpus"], payload["wall_hours"], payload["cpus"], payload["mem_gb"]) == (1, 24, 12, 128)
-    assert "whole_node" not in payload
+    lane = payload["cell_b"]
+    assert (lane["gpus"], lane["wall_hours"], lane["cpus"], lane["mem_gb"]) == (1, 24, 12, 128)
+    assert lane["predicted_hours"] == pytest.approx(8.0)
+    assert lane["baseline_elapsed_seconds"] == pytest.approx(3.0 * 3600)
+    assert lane["baseline_elapsed_source"] == "ledger"
+    assert "whole_node" not in lane
+    assert isinstance(payload["cell_c"]["unshaped"], str)
+
+
+def test_cli_finish_needs_the_cell_inputs_of_the_full_path(capsys):
+    assert cs.main(["--finish"]) == 2
+    assert "--runtime is required" in capsys.readouterr().err
+
+
+def test_cli_finish_takes_the_operator_time_for_a_baseline_with_no_timing(tmp_path, capsys):
+    runtime = tmp_path / "runtime"; runtime.mkdir()
+    state = _baseline_state(10.0)
+    state["baseline"]["validation_folds"] = [{"fold_index": k} for k in range(5)]
+    _write_state(runtime, "cell_all", state)
+    _write_baseline_log(runtime, "cell_all", cached_folds=5)
+    assert cs.main(["--finish", "--runtime", str(runtime), "--cells", "cell_all", "--json"]) == 0
+    assert "cached" in json.loads(capsys.readouterr().out)["cell_all"]["unshaped"]
+    assert cs.main([
+        "--finish", "--runtime", str(runtime), "--cells", "cell_all", "--json",
+        "--e5-seconds", str(3.5 * 3600),
+    ]) == 0
+    lane = json.loads(capsys.readouterr().out)["cell_all"]
+    assert lane["baseline_elapsed_source"] == "operator"
+    assert lane["predicted_hours"] == pytest.approx(cs.rescore_hours(3.5 * 3600) + cs.OVERHEAD_H)
+
+
+def test_cli_finish_cell_field_prints_the_finish_lane_wall(fabricated_runtime, capsys):
+    assert cs.main([
+        "--runtime", str(fabricated_runtime), "--cell", "cell_b", "--field", "wall_hours",
+    ]) == 0
+    assert int(capsys.readouterr().out) == 72
+    assert cs.main([
+        "--finish", "--runtime", str(fabricated_runtime), "--cell", "cell_b", "--field", "wall_hours",
+    ]) == 0
+    assert int(capsys.readouterr().out) == 24
 
 
 def test_json_report_carries_the_prediction_input(fabricated_runtime, capsys):

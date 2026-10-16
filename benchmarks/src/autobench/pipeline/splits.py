@@ -13,6 +13,7 @@ across train/val/test.
 from __future__ import annotations
 
 import os
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -20,8 +21,10 @@ from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold, train
 
 from autobench.pipeline.config import StrategyConfig
 
-#: ``devcv`` partitions standard fold 0's train+val slides with this seed.
-DEVCV_PARTITION_SEED = 1000
+#: Every development-CV strategy and the seed it partitions standard fold 0's
+#: train+val slides with. ``devcv_r1`` and ``devcv_r2`` are fresh partitions of
+#: the same slides ``devcv`` cuts; the strategy registry is built from this map.
+DEVCV_PARTITION_SEEDS = {"devcv": 1000, "devcv_r1": 1001, "devcv_r2": 1002}
 
 
 def create_strategy_splits(
@@ -53,10 +56,11 @@ def create_strategy_splits(
         (development) slides: fold k trains on k-1 of ``n_splits``
         patient-grouped, class-stratified parts and validates on the k-th,
         so every development slide is validated exactly once and no test
-        slide is ever validated. Any other value is rejected explicitly so
-        a new strategy added to a dataset YAML doesn't silently produce
-        in-distribution splits while the operator believes they configured
-        a held-out cohort.
+        slide is ever validated. ``devcv_r1`` and ``devcv_r2`` do the same
+        with a different partition seed (``DEVCV_PARTITION_SEEDS``). Any
+        other value is rejected explicitly so a new strategy added to a
+        dataset YAML doesn't silently produce in-distribution splits while
+        the operator believes they configured a held-out cohort.
 
     Returns a list of paths to the generated split CSVs.
     """
@@ -107,13 +111,16 @@ def _splits_devcv(
     n_splits: int,
     seed: int,
     stratify_col: str = "label",
+    *,
+    partition_seed: int,
 ) -> list[str]:
     """Cross-validate standard fold 0's development slides; test on its test slides.
 
     The development slides (fold 0's train then val, in that order) are cut
-    into ``n_splits`` parts by a shuffled ``StratifiedGroupKFold`` grouped on
-    ``case_id`` and stratified on ``stratify_col``. Fold k validates on part
-    k and trains on the rest; every fold keeps fold 0's test slides.
+    into ``n_splits`` parts by a ``StratifiedGroupKFold`` shuffled with
+    ``partition_seed``, grouped on ``case_id`` and stratified on
+    ``stratify_col``. Fold k validates on part k and trains on the rest;
+    every fold keeps fold 0's test slides.
     """
     train0, val0, test0 = next(iter(_standard_folds(df, n_splits, seed, stratify_col)))
     development = np.concatenate([train0, val0])
@@ -121,7 +128,7 @@ def _splits_devcv(
     labels = slide_rows.loc[development, stratify_col].to_numpy()
     groups = slide_rows.loc[development, "case_id"].to_numpy()
     parts = StratifiedGroupKFold(
-        n_splits=n_splits, shuffle=True, random_state=DEVCV_PARTITION_SEED,
+        n_splits=n_splits, shuffle=True, random_state=partition_seed,
     ).split(development, labels, groups)
     split_paths = []
     for fold_idx, (train_idx, val_idx) in enumerate(parts):
@@ -302,4 +309,10 @@ def _write_split_csv(
     return path
 
 
-_STRATEGIES = {"standard": _splits_standard_cv, "devcv": _splits_devcv}
+_STRATEGIES = {
+    "standard": _splits_standard_cv,
+    **{
+        name: partial(_splits_devcv, partition_seed=partition_seed)
+        for name, partition_seed in DEVCV_PARTITION_SEEDS.items()
+    },
+}

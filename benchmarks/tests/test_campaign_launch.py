@@ -24,8 +24,6 @@ from automil.activity_hooks import (
 
 from autobench.campaign import (
     AGENT_PROTOCOL_FILE,
-    WINNER_FLOOR,
-    WINNER_SE_MULTIPLIER,
     CampaignManifestError,
     build_agent_protocol,
     content_sha256,
@@ -75,7 +73,7 @@ def launch_host(tmp_path):
     """A fake repository with one materialized-enough cell, ready to launch."""
     repo_root = tmp_path / "repo"
     runtime_root = repo_root / "runtime"
-    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v6"
+    cell_root = runtime_root / "dataset__task__enc__arm__s42__preprint-v7"
     adir = cell_root / "automil"
     adir.mkdir(parents=True)
     (repo_root / "CLAUDE.md").write_text("# repo dev instructions\n")
@@ -196,12 +194,11 @@ def test_committed_policy_carries_the_load_bearing_rules():
         "--predicted-delta",
         "--role neighbour",
         "registry.policy_smoke",
-        # v5: five-fold attempts, the ban on steering the winner pool, the
-        # two policy seams for training bags and evaluation weights, and
-        # the log marker that shows the smoothed score.
+        # v5: five-fold attempts, the ban on attempts that only chase a
+        # validation score, the two policy seams for training bags and
+        # evaluation weights, and the log marker that shows the smoothed score.
         "An attempt trains all five folds",
-        "submitted to move the pool's statistics rather than to improve "
-        "the model is a protocol violation",
+        "draw a luckier validation score rather than to improve the model is a",
         "`transform_bag(features, *, label, epoch, generator)`",
         "`before_validation(*, epoch)`",
         "`[smoothed]`",
@@ -209,12 +206,21 @@ def test_committed_policy_carries_the_load_bearing_rules():
         assert anchor in text, f"proposal policy lost its {anchor!r} rule"
 
 
-def test_committed_policy_states_the_winner_bar_the_protocol_applies():
-    """The agent is told the bar its best candidate must clear; it has to be
-    the one the winner rule applies, or the instruction misleads."""
+def test_committed_policy_states_the_winner_rule_the_protocol_applies():
+    """The agent is told how its attempts are judged; it has to be the rule
+    the protocol applies (the validation-best attempt, no significance bar),
+    or the instruction misleads."""
     text = " ".join(POLICY_SOURCE.read_text().split())
-    bar = f"max({WINNER_FLOOR:g}, {WINNER_SE_MULTIPLIER:g} × paired SE)"
-    assert bar in text, f"proposal policy no longer states the winner bar {bar!r}"
+    for anchor in (
+        "The cell deploys the attempt with the best validation score.",
+        "when that lift is above zero",
+        "re-scores that attempt and the baseline on two fresh partitions of the "
+        "development slides",
+        "averages those fold models with the original five",
+    ):
+        assert anchor in text, f"proposal policy lost its {anchor!r} statement"
+    for stale in ("2.93", "best of 30", "discounts luck", "Sidak"):
+        assert stale not in text, f"proposal policy still states {stale!r}"
 
 
 def test_builder_rejects_a_placeholder_model_version():
