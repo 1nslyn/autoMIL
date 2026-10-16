@@ -1,0 +1,17 @@
+[
+ {
+  "name": "ema998_step14",
+  "parent": "baseline",
+  "desc": "EMA 0.998 + full lr to epoch 14 then x0.1 (playbook direction 6; three seeds)",
+  "axis": "schedule",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "STEP_ANNEAL": [
+    14,
+    0.1
+   ]
+  },
+  "hparams": {}
+ }
+]
