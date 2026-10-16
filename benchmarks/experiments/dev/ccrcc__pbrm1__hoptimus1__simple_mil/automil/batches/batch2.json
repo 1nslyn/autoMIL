@@ -1,0 +1,50 @@
+[
+ {
+  "name": "b4_ema98",
+  "parent": "b4",
+  "desc": "batch 4 + EMA 0.98 (stack of the two positive pieces)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "MIN_EPOCHS": 12
+  },
+  "hparams": {
+   "batch_size": 4
+  }
+ },
+ {
+  "name": "b8",
+  "parent": "baseline",
+  "desc": "batch 8 alone (dose)",
+  "axis": "batch_size",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "batch_size": 8
+  }
+ },
+ {
+  "name": "b2",
+  "parent": "baseline",
+  "desc": "batch 2 alone (dose)",
+  "axis": "batch_size",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "batch_size": 2
+  }
+ },
+ {
+  "name": "b4_lr15",
+  "parent": "b4",
+  "desc": "batch 4 with lr 1.5e-4 (sqrt rule from 3e-4 at batch 24): is the gain the step count or the effective lr?",
+  "axis": "lr",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "batch_size": 4,
+   "lr": 0.00015
+  }
+ }
+]

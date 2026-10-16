@@ -1,0 +1,22 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "b4",
+  "parent": "baseline",
+  "desc": "batch 4 alone (seed replicate of the kept CCRCC attempt)",
+  "axis": "batch_size",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "batch_size": 4
+  }
+ }
+]
