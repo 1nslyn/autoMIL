@@ -1,0 +1,11 @@
+{
+  "arm": "abmil",
+  "cell_name": "clwd_dev__subtype_6class__hoptimus1__abmil__seed43",
+  "dataset": "clwd_dev",
+  "encoder": "hoptimus1",
+  "framework": "abmil",
+  "model": "abmil",
+  "seed": 43,
+  "task": "subtype_6class",
+  "task_family": "multiclass"
+}

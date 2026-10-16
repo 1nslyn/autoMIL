@@ -1,0 +1,148 @@
+[
+ {
+  "name": "ema_unfreeze",
+  "parent": "baseline",
+  "desc": "EMA 0.998 + projection unfreezing 8-16, no schedule",
+  "axis": "unfreeze",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ]
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_unfreeze_early",
+  "parent": "baseline",
+  "desc": "winner with unfreezing 4-12 (dose)",
+  "axis": "unfreeze",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 254,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    4,
+    12,
+    0.1
+   ]
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_unfreeze_soft",
+  "parent": "baseline",
+  "desc": "winner with projection at 0.3x instead of 0.1x (dose)",
+  "axis": "unfreeze",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 254,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.3
+   ]
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_unfreeze_sub512",
+  "parent": "ema_cos_unfreeze",
+  "desc": "winner + 512 random tiles",
+  "axis": "bag_subsampling",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 254,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ],
+   "MAX_TILES": 512
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_unfreeze_ls10",
+  "parent": "ema_cos_unfreeze",
+  "desc": "winner + label smoothing 0.1",
+  "axis": "label_smoothing",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 254,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ],
+   "LS_EPS": 0.1
+  },
+  "hparams": {}
+ },
+ {
+  "name": "e995_cos_unfreeze",
+  "parent": "baseline",
+  "desc": "winner with EMA 0.995 (dose)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.995,
+   "WARMUP_STEPS": 254,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ]
+  },
+  "hparams": {}
+ },
+ {
+  "name": "e999_cos_unfreeze",
+  "parent": "baseline",
+  "desc": "winner with EMA 0.999 (dose)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.999,
+   "WARMUP_STEPS": 254,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ]
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_unfreeze_drop06",
+  "parent": "ema_cos_unfreeze",
+  "desc": "winner + dropout 0.6",
+  "axis": "dropout",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 254,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ]
+  },
+  "hparams": {
+   "dropout": 0.6
+  }
+ }
+]

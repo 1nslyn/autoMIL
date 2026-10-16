@@ -1,0 +1,40 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "ema998",
+  "parent": "baseline",
+  "desc": "EMA 0.998 of the weights (seed replicate)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema_cos_unfreeze",
+  "parent": "baseline",
+  "desc": "EMA + warmup/cosine + projection unfreezing 8-16 (seed replicate of the CLWD winner)",
+  "axis": "unfreeze",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "WARMUP_STEPS": 254,
+   "COSINE_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ]
+  },
+  "hparams": {}
+ }
+]
