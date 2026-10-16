@@ -1,0 +1,51 @@
+[
+ {
+  "name": "ema998_bal",
+  "parent": "baseline",
+  "desc": "EMA 0.998 + class-balanced bag weights (does the weighting rescue the bacc guard?)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "POSITIVE_SHARE": 0.438
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema995",
+  "parent": "baseline",
+  "desc": "EMA 0.995 (dose)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.995
+  },
+  "hparams": {}
+ },
+ {
+  "name": "d08",
+  "parent": "baseline",
+  "desc": "dropout 0.8 alone (dose)",
+  "axis": "dropout",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "droprate": 0.8,
+   "droprate_2": 0.8
+  }
+ },
+ {
+  "name": "d07_bal",
+  "parent": "baseline",
+  "desc": "dropout 0.7 + class-balanced bag weights",
+  "axis": "stack",
+  "kind": "regularization",
+  "constants": {
+   "POSITIVE_SHARE": 0.438
+  },
+  "hparams": {
+   "droprate": 0.7,
+   "droprate_2": 0.7
+  }
+ }
+]

@@ -1,0 +1,47 @@
+[
+ {
+  "name": "ema99",
+  "parent": "baseline",
+  "desc": "EMA 0.99 (dose)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.99
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema995",
+  "parent": "baseline",
+  "desc": "EMA 0.995 (dose)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.995
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema999",
+  "parent": "baseline",
+  "desc": "EMA 0.999 (dose)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.999
+  },
+  "hparams": {}
+ },
+ {
+  "name": "ema998_ls10",
+  "parent": "baseline",
+  "desc": "EMA 0.998 + label smoothing 0.1",
+  "axis": "label_smoothing",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998,
+   "LS_EPS": 0.1
+  },
+  "hparams": {}
+ }
+]
