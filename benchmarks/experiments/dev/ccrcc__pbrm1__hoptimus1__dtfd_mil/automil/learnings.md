@@ -9,3 +9,10 @@ Root 0.6044 (folds 0.50, 0.61, 0.59, 0.71, 0.61; marginal SE 0.033).
 - Nothing approaches the keep bar; the KRAS v6 leader recipe does not transfer.
 
 Decision: replicate root + ema998 + d07 under seeds 43 and 44 to see whether the guard failure of EMA is systematic on this task and to measure the seed noise floor. Batch 2 after nnMIL and CLAM batch 1 read out.
+
+## 2026-10-16 seed replicates (seeds 43, 44; same folds, training seed only)
+
+Root by seed: 0.6044 (42), 0.5994 (43), 0.6051 (44); SD 0.003 across seeds, so DTFD's baseline is seed-stable here (ABMIL's is not).
+- EMA 0.998: +0.0072 (42, guard fail), +0.0023 (43), +0.0012 (44); mean +0.004. val_bacc delta -0.029, -0.007, -0.003: the guard failure was largest under seed 42 and is not systematic in size, but the sign is consistent.
+- Dropout 0.7: +0.0050, -0.0060, +0.0080; mean +0.002, not distinguishable from zero.
+Reading: no piece gives DTFD a measurable gain on this task. Batch 2a (submitted): EMA 0.998 + class-balanced bag weights (does the weighting rescue the guard, as in ema_ls20_d07_bal), EMA 0.995, dropout 0.8, dropout 0.7 + balanced weights.

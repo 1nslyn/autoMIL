@@ -14,3 +14,10 @@ Root 0.6115 (folds 0.49, 0.65, 0.59, 0.71, 0.62; marginal SE 0.035). Fixed 20-ep
 - Paired SEs run 0.009-0.030 (KRAS devcv: about 0.01), so nothing here can clear the keep bar; the best-of-6 Sidak bar is 0.044.
 
 Decision: before batch 2, replicate root + ema998 + ema_cos_nowarm under seeds 43 and 44 (cells `__seed43`, `__seed44`) to measure the seed noise floor of this task and whether EMA's +0.007 persists. Batch 2 (EMA dose, directions not yet tested) is designed once nnMIL and CLAM batch 1 read out.
+
+## 2026-10-16 seed replicates (seeds 43, 44; same folds, training seed only)
+
+Root by seed: 0.6115 (42), 0.5720 (43), 0.5632 (44); SD 0.026 across seeds. The native ABMIL run (fixed 20 epochs, selection often at epochs 0-4) is seed-unstable on this task: the seed moves the baseline five times more than any recipe piece.
+- EMA 0.998: +0.0073 (42), +0.0152 (43), +0.0023 (44); mean +0.008, positive under every seed. val_bacc: -0.036, +0.002, -0.055, so EMA also lowers the balanced accuracy at the fixed threshold here (seed 44 would fail the guard).
+- EMA + cosine without warmup: +0.0033, +0.0035, +0.0083; mean +0.005.
+Reading: EMA is a real, small, seed-robust gain on this arm and task (about +0.008); the schedule adds nothing beyond it. Batch 2a (submitted): EMA dose 0.99 / 0.995 / 0.999 and EMA + label smoothing 0.1.
