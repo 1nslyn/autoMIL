@@ -25,3 +25,7 @@ Reading: EMA is a real, small, seed-robust gain on this arm and task (about +0.0
 ## 2026-10-16 batch 2a (EMA dose, EMA + LS 0.1)
 
 EMA 0.99 +0.0002 ± 0.0101, 0.995 +0.0052 ± 0.0081, 0.998 +0.0073 ± 0.0086 (batch 1), 0.999 -0.0005 ± 0.0084 (guard fail). EMA 0.998 + label smoothing 0.1: +0.0047 ± 0.0214, guard fail. The EMA effect peaks at decay 0.995-0.998 and is the only effect in 12 attempts; nothing stacks on it. Any further ABMIL attempt on this task must run under three seeds to resolve effects of this size (seed SD of the root 0.026).
+
+## 2026-10-16 batch 3 (late lr step on EMA, three seeds): inert
+
+EMA 0.998 + full lr to epoch 14 then x0.1: +0.0071 (42), +0.0154 (43), +0.0024 (44), fold for fold the values of EMA 0.998 alone under each seed. The selected epochs fall before epoch 14, so the step never acts. Playbook direction 6 is closed for ABMIL on this task. Cell closed at 13 attempts; recipe v1 for ABMIL on a weak-signal task = EMA 0.995-0.998, about +0.008.

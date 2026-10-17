@@ -1,0 +1,22 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "b4",
+  "desc": "recipe v1 for nnMIL: batch 4 (transfer check, no search)",
+  "axis": "batch_size",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "batch_size": 4
+  },
+  "parent": "baseline"
+ }
+]

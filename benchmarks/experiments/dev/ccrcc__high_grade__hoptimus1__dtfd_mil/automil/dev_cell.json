@@ -1,0 +1,11 @@
+{
+  "arm": "dtfd_mil",
+  "cell_name": "ccrcc__high_grade__hoptimus1__dtfd_mil",
+  "dataset": "ccrcc",
+  "encoder": "hoptimus1",
+  "framework": "dtfd",
+  "model": "dtfd_mil",
+  "seed": 42,
+  "task": "high_grade",
+  "task_family": "binary"
+}

@@ -1,0 +1,13 @@
+graph.json
+results.tsv
+result.json
+orchestrator/
+cells/
+sessions/
+.activity.jsonl
+.activity.samples.json
+.activity.lock
+.automil_active
+.automil_worktrees/
+*.log
+*.pid

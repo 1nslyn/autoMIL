@@ -1,0 +1,11 @@
+{
+  "arm": "clam_mb",
+  "cell_name": "ccrcc__high_grade__hoptimus1__clam_mb",
+  "dataset": "ccrcc",
+  "encoder": "hoptimus1",
+  "framework": "clam",
+  "model": "clam_mb",
+  "seed": 42,
+  "task": "high_grade",
+  "task_family": "binary"
+}

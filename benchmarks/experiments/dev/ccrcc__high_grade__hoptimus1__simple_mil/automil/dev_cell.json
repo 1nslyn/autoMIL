@@ -1,0 +1,11 @@
+{
+  "arm": "simple_mil",
+  "cell_name": "ccrcc__high_grade__hoptimus1__simple_mil",
+  "dataset": "ccrcc",
+  "encoder": "hoptimus1",
+  "framework": "nnmil",
+  "model": "simple_mil",
+  "seed": 42,
+  "task": "high_grade",
+  "task_family": "binary"
+}

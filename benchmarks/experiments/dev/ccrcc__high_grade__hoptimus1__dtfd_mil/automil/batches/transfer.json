@@ -1,0 +1,24 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "ema_step9",
+  "desc": "recipe v1 candidate for DTFD: EMA 0.998 + lr x0.2 from epoch 9 (transfer check; watch the bacc guard)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {
+   "lr_decay_step": 9
+  },
+  "parent": "baseline"
+ }
+]
