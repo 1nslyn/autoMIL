@@ -10,3 +10,9 @@ Root 0.5739 (folds 0.47, 0.59, 0.53, 0.62, 0.66; marginal SE 0.032). The nnMIL p
 - Attention/body lr x0.1 (the KRAS v5 piece) reverses the sign: attn10_b4 -0.0095 (guard fail), ema_attn10_b4 -0.0184 (guard fail), ema_attn10_b8 -0.0125, ema_attn20_b6 -0.0067, the v5 recipe + LS 0.1 -0.0204 (guard fail). On this task the body-lr scaling costs about 0.05 against batch 4 alone.
 
 Reading: the native batch size under-trains nnMIL on a small cohort (too few steps per epoch for the epoch-based patience); the first real recipe finding of the loop. Decision: replicate root + batch 4 under seeds 43 and 44 first, then batch 2: batch 4 + EMA 0.98, batch 8, batch 2, and batch 4 with lr 1.5e-4 (sqrt rule) to separate the step count from the effective learning rate.
+
+## 2026-10-17 seed replicates (cells `__seed43`, `__seed44`; same folds, training seed only): batch 4 holds
+
+Root five-fold mean by seed: 0.5739 / 0.5734 / 0.5897 (SD 0.0093). Batch 4 paired lift by seed: +0.0335 / +0.0276 / +0.0404 (mean +0.0338); val_bacc +0.023 / +0.033 / +0.045. Fold 0, the fold the native batch size left at epoch 0, gains +0.09 / +0.14 / +0.10; one fold per seed moves down by 0.004 to 0.020.
+
+Reading: the lift is three to four times the root's seed spread and has the same sign on every seed, so batch size 4 is the nnMIL recipe for cohorts of this size (about 200 training bags), independent of the training seed. Batch 2 (submitted 10-17 01:57, one job at a time): batch 4 + EMA 0.98, batch 8, batch 2, batch 4 with lr 1.5e-4.

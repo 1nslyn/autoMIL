@@ -293,7 +293,8 @@ evidence for a TITAN cell.
    below 400 training bags, which is 9–12 optimizer steps per epoch, and
    the epoch-based patience of 10 then stops folds under-trained (on CCRCC
    fold 0 selected epoch 0). `batch_size 4` alone: +0.034 ± 0.020, every
-   fold but one up, kept; batch 4 moved fold 0's selection to epoch 13.
+   fold but one up, kept, and +0.028 to +0.040 under two more seeds
+   (baseline seed SD 0.009); batch 4 moved fold 0's selection to epoch 13.
    KRAS v5's +0.046 nnMIL recipe carried this same change. Submit batch 4
    (or 8) in the opening batch and keep the native lr 3e-4: scaling the
    attention/body lr by 0.1, the other half of the v5 recipe, reversed the
