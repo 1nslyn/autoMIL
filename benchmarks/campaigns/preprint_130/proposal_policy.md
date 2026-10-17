@@ -295,10 +295,14 @@ evidence for a TITAN cell.
    fold 0 selected epoch 0). `batch_size 4` alone: +0.034 ± 0.020, every
    fold but one up, kept, and +0.028 to +0.040 under two more seeds
    (baseline seed SD 0.009); batch 4 moved fold 0's selection to epoch 13.
-   KRAS v5's +0.046 nnMIL recipe carried this same change. Submit batch 4
-   (or 8) in the opening batch and keep the native lr 3e-4: scaling the
-   attention/body lr by 0.1, the other half of the v5 recipe, reversed the
-   sign on CCRCC (−0.010 to −0.020 with guard failures).
+   Batch 2, 4 and 8 are equal (+0.031 to +0.034); the sqrt-rule lr (1.5e-4
+   at batch 4) gives the gain back (−0.029) and EMA on top of batch 4 adds
+   nothing (−0.001): what the native plan gets wrong is optimizer progress
+   per epoch against the patience, so keep the native lr and spend no
+   attempt on the dose. KRAS v5's +0.046 nnMIL recipe carried this same
+   change. Submit batch 4 in the opening batch: scaling the attention/body
+   lr by 0.1, the other half of the v5 recipe, reversed the sign on CCRCC
+   (−0.010 to −0.020 with guard failures).
 3. Everything else is task-specific. Test it as a single addition on EMA,
    expect ±0.01, and read B before spending.
 

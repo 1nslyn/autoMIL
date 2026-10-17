@@ -1,8 +1,8 @@
 # A training recipe for MIL on small cohorts: what 900 attempts found (v1, draft)
 
 Status: draft of 2026-10-17. Numbers marked *pending* fill in as the last
-development cells finish (nnMIL batch 2 on CCRCC, the 6-class nnMIL and
-CLAM cells, the CCRCC high_grade transfer check).
+development cells finish (the 6-class nnMIL and CLAM cells, the CCRCC
+high_grade transfer check).
 Everything here is validation-only; the held-out readings of the two
 development cohorts are taken once at the end and appear in §7 only as a
 sanity check, never as the measurement.
@@ -29,6 +29,9 @@ and nothing stacks on it beyond ±0.003. nnMIL's native batch size is
 mis-sized for cohorts under 400 training bags (9–12 optimizer steps per
 epoch against an epoch-based patience of 10), and batch 4 alone recovers
 +0.034 on CCRCC; the KRAS v5 nnMIL recipe (+0.046) carried the same change.
+Batch 2, 4 and 8 are equal (+0.031 to +0.034) and scaling the lr down with
+the batch gives the gain back, so the quantity that matters is optimizer
+progress per epoch against the patience, not the batch size itself.
 
 The recipes the KRAS trials found (ABMIL warmup + cosine; CLAM label
 smoothing, 512-tile bags, class balancing; DTFD label smoothing + dropout
@@ -69,8 +72,8 @@ average on the KRAS arms will not come from training recipes alone.
   cache used for ABMIL and DTFD readers was checked bit-identical against an
   uncached fold (407 s → 63 s).
 - **Budget.** CCRCC: ABMIL 13 + 6 replicate runs, DTFD 12 + 6, CLAM 9 +
-  identity, nnMIL 8 + identity + 4 replicate runs (batch 2 pending);
-  6-class: ABMIL 17 + 6, DTFD 8, nnMIL and CLAM pending. All jobs ran at low priority beside the official
+  identity, nnMIL 12 + identity + 4 replicate runs; 6-class: ABMIL 17 + 6,
+  DTFD 8, nnMIL and CLAM pending. All jobs ran at low priority beside the official
   trial, one at a time once the machine was shared.
 
 ## 3. Results by cell (validation only)
@@ -94,7 +97,9 @@ and −0.030, all guard failures. DTFD — every EMA variant fails the `val_bacc
 guard (−0.03 to −0.05) while the AUC holds; EMA + balanced weights −0.011;
 dropout 0.5 / 0.8, LS, lr step: within noise. nnMIL — attention/body lr ×0.1
 (the KRAS v5 piece) −0.010 to −0.020 with guard failures, EMA 0.98 +0.005,
-LS 0.1 +0.002.
+LS 0.1 +0.002; batch 2 +0.032 ± 0.019 and batch 8 +0.031 ± 0.027 (both
+kept), batch 4 + EMA 0.98 −0.001 ± 0.003 against batch 4, batch 4 with lr
+1.5e-4 −0.029 ± 0.018 against batch 4 (fold 0 back to epoch 0).
 
 Seed spread of the root's five-fold mean: ABMIL 0.026 (fixed 20 epochs; two
 folds select epochs 0–4), DTFD 0.003, nnMIL 0.009.
@@ -129,9 +134,12 @@ Recipe v1 applied with no search (one attempt per arm): *pending*.
   epochs, a fold that has not improved in 90 steps stops. Batch 4 gives 51
   steps per epoch and the same folds train for 500+ steps before the
   patience acts. Under three seeds the lift is +0.028 to +0.040, and fold 0,
-  the under-trained fold, gains +0.09 to +0.14 every time. Whether the lr
-  should be scaled with the batch (sqrt rule) is the pending `b4_lr15`
-  attempt.
+  the under-trained fold, gains +0.09 to +0.14 every time. Scaling the lr
+  down with the batch (sqrt rule, 1.5e-4 at batch 4) gives the whole gain
+  back and returns fold 0 to epoch 0, while batch 2, 4 and 8 at the native
+  lr are equal: the quantity that matters is optimizer progress per epoch
+  (steps × lr) against the epoch-based patience. EMA on top of batch 4 adds
+  nothing (−0.001): the jitter it removes is already gone.
 - **DTFD and EMA.** The averaged weights rank validation slides as well or
   slightly better but shift the operating point at the fixed decision
   threshold, lowering balanced accuracy by 0.015–0.05 on every task. The
@@ -155,10 +163,11 @@ Recipe v1 applied with no search (one attempt per arm): *pending*.
 - **DTFD-MIL**: native recipe. EMA gains AUC but fails the balanced-accuracy
   guard; if the deployment threshold is tuned rather than fixed, EMA 0.998
   with the native lr step is worth +0.003 to +0.007.
-- **nnMIL simple_mil**: batch size 4 (or 8) on cohorts below ~400 training
-  bags, native lr 3e-4 and schedule; EMA 0.98 optional (+0.005). Expected
-  +0.03 on a cohort of ~200 bags, confirmed under three seeds; the 6-class
-  check is *pending*.
+- **nnMIL simple_mil**: batch size 4 (2 to 8 equal) on cohorts below ~400
+  training bags, native lr 3e-4 and schedule; never scale the lr down with
+  the batch (−0.029); EMA adds nothing on top (−0.001). Expected +0.03 on a
+  cohort of ~200 bags, confirmed under three seeds; the 6-class check is
+  *pending*.
 
 ## 6. What this changes for the campaign
 
