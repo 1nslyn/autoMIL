@@ -266,6 +266,131 @@ Consequences you must design around, not discover:
   dozen slides to express. Charge the lesson once; never re-measure a
   hash-identical configuration.
 
+## 3c. Prior experience — what 900 earlier attempts settled
+
+Everything below was measured validation-only, under the same five-fold
+development split as this cell, on LUAD KRAS and HNSC grade (790 attempts
+by earlier agents) and on two cohorts outside the roster that an operator
+loop searched to test what transfers: CPTAC CCRCC PBRM1 (weak signal,
+baselines 0.57–0.63, 52 validation slides per fold) and a 6-class lung
+growth-pattern task (strong signal, baselines 0.88, 64 per fold). Lifts are
+paired `val_auc_smooth` against the arm's native baseline. The TITAN
+entries come from the v6 TITAN folds themselves and are not independent
+evidence for a TITAN cell.
+
+**A. Open with these; they are the only pieces that moved every task.**
+
+1. **Weight EMA.** A bias-corrected, zero-initialised shadow of the weights
+   updated after each optimizer step, swapped in at `before_validation` and
+   restored in `should_stop`. ABMIL decay 0.998 (0.995–0.999 equal): +0.008
+   ± 0.009 on the weak task, +0.015 ± 0.004 on the strong one, the same
+   under three seeds; +0.016 on KRAS. CLAM 0.9995: +0.007 ± 0.009 and
+   +0.013 on KRAS. nnMIL 0.98: +0.005. DTFD 0.998: +0.003 to +0.007 in AUC
+   but `val_bacc` −0.015 to −0.05 on every task, so it fails the guard (B4).
+   The gain is removed epoch-to-epoch jitter: the smoothing window stops
+   paying for a noisy curve. It does not raise the curve.
+2. **nnMIL batch size on a small cohort.** The nnMIL plan picks batch 24
+   below 400 training bags, which is 9–12 optimizer steps per epoch, and
+   the epoch-based patience of 10 then stops folds under-trained (on CCRCC
+   fold 0 selected epoch 0). `batch_size 4` alone: +0.034 ± 0.020, every
+   fold but one up, kept; batch 4 moved fold 0's selection to epoch 13.
+   KRAS v5's +0.046 nnMIL recipe carried this same change. Submit batch 4
+   (or 8) in the opening batch and keep the native lr 3e-4: scaling the
+   attention/body lr by 0.1, the other half of the v5 recipe, reversed the
+   sign on CCRCC (−0.010 to −0.020 with guard failures).
+3. Everything else is task-specific. Test it as a single addition on EMA,
+   expect ±0.01, and read B before spending.
+
+**B. Measured on KRAS and re-measured elsewhere: what did not transfer.**
+
+1. ABMIL 1-epoch warmup + per-step cosine to 0 (KRAS v6 leader with EMA,
+   +0.025 against EMA's +0.016): on the two development tasks the schedule
+   added +0.002 ± 0.015 and 0.000 over EMA alone. Without EMA it lost
+   (−0.010, guard fail). KRAS-only.
+2. CLAM label smoothing 0.2, 512-tile training bags, class-balanced weights
+   (each about +0.02 on EMA on KRAS, never stacked there): on CCRCC each
+   lost (−0.030, −0.025, −0.029) and the two-, three- and four-piece stacks
+   lost 0.03–0.05 with `val_bacc` −0.04 to −0.08. KRAS-only until the
+   6-class result lands.
+3. DTFD label smoothing 0.2 + dropout 0.7 (+0.021 on KRAS, with EMA):
+   +0.010 ± 0.017 on CCRCC but guard-excluded, −0.002 on the 6-class task.
+   Dropout 0.7 alone: +0.005 and −0.012. Dropout 0.5/0.8, label smoothing
+   alone, balanced weights: within noise. DTFD's native recipe (two tiers,
+   lr decay, dropout, pseudo-bags) leaves nothing for a training-only recipe
+   on these tasks.
+4. DTFD and EMA: `val_bacc` falls 0.015–0.05 at the fixed threshold while
+   the AUC holds, on every task tested; balanced bag weights do not repair
+   it (−0.011, guard fail). The only EMA form that passed was EMA + an lr
+   step ×0.2 at epoch 9 (+0.004 ± 0.003). Expect the guard to exclude EMA
+   on DTFD.
+5. Gradual projection unfreezing (0.1× lr to epoch 8, linear to 1× by 16,
+   on the EMA stack): ABMIL −0.031 on CCRCC (guard fail); on the 6-class
+   task +0.004 over EMA under one seed and 0.000 under three. Earlier
+   HNSC/CLAM evidence (+0.012) stands alone.
+6. A late lr step on ABMIL (full lr to epoch 14, then ×0.1): inert, fold
+   for fold equal to EMA alone under three seeds; the selected epochs fall
+   before the step.
+7. Dead in every arm, 0 of N attempts better than the parent by 1 SE:
+   feature dropout or noise (0/15), cross-slide bag mixing (0/7), SAM and
+   weight perturbation (0/10), Lookahead (0/11), gradient clipping (0/4),
+   DTFD pseudo-bag count and CLAM `B` (0/12), constant-rate changes to the
+   1536→512 projection lr (0/13, mean −0.047), larger effective batch for
+   batch-1 arms, coupled L2 1e-2. v6 spent 19 of 70 attempts re-testing
+   these; none helped.
+
+**C. What a small cohort can resolve, measured.**
+
+- Paired SE of one attempt: 0.009–0.030 on the weak binary task,
+  0.002–0.007 on the strong 6-class task, about 0.010 on KRAS. A ±0.01
+  effect cannot clear the keep-bar on a weak task; do not spend attempts
+  chasing it there.
+- Seed noise of the baseline itself, same folds, training seed only:
+  ABMIL on CCRCC SD 0.026 (fixed 20 epochs, selection at epochs 0–4 on two
+  folds), DTFD 0.003, ABMIL on the 6-class task 0.0008. A single-seed lift
+  smaller than the baseline's seed spread is not a finding.
+- Pieces do not add. In 17 ABMIL attempts on the 6-class task every EMA
+  variant lay within +0.013 to +0.017 and each addition moved its parent by
+  at most 0.003; the best validation score still belonged to a three-piece
+  stack, because the best of 15 near-equal lifts is always one of them.
+  Under three seeds the stack and EMA alone were equal.
+- Earlier agents predicted a gain 89% of the time and got one 52% of the
+  time; 44% of attempts landed within 1 SE of their parent.
+
+**D. Arm notes that still hold (exact settings).**
+
+- ABMIL (Adam 5e-4, L2 1e-4, batch 1, 20 fixed epochs): L2 1e-4 is
+  load-bearing (−0.010 at 0); lr 1e-4 to 5e-4 equal at constant lr, 6e-4
+  −0.016; on the 20-epoch cap, 30/40-epoch cosines did not rescue slow folds.
+- CLAM-MB (Adam 1e-4, L2 1e-5, dropout 0.25, weighted sampler, patience 20):
+  never submit svm instance losses (crash); `inst_loss=ce` and the scheduler
+  seam are no-ops; dropout 0.5, 30% subsampling, input dropout, accumulation
+  4 were null on EMA; lr 3e-5 +0.007 with `val_bacc` −0.026.
+- DTFD-MIL (Adam 1e-4 both tiers, L2 1e-4, numGroup 4, lr ×0.2 at epoch
+  100): sharp lr optimum at 1e-4 (3e-5: −0.010 to −0.033); do not slow or
+  regularise the projection.
+- nnMIL (AdamW 3e-4, decoupled wd 1e-4, cosine 100 epochs with 10 warmup,
+  patience 10, dropout 0.25): the submit smoke uses torch Adam, the trainer
+  AdamW with two groups, `cosine_lr` and a GradScaler, so test both paths;
+  each slide always shows the same ≤3921-patch crop; lr 1.5e-4 −0.029,
+  40 epochs −0.013, instance dropout −0.016, Lookahead −0.028.
+- TITAN probe (Linear(768,2), Adam 1e-3, batch 32): centre first (|mean| 12
+  exceeds the spread, effective dimension ~13); the best native-cadence
+  recipe is a class-balanced covariance basis with a k(e)=min(18, 1+4e)
+  curriculum, +0.030 ± 0.010; EMA, input noise, z-scoring, decay ≤ 1.0 and
+  supervised PC selection were null or harmful.
+
+**E. How to spend the budget given A–D.**
+
+- Opening batch: EMA alone at the arm's decay (A1); for nnMIL also batch 4
+  and batch 8 (A2); then at most one single addition per remaining slot
+  from directions not listed in B, each with its detectable size stated.
+- Replicate before you stack: a kept piece gets its two robustness
+  neighbours as seed-free variants of dose, not as additions; stacks only
+  on a piece that held under every fold.
+- Size every predicted effect against the paired SE of the previous batch,
+  not against the lifts in this section: those are means over seeds and
+  tasks.
+
 ## 4. PolicyVariant — the honest seam sheet
 
 The protected trainer owns forward, loss, validation, and result writing. A

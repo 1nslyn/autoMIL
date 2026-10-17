@@ -1,0 +1,190 @@
+# A training recipe for MIL on small cohorts: what 900 attempts found (v1, draft)
+
+Status: draft of 2026-10-16. Numbers marked *pending* fill in as the last
+development cells finish (nnMIL seed replicates and batch 2 on CCRCC, the
+6-class nnMIL and CLAM cells, the CCRCC high_grade transfer check).
+Everything here is validation-only; the held-out readings of the two
+development cohorts are taken once at the end and appear in §7 only as a
+sanity check, never as the measurement.
+
+## 1. Summary
+
+Across four MIL aggregators (ABMIL, CLAM-MB, DTFD-MIL, nnMIL simple_mil) on
+frozen H-optimus-1 features, a training-only recipe (architecture, features,
+seed and measurement untouched) gains:
+
+| Piece | Arms | Weak-signal task (CCRCC PBRM1, AUC ~0.6) | Strong-signal task (6-class growth pattern, macro AUC 0.88) | Seed-robust |
+|---|---|---|---|---|
+| Weight EMA (bias-corrected, swapped in for validation) | ABMIL 0.998 | +0.008 ± 0.009 | +0.015 ± 0.004 | yes (3 seeds, both tasks) |
+| | CLAM 0.9995 | +0.007 ± 0.009 | pending | — |
+| | nnMIL 0.98 | +0.005 ± 0.009 | pending | — |
+| | DTFD 0.998 | +0.007 (guard fail) | +0.003 (guard fail) | sign yes, size no |
+| nnMIL batch size 4 (native 24) | nnMIL | **+0.034 ± 0.020, kept** | pending | pending (seeds 43, 44) |
+| Any other piece or stack | all | within ±0.01 or worse | within ±0.003 of its parent | — |
+
+Two findings carry the recipe. Weight EMA is universal: it removes the
+epoch-to-epoch jitter that the smoothed selection metric pays for, worth
++0.007 to +0.015 depending on how noisy the task's validation curve is,
+and nothing stacks on it beyond ±0.003. nnMIL's native batch size is
+mis-sized for cohorts under 400 training bags (9–12 optimizer steps per
+epoch against an epoch-based patience of 10), and batch 4 alone recovers
++0.034 on CCRCC; the KRAS v5 nnMIL recipe (+0.046) carried the same change.
+
+The recipes the KRAS trials found (ABMIL warmup + cosine; CLAM label
+smoothing, 512-tile bags, class balancing; DTFD label smoothing + dropout
+0.7) did not transfer: on CCRCC they are neutral or lose 0.02–0.05, on the
+6-class task they are neutral. They are KRAS-specific tuning of the kind a
+30-attempt search finds by chance on 70 validation slides per fold.
+
+So the honest ceiling of a training-only recipe, measured on tasks the
+search never saw, is about +0.01 on top of the native recipe, plus the
+occasional correction of a mis-sized default (nnMIL's batch). A +0.05
+average on the KRAS arms will not come from training recipes alone.
+
+## 2. Method
+
+- **Development cells.** Plain autoMIL projects on two cohorts outside the
+  paper roster, driven by the operator (no agent): CPTAC CCRCC PBRM1
+  (142 mutant / 182 wild type, 340 slides) and a 6-class lung growth-pattern
+  task (398 slides, cases with disagreeing slide labels dropped). Split
+  design `devcv`: five-fold cross-validation inside standard fold 0's
+  development slides, fixed test slides; seed 42; the same validation
+  schema, keep margin (max(0.015, 1 × paired SE)), companion guard
+  (`val_bacc`, margin from the class counts) and winner rule (max(0.01,
+  2.93 × pooled paired SE), Sidak-adjusted for the pool size) as the
+  campaign cells.
+- **Attempts.** Each attempt is one generated policy file from a composite
+  recipe template (switches: EMA decay, label smoothing, class weights,
+  bag subsampling, warmup/cosine, lr step, minimum epochs, projection
+  unfreezing, body-lr scale) plus an `--hparams` override, submitted through
+  the same sealed policy seams and submit-time smoke the campaign agents
+  use, so every recipe here is expressible by an agent. The root of every
+  cell is the native recipe. An all-off policy reproduced the root bit for
+  bit on CLAM and nnMIL (five identical prediction hashes each): the seam
+  path is the identity.
+- **Measurement.** Lift = paired five-fold mean difference against the root
+  (or the parent for a stack) ± paired SE, read with `dev_cell.py readout`;
+  seed replicates re-run the root and the best pieces under seeds 43 and 44
+  on the same folds (the training seed changes, the splits do not). The bag
+  cache used for ABMIL and DTFD readers was checked bit-identical against an
+  uncached fold (407 s → 63 s).
+- **Budget.** CCRCC: ABMIL 13 + 6 replicate runs, DTFD 12 + 6, CLAM 9 +
+  identity, nnMIL 8 + identity (+ pending); 6-class: ABMIL 17 + 6, DTFD 8,
+  nnMIL and CLAM pending. All jobs ran at low priority beside the official
+  trial, one at a time once the machine was shared.
+
+## 3. Results by cell (validation only)
+
+### 3.1 CCRCC PBRM1
+
+| Arm | Root | Best attempt | Lift ± SE | Seeds 42/43/44 | Verdict |
+|---|---|---|---|---|---|
+| ABMIL | 0.612 | EMA 0.998 | +0.007 ± 0.009 | +0.007 / +0.015 / +0.002 | baseline kept; EMA real but small |
+| CLAM-MB | 0.633 | EMA 0.9995 | +0.007 ± 0.009 | — | baseline kept |
+| DTFD-MIL | 0.604 | dropout 0.7 | +0.005 ± 0.015 | +0.005 / −0.006 / +0.008 | baseline kept; nothing |
+| nnMIL | 0.574 | batch 4 | +0.034 ± 0.020 | pending | **kept** (clears the best-of-6 bar, not the frozen bar) |
+
+What else was measured: ABMIL — warmup + cosine +0.002, without EMA
+−0.010 (guard fail), 512 tiles −0.023, balanced weights −0.001, projection
+unfreezing −0.031 (guard fail), HNSC recipe +0.001, EMA dose 0.99 / 0.995 /
+0.999 = +0.000 / +0.005 / −0.001, EMA + LS 0.1 +0.005 (guard fail), late lr
+step = EMA alone. CLAM — LS 0.2 −0.030, 512 tiles −0.025, EMA + LS −0.042,
+EMA + 512 −0.039, EMA + balanced −0.029, three- and four-piece stacks −0.054
+and −0.030, all guard failures. DTFD — every EMA variant fails the `val_bacc`
+guard (−0.03 to −0.05) while the AUC holds; EMA + balanced weights −0.011;
+dropout 0.5 / 0.8, LS, lr step: within noise. nnMIL — attention/body lr ×0.1
+(the KRAS v5 piece) −0.010 to −0.020 with guard failures, EMA 0.98 +0.005,
+LS 0.1 +0.002.
+
+Seed spread of the root's five-fold mean: ABMIL 0.026 (fixed 20 epochs; two
+folds select epochs 0–4), DTFD 0.003.
+
+### 3.2 Six-class growth pattern
+
+| Arm | Root | Best attempt | Lift ± SE | Seeds 42/43/44 | Verdict |
+|---|---|---|---|---|---|
+| ABMIL | 0.883 | EMA + cosine + unfreezing (+ 512 tiles) | +0.017 ± 0.006 | EMA alone +0.011 / +0.015 / +0.019; the stack +0.016 / +0.012 / +0.017 | stack accepted by the rule; equal to EMA under seeds |
+| DTFD-MIL | 0.886 | EMA + lr step at 9 | +0.004 ± 0.003 | — | baseline kept |
+| nnMIL | pending | | | | |
+| CLAM-MB | pending | | | | |
+
+ABMIL batch 2 (eight variants on the EMA stack: unfreezing dose and
+schedule-free form, EMA 0.995 / 0.999, + 512 tiles, + LS 0.1, + dropout 0.6)
+all lie within +0.013 to +0.017 against the root; against their parent the
+additions are +0.002, −0.002 and +0.001. Root seed spread 0.0008.
+
+### 3.3 CCRCC high_grade transfer check
+
+Recipe v1 applied with no search (one attempt per arm): *pending*.
+
+## 4. Mechanisms
+
+- **EMA removes jitter, not error.** The selection score is the mean of the
+  validation metric over five epochs around the restored epoch. ABMIL's
+  native per-fold jitter on CCRCC was 0.003–0.076; under EMA 0.002–0.026,
+  and the lift equals the jitter removed. The underlying curve (peak minus
+  hindsight gap) did not rise in any cell by more than 0.005.
+- **nnMIL's batch size is a step-count problem.** Steps per epoch = training
+  bags / batch size; the plan's batch 24 gives 9 on CCRCC. With patience 10
+  epochs, a fold that has not improved in 90 steps stops. Batch 4 gives 51
+  steps per epoch and the same folds train for 500+ steps before the
+  patience acts. Whether the lr should be scaled with the batch (sqrt rule)
+  is the pending `b4_lr15` attempt.
+- **DTFD and EMA.** The averaged weights rank validation slides as well or
+  slightly better but shift the operating point at the fixed decision
+  threshold, lowering balanced accuracy by 0.015–0.05 on every task. The
+  companion guard is doing its job: the recipe would look better on AUC
+  alone.
+- **Why KRAS pieces did not transfer.** Each was selected as the best of
+  ~30 attempts on five folds of about 70 validation slides. The CCRCC
+  re-measurement shows them neutral or harmful with guard failures; the
+  6-class task shows them neutral. A best-of-30 selection on that much
+  noise has an expected optimism of about one pooled SE, which is the size
+  of the "gains" they carried beyond EMA.
+
+## 5. Recipe v1 (per arm, exact overrides)
+
+- **ABMIL**: EMA decay 0.998 (0.995–0.999 equal), swapped in for
+  validation; everything else native. Expected +0.008 (weak task) to +0.015
+  (strong task). Optional: 1-epoch warmup + cosine, neutral.
+- **CLAM-MB**: EMA decay 0.9995; everything else native. Expected +0.007 to
+  +0.013. Do not add label smoothing, bag subsampling or balancing by
+  default: they lost on CCRCC.
+- **DTFD-MIL**: native recipe. EMA gains AUC but fails the balanced-accuracy
+  guard; if the deployment threshold is tuned rather than fixed, EMA 0.998
+  with the native lr step is worth +0.003 to +0.007.
+- **nnMIL simple_mil**: batch size 4 (or 8) on cohorts below ~400 training
+  bags, native lr 3e-4 and schedule; EMA 0.98 optional (+0.005). Expected
+  +0.03 on a cohort of ~200 bags (*pending* seed and 6-class confirmation).
+
+## 6. What this changes for the campaign
+
+- The agent's instruction file gains a prior-experience section (§3c):
+  open with EMA (and batch 4 for nnMIL), skip the settled axes, size every
+  predicted effect against the paired SE, replicate before stacking. The
+  expected effect on round 2 is fewer wasted attempts and nnMIL cells that
+  find their batch-size gain in batch 1 instead of batch 3; the expected
+  lift per arm stays at about +0.01, except nnMIL.
+- The +0.05 goal for the KRAS arms is not reachable by training recipes
+  within the sealed seams. The two routes left are outside this report's
+  scope: changing what the seams allow (architecture, features, ensembling)
+  or changing the claim.
+
+## 7. Held-out sanity readings (development cohorts only)
+
+Taken once per cell through `automil certify` after the cell is closed;
+*pending*. These cohorts are not in the paper, so the values may be
+recorded here; the only clean test of a devcv-selected configuration is
+split 0's own test slides (67 and 80 slides), so the readings are a sanity
+check with an SE of about 0.04, not a measurement.
+
+## 8. Record
+
+- Cells: `benchmarks/experiments/dev/<cohort>__<task>__hoptimus1__<arm>[__seedN]/automil/`
+  (graph.json, learnings.md with every batch decision, batches/*.json with
+  every attempt's constants and overrides, orchestrator archive on aihub).
+- Tooling: `benchmarks/scripts/dev_cell.py` (materialize, readout, batch),
+  `dev_loop.py`, `dev_recipe.py`, `dev_batch_file.py`; template
+  `benchmarks/experiments/dev/_recipes/composite.py`.
+- Earlier evidence: `docs/recipes/trial-synthesis-2026-10-15.md`,
+  `docs/recipes/trial-attempts-2026-10-15.csv`, `docs/recipes/playbook-v0.md`.
