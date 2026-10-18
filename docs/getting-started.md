@@ -315,7 +315,8 @@ promotion rate. See [calibration-pilot.md](calibration-pilot.md) for choosing `K
 ## Trajectory recording
 
 Each submit can record a JSONL trajectory of the agent's events, using
-OpenTelemetry `gen_ai.*` field names, at `archive/<node_id>/trajectory.jsonl`.
+OpenTelemetry `gen_ai.*` field names, at `automil/archive/<node_id>/trajectory.jsonl`
+(next to the gate logs, outside `automil/orchestrator/archive/`).
 Secrets (`sk-...`, `hf_...`, `ghp_...`, AWS keys, `*_API_KEY=...`, `*_TOKEN=...`)
 are redacted on capture. Each event is capped at 8 KB, and files rotate at 5 MB
 (soft) and 50 MB (hard). Trajectories are gitignored. Export a redacted,
