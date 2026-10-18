@@ -1,422 +1,407 @@
 # Getting Started with autoMIL
 
-autoMIL automates the **research iteration**, not the hyperparameter: a coding
-agent reads your codebase, implements **source-level** changes (architecture +
-training recipe), and runs each as an isolated reproducible experiment in a
-persistent tree that informs later proposals — a different level of automation
-from grid/menu AutoML, which only searches configurations within a fixed
-pipeline. autoMIL is the framework; your training code is the consumer. The seam
-between them is the [training-script contract](training-script-contract.md):
-write a `result.json`, honor `SIGTERM`, declare your env vars. Anything
-beyond that is up to you.
+autoMIL automates the research iteration of an ML project. A coding agent reads
+your codebase, implements source-level changes (architecture and training
+recipe), and runs each change as an isolated, reproducible experiment in a
+persistent tree that informs later proposals. Grid and menu AutoML only search
+configurations inside a fixed pipeline; autoMIL searches over the code itself.
+
+autoMIL is the framework and your training code is the consumer. The two meet at
+the [training-script contract](training-script-contract.md): write a
+`result.json`, exit cleanly on `SIGTERM`, and declare the environment variables
+the script needs.
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.10 or newer
 - Git
-- A coding agent (Claude Code recommended; Codex / OpenCode / DeepSeek-via-X
-  also first-class via per-runtime overlays)
-- Optional: NVIDIA GPU(s) with CUDA, or a ROCm system, or just CPU. autoMIL
-  detects accelerators at `automil init` time and stamps defaults accordingly.
+- A coding agent. Claude Code is the primary runtime. Codex, OpenCode, and
+  DeepSeek (through OpenCode or Codex) are also supported; see
+  [Other runtimes](#other-runtimes).
+- Optional: NVIDIA GPUs with CUDA, a ROCm system, or CPU only. `automil init`
+  detects the accelerator and writes matching defaults.
 
 ## Installation
 
 ```bash
 # Install as a global CLI tool (recommended)
-uv tool install git+https://github.com/leoyin1127/autoMIL.git
+uv tool install git+https://github.com/1nslyn/autoMIL.git
 
 # Or install from a local clone
-git clone https://github.com/leoyin1127/autoMIL.git
+git clone https://github.com/1nslyn/autoMIL.git
 cd autoMIL
 uv tool install -e .
 ```
 
-> **Environment convention:** Development in the autoMIL source repository
-> always uses `uv run`. The bare `automil` commands below assume the recommended
-> global installation was created by `uv tool install`; they are not an
-> instruction to bypass uv-managed environments.
+> **Environment convention:** work inside the autoMIL source repository with
+> `uv run automil ...`. The bare `automil` commands below assume the global
+> install from `uv tool install` and are meant for your own project.
 
-### Optional extras
-
-```bash
-uv sync --extra slurm         # SLURMBackend (submitit AutoExecutor)
-uv sync --extra ray           # RayBackend (raw @ray.remote)
-uv sync --extra examples-iris # scikit-learn + pyyaml for the sklearn-iris example
-```
-
-## Adding autoMIL to Your Project
-
-`automil init` overlays an `automil/` directory onto an existing git repo.
+Optional extras, installed from a source checkout:
 
 ```bash
-cd /path/to/your/project   # must be a git repo
-
-# Auto-detect runtime from existing .claude/, .codex/, .opencode/ dirs
-automil init
-
-# Or pin a runtime explicitly
-automil init --runtime claude
-automil init --runtime codex
-automil init --runtime opencode
-automil init --runtime deepseek-via-opencode
-automil init --runtime deepseek-via-codex
-automil init --runtime all                  # install assets for every supported runtime
-
-# CI / smoke-test path: skip hardware probe, use conservative defaults
-automil init --no-healthcheck
-
-# Re-render skills/hooks/AGENTS.md after upgrading autoMIL without re-scaffolding
-automil init --update
+uv sync --extra slurm         # SLURM backend (submitit)
+uv sync --extra ray           # Ray backend
+uv sync --extra examples-iris # scikit-learn and pyyaml for the sklearn-iris example
 ```
 
-`automil init` creates an `automil/` subdirectory with:
+## Adding autoMIL to your project
 
-- `config.yaml`, project settings (run, files, env, scoring, cap, gate, backend, hardware, registry)
-- `program.md`, agent instructions for the experiment loop
-- `learnings.md`, accumulated insights (starts empty)
-- `variants/`, registered variant modules (Phase 1); empty until your first `automil port-variant`
-- `cells/`, cell budget state (Phase 4)
-- `orchestrator/`, runtime queue / running / archive / completed directories
-- `.gitignore`, excludes runtime files (`graph.json`, `orchestrator/`, `trajectory.jsonl`, `cells/`)
+`automil init` overlays an `automil/` directory onto an existing git repository.
+Your code is not modified.
 
-Per-runtime assets are written under `.claude/skills/automil/`,
-`.codex/skills/automil-setup/`, etc., depending on selected runtime(s).
-`AGENTS.md` is regenerated at the project root.
+```bash
+cd /path/to/your/project   # must be inside a git repo
 
-By default, `automil init` runs `LocalBackend.healthcheck()` to probe
-CUDA / ROCm / CPU and writes detected GPU count, VRAM, and concurrency
-defaults into `config.yaml`'s `hardware:` and `cap.default_vram_estimate_gb`
-sections. Pass `--no-healthcheck` for CI environments without GPUs.
+automil init                       # detect the runtime from .claude/, .codex/, .opencode/
+automil init --runtime claude      # or pin one (see "Other runtimes" for the full list)
+automil init --no-healthcheck      # skip the hardware probe (CI, machines without GPUs)
+automil init --update              # re-render skills, hooks, and AGENTS.md after upgrading autoMIL
+```
 
-Your existing codebase is untouched. The agent will scope it and determine
-what to edit.
+`--update` also re-renders `config.yaml` from the template unless you pass
+`--no-healthcheck`, which replaces your edits in that file. Use
+`automil init --update --no-healthcheck` to keep `config.yaml` as it is.
+
+Init creates:
+
+- `automil/config.yaml`: project settings (run, files, env, scoring, cap, gate, backend, hardware, registry)
+- `automil/program.md`: instructions for the agent's experiment loop
+- `automil/plan.md`: the agent's plan for the current batch of experiments
+- `automil/learnings.md`: accumulated insights, empty at the start
+- `automil/variants/`: registered variant modules, empty until your first `automil port-variant`
+- `automil/orchestrator/`: the `queue`, `running`, `archive`, and `completed` directories
+- `automil/.gitignore`: excludes runtime files such as `graph.json`, `orchestrator/`, `sessions/`, and trajectories
+- `AGENTS.md` at the project root, plus per-runtime assets (for Claude: `.claude/skills/`, `.claude/hooks/`, `.claude/settings.json`)
+
+Cell budget state is created lazily under `automil/cells/` on the first submit,
+not by `init`. Unless you pass `--no-healthcheck`, init probes CUDA, ROCm, or CPU
+and writes the detected GPU count, VRAM, and concurrency into the `hardware:` and
+`orchestrator:` sections of `config.yaml`, including
+`orchestrator.default_vram_estimate_gb`.
 
 ## Configuration
 
-After `automil init`, edit `automil/config.yaml`. The fields that you must
-touch:
+Edit `automil/config.yaml`. The fields you normally set:
 
 ```yaml
 run:
   script: "train.py"             # your training script
-  command: null                  # optional full override, e.g. "python src/train.py --config config.yaml"
+  command: null                  # optional full command, e.g. "python src/train.py --config config.yaml"
 
 files:
   editable: ["train.py", "models/"]   # files, dirs, or globs the agent may modify
   readonly: ["evaluate.py"]           # files the agent must not touch
 
 env:
-  required: []                   # vars that MUST be set before submit; automil check enforces
-  passthrough: [AUTOMIL_*]       # vars forwarded into experiment subprocesses
+  required: []                   # variables that must be set; `automil check` enforces this
+  passthrough: [AUTOMIL_*]       # variables forwarded into experiment subprocesses
 
 scoring:
-  formula: ""                    # primary_value reducer: "" -> mean | max | min | trust_reported
-
-baseline:
-  primary_value: 0.0                 # your starting performance
+  formula: ""                    # see below
+  accept_margin: 0.0             # predeclared keep-margin
+  se_multiplier: 1.0
 
 cap:
-  # cap is consumer-supplied — 6h is the generic framework fallback, not
-  # special. Durations accept 6h / 30m / 90s / 2d (or a bare number = seconds).
-  # Change with `uv run automil budget set 6h`. See note below on precedence.
-  budget: 6h                     # agent-active working budget
-  safety_buffer: 30m             # refuse-new buffer; must be < budget
-  mode: agent_active             # bill only while the agent is working (see below)
-
-backend:
-  name: "local"                  # "local" | "slurm" | "ray"
+  budget: 6h                     # working budget per cell
+  safety_buffer: 30m             # must be shorter than budget
+  mode: agent_active             # or wall_clock
 ```
 
-A few notes on each:
-
-- **`run.script` / `run.command`**, the orchestrator runs this script for
-  each experiment. Defaults to `train.py`; override with any script name or
-  full command.
-- **`env.required` is mandatory in v1.0.** `automil check` fails with
-  `Missing required env var: <name>` if anything declared here is unset
-  in the orchestrator's environment. Empty list is fine for self-contained
-  consumers (e.g. sklearn-iris).
-- **`env.passthrough`** controls what the orchestrator forwards into each
-  experiment subprocess. `AUTOMIL_*` matches all framework variables
-  including `AUTOMIL_RUNTIME` (declared, never inferred, D-87).
-- **`scoring.formula`** is the reducer the framework uses to recompute the
-  primary_value from the validation `metrics` block at ingest (CR-1b — the
-  val-firewall does not trust the reported scalar). `""` means `mean`, which
-  reproduces the standard primary values exactly; `trust_reported` opts out.
-  Arithmetic expressions are rejected by `automil check`.
-- **`cap.budget` / `cap.safety_buffer`** are consumer-supplied durations
-  (`6h`, `30m`, `90s`, `2d`, or a bare number of seconds). The framework provides the
-  per-cell cap *mechanism*: at `T - safety_buffer` the cell enters
-  `refusing-new` (no new submits accepted into this cell); at `T` the cell
-  enters `terminating` and SIGTERM is sent to running experiments. The
-  precedence chain is `CLI flag > cap.<key> duration > framework fallback
-  (6h / 30m)`. Set it with `uv run automil budget set 6h` (or
-  `uv run automil budget show` to inspect), or override
-  per-cell via `automil submit --budget-seconds N` (D-134; honored ONLY on the
-  submit that creates the cell — later submits joining the same cell log INFO
-  and keep the established value, preventing sandbagging).
-- **`cap.mode`** chooses how the budget clock is metered:
-  - **`agent_active`** bills time under the supported Claude runtime observer
-    contract: Claude Code's native cumulative `claude_code.active_time.total`
-    metric, summed across its `cli` and `user` series. Claude excludes idle time.
-    `automil init` enables Claude's localhost Prometheus endpoint; the
-    orchestrator scrapes its cumulative counter every scheduling cycle.
-    Synchronous `SessionStart` and `SessionEnd` hooks bind the runtime session
-    to the budget cell and capture the final counter. There is no idle timeout,
-    heartbeat, or tick-based time estimate; replay after a daemon restart yields
-    the same total. `Monitor` remains the event-driven way to wait for
-    experiments, but it is not the budget clock.
-  - **`wall_clock`** is continuous time since cell creation and includes GPU and
-    idle time. Use it for runtimes without the synchronous hook contract.
-- **`backend.name`**, `local` works on any machine. `slurm` requires
-  `uv sync --extra slurm` and valid SLURM directives (`backend.slurm.directives.partition`,
-  `account`, `cpus_per_task`, `mem_gb`). `ray` requires `uv sync --extra ray`
-  and a `RAY_ADDRESS` (or local fallback if `backend.ray.allow_local_fallback: true`).
-
-For the full annotated template, see
+The annotated template is
 [`src/automil/templates/config.yaml.j2`](../src/automil/templates/config.yaml.j2).
 
-## Training Script Contract
+- **`env.required`**: `automil check` fails with `Missing required env var:
+  <name>` if a listed variable is unset in the orchestrator's environment. An
+  empty list is fine for self-contained scripts.
+- **`env.passthrough`**: variables forwarded into each experiment subprocess.
+  `AUTOMIL_*` covers all framework variables, including `AUTOMIL_RUNTIME`, which
+  you declare and autoMIL never infers.
 
-Your training script must honor the 6 items documented in
-[training-script-contract.md](training-script-contract.md):
+### Scoring and keep/discard
 
-1. Read `automil/config.yaml` (or honor a `--config` flag).
-2. Honor the framework-owned CUDA/ROCm device masks; never override them.
-3. Branch on `AUTOMIL_ACCELERATOR` (`cpu`, `cuda`, or `rocm`) and treat
-   `AUTOMIL_GPU=0` only as the backward-compatible logical slot.
-4. Exit cleanly on `SIGTERM` with a partial `result.json`.
-5. Write `result.json` matching `automil/schemas/result.schema.json`.
-6. Declared env vars (under `env.required`) must be present at startup.
+The framework recomputes `primary_value` from the validation `metrics` block at
+ingest and does not trust the value the script reports. `scoring.formula` picks
+the reducer:
 
-The minimum valid `result.json` is:
+- `""` (default) or `mean`: the mean of all validation metrics
+- `max` or `min`
+- `val_<metric>`, for example `val_auc`: `primary_value` is exactly that one
+  validation metric. The other metrics stay recorded but do not vote. The metric
+  must exist in `metrics`, or the result fails ingest. This is the recommended
+  setting once you know your metric names; set `metrics.primary` to the same
+  selector.
+- `trust_reported`: use the reported value as is. This weakens the validation
+  firewall (see [Revealing held-out test metrics](#revealing-held-out-test-metrics)).
+
+Arithmetic expressions are rejected by `automil check`.
+
+A child node is kept only if
+
+```
+child.primary_value > parent.primary_value + margin
+margin = max(accept_margin, se_multiplier x SE)
+```
+
+`SE` is the standard error of the per-fold child-minus-parent deltas when both
+nodes carry primary values for the same folds (runs share folds under a locked
+seed, so the fold effect cancels). Otherwise it is the parent's marginal
+cross-fold SE. The margin can only raise the bar set by `accept_margin`, never
+lower it. This is a screen during search. The significance test is the
+[generalization gate](#generalization-gate).
+
+### Budget
+
+`cap.budget` and `cap.safety_buffer` are durations (`6h`, `30m`, `90s`, `2d`, or
+a bare number of seconds). At `budget - safety_buffer` a cell stops accepting
+new submits; at `budget` it sends `SIGTERM` to running experiments. The value in
+effect is the CLI flag, then the `cap` key, then the framework fallback
+(6h and 30m). Inspect or change it with `automil budget show` and
+`automil budget set 6h`. `automil submit --budget-seconds N` overrides it, but
+only on the submit that creates the cell, so later submits cannot change an
+established budget. `cap.eval_budget` (default `null`) additionally caps how
+many experiments a cell may launch, counting crashes and budget kills.
+
+`cap.mode` chooses how the clock runs:
+
+- **`agent_active`** bills only the time the agent is working, using Claude
+  Code's cumulative `claude_code.active_time.total` metric (CLI and user series,
+  idle time excluded). The orchestrator reads it from Claude's local Prometheus
+  endpoint on every scheduling cycle, and `SessionStart` and `SessionEnd` hooks
+  bind the Claude session to the cell. Claude Code reads telemetry settings only
+  from the environment it starts in, and `automil init` does not set them. Start
+  Claude like this (init prints the same line):
+
+  ```bash
+  CLAUDE_CODE_ENABLE_TELEMETRY=1 OTEL_METRICS_EXPORTER=prometheus \
+  OTEL_METRICS_INCLUDE_SESSION_ID=true OTEL_EXPORTER_PROMETHEUS_PORT=9464 \
+  claude --dangerously-skip-permissions
+  ```
+
+  The port is `activity.exporter_port` in `config.yaml` (default 9464).
+- **`wall_clock`** counts continuous time since the cell was created, including
+  GPU and idle time. It needs no telemetry setup and works with any runtime.
+
+### Backend
+
+`backend.name` is `local` (any machine), `slurm`, or `ray`. `slurm` needs the
+`slurm` extra and valid `backend.slurm.directives` (`partition`, `account`,
+`cpus_per_task`, `mem_gb`). `ray` needs the `ray` extra and a `RAY_ADDRESS`, or
+`backend.ray.allow_local_fallback: true`.
+
+## Training script contract
+
+Your training script reads its config, honors the device masks the framework
+sets, exits cleanly on `SIGTERM`, and writes a `result.json` that validates
+against `result.schema.json`. The minimum valid result is:
 
 ```json
 {"primary_value": 0.912}
 ```
 
-`primary_value` is the single scalar the experiment tree uses for ranking
-(higher is always better; for loss minimization, negate). All other
-fields are optional. Under the **val-firewall**, `metrics` is
-validation-only and is what `primary_value` is computed from; any test metrics go
-in a sealed `held_out` block that the orchestrator quarantines under
-`archive/<node>/certify/` and reveals once via `automil certify` — the agent
-never sees test during search. A full example payload from the autobench
-consumer:
+`primary_value` is the single number used to rank experiments. Higher is always
+better, so negate a loss. `metrics` holds validation metrics only. Test metrics
+go in a separate `held_out` block, which the framework seals away from the
+agent. Malformed results mark the node `crashed`.
 
-```json
-{
-  "status": "completed",
-  "metrics": {"val_auc": 0.870, "val_bacc": 0.810},
-  "held_out": {"test_auc": 0.872, "test_bacc": 0.830},
-  "primary_value": 0.840,
-  "elapsed_seconds": 4098,
-  "peak_vram_mb": 4500,
-  "fold_results": [...],
-  "partial": false
-}
-```
+The full contract, the SIGTERM patterns, the `validation_folds` per-fold
+evidence, and examples are in [training-script-contract.md](training-script-contract.md).
 
-The sklearn-iris consumer writes `{"primary_value": <accuracy>, "metrics": {"accuracy": 0.95, "f1": 0.94}, "status": "completed"}`.
-Both shapes validate against the same schema; the framework imposes no
-hardcoded metric keys.
+## Running the loop
 
-The orchestrator validates this at ingest via JSON Schema. Malformed payloads
-transition the node to `crashed` with a schema-location pointer. The
-`primary_value` scalar is the single field the experiment tree uses for ranking
-(UCB scoring, primary_value-dominance gated by the Ladder keep-margin, higher is
-always better; for loss minimization, negate).
-
-## Running the Loop
-
-Use **tmux** so processes survive terminal disconnects.
+Use tmux so processes survive a dropped terminal.
 
 ### 1. Start the orchestrator
 
 ```bash
 tmux new -s orchestrator
-automil orchestrator start
-# Ctrl-b d to detach
+automil orchestrator start     # detach with Ctrl-b d
 ```
 
-The orchestrator runs as a daemon, polls the queue, schedules experiments
-across GPUs via best-fit bin packing, drains backend logs to `archive/<id>/run.log`,
-validates each `result.json` against the schema at ingest, and updates the
-graph.
+The orchestrator polls the queue, schedules experiments onto GPUs, writes each
+run's log to `archive/<id>/run.log`, validates every `result.json`, and updates
+the graph.
 
-### 2. Start the visualization dashboard (optional)
+### 2. Start the dashboard (optional)
 
 ```bash
 tmux new -s viz
-automil viz start
-# Open http://localhost:8420 in your browser
-# Ctrl-b d to detach
+automil viz start              # http://localhost:8420
 ```
 
-Live SSE updates show the experiment tree, promotion-rate metric, and per-cell
-budget consumption.
+The dashboard shows the experiment lineage tree (3D or flat) next to a chart of
+primary value by attempt, a discovery timeline, the agent's transcript, a table
+of node records, and the agent's notes. It binds to 127.0.0.1 by default; set
+`viz.host` in `config.yaml` to expose it on a trusted network. It has no
+authentication. Over SSH, forward the port with
+`ssh -N -L 8420:127.0.0.1:8420 user@host`. `automil viz export` writes the record
+as a static site.
 
 ### 3. Launch your coding agent
 
-**Claude Code (recommended):**
-
 ```bash
 tmux new -s automil
-claude --dangerously-skip-permissions   # autonomous mode, no permission prompts
-# Then type: /automil-setup (first time) or /automil (subsequent runs)
+claude --dangerously-skip-permissions   # for agent_active, add the telemetry variables above
+# then type /automil-setup the first time, and /automil afterwards
 ```
 
 `--dangerously-skip-permissions` lets the agent run unattended. The
-`/automil-setup` skill runs once: it scopes the codebase, configures
-`automil/config.yaml`, verifies the contract via a 1-minute dry-run gate,
-and establishes a baseline. `/automil` then runs the experiment loop.
-
-**Other runtimes:** install via `automil init --runtime <name>` (or
-`--runtime all`), then point the agent at `automil/program.md` and tell it
-to follow the loop. See [agent-compatibility.md](agent-compatibility.md).
+`/automil-setup` skill runs once: it scopes the codebase, fills in
+`config.yaml`, checks the contract with a one-minute dry run, and records a
+baseline. `/automil` then runs the experiment loop. For other runtimes see
+[Other runtimes](#other-runtimes).
 
 ### 4. Monitor progress
 
 ```bash
-automil status              # quick summary
-automil rank                # top-ranked proposals (UCB)
-automil cell list           # cell budget state
-automil orchestrator status # daemon health
-# Open http://localhost:8420 for the dashboard (over SSH: ssh -N -L 8420:127.0.0.1:8420 user@host)
+automil status                # summary, including the 30-day promotion rate
+automil rank                  # top-ranked proposals
+automil cell list             # budget state per cell
+automil orchestrator status   # daemon health
 ```
 
-## How Experiments Run
+## How experiments run
 
-1. The agent edits files in your repo (any files, not just one).
-2. Runs `automil submit --node node_0001 --desc "try focal loss" --mil-model clam_mb --files train.py models/clam.py`.
-   Optional: `--max-time 60` for seconds-precision timeout, `--budget-seconds N`
-   to override the cell budget on cell creation.
-3. The CLI snapshots only the changed files into `automil/orchestrator/archive/node_0001/`
-   and validates them against `registry.protected` globs (rejects edits to
-   shared library code; those must ship as registered variant modules).
-4. The orchestrator picks up the spec, creates a git worktree at the base
-   commit, and overlays the changed files. Each experiment runs in isolation;
-   only its diff is stored.
-5. The experiment runs on the assigned backend (local, SLURM, or Ray) in a
-   typed CPU/CUDA/ROCm execution slot. The orchestrator owns the matching
-   device-isolation variables and maps any accelerator to logical device 0.
-6. The agent (and a SIGTERM handler if installed) writes `result.json`.
-7. The daemon validates the payload, ingests it, and updates the graph.
-8. The agent runs `automil reconcile` to sync state, reads `learnings.md`,
-   and designs the next experiment.
+1. The agent edits files and submits, for example
+   `automil submit --node node_0001 --desc "try focal loss" --mil-model clam_mb --files train.py models/clam.py`.
+   `--mil-model` names the budget cell and can be omitted when `run.mil_model` is
+   set. `--max-time SECONDS` sets the experiment timeout.
+2. The CLI snapshots only the changed files into
+   `automil/orchestrator/archive/node_0001/` and rejects edits to files matching
+   `registry.protected`; those changes must ship as registered variant modules.
+3. The orchestrator creates a git worktree at the base commit, overlays the
+   changed files, and runs the script on the configured backend in a CPU, CUDA,
+   or ROCm slot. It owns the device-mask variables and exposes the accelerator as
+   logical device 0.
+4. The daemon validates `result.json`, ingests it, and updates the graph. The
+   agent runs `automil reconcile`, reads `learnings.md`, and designs the next
+   experiment.
 
-## Variants and Reproduction (Phase 1)
+## Variants and reproduction
 
-For architectural changes that touch shared library code, the v1.0 path is
-to register the change as a variant module:
+For architectural changes that touch shared library code, register the change as
+a variant module:
 
 ```bash
-# After an experiment that edited shared code:
-automil port-variant <node_id>           # convert overlay into automil/variants/<parent>/<name>.py
-automil refresh-registry                 # regenerate per-kind variants/__init__.py
-automil apply <node_id>                  # apply this node's variant selection to config.yaml
-automil verify-repro <node_id>           # reproduce via the registry path; assert |actual - expected| < tolerance
+automil port-variant <node_id>      # overlay -> automil/variants/<parent>/<name>.py
+automil refresh-registry            # regenerate the per-kind variants/__init__.py
+automil apply <node_id>             # write this node's variant selection into config.yaml
+automil verify-repro <node_id>      # reproduce through the registry and compare
 ```
 
-`registry.protected` in `config.yaml` lists glob patterns the agent's overlay
-must NOT touch directly (e.g. `lib/CLAM/**`, `src/models/clam/base.py`).
-Variants live as committed code modules; the search-scope mode is `free`
-by default (interface + purity validators) or `architecture-preserving`
-(adds identity-strict validation per `identity_constraints`).
+`registry.protected` lists globs the overlay may not touch (for example
+`lib/CLAM/**`). The search scope is `free` by default, or
+`architecture-preserving`, which adds the checks in `registry.identity_constraints`.
 
-## Generalization Gate (Phase 5)
+## Generalization gate
 
-A keep-status node can be nominated as a candidate and promoted via a
-pre-registered held-out manifest:
+A node with status `keep` can be nominated as a candidate and tested on cells
+that were declared in advance:
 
 ```bash
-automil nominate <node_id>               # mark as candidate
-automil gate register-manifest           # write & git-commit the held-out manifest BEFORE search
-automil promote <candidate_id>           # paired Wilcoxon + bootstrap CI + Bonferroni alpha/K
+automil nominate <node_id>
+automil gate register-manifest <parent_id> --strategy operator-curated --held-out-cells "<cell_id:dataset:encoder:task>,..."
+                                             # writes and git-commits the held-out manifest before the test
+automil promote <candidate_id>               # paired Wilcoxon, bootstrap CI, Bonferroni alpha/K
 ```
 
-Manual nomination is the v1.0 default (`gate.auto_nominate: false`).
-Promotion-rate is exposed in viz `/api/promotion-rate` SSE and
-`automil status`.
+Nomination is always manual (`gate.auto_nominate` is reserved and has no effect).
+`automil gate status` and `automil gate stats` show the manifest and the
+promotion rate. See [calibration-pilot.md](calibration-pilot.md) for choosing `K`.
 
-## Trajectory Recording (Phase 3)
+## Trajectory recording
 
-Per-submit JSONL trajectories using OpenTelemetry `gen_ai.*` keys are
-written to `archive/<node_id>/trajectory.jsonl`. Secrets (`sk-…`, `hf_…`,
-`ghp_…`, AWS keys, `*_API_KEY=…`, `*_TOKEN=…`) are redacted on capture; per-event 8 KB
-cap, per-file 5 MB soft / 50 MB hard rotate. Trajectories are gitignored
-by default. Export a redacted, schema-validated bundle:
+Each submit can record a JSONL trajectory of the agent's events, using
+OpenTelemetry `gen_ai.*` field names, at `archive/<node_id>/trajectory.jsonl`.
+Secrets (`sk-...`, `hf_...`, `ghp_...`, AWS keys, `*_API_KEY=...`, `*_TOKEN=...`)
+are redacted on capture. Each event is capped at 8 KB, and files rotate at 5 MB
+(soft) and 50 MB (hard). Trajectories are gitignored. Export a redacted,
+schema-validated bundle with:
 
 ```bash
 automil trajectory export <node_id> --out trajectory_bundle.tgz
 ```
 
-## Revealing Held-Out Test Metrics (the val-firewall)
+How events are captured depends on the runtime; see [Other runtimes](#other-runtimes).
 
-Selection runs entirely on the **validation** primary_value. Test metrics are sealed
-at ingest into a `held_out` block that the orchestrator quarantines under
-`archive/<node>/certify/`, out of every agent-facing surface during search. Once
-search is done, reveal them exactly once:
+## Revealing held-out test metrics
+
+Selection uses the validation `primary_value` only. Test metrics are sealed at
+ingest under `archive/<node>/certify/`, outside everything the agent can read.
+After the search ends, reveal them once:
 
 ```bash
-automil certify                 # sealed held-out test for the val-selected best node
-automil certify --top-k 3       # or the top-K keep nodes by validation primary_value
+automil certify                 # the validation-selected best node
 automil certify --node node_0042
 ```
 
-This is the only sanctioned read of test: the val→test gap is the honest cost of
-search, and it must never feed back into selection. Reporting the certified
-held-out numbers is what keeps an encoder-vs-aggregator comparison free of
-test-selection bias — the rigor the framework exists to provide.
+This is the only supported read of test. `automil certify --top-k K` with K above
+1 needs `--unseal-multiple`, because comparing several test results is itself
+selection on test. Use it only for a table where all K rows are reported together.
 
-## CLI Reference
+## Other runtimes
 
-| Command | Description |
-|---------|-------------|
-| `automil init [--runtime <r>] [--no-healthcheck]` | Add autoMIL to current git repo |
-| `automil check` | Validate setup (protected files, env.required, backend, registry) |
-| `automil show-skill --runtime <r>` | Render merged per-runtime skill file to stdout |
-| `automil submit --node <id> --desc "..." --mil-model <m> [--files <f>] [--max-time SEC]` | Snapshot changed files, queue experiment. `--mil-model` is required unless `run.mil_model` is set in `config.yaml` |
-| `automil cancel <node_id>` | Cancel a running experiment |
-| `automil resubmit <node_id>` | Re-queue a terminal experiment as a new node |
-| `automil rank` | Show top-ranked proposals (UCB) |
-| `automil propose --parent <id> --desc "..."` | Add a brainstormed proposal |
-| `automil reconcile [--recompute-best]` | Sync graph with orchestrator state |
-| `automil status` | Show experiment summary |
-| `automil port-variant <node_id>` | Convert overlay into a registered variant |
-| `automil promote-variant <variant_id>` | Move a gate-passing variant to canonical |
-| `automil refresh-registry` | Regenerate per-kind variants/__init__.py |
-| `automil apply <node_id>` | Apply a node's variant selection to config.yaml |
-| `automil revert-baseline` | Reset registry.protected paths to base_commit |
-| `automil verify-repro <node_id>` | Reproduce a node via the registry path |
-| `automil cell status [<id>] / list` | Inspect cell budget state and consumed seconds |
-| `automil nominate <node_id>` | Mark keep-status node as gate candidate |
-| `automil promote <candidate_id>` | Run Stage B gate |
-| `automil certify [--node <id>] [--top-k N]` | Reveal sealed held-out TEST metrics for val-selected node(s) — once, post-search |
-| `automil gate register-manifest / retire-manifest / status / stats` | Manage / inspect the gate manifest |
-| `automil trajectory record / export` | JSONL trajectory capture + redacted export bundle |
-| `automil start-loop` / `automil stop-loop` | Control agent loop flag |
-| `automil orchestrator start / stop / status` | Manage GPU scheduler daemon |
-| `automil viz start / stop / status / export` | The dashboard site (live), or exported as a static site |
+autoMIL works through files and the CLI. An agent needs to read files, edit code,
+and run shell commands. The shared instructions live once in
+`src/automil/agent_assets/_shared/`, and per-runtime directories add only what
+differs. `automil init --runtime <r>` installs the assets for one runtime:
 
-Run `automil <command> --help` for the full flag listing.
+| Runtime | `--runtime` value | What init installs |
+|---------|-------------------|--------------------|
+| Claude Code | `claude` | Skills `automil` and `automil-setup` under `.claude/skills/`, the `on_stop.sh` hook (blocks stopping while the loop is active) and the activity hooks registered in `.claude/settings.json`, and `.claude/CLAUDE.md` importing `AGENTS.md` |
+| Codex | `codex` | `.codex/instructions.md`, a copy of the shared `AGENTS.md` |
+| OpenCode | `opencode` | `.opencode/AGENTS.md` and the trajectory plugin `.opencode/plugins/automil-trajectory.ts` |
+| DeepSeek through OpenCode | `deepseek-via-opencode` | The OpenCode assets |
+| DeepSeek through Codex | `deepseek-via-codex` | The Codex assets |
 
-## Examples
+`--runtime all` installs Claude, OpenCode, and Codex. Without `--runtime`, init
+detects existing `.claude/`, `.codex/`, and `.opencode/` directories and installs
+those, and falls back to Claude if none exist. All runtimes also get `AGENTS.md`
+at the project root.
 
-See [`examples/`](../examples/) for reference configurations:
+DeepSeek is a model, not a runtime, so it runs inside OpenCode or Codex. Set
+`AUTOMIL_RUNTIME=deepseek-via-opencode` or `deepseek-via-codex` so trajectories
+carry the right tag. In general, declare `AUTOMIL_RUNTIME` in the agent's
+environment; autoMIL never infers it.
 
-- [`sklearn-iris/`](../examples/sklearn-iris/), ~80-line second consumer
-  demonstrating the contract on a non-autobench pipeline (CPU-only, no env
-  vars). Used as the Phase 8 final-acceptance sub-gate B in CI.
-- [`ovarian_hrd/`](../examples/ovarian_hrd/), pre-v1.0 autonomous run
-  with 189 experiments and accumulated `learnings.md`.
-- [`clwd/`](../examples/clwd/), multi-class lung adenocarcinoma subtyping skeleton.
-- [`placeholder/`](../examples/placeholder/), minimal template emitted by
-  `automil init`.
+To see exactly what an agent will read, render the skill or the `AGENTS.md`:
 
-## Further Reading
+```bash
+automil show-skill --runtime claude > /tmp/claude-skill.md
+automil show-skill --runtime codex --asset AGENTS
+```
 
-- [Training-Script Contract](training-script-contract.md), the seam between framework and consumer
-- [Agent Compatibility](agent-compatibility.md), per-runtime setup, overlay merge model
-- [Implementation Report](implementation-report.md), v1.0 architecture and design decisions
-- [CHANGELOG](../CHANGELOG.md), release notes through the Unreleased preprint-campaign integration
+No runtime currently overrides the shared text, so the output is the same for
+every runtime.
+
+**Trajectory capture by runtime.**
+
+- Claude Code: the `on_stop.sh` hook records events when `AUTOMIL_NODE_ID` and
+  `AUTOMIL_RUNTIME` are set.
+- OpenCode: the installed plugin records events automatically.
+- Codex and DeepSeek through Codex: no stable hook API exists, so add
+  `automil trajectory record '<event-json>'` to the agent's instructions after
+  each tool call. See
+  [`agent_assets/codex/README.md`](../src/automil/agent_assets/codex/README.md).
+
+**Any other agent** (Cursor, Aider, Windsurf, and so on) can follow the loop if
+it can read files, edit code, and run shell commands. Run `automil init
+--no-healthcheck`, skip the per-runtime assets, and point the agent at
+`automil/program.md` and the [training-script contract](training-script-contract.md).
+It reads `config.yaml`, `graph.json`, `learnings.md`, and `program.md`, edits
+your source files, and drives everything else through `automil` commands. The
+agent needs to remember what it has tried, and `learnings.md` is where it
+records that between submissions.
+
+## Command reference and examples
+
+Run `automil --help` for the command list and `automil <command> --help` for the
+options of each command.
+
+[`examples/`](../examples/) has reference layouts: `sklearn-iris` (a short
+CPU-only consumer that CI runs end to end), `ovarian_hrd` (an autonomous run with
+189 experiments and its `learnings.md`), `clwd` (multi-class subtyping), and
+`placeholder` (the template `automil init` produces). Related documents:
+[training-script contract](training-script-contract.md),
+[gate calibration pilot](calibration-pilot.md), and the
+[CHANGELOG](../CHANGELOG.md).

@@ -1,17 +1,17 @@
-# sklearn-iris, autoMIL second consumer (DEC-02)
+# sklearn-iris, a second autoMIL consumer
 
-A ~80-line training script that demonstrates plugging a non-autobench
+A short training script (about 130 lines) that demonstrates plugging a non-autobench
 training pipeline into autoMIL via the documented contract
-(`docs/training-script-contract.md`, DEC-06).
+(`docs/training-script-contract.md`).
 
 ## What this demonstrates
 
 - The framework is consumer-agnostic. autobench is one consumer; this
   sklearn-iris demo is another. They run side-by-side in the same project
-  via the registry path (Phase 1).
-- `result.json` is JSON-Schema-validated at ingestion (D-201).
+  via the variant registry.
+- `result.json` is JSON-Schema-validated at ingestion.
 - Required env vars are declared in `automil/config.yaml: env.required`
-  (D-202). For this consumer, the list is empty.
+  For this consumer, the list is empty.
 
 ## How to run (local development)
 
@@ -26,22 +26,29 @@ Expected: `primary_value` between 0.93 and 0.98 with `random_state=42`.
 
 ## How autoMIL uses it
 
+Copy `train.py` into a scratch git repository, scaffold `automil/` there, and
+submit the script as the baseline node. The `agent_active` budget clock needs
+Claude telemetry, so this demo switches to `cap.mode: wall_clock`.
+
 ```
-cd examples/sklearn-iris
-uv run automil init                 # already initialised; this is idempotent
-uv run automil submit --node iris_001 --desc "baseline" --files train.py --max-time 60 --mil-model sklearn_iris
-uv run automil orchestrator start
-uv run automil status
+mkdir /tmp/iris_project && cp examples/sklearn-iris/train.py /tmp/iris_project/
+cd /tmp/iris_project
+git init -q && git add -A && git commit -q -m initial
+automil init --no-healthcheck       # scaffolds automil/ (needs uv tool install)
+# set cap.mode: wall_clock in automil/config.yaml, then commit the scaffold
+automil submit --node iris_001 --desc "baseline" --files train.py --max-time 60 --mil-model sklearn_iris
+automil orchestrator start
+automil status
 ```
 
-The acceptance gate (`tests/acceptance/test_final_phase8_acceptance.py`)
-exercises this exact path on every Phase 8+ commit.
+The acceptance test (`tests/acceptance/test_final_phase8_acceptance.py`)
+runs this flow end to end on every CI run.
 
 ## Files
 
 | Path | Role |
 |------|------|
-| `train.py` | minimal training script (~80 lines) |
+| `train.py` | minimal training script (about 130 lines) |
 | `automil/config.yaml` | consumer config: env.required=[], scoring.formula="val_accuracy" |
 | `automil/program.md` | narrative for the agent: what to search, primary_value definition |
 | `automil/variants/classifier_v0/logistic_v0.py` | starter variant exporting `make_classifier` |

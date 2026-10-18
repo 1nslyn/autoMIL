@@ -1,12 +1,23 @@
 # Changelog
 
-autoMIL: F2-readiness framework refactor.
+Changelog for autoMIL, an autonomous experiment framework for Multiple Instance
+Learning in computational pathology.
 
 > Releases through v1.0 use the phase-based numbering below (`8.0.0` = the v1.0
 > milestone). Post-v1.0 releases follow semver and map to git tags `v1.1.0`,
 > `v1.2.0`, and `v1.2.1`.
 
 ## Unreleased
+
+- **Campaign roster reduced from 5 cohorts and 130 cells to 3 cohorts and 78
+  cells (declared 2026-08-23).** The campaign runs `tcga_luad`, `tcga_hnsc` and
+  `cptac_pdac`, with 26 cells per cohort. `tcga_lgg` and `cptac_gbm` were
+  dropped; their dataset configs stay in `benchmarks/datasets/`. `manifest.json`
+  stays a byte-identical 130-row superset, because exporter ports are indexed by
+  manifest row and `manifest_sha256` is pinned into every cell at
+  materialization. `benchmarks/campaigns/preprint_130/active_roster.json` is the
+  census authority: `materialize` builds only roster cells, and campaign-wide
+  counts and set checks are validated against it.
 
 - **The selection freeze applies the discovery freeze's duplicate rule.**
   Since 2026-08-15 the discovery freeze treats a run that reproduced another
@@ -331,6 +342,9 @@ autoMIL: F2-readiness framework refactor.
   state can no longer fail the all-or-nothing checkout — and glob patterns
   still match.
 
+  The validation-loss checkpoint rule is superseded by `preprint-v4` (above),
+  which selects on the primary validation metric.
+
 - **Adversarial-review fix round 2 (Codex gpt-5.6-sol xhigh, 17 findings —
   16 real, 1 rejected).** The firewall's fold-level seams: held-out-named
   keys inside `validation_folds[*].metrics` now fail the node closed (they
@@ -429,6 +443,8 @@ autoMIL: F2-readiness framework refactor.
   tumor grade tasks across two data sources (TCGA + CPTAC), prioritizing
   classification-task diversity over the old ≥100-OS-deaths hard gate. Grid
   math is unchanged: 165 experiments (33/dataset), 825 fold-trainings.
+  Superseded by the 2026-08-23 roster reduction (top of Unreleased): the
+  campaign roster is 3 cohorts and 78 cells.
 
 ## v1.2.1 (2026-07-15, `git tag v1.2.1`)
 

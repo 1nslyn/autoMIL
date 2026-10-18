@@ -11,9 +11,7 @@ End-to-end guide for extracting pathology features from TCGA whole-slide images 
 
 **Pipeline:** GDC slide download → GOLDMARK metadata → YAML config → TRIDENT feature extraction
 
-**Output:** Per-slide `.pt` tensors in `{output_dir}/{encoder_key}/pt_files/`
-
-**Tracking sheet:** `datasets/TCGA-CPTAC-Datasets - TCGA-16.csv`, update your row as you complete each step.
+**Output:** Per-slide `.h5` feature files in `{output_dir}/20x_224px_0px_overlap/features_{encoder}/`
 
 **Reference:**
 - `benchmarks/datasets/tcga/tcga_luad.yaml`, Leo's completed config (checked into repo)
@@ -31,7 +29,7 @@ End-to-end guide for extracting pathology features from TCGA whole-slide images 
 ```bash
 # Clone the repo to your scratch space
 cd ~/scratch
-git clone https://github.com/leoyin1127/autoMIL.git
+git clone https://github.com/1nslyn/autoMIL.git
 cd autoMIL
 
 # Load required modules
@@ -127,7 +125,7 @@ The GOLDMARK manifest contains everything the pipeline needs:
 4. Click into the project page
 5. Click the **Manifest** button at the top
 
-![GDC Project Page, Manifest download](public/Screenshot%202026-03-31%20at%2001.56.01.png)
+![GDC Project Page, Manifest download](../public/Screenshot%202026-03-31%20at%2001.56.01.png)
 
 Save the manifest file to `datasets/{DATASET}/gdc_manifest.txt`.
 
@@ -361,11 +359,11 @@ cat $DATASET_ROOT/trident_output/skipped_slides.txt 2>/dev/null
 grep -i "error\|failed\|oom" logs/extract_wsi_extract_*.out
 ```
 
-The `.pt` file count should match (or be close to) the input slide count.
+The `.h5` file count should match (or be close to) the input slide count.
 
 #### Update Tracking Sheet
 
-Update your row in `datasets/TCGA-CPTAC-Datasets - TCGA-16.csv`:
+Update your row in the tracking sheet linked in Step 4:
 - Mark **FE:virchow2**, **FE:hoptimus1**, **FE:univ2** as complete (or note failures)
 - Ensure all dataset info columns are filled (DOI, subjects, license, etc.)
 - Ensure **Tasks** cell has class distributions for each biomarker, e.g.: `EGFR (465: 51 vs 414)`

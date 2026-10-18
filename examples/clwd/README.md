@@ -10,7 +10,7 @@ that honors the [training-script contract](../../docs/training-script-contract.m
 ## Status
 
 Skeleton, config and program.md only. No autonomous run results shipped
-with this example; it serves as a v1.0 multi-class reference layout.
+with this example; it serves as a multi-class reference layout.
 
 ## Running this
 

@@ -1,18 +1,13 @@
-# Generalization-Gate Calibration — K Threshold Empirical Choice
+# Generalization-Gate Calibration: Choosing K Empirically
 
-> Relocated from `.planning/phase-05-calibration.md` on 2026-08-06 when the
-> planning tree was removed. This is still the live operator recipe for the
-> deferred calibration pilot.
-
-**Status:** SCAFFOLD — operator-fillable. Replace `_tbd_` placeholders when running pilot.
+**Status:** scaffold for the operator to fill in. Replace the `_tbd_` placeholders when running the pilot.
 **Date:** _to-be-filled_
 **Operator:** Leo
 **Known-good change:** CCRCC node_0176 (clam_mb_v0176 + ce_smooth008 + sam_lookahead)
 **Held-out cells:** 3 fresh CCRCC + 2 fresh CLWD = 5 total
 
 **Pilot recipe:** Apply node_0176's variant module + config delta to each held-out cell
-via `automil apply node_0176` (Phase 1 REG-08) or manually copy the overlay files if
-Phase 1 has not shipped. Submit via `automil submit --node <new_id_per_cell> --files ...`.
+via `automil apply node_0176`. Submit via `automil submit --node <new_id_per_cell> --desc "..." --files ...`.
 Wait for completion (estimated ~6h per cell; saturate GPUs by submitting all 5
 simultaneously). Gather the matrix via:
 
@@ -54,9 +49,9 @@ Empirical recommendation: K = _tbd_
 
 Rationale: with the observed delta distribution, K = _tbd_ produces a gate that:
 - reliably passes node_0176-equivalent improvements (true positive)
-- rejects no-improvement candidates (true negative — confirmed by cross-checking
+- rejects no-improvement candidates (true negative, confirmed by cross-checking
   against a known-no-op change if available)
-- aligns with the framework default `max(2, len(held_out_cells) // 3)` from D-151 / O-01
+- aligns with the framework default `max(2, len(held_out_cells) // 3)`
 
 If the recommended K differs from the framework default currently in
 `src/automil/templates/config.yaml.j2`, update the `gate.K` default:
@@ -80,13 +75,13 @@ Commit with message: `gate: lock K=<N> from the calibration pilot`
 
 ## Procedure checklist (step-by-step)
 
-1. **Pick fresh cells.** Run `uv run automil cell list` — choose 3 CCRCC + 2 CLWD where
+1. **Pick fresh cells.** Run `uv run automil cell list`, then choose 3 CCRCC + 2 CLWD where
    `status=active` AND `consumed_seconds` is low (well below the 6h cap). Note cell_ids.
-   Avoid cells where the agent has already submitted experiments (D-150 / Pitfall 1).
+   Avoid cells where the agent has already submitted experiments.
 
-2. **Confirm node_0176 portability.** If REG-08 (Phase 1) has shipped, use
-   `uv run automil apply node_0176`. Otherwise, manually identify node_0176's overlay files
-   (clam_mb model edits + ce_smooth loss + sam_lookahead policy) and copy them.
+2. **Confirm node_0176 portability.** Use `uv run automil apply node_0176`, which
+   applies the node's variant selection (clam_mb model edits, ce_smooth loss, and
+   sam_lookahead policy) to `config.yaml`.
 
 3. **Register the manifest.** For node_0176's parent, declare all 5 fresh cells as held-out:
    ```bash

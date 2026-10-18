@@ -1,12 +1,12 @@
-# Running your cells of the 130-cell agentic campaign
+# Running your cells of the 78-cell agentic campaign
 
-This is the successor to
-[`run_preprint_benchmark.md`](run_preprint_benchmark.md). That one told you how
-to run the **static baseline grid**. This one tells you how to run the
-**agentic campaign** — the actual experiment the preprint is about.
+This guide covers the **agentic campaign**, the experiment the preprint is
+about: 3 cohorts (`tcga_luad`, `tcga_hnsc`, `cptac_pdac`) and 78 cells. The
+static baseline grid is a separate workflow, described in
+[benchmark_experiments_tutorial.md](benchmark_experiments_tutorial.md).
 
-It is a different kind of work. In the baseline you queued a few batch jobs and
-waited. Here you drive a staged, fail-closed controller one cell at a time, and
+The work differs from the baseline grid. There you queue a few batch jobs and
+wait. Here you drive a staged, fail-closed controller one cell at a time, and
 a coding agent does the research inside a budget you are responsible for not
 breaking.
 
@@ -26,7 +26,7 @@ baselines trained on that host (campaign README, Section 4c).
 
 [`benchmarks/campaigns/preprint_130/PROGRESS.md`](../../benchmarks/campaigns/preprint_130/PROGRESS.md)
 is the single source of truth for launch gates. **Nobody runs a formal cell
-until every item in its Gates section is green**, including exact 130/130
+until every item in its Gates section is green**, including exact
 manifest coverage, the ten-regime real-GPU canary, the locked agent protocol,
 and the compute plan derived from that canary's timings. Until then, use only a
 throwaway cell root.
@@ -34,7 +34,7 @@ throwaway cell root.
 Tracking lives in two places, and they are not interchangeable:
 
 - **[The campaign tracker Sheet](https://docs.google.com/spreadsheets/d/1e79rsWlc8BOZoi6xFRWQvyi9M1uDuCexlQCsOTE5gOU/edit)**
-  — one row per cell, 130 rows. Filter by `Owner` to get your 26. **This is
+  — one row per cell. Filter by `Owner` to get your cells. **This is
   where you update your own cells.**
 - [`benchmarks/campaigns/preprint_130/PROGRESS.md`](../../benchmarks/campaigns/preprint_130/PROGRESS.md)
   — the overall view: gates, rolling totals, weekly snapshot. Leo keeps this current.
@@ -86,20 +86,19 @@ starts, and does not consume any of the 30 attempts.
 
 ---
 
-## 2. Your assignment
+## 2. The cells
 
-Same cohort ownership as the baseline phase. 26 cells each.
+The active roster (`active_roster.json`, declared 2026-08-23) has three cohorts.
+Who runs which cohort is coordinated separately.
 
-| Member  | Dataset    | Classification task    | `<dataset>` |
-| ------- | ---------- | ---------------------- | ----------- |
-| Leo     | TCGA-LUAD  | KRAS (binary)          | `tcga_luad` |
-| Yeonwoo | TCGA-LGG   | IDH1 (binary)          | `tcga_lgg`  |
-| Ryan    | TCGA-HNSC  | tumour grade (3-class) | `tcga_hnsc` |
-| Keishi  | CPTAC-GBM  | TP53 (binary)          | `cptac_gbm` |
-| Terry   | CPTAC-PDAC | immune_class (3-class) | `cptac_pdac`|
+| Dataset    | Classification task    | `<dataset>`   |
+| ---------- | ---------------------- | ------------- |
+| TCGA-LUAD  | KRAS (binary)          | `tcga_luad`   |
+| TCGA-HNSC  | tumour grade (3-class) | `tcga_hnsc`   |
+| CPTAC-PDAC | immune_class (3-class) | `cptac_pdac`  |
 
-Your 26 = 13 classification + 13 survival, where 13 = (4 aggregators × 3 tile
-encoders) + 1 TITAN arm. Cell ids look like:
+Each cohort has 26 cells: 13 classification + 13 survival, where 13 = (4
+aggregators × 3 tile encoders) + 1 TITAN arm. Cell ids look like:
 
 ```
 tcga_luad__kras__uni_v2__clam__s42__preprint-v4
@@ -116,7 +115,7 @@ refuses to launch.
 ### 3a. Repository and environment
 
 ```bash
-git clone https://github.com/leoyin1127/autoMIL.git   # a full clone, not an export:
+git clone https://github.com/1nslyn/autoMIL.git   # a full clone, not an export:
 cd autoMIL                                            # baselines and the orchestrator
 git checkout main && git pull --ff-only               # both run in git worktrees
 uv sync --all-packages
@@ -224,7 +223,7 @@ Claude session and every command run after `cd` must resolve the same workspace:
 
 ```bash
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
-export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_lgg__idh1__uni_v2__clam__s42__preprint-v4"
+export CELL="$REPO_ROOT/benchmarks/campaigns/preprint_130/runtime/tcga_luad__kras__uni_v2__clam__s42__preprint-v4"
 ```
 
 The day-to-day driver is the operator CLI, `campaign_operate.py`. It adds
@@ -474,9 +473,6 @@ Two standing rules:
 - **A null result is a fine result.** We are measuring whether equal-effort
   recipe search moves the cross-method ranking. Stability and null are
   publishable outcomes. Nobody should be tuning toward a preferred answer.
-- **GBM survival is our declared low-signal region** (operator experience from
-  pre-campaign runs; no in-repo artifact pins a count). Run it like everything
-  else.
 - **`kappa` is not comparable across arms** (only nnMIL emits it), and
   `sensitivity`/`specificity` are undefined for the 3-class tasks. Do not build
   any cross-arm comparison on those.
@@ -511,7 +507,8 @@ Two standing rules:
 ## 8. Reference
 
 - Protocol authority: [`benchmarks/campaigns/preprint_130/README.md`](../../benchmarks/campaigns/preprint_130/README.md)
-- Frozen roster: [`benchmarks/campaigns/preprint_130/manifest.json`](../../benchmarks/campaigns/preprint_130/manifest.json)
+- Active roster (78 cells): [`benchmarks/campaigns/preprint_130/active_roster.json`](../../benchmarks/campaigns/preprint_130/active_roster.json)
+- Frozen manifest (130-row superset): [`benchmarks/campaigns/preprint_130/manifest.json`](../../benchmarks/campaigns/preprint_130/manifest.json)
 - Pre-registered analysis: [`benchmarks/campaigns/preprint_130/analysis_plan.json`](../../benchmarks/campaigns/preprint_130/analysis_plan.json)
 - Per-cell tracker: [campaign tracker Sheet](https://docs.google.com/spreadsheets/d/1e79rsWlc8BOZoi6xFRWQvyi9M1uDuCexlQCsOTE5gOU/edit)
 - Overall progress: [`benchmarks/campaigns/preprint_130/PROGRESS.md`](../../benchmarks/campaigns/preprint_130/PROGRESS.md)
@@ -520,11 +517,12 @@ Two standing rules:
 
 ## Appendix A. Recovery / manual operation (the audit trail)
 
-Everything `campaign_operate.py` does is a sequence of these commands, and
-they remain the supported way to drive a single transition by hand — after an
-interruption, when a refusal needs investigating, or when you want to see
-exactly what the operator CLI would run. The order below is the protocol
-order; `finish` executes A.6–A.9 for you.
+`campaign_operate.py` runs the commands below in this order, and they remain the
+supported way to drive one transition by hand: after an interruption, or to see
+exactly what the operator CLI would run. `finish` executes A.5 to A.8 for you.
+The protocol behind each step is in the
+[campaign README](../../benchmarks/campaigns/preprint_130/README.md), Sections 3
+to 5 and "Recovery and audit trail".
 
 ### A.1. Check where the cell is
 
@@ -532,14 +530,11 @@ order; `finish` executes A.6–A.9 for you.
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" status --cell-root "$CELL"
 ```
 
-This is your main instrument. It reports the phase, attempts charged against the
-budget, promoted candidates, and the winner — **validation only**. It will never
-print a held-out value. Run it between every step.
-
-The phase order is
-`discovery → promotion-ready → promotion → selection-ready → winner-frozen`,
-with one legal skip: a zero-eligible-candidate discovery freeze goes straight
-to `selection-ready` (no promotion) and the native baseline wins by default.
+Run it between every step. It reports the phase, attempts charged, promoted
+candidates and the winner, validation only. The phase order is
+`discovery → promotion-ready → promotion → selection-ready → winner-frozen`.
+A discovery freeze with zero eligible candidates skips promotion and goes
+straight to `selection-ready`; the native baseline then wins by default.
 
 ### A.2. Run the native baseline
 
@@ -548,27 +543,10 @@ uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" run-baseline    --cell-root "$CELL" --gpu 0
 ```
 
-Five folds, the arm's own published recipe, outside the 30-attempt budget. It
-takes a lock, so a second invocation refuses rather than double-running. If a
-baseline is already registered it re-verifies and returns — safe to re-run.
+Five folds, outside the 30-attempt budget. A lock makes a second invocation
+refuse, and an already registered baseline is re-verified and returned.
 
 ### A.3. Start metering, launch, and open the agent session
-
-Start the cell orchestrator first so it can scrape this cell's localhost
-Prometheus endpoint — every cell declares its own exporter port
-(`activity.exporter_port`), so several cells can run concurrently on one
-host. When you do run cells in parallel, give each orchestrator a disjoint
-GPU partition (`AUTOMIL_VISIBLE_GPUS=0,1` in one tmux session, `2,3` in
-another). Then start the formal session **through the campaign
-launcher, never a bare `claude`** — it re-verifies the locked protocol on this
-host (pinned CLI version, frozen memory surface, untouched activity settings,
-this cell's port being free, running orchestrator, no prior session evidence),
-renders the frozen instruction text into the cell root as `CLAUDE.md`, and
-execs the pinned runtime with its working directory at the cell root. After
-the first orchestrator scrape, write a two-field session JSON — the
-`session_id` from the runtime's `session_open` journal event and its
-timezone-aware ISO-8601 `started_at` — and run `open-agent-session` from the
-operator shell (this is what `bind` automates):
 
 ```bash
 uv run --project "$REPO_ROOT" automil --project "$CELL" check
@@ -580,39 +558,32 @@ uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/
   --cell-root "$CELL" --agent-session /abs/path/agent_session_start.json
 ```
 
-`preflight` and `launch-command` print the same derivation without starting
-anything, and a `campaign-launch refusal` is fail-closed information: fix the
-named precondition, never bypass it.
-
-This binds the hook-recorded, natively metered session to the cell. Every later
-`automil submit` is stamped with it, and submit **refuses** if the session was
-never opened or lacks an active-time sample.
+Start the orchestrator first so it can scrape the cell's Prometheus endpoint.
+Always start the formal session through the launcher, never a bare `claude`.
+The session JSON holds the `session_id` from the runtime's `session_open`
+journal event and a timezone-aware ISO-8601 `started_at` (`bind` automates this).
+`campaign_launch.py preflight` and `launch-command` print the derivation without
+starting anything.
 
 ### A.4. Run discovery
 
 ```bash
-uv run --project "$REPO_ROOT" automil --project "$CELL" check
-# The orchestrator and ONE fresh Claude session are already running from A.3.
 uv run --project "$REPO_ROOT" automil --project "$CELL" status
 uv run --project "$REPO_ROOT" automil --project "$CELL" rank
 ```
 
-The agent proposes candidates and submits them with `automil submit`. It stops
-at 30 charged attempts.
+The orchestrator and the one Claude session from A.3 are already running. The
+agent submits candidates with `automil submit` and stops at 30 charged attempts.
+`automil rank` shows validation only; never pass `--include-held-out`.
 
-> `automil rank` shows validation only. **Never pass `--include-held-out`.**
-
-### A.5. Freeze discovery
+### A.5. Freeze discovery and end the session
 
 ```bash
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" freeze-discovery --cell-root "$CELL"
 ```
 
-Requires exactly 30 charged attempts and nothing still queued or running. It
-audits all 30 attempts, deduplicates candidates, and freezes the top ≤10 by
-validation mean.
-
-Now end the coding-agent session before any promotion or selection step:
+This requires exactly 30 charged attempts and nothing queued or running. End the
+coding-agent session before any promotion or selection step:
 
 ```bash
 # Inside Claude: exit normally so SessionEnd captures and persists the final sample.
@@ -621,37 +592,28 @@ Now end the coding-agent session before any promotion or selection step:
 # Back in the operator shell. Keep agent_session_end.json for step A.8.
 ```
 
-The controller refuses promotion and direct/zero-candidate winner selection
-until the exclusive bound discovery session has both `SessionEnd` and its
-durable final active-time sample. Do not bypass that refusal or leave Claude
-open while continuing the controller.
+The controller refuses promotion and zero-candidate winner selection until the
+bound discovery session has both `SessionEnd` and its
+durable final active-time sample.
 
 **Dead-session recovery.** If the Claude process died without running its
-SessionEnd hook (crash, OOM-kill, power loss), the session cannot finalize
-itself — the hook path needs a live scrape of a now-dead exporter. The
-supported recovery is an operator-attested close from the last durable
-sample (`finish --attest "..."` runs exactly this):
+SessionEnd hook (crash, OOM-kill, power loss), close the session from the last
+durable sample (`finish --attest "..."` runs exactly this):
 
 ```bash
 uv run --project "$REPO_ROOT" automil --project "$CELL" activity close \
   --session <session-id> --attest "runtime died before SessionEnd: <cause>"
 ```
 
-It refuses while the exporter still serves the session (a live session must
-exit normally), records `finalized_by: operator-close` plus your attestation
-in the journal, and unblocks freeze/promotion/finalize. Disclose the closure
-in `termination_reason` at step A.8. Never start a replacement session for the
-cell — a new session cannot rebind, and the one-session-per-cell census is
-load-bearing.
+The command refuses while the exporter still serves the session, records
+`finalized_by: operator-close` and your attestation in the journal, and unblocks
+freeze, promotion and finalize. Disclose the closure in `termination_reason` at
+A.8. Never start a replacement session for a cell that has submitted attempts.
 
-If the runtime died **before `open-agent-session` completed** (pre-bind), the
-journal's exclusivity check will refuse any replacement session for that cell
-root, and `activity close` may refuse too — a session that died instantly has
-no durable sample to attest. Nothing has been charged at that point: no
-attempts, no bound session evidence. The declared recovery is to
-re-materialize that cell's root from the frozen manifest (the materialization
-audit re-verifies the protocol) and open a fresh session. After the first
-submit this reset is forbidden — recover with `activity close` instead.
+If the runtime died before `open-agent-session` completed, nothing has been
+charged. Re-materialize that cell's root from the frozen manifest and open a
+fresh session. After the first submit this reset is forbidden; use
+`activity close`.
 
 ### A.6. Promotion on folds 3 and 4
 
@@ -661,12 +623,9 @@ uv run --project "$REPO_ROOT" automil --project "$CELL/promotion" orchestrator s
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" freeze-promotion --cell-root "$CELL"
 ```
 
-The frozen top-10 are copied byte-exact and re-run on the two held-back
-validation folds. **No agent runs here** — promotion is non-adaptive by design.
-A candidate that fails is marked ineligible; that is not fatal to the cell.
-Note that `orchestrator start` runs the daemon in the **foreground** — it
-never daemonizes — so keep it in a tmux window (or let `finish` supervise it
-as a child) and stop it with
+The frozen top 10 are re-run byte-exact on the two held-back validation folds.
+No agent runs here. `orchestrator start` stays in the foreground, so keep it in
+a tmux window (or let `finish` supervise it) and stop it with
 `uv run --project "$REPO_ROOT" automil --project "$CELL/promotion" orchestrator stop`
 once the queue drains, before freezing.
 
@@ -676,9 +635,8 @@ once the queue drains, before freezing.
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" select-winner --cell-root "$CELL"
 ```
 
-One winner, chosen on the five-fold **validation** mean, ties broken
-deterministically with the baseline preferred. Immutable once written. Still no
-test data anywhere.
+One winner, chosen on the five-fold validation mean, with ties broken in favor
+of the baseline. The record is immutable.
 
 ### A.8. Finalize the session attestation
 
@@ -687,14 +645,10 @@ uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/
   --cell-root "$CELL" --agent-session /abs/path/agent_session_end.json
 ```
 
-Claude already exited after step A.5 and flushed its final native active-time
-export. After the winner is frozen, fill
-`agent_session_end.template.json` with `session_id`, `ended_at`,
-`termination_reason` and the runtime `usage` block (tokens and cost). **Report
-usage honestly — if a number is unavailable, say unavailable. Never write a
-zero.** The analysis plan treats a coerced zero as a data-integrity failure.
-
-Then set that cell's `Stage` to `W` in the tracker Sheet, with today's date.
+Fill `agent_session_end.template.json` with `session_id`, `ended_at`,
+`termination_reason` and the runtime `usage` block. **Report usage honestly: if
+a number is unavailable, say unavailable. Never write a zero.** Then set the
+cell's `Stage` to `W` in the tracker Sheet, with today's date.
 
 ### A.9. Shortcut
 
@@ -702,7 +656,6 @@ Then set that cell's `Stage` to `W` in the tracker Sheet, with today's date.
 uv run --project "$REPO_ROOT" --package autobench python "$REPO_ROOT/benchmarks/scripts/campaign_stage.py" advance --cell-root "$CELL"
 ```
 
-Performs one legal transition and stops. It will not run past `winner-frozen`,
-and it inherits the same closed-discovery-session requirement before promotion
-or winner selection. It does **not** start the promotion orchestrator — that
-is `finish`'s job (or yours, per A.6).
+Performs one legal transition and stops at `winner-frozen`. It requires the same
+closed discovery session before promotion or winner selection and does not start
+the promotion orchestrator.
