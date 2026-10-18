@@ -54,8 +54,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://automil.org"
-Repository = "https://github.com/leoyin1127/autoMIL"
-Issues = "https://github.com/leoyin1127/autoMIL/issues"
+Repository = "https://github.com/1nslyn/autoMIL"
+Issues = "https://github.com/1nslyn/autoMIL/issues"
 
 [project.optional-dependencies]
 ml = [

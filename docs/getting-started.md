@@ -37,13 +37,16 @@ uv tool install -e .
 > `uv run automil ...`. The bare `automil` commands below assume the global
 > install from `uv tool install` and are meant for your own project.
 
-Optional extras, installed from a source checkout:
+Optional backends are extras. Install them into the same tool environment:
 
 ```bash
-uv sync --extra slurm         # SLURM backend (submitit)
-uv sync --extra ray           # Ray backend
-uv sync --extra examples-iris # scikit-learn and pyyaml for the sklearn-iris example
+uv tool install "automil[slurm] @ git+https://github.com/1nslyn/autoMIL.git"   # SLURM backend (submitit)
+uv tool install "automil[ray] @ git+https://github.com/1nslyn/autoMIL.git"     # Ray backend
 ```
+
+With `uv tool install` the orchestrator runs your script with the tool's own
+Python unless `run.command` is set, so set `run.command` to the command that
+runs your script in its own environment (for example `uv run python train.py`).
 
 ## Adding autoMIL to your project
 

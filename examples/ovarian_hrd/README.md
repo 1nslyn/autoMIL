@@ -28,7 +28,7 @@ To run a similar campaign on this example with the current framework:
 
 ```bash
 cd examples/ovarian_hrd
-uv run automil init --runtime claude # or your runtime; uses the existing config.yaml
+uv run automil init --update --no-healthcheck --runtime claude  # keeps the shipped config.yaml
 uv run automil check                 # verifies env.required, registry, backend
 uv run automil orchestrator start
 
