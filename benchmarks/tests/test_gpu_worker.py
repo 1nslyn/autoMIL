@@ -548,8 +548,8 @@ def _patch_multigpu_runtime(
             ),
         )
         monkeypatch.setattr(
-            "autobench.pipeline.orchestrator.collect_all_summaries_on_disk",
-            lambda benchmark_dir: list(summaries_by_id.values()),
+            "autobench.pipeline.orchestrator.collect_summaries",
+            lambda roots: list(summaries_by_id.values()),
         )
     monkeypatch.setattr(
         "autobench.pipeline.orchestrator._finalize",

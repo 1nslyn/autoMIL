@@ -179,10 +179,10 @@ The `os` task trains a time-to-event model on overall survival. It runs in the s
 │       ├── config.json
 │       ├── summary.json                   # mean, std, 95% CI across folds
 │       └── fold_<i>/metrics.json, predictions.csv   # predictions.csv: classification tasks
-└── aggregated/<framework>/standard.csv    # one row per classification experiment
+└── aggregated/<framework>/standard.csv    # one row per experiment
 ```
 
-`<loss>` appears for survival tasks only. `summary.json` holds `test` and `val` blocks, each metric with `mean`, `std`, `ci_low` and `ci_high`, plus the per-fold values (`per_fold_test`, `per_fold_val`). Classification metrics are `auc_roc`, `accuracy`, `balanced_accuracy` and `f1` (binary tasks also get `sensitivity` and `specificity`, and the ordinal HNSC grade task adds `qwk`). Survival experiments report `c_index`. The aggregated CSV has columns like `test_auc_roc_mean`; it does not yet collect survival experiments, so read those from their `summary.json`.
+`<loss>` appears for survival tasks only. `summary.json` holds `test` and `val` blocks, each metric with `mean`, `std`, `ci_low` and `ci_high`, plus the per-fold values (`per_fold_test`, `per_fold_val`). Classification metrics are `auc_roc`, `accuracy`, `balanced_accuracy` and `f1` (binary tasks also get `sensitivity` and `specificity`, and the ordinal HNSC grade task adds `qwk`). Survival experiments report `c_index`. The aggregated CSV has a `survival_loss` column and columns like `test_auc_roc_mean` or `test_c_index_mean`.
 
 Rank experiments from the aggregated tables. Set `BENCH` to the benchmark directory (for a SLURM run, `<Pathology root>/autoMIL/phase2/<dataset>/benchmark_<n>fold`):
 
