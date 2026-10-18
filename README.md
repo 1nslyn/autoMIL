@@ -105,13 +105,9 @@ SLURM, or on Ray.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A["Coding agent<br/>edits the code"] -->|automil submit| B["Isolated run<br/>git worktree on a free GPU"]
-    B -->|result.json| C{"Beats its parent<br/>on validation?"}
-    C -->|keep or discard| D[("Experiment tree")]
-    D -->|ranking, results, notes| A
-```
+<p align="center">
+  <img alt="The autoMIL research loop: the coding agent proposes and edits, the framework runs the candidate in an isolated worktree, compares it on validation, records it in the experiment tree, and seals test results until the search ends" src="docs/assets/research-loop.png" width="100%">
+</p>
 
 1. The agent edits files and runs `automil submit`. autoMIL stores only the changed files.
 2. The orchestrator checks out the base commit in a git worktree, overlays the changed files and runs your training script on a free GPU or CPU slot.
