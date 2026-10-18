@@ -608,12 +608,15 @@ uv run --project "$REPO_ROOT" automil --project "$CELL" activity close \
 The command refuses while the exporter still serves the session, records
 `finalized_by: operator-close` and your attestation in the journal, and unblocks
 freeze, promotion and finalize. Disclose the closure in `termination_reason` at
-A.8. Never start a replacement session for a cell that has submitted attempts.
+A.8. Never start a replacement session for the cell: a new session cannot
+rebind, and the one-session-per-cell census is load-bearing.
 
-If the runtime died before `open-agent-session` completed, nothing has been
-charged. Re-materialize that cell's root from the frozen manifest and open a
-fresh session. After the first submit this reset is forbidden; use
-`activity close`.
+If the runtime died before `open-agent-session` completed (pre-bind), the
+journal refuses any replacement session for that cell root, and
+`activity close` may refuse too, because a session that died instantly has no
+durable sample to attest. Nothing has been charged at that point. Re-materialize
+that cell's root from the frozen manifest and open a fresh session. After the
+first submit this reset is forbidden; use `activity close`.
 
 ### A.6. Promotion on folds 3 and 4
 

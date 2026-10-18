@@ -11,7 +11,7 @@ authors:
   - given-names: Jun
     family-names: Ma
     # corresponding author
-repository-code: "https://github.com/leoyin1127/autoMIL"
+repository-code: "https://github.com/1nslyn/autoMIL"
 url: "https://automil.org"
 abstract: >-
   autoMIL is an autonomous experiment framework for Multiple Instance Learning

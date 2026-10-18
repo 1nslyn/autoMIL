@@ -74,7 +74,7 @@ Run each script with `--help` for its options. `--case-col` names the manifest c
 
 To get a clinical export by hand, open the cohort's GDC page (for CPTAC, follow the GDC link from its TCIA page), choose **Clinical, TSV**, unzip the download and keep `clinical.tsv` in the dataset folder.
 
-Cached task CSVs and splits do not notice that a manifest changed. After rebuilding a manifest, delete `dataset_csv/` and `splits/` under the benchmark directory (never `features/` or `results/`) so the next run regenerates them.
+Cached task CSVs and splits do not notice that a manifest changed. After rebuilding a manifest, delete `dataset_csv/`, `splits/` and `nnmil/` under the benchmark directory (never `features/` or `results/`) so the next run regenerates them. `nnmil/` holds nnMIL's dataset plans, which keep their own copy of the labels and folds.
 
 ## Run the benchmark
 
@@ -116,9 +116,11 @@ sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad 10     # 10-fold c
 # Run a subset of the four frameworks
 FRAMEWORKS="clam nnmil" sbatch benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad
 
-# Use a different SLURM account
-sbatch --account=YOUR_ACCOUNT benchmarks/scripts/slurm/submit_benchmark.sh tcga_luad
 ```
+
+To use a different SLURM account, edit the `#SBATCH --account` line in
+`submit_benchmark.sh` (and `submit_titan.sh`). An `sbatch --account=...` flag
+is lost when the job resubmits itself.
 
 The script always runs the dataset YAML's full encoder, task and model lists. To run a narrower slice, call `run_benchmark.py` directly. Check progress with:
 
@@ -177,17 +179,18 @@ The `os` task trains a time-to-event model on overall survival. It runs in the s
 │       ├── config.json
 │       ├── summary.json                   # mean, std, 95% CI across folds
 │       └── fold_<i>/metrics.json, predictions.csv   # predictions.csv: classification tasks
-└── aggregated/<framework>/standard.csv    # one row per experiment
+└── aggregated/<framework>/standard.csv    # one row per classification experiment
 ```
 
-`<loss>` appears for survival tasks only. `summary.json` holds `test` and `val` blocks, each metric with `mean`, `std`, `ci_low` and `ci_high`, plus the per-fold values (`per_fold_test`, `per_fold_val`). Classification metrics are `auc_roc`, `accuracy`, `balanced_accuracy` and `f1` (binary tasks also get `sensitivity` and `specificity`, and the ordinal HNSC grade task adds `qwk`). Survival experiments report `c_index`. The aggregated CSV has a `survival_loss` column and columns like `test_auc_roc_mean` or `test_c_index_mean`.
+`<loss>` appears for survival tasks only. `summary.json` holds `test` and `val` blocks, each metric with `mean`, `std`, `ci_low` and `ci_high`, plus the per-fold values (`per_fold_test`, `per_fold_val`). Classification metrics are `auc_roc`, `accuracy`, `balanced_accuracy` and `f1` (binary tasks also get `sensitivity` and `specificity`, and the ordinal HNSC grade task adds `qwk`). Survival experiments report `c_index`. The aggregated CSV has columns like `test_auc_roc_mean`; it does not yet collect survival experiments, so read those from their `summary.json`.
 
-Rank experiments from the aggregated tables:
+Rank experiments from the aggregated tables. Set `BENCH` to the benchmark directory (for a SLURM run, `<Pathology root>/autoMIL/phase2/<dataset>/benchmark_<n>fold`):
 
 ```bash
+BENCH=/path/to/benchmark_dir
 uv run --package autobench python -c "
 import glob, pandas as pd
-df = pd.concat(pd.read_csv(p) for p in glob.glob('${AUTOBENCH_TCGA_LUAD_ROOT}/benchmark/aggregated/*/standard.csv'))
+df = pd.concat(pd.read_csv(p) for p in glob.glob('$BENCH/aggregated/*/standard.csv'))
 col = 'test_auc_roc_mean'
 print(df.sort_values(col, ascending=False)[['framework','task','encoder','model_type',col]].head(10))
 "
@@ -198,7 +201,7 @@ Failed experiments are recorded in `results/_failed.json`.
 ## Resuming and troubleshooting
 
 - **Resume.** Completed experiments are listed in `_completed.json` and skipped. Finished folds inside a partly done experiment are skipped too. Resubmit the same command.
-- **Rerun after a code or label change.** Existing results count as finished, so move them aside first. If prep stops with a message that cached splits or a task CSV do not match, delete `dataset_csv/` and `splits/` as the message says and rerun.
+- **Rerun after a code or label change.** Existing results count as finished, so move them aside first. If prep stops with a message that cached splits or a task CSV do not match, delete `dataset_csv/`, `splits/` and `nnmil/` and rerun.
 - **CUDA out of memory.** The scheduler retries with a larger memory estimate. Any other worker exception aborts the whole run: read `logs/bench_*.err` and `_failed.json`, fix the cause and resubmit.
 - **Missing feature files.** The run continues with the slides that have features. Compare `ls features_{encoder}/*.h5 | wc -l` with the slide count and check `trident_output/skipped_slides.txt`; see the feature extraction tutorial's troubleshooting section.
 - **Config errors.** `Dataset config not found` means a wrong name. `Environment variable ... is not set` means `benchmarks/.env` is missing or not sourced (`set -a && source benchmarks/.env && set +a`). A `KeyError` on a column name means `slide_id_column` or `case_id_column` in the YAML does not match the manifest.

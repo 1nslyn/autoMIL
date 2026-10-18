@@ -1,6 +1,6 @@
 # Placeholder Example
 
-Minimal template showing what `automil init` creates. Copy and edit
+Minimal project layout to start from. Copy and edit
 `automil/config.yaml` for your project.
 
 ## Quick start from this template

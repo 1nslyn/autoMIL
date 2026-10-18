@@ -137,7 +137,8 @@ claude                          # then type: /automil-setup
 
 `/automil-setup` reads your code, fills in `automil/config.yaml`, checks that
 your training script follows the contract and trains a baseline. To configure by
-hand, edit `automil/config.yaml` and run `automil check`.
+hand, edit `automil/config.yaml`, set `run.command` to the command that runs
+your script in its own environment, and run `automil check`.
 
 **3. Start the loop.** Run each command in its own tmux window.
 
@@ -221,7 +222,7 @@ about 130 lines.
 | [`sklearn-iris`](examples/sklearn-iris/) | Iris classification, scikit-learn, CPU | The smallest complete consumer of the contract |
 | [`ovarian_hrd`](examples/ovarian_hrd/) | HRD prediction from whole-slide images, CLAM-MB | A 189-attempt autonomous run with its tree and notes (shown above) |
 | [`clwd`](examples/clwd/) | 7-class lung subtyping | A multi-class project layout |
-| [`placeholder`](examples/placeholder/) | | The template `automil init` creates |
+| [`placeholder`](examples/placeholder/) | | A minimal project layout to start from |
 
 ## Benchmarks
 

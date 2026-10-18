@@ -35,7 +35,9 @@ mkdir /tmp/iris_project && cp examples/sklearn-iris/train.py /tmp/iris_project/
 cd /tmp/iris_project
 git init -q && git add -A && git commit -q -m initial
 automil init --no-healthcheck       # scaffolds automil/ (needs uv tool install)
-# set cap.mode: wall_clock in automil/config.yaml, then commit the scaffold
+# in automil/config.yaml set cap.mode: wall_clock and
+#   run.command: "uv run --no-project --with scikit-learn --with pyyaml python train.py"
+# (the tool's own Python has no scikit-learn), then commit the scaffold
 automil submit --node iris_001 --desc "baseline" --files train.py --max-time 60 --mil-model sklearn_iris
 automil orchestrator start
 automil status

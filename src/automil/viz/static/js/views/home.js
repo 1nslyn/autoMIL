@@ -231,7 +231,7 @@
           h('li', 'On a remote host, forward the dashboard port, or connect this site to it.', h('span.note', h('a', { href: '#/remote', text: 'Remote access in detail' }))),
         ),
         h('div.code-panel', { html:
-          '<span class="c"># install</span>\nuv tool install git+https://github.com/leoyin1127/autoMIL.git\n\n' +
+          '<span class="c"># install</span>\nuv tool install git+https://github.com/1nslyn/autoMIL.git\n\n' +
           '<span class="c"># overlay onto your project</span>\ncd /path/to/your/project\nautomil init\nautomil check\n\n' +
           '<span class="c"># run (three terminals)</span>\nautomil orchestrator start\nautomil viz start\nclaude --dangerously-skip-permissions   <span class="c"># then /automil-setup, /automil</span>\n\n' +
           '<span class="c"># from your own machine</span>\nssh -N -L 8420:127.0.0.1:8420 user@gpu-host' }),
@@ -242,7 +242,7 @@
       h('div.index', '06 / authors'),
       h('h2', 'Authors'),
       h('p.authors', 'Shuolin Yin, Yeonwoo Seo and Jun Ma. The framework is released under the Apache-2.0 licence; the code and the issue tracker are on GitHub.'),
-      h('pre', '@software{automil,\n  title  = {autoMIL},\n  author = {Yin, Shuolin and Seo, Yeonwoo and Ma, Jun},\n  year   = {2026},\n  url    = {https://github.com/leoyin1127/autoMIL}\n}'),
+      h('pre', '@software{automil,\n  title  = {autoMIL},\n  author = {Yin, Shuolin and Seo, Yeonwoo and Ma, Jun},\n  year   = {2026},\n  url    = {https://github.com/1nslyn/autoMIL}\n}'),
     )));
     return () => hero.destroy();
   };

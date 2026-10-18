@@ -35,8 +35,8 @@ remain in `datasets/`.
 Other configs ship outside the roster: **Ovarian** (BRCA/HRD, `datasets/other/ovarian.yaml`),
 **CLWD** (lung subtype, `datasets/other/clwd.yaml`), **HANCOCK**
 (`datasets/other/hancock.yaml`) and **CPTAC-CCRCC** (`datasets/cptac/`). Ovarian,
-CLWD and HANCOCK configure 7 foundation-model encoders; the roster datasets and
-CPTAC-CCRCC configure 3. `datasets/templates/` holds the `tcga_`, `cptac_` and
+CLWD, HANCOCK and `ccrcc.yaml` configure 7 foundation-model encoders; the roster
+datasets and `cptac_ccrcc.yaml` configure 3. `datasets/templates/` holds the `tcga_`, `cptac_` and
 `placeholder` templates for adding your own. The dataset loader finds a config by
 name, for example `--dataset tcga_luad`, wherever it sits under `datasets/`.
 
