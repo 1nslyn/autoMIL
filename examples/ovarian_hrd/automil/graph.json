@@ -6,7 +6,7 @@
     "total_executed": 189,
     "total_proposed": 9,
     "next_id": 199,
-    "baseline_primary_value": 0.0,
+    "baseline_primary_value": 0.814061,
     "scoring": {
       "exploration_weight": 0.005,
       "novelty_weight": 0.003

@@ -28,8 +28,8 @@ baseline:
 
 # Cap configuration: consumer-supplied. iris is CPU-only and fast.
 cap:
-  budget_seconds: 60
-  safety_buffer_seconds: 10
+  budget: 60s
+  safety_buffer: 10s
 
 # Hardware: CPU-only consumer.
 hardware:
