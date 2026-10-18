@@ -1,6 +1,6 @@
 # Ovarian HRD Example
 
-Pre-v1.0 reference run: HRD status prediction from ovarian cancer WSIs.
+Reference run: HRD status prediction from ovarian cancer WSIs.
 Binary classification using CLAM-MB with H-optimus-1 encoder features.
 
 ## What's here
@@ -13,7 +13,7 @@ an existing project. The full project would also contain:
 - Feature extraction pipeline (TRIDENT + H-optimus-1)
 - Training script honoring the [training-script contract](../../docs/training-script-contract.md)
 
-## Results (pre-v1.0 autonomous run)
+## Results (earlier autonomous run)
 
 - **189 experiments** executed autonomously
 - **Best primary_value: 0.851** (from 0.814 baseline, +4.5%)
@@ -22,9 +22,9 @@ an existing project. The full project would also contain:
 - See `automil/graph.json` for the full experiment tree
 - See `automil/learnings.md` for the accumulated insights
 
-## Running this with v1.0
+## Running this
 
-To run a similar campaign on this example with the v1.0 framework:
+To run a similar campaign on this example with the current framework:
 
 ```bash
 cd examples/ovarian_hrd
@@ -39,4 +39,4 @@ claude --dangerously-skip-permissions
 
 The same pattern works for any consumer that honors the contract; see
 [`examples/sklearn-iris/`](../sklearn-iris/) for a minimal non-pathology
-reference (~80 LOC, no `automil.*` imports).
+reference (about 130 lines, no `automil.*` imports).

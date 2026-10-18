@@ -33,7 +33,7 @@ A training script must:
    PyTorch CUDA and ROCm builds); CPU consumers ignore `AUTOMIL_GPU`.
 
 4. **Exit cleanly on `SIGTERM`** with partial output written to result.json.
-   The orchestrator sends SIGTERM at the cap boundary (Phase 4 / D-115);
+   The orchestrator sends SIGTERM at the cap boundary;
    scripts that ignore it lose work and corrupt the cell budget bookkeeping.
    Write a result.json with `"partial": true` and `"status": "budget_killed"`
    before exiting. See the SIGTERM handling section below.
@@ -53,7 +53,7 @@ A training script must:
 
 ## Minimal sklearn-iris example
 
-The shipped reference is `examples/sklearn-iris/train.py` (~75 lines). It
+The shipped reference is `examples/sklearn-iris/train.py` (about 130 lines). It
 demonstrates contract items 1, 2, 4, 5; item 3 selects CPU and item 6 is empty.
 Read it as the executable spec.
 
@@ -65,7 +65,14 @@ The script follows this structure:
 - compute accuracy and F1
 - write `result.json` with `{"primary_value": accuracy, "metrics": {...}, "status": "completed"}`
 
-To run it end-to-end: `uv run automil submit --node iris_001 --files examples/sklearn-iris/train.py`.
+To run it end-to-end, copy `train.py` into a git repository that has been
+initialized with `automil init`, then submit it:
+
+```bash
+uv run automil submit --node iris_001 --desc "baseline" --files train.py --mil-model sklearn_iris
+```
+
+`examples/sklearn-iris/README.md` lists the full steps.
 
 ## Minimal pytorch skeleton
 
@@ -158,8 +165,9 @@ The contract is `automil/schemas/result.schema.json` (Draft 2020-12).
 Required: `primary_value` (number). Optional: `metrics` (dict of
 str -> number; validation-only under the val-firewall), `held_out` (dict of
 str -> number; sealed test metrics, quarantined from search and revealed only
-via `automil certify`), `status` (one of completed, crash, budget_killed,
-cancelled), `elapsed_seconds`, `peak_vram_mb`, `fold_results`, `partial`.
+via `automil certify`), `status` (one of `completed`, `crash`, `budget_killed`,
+`cancelled`, `partial`), `termination_reason`, `elapsed_seconds`,
+`peak_vram_mb`, `fold_results`, `partial` (boolean).
 `additionalProperties: true` means consumers may extend.
 
 Two ingest rules sit on top of the schema. (a) Held-out-named keys inside
@@ -167,10 +175,22 @@ Two ingest rules sit on top of the schema. (a) Held-out-named keys inside
 `summary`) fail the node closed with a val-firewall error: test values belong
 only in `held_out`. (b) An optional `validation_folds` list of per-fold
 validation projections, shaped
-`[{"fold_index": <int>, "metrics": {"val_...": <number>}, "primary_value": <number>}, ...]`,
-lets the framework recompute `primary_se` (the cross-fold standard error
-that feeds the Ladder keep-margin) from the per-fold primary values; when present,
-the recomputed SE is preferred over a reported `primary_se`.
+`[{"fold_index": <int>, "metrics": {"val_...": <number>}, "primary_value": <number>, "val_predictions_sha256": <64 hex characters or null>}, ...]`,
+carries the per-fold evidence the keep-margin uses. The framework recomputes
+`primary_se` (the cross-fold standard error) from the per-fold primary values;
+when present, the recomputed SE is preferred over a reported `primary_se`.
+`val_predictions_sha256` is a hash of that fold's validation predictions.
+Identical hashes across two attempts mean the predictions did not change, which
+is how a no-op attempt is detected. The multi-fold aggregator in
+`automil.cells.reconcile` carries the field through to the final record.
+
+A child is kept only if its `primary_value` beats the parent's by more than the
+keep-margin, `max(accept_margin, se_multiplier x SE)`. When parent and child
+both carry `validation_folds` for the same fold indices, SE is the standard
+error of the per-fold child-minus-parent deltas (the paired SE, because both
+runs share folds under a locked seed). Otherwise it falls back to the parent's
+marginal cross-fold SE. A script that writes no `validation_folds` therefore
+gets the wider marginal margin.
 
 Minimum valid payload:
 
@@ -206,9 +226,12 @@ The `primary_value` field is the single scalar used by the experiment tree for
 ranking and keep/discard (UCB scoring, Ladder margin). It is the
 **validation** selection signal, never test. When a `metrics` block is
 present the framework recomputes the primary_value from it at ingest (the
-`scoring.formula` reducer, `mean` by default; CR-1b) and prefers the
+`scoring.formula` reducer, `mean` by default) and prefers the
 recomputed value, logging any disagreement; a bare `{"primary_value": ...}`
-payload is used as reported. Test metrics belong in
+payload is used as reported. Setting `scoring.formula` to `val_<metric>` (for
+example `val_auc`) makes the `primary_value` exactly that one validation metric
+and keeps the others as recorded companions; the metric must be present in
+`metrics`, or ingest fails closed. Test metrics belong in
 `held_out` instead, sealed away from search and revealed once via
 `automil certify`. Higher is always better. For loss minimization, negate:
 `"primary_value": -val_loss`.
@@ -232,8 +255,8 @@ with `Missing required env var: <name>; see automil/config.yaml: env.required`.
 
 `env.passthrough` controls forwarding from the orchestrator process into
 experiment subprocesses. Use this list to opt in consumer-specific vars
-(formerly auto-injected `AUTOBENCH_ROOT` is now consumer-declared via
-this list per Phase 8 / DEC-01).
+(`AUTOBENCH_ROOT` is no longer injected automatically, so a consumer
+declares it in this list).
 
 For CPU-only consumers with no external data dependencies (e.g. sklearn-iris
 where the dataset is bundled), both lists stay empty:
@@ -270,7 +293,7 @@ inside the handler before exiting.
 
 ## See also
 
-- `examples/sklearn-iris/train.py`: shipped reference (DEC-02).
+- `examples/sklearn-iris/train.py`: shipped reference.
 - `src/automil/schemas/result.schema.json`: result.json contract.
 - `src/automil/cli/check.py`: `automil check` env.required validator.
 - `src/automil/runtime_helpers.py`: multi-fold SIGTERM helper.

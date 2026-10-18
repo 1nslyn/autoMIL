@@ -13,9 +13,9 @@ End-to-end guide for extracting pathology features from CPTAC whole-slide images
 
 **Key difference from TCGA:** Labels and splits come from **Patho-Bench** (HuggingFace), not GOLDMARK. A helper script (`benchmarks/scripts/manifests/prepare_cptac_manifest.py`) downloads and converts them. Everything else — TRIDENT extraction, YAML config, SLURM scripts — is identical to the TCGA workflow.
 
-**Output:** Per-slide `.h5` tensors in `{output_dir}/20x_224px_0px_overlap/features_{encoder}/`
+**Output:** Per-slide `.h5` feature files in `{output_dir}/20x_224px_0px_overlap/features_{encoder}/`
 
-**Tracking sheet:** `datasets/TCGA-CPTAC-Datasets - CPTAC-10.csv`, update your row as you complete each step.
+**Tracking sheet:** update your row as you complete each step (link in Step 5).
 
 **Reference:**
 - `benchmarks/datasets/templates/cptac_template.yaml`, template config to copy
@@ -30,7 +30,7 @@ End-to-end guide for extracting pathology features from CPTAC whole-slide images
 | `cptac_coad` | Colorectal Adenocarcinoma |
 | `cptac_gbm` | Glioblastoma |
 | `cptac_hnsc` | Head & Neck Squamous Cell Carcinoma |
-| `cptac_lscc` | Laryngeal Squamous Cell Carcinoma |
+| `cptac_lscc` | Lung Squamous Cell Carcinoma |
 | `cptac_luad` | Lung Adenocarcinoma |
 | `cptac_pdac` | Pancreatic Ductal Adenocarcinoma |
 | `cptac_ucec` | Uterine Corpus Endometrial Cancer |
@@ -45,7 +45,7 @@ Same as TCGA — your own Compute Canada account, SLURM familiarity, sufficient 
 
 ```bash
 cd ~/scratch
-git clone https://github.com/leoyin1127/autoMIL.git
+git clone https://github.com/1nslyn/autoMIL.git
 cd autoMIL
 
 module load cuda/12.2

@@ -14,7 +14,7 @@ cd /path/to/your/project
 #   files.editable / files.readonly
 #   env.required + env.passthrough
 #   scoring.formula
-#   cap.budget_seconds + cap.safety_buffer_seconds
+#   cap.budget + cap.safety_buffer (durations such as 6h and 30m)
 #   baseline.primary_value
 
 uv run automil check                # validates protected files, env.required, backend
@@ -27,5 +27,5 @@ Ensure your training script honors the
 with the package; `automil init` does not scaffold a project-local copy), exit
 cleanly on SIGTERM with a partial result, declare env vars under `env.required`.
 
-For a worked minimal reference (~80 LOC, no `automil.*` imports), see
+For a worked minimal reference (about 130 lines, no `automil.*` imports), see
 [`examples/sklearn-iris/`](../sklearn-iris/).

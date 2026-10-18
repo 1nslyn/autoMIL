@@ -1,7 +1,7 @@
-# Preprint 130-cell campaign operations
+# Preprint campaign operations (130-row manifest, 78-cell active roster)
 
 This directory contains the immutable manifest and the operator entry points for
-the full `automil-preprint-130-v6` campaign. The controller enforces the frozen
+the `automil-preprint-130-v6` campaign. The controller enforces the frozen
 protocol independently for every cell:
 
 - native five-fold baseline on folds `0,1,2,3,4`;
@@ -33,6 +33,19 @@ is archived. An incomplete promotion candidate is ineligible. The native
 baseline wins an exact tie against a searched candidate; searched-candidate
 ties use the stable node ID.
 
+## Active roster
+
+The manifest (`manifest.json`) has 130 rows: 5 cohorts x 26 cells. The campaign
+runs a subset of it, declared in `active_roster.json` on 2026-08-23: three
+cohorts (`tcga_luad`, `tcga_hnsc`, `cptac_pdac`) and 78 cells. `tcga_lgg` and
+`cptac_gbm` were dropped. The manifest stays a byte-identical 130-row superset
+because exporter ports are indexed by manifest row and `manifest_sha256` is
+pinned into every cell at materialization. `active_roster.json` is the census
+authority: every campaign-wide count and set check in the framework and
+launcher is validated against it. Each cohort contributes 26 cells: 13
+classification and 13 survival, where 13 = 4 tile aggregators x 3 encoders + 1
+TITAN arm.
+
 ## 1. Preflight
 
 Run these commands from the repository root with the campaign workspace synced
@@ -44,7 +57,7 @@ uv run python benchmarks/scripts/campaign_manifest.py canary
 ```
 
 `check` rebuilds the canonical roster and compares it with the byte-locked
-manifest. `canary` materializes and audits all 130 roots in a temporary
+manifest. `canary` materializes and audits all 130 manifest rows in a temporary
 directory, checks all 10 arm/task regimes, and starts zero GPU processes.
 The manifest also locks `analysis_plan.json` before certification. It declares
 the task-specific primary metrics, real four-arm tile ranking estimand, separate
@@ -86,7 +99,7 @@ running it on a host with a different `claude --version` is how operators
 usually hit that refusal. Rebuilding is deliberate and rare (a changed source
 payload, or a re-pinned identity, before anything is materialized): delete
 `agent_protocol.json`, run `build`, then `verify`. Never rebuild after
-materialization — the runtime copy is what all 130 cells hash-lock.
+materialization — the runtime copy is what all 78 roster cells hash-lock.
 
 ```bash
 uv run python benchmarks/scripts/campaign_manifest.py materialize \
@@ -94,7 +107,9 @@ uv run python benchmarks/scripts/campaign_manifest.py materialize \
 ```
 
 This creates one restart-safe project under
-`benchmarks/campaigns/preprint_130/runtime/<cell-id>/` for every manifest row.
+`benchmarks/campaigns/preprint_130/runtime/<cell-id>/` for every active-roster
+cell (78 of the 130 manifest rows; off-roster rows are skipped and row indices
+are not renumbered).
 Every cell is identified only by `dataset + task + encoder + arm + seed +
 protocol_version`. Git commits are operational worktree metadata, not campaign
 identity and not a baseline-reuse condition. Re-running materialization
@@ -236,7 +251,7 @@ fix the named precondition, never bypass it. A bare `claude` in the cell root
 is not a formal session: it would run an unpinned, unarchived surface.
 
 Web research tools stay enabled (the frozen policy's RESEARCH step delegates
-WebSearch and WebFetch subagents), identically for all 130 cells; a cell run
+WebSearch and WebFetch subagents), identically for all 78 cells; a cell run
 without network access is a protocol deviation to record in that cell's
 disclosure. Research and diagnosis are ordinary metered agent-active work.
 
@@ -548,10 +563,10 @@ uv run python benchmarks/scripts/campaign_stage.py finalize-agent-session \
   --agent-session /path/to/agent_session_end.json
 ```
 
-Repeat Sections 3–5 for every manifest cell, using a distinct fresh runtime
+Repeat Sections 3–5 for every active-roster cell, using a distinct fresh runtime
 session identifier each time. Session opening rejects an identifier already
 reserved by a sibling cell, and the global freeze rechecks uniqueness across
-all 130 attestations. Automatic compaction keeps the same metered session;
+all 78 attestations. Automatic compaction keeps the same metered session;
 `/clear` and resumed sessions are not accepted for the formal one-session cell.
 No cell may be certified early.
 
@@ -630,7 +645,7 @@ integrity drift. A declared cell spec that becomes unreadable is held at
 admission (HOLD) and recovers automatically when the file reads again; it is
 never cancelled.
 
-Operate all 130 roots with an external scheduler if desired, but invoke these
+Operate all 78 roots with an external scheduler if desired, but invoke these
 same per-cell commands and preserve the one-GPU-per-training-process contract.
 Never infer campaign progress from directory counts alone; use the validated
 stage ledger and public `status` surface.

@@ -1,9 +1,7 @@
 # Design Spec — Integrating ABMIL, DTFD-MIL, and TITAN into `autobench`
 
 **Date:** 2026-07-05
-**Status:** design approved (architecture + fidelity knobs), pending spec review → implementation plan
-**Companion:** [`../../../paper/preprint/EXECUTION_PLAN.md`](../../../paper/preprint/EXECUTION_PLAN.md) (compute campaign),
-[`../../../paper/preprint/PLAN.md`](../../../paper/preprint/PLAN.md) (preprint strategy)
+**Status:** implemented (`benchmarks/src/autobench/pipeline/abmil/`, `pipeline/dtfd/`, `pipeline/titan/`)
 **Provenance:** synthesized from two independent, blind architecture passes (deep-reasoner/Opus + Codex),
 which converged on the same hybrid structure and independently flagged the two corrections below.
 
