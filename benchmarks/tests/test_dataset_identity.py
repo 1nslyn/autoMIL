@@ -46,7 +46,7 @@ from autobench.pipeline.config import (
     build_registries,
     generate_all_experiments,
 )
-from autobench.pipeline.orchestrator import aggregate_results
+from autobench.pipeline.collect import aggregate_results
 from _helpers import make_test_ds
 
 

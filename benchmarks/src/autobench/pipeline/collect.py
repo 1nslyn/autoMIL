@@ -34,9 +34,31 @@ import os
 
 import pandas as pd
 
-from autobench.pipeline.orchestrator import aggregate_results
 
 __all__ = ["collect_summaries", "summaries_to_frame", "per_fold_frame"]
+
+
+def aggregate_results(summaries: list[dict]) -> pd.DataFrame:
+    rows: list[dict] = []
+    for s in summaries:
+        row = {
+            "dataset": s.get("dataset", ""),
+            "framework": s.get("framework", "clam"),
+            "strategy": s["strategy"],
+            "task": s["task"],
+            "encoder": s["encoder"],
+            "model_type": s["model_type"],
+            "survival_loss": s.get("survival_loss"),
+            "embed_dim": s["embed_dim"],
+            "n_folds": s["n_folds"],
+            "seed": s["seed"],
+        }
+        for split_name in ("test", "val"):
+            for metric_name, metric_data in s[split_name].items():
+                for stat in ("mean", "std", "ci_low", "ci_high"):
+                    row[f"{split_name}_{metric_name}_{stat}"] = metric_data[stat]
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def collect_summaries(roots: list[str] | list[tuple[str, str]]) -> list[dict]:
@@ -112,7 +134,7 @@ def _task_type(summary: dict) -> str:
 def summaries_to_frame(summaries: list[dict]) -> pd.DataFrame:
     """One row per experiment.
 
-    Reuses :func:`autobench.pipeline.orchestrator.aggregate_results` for the
+    Reuses :func:`aggregate_results` for the
     core columns (dataset/framework/strategy/task/encoder/model_type/
     survival_loss/embed_dim/n_folds/seed plus flattened
     ``test_*``/``val_*`` mean/std/ci_low/ci_high) and adds two columns on top

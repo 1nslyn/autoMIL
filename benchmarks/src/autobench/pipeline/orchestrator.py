@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import gc
-import glob
 import json
 import multiprocessing
 import os
@@ -25,6 +24,7 @@ from autobench.pipeline.config import (
     StrategyConfig,
     generate_all_experiments,
 )
+from autobench.pipeline.collect import aggregate_results, collect_summaries
 from autobench.pipeline.prepare import prepare_all
 
 
@@ -226,29 +226,6 @@ def estimate_vram_gb(exp: ExperimentConfig) -> float:
 # ---------------------------------------------------------------------------
 # Results aggregation
 # ---------------------------------------------------------------------------
-
-
-def aggregate_results(summaries: list[dict]) -> pd.DataFrame:
-    rows: list[dict] = []
-    for s in summaries:
-        row = {
-            "dataset": s.get("dataset", ""),
-            "framework": s.get("framework", "clam"),
-            "strategy": s["strategy"],
-            "task": s["task"],
-            "encoder": s["encoder"],
-            "model_type": s["model_type"],
-            "survival_loss": s.get("survival_loss"),
-            "embed_dim": s["embed_dim"],
-            "n_folds": s["n_folds"],
-            "seed": s["seed"],
-        }
-        for split_name in ("test", "val"):
-            for metric_name, metric_data in s[split_name].items():
-                for stat in ("mean", "std", "ci_low", "ci_high"):
-                    row[f"{split_name}_{metric_name}_{stat}"] = metric_data[stat]
-        rows.append(row)
-    return pd.DataFrame(rows)
 
 
 def _load_or_collect_summary(benchmark_dir: str, exp_cfg_or_id) -> dict | None:
@@ -514,7 +491,7 @@ def run_benchmark(
         pbar.update(1)
     pbar.close()
 
-    return _finalize(cfg.benchmark_dir, collect_all_summaries_on_disk(cfg.benchmark_dir))
+    return _finalize_from_disk(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -577,44 +554,6 @@ def _collect_all_summaries_or_raise(
             f"experiments ({preview}{suffix})"
         )
     return all_summaries
-
-
-def collect_all_summaries_on_disk(benchmark_dir: str) -> list[dict]:
-    """Collect every ``summary.json`` under ``results/<fw>/<strategy>/.../``.
-
-    Used by ``_finalize`` so the rolled-up CSVs reflect every experiment that
-    has ever completed for this benchmark dir, not just the subset selected by
-    the current run's ``--encoders``/``--models``/``--frameworks`` filters.
-    Without this, re-running with a narrower filter silently truncates the
-    aggregated CSV (and downstream consumers go stale).
-    """
-    results_root = os.path.join(benchmark_dir, "results")
-    if not os.path.isdir(results_root):
-        return []
-
-    summaries: list[dict] = []
-    seen_ids: set[str] = set()
-    # Two layouts coexist:
-    #   classification: results/<fw>/<strategy>/<task>/<encoder>/<model>/summary.json
-    #   survival:       results/<fw>/<strategy>/<task>/<encoder>/<model>/<loss>/summary.json
-    patterns = [
-        os.path.join(results_root, "*", "*", "*", "*", "*", "summary.json"),
-        os.path.join(results_root, "*", "*", "*", "*", "*", "*", "summary.json"),
-    ]
-    paths = sorted({p for pat in patterns for p in glob.glob(pat)})
-    for path in paths:
-        try:
-            with open(path) as f:
-                s = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-        # Dedupe by experiment_id — unique across all loss variants and layouts.
-        eid = s.get("experiment_id", path)
-        if eid in seen_ids:
-            continue
-        seen_ids.add(eid)
-        summaries.append(s)
-    return summaries
 
 
 def run_benchmark_multigpu(
@@ -716,7 +655,7 @@ def run_benchmark_multigpu(
     if not pending:
         _validate_expected_completed(cfg.benchmark_dir, expected_experiment_ids)
         _collect_all_summaries_or_raise(cfg.benchmark_dir, experiments)
-        return _finalize(cfg.benchmark_dir, collect_all_summaries_on_disk(cfg.benchmark_dir))
+        return _finalize_from_disk(cfg)
 
     pending_queue: list[ExperimentConfig] = sorted(
         pending,
@@ -915,12 +854,23 @@ def run_benchmark_multigpu(
 
     _validate_expected_completed(cfg.benchmark_dir, expected_experiment_ids)
     _collect_all_summaries_or_raise(cfg.benchmark_dir, experiments)
-    return _finalize(cfg.benchmark_dir, collect_all_summaries_on_disk(cfg.benchmark_dir))
+    return _finalize_from_disk(cfg)
 
 
 # ---------------------------------------------------------------------------
 # Finalization
 # ---------------------------------------------------------------------------
+
+
+def _finalize_from_disk(cfg: BenchmarkConfig) -> pd.DataFrame:
+    """Roll up every summary under ``cfg.benchmark_dir/results``, not only this run's.
+
+    A run narrowed by ``--encoders``/``--models``/``--frameworks`` must not
+    truncate the aggregated tables, so the roll-up reads the whole results tree.
+    """
+    return _finalize(
+        cfg.benchmark_dir, collect_summaries([(cfg.dataset, cfg.benchmark_dir)]),
+    )
 
 
 def _finalize(benchmark_dir: str, all_summaries: list[dict]) -> pd.DataFrame:

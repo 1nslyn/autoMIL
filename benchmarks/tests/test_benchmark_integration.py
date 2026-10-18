@@ -25,7 +25,8 @@ from autobench.pipeline.config import (
     generate_all_experiments,
 )
 from autobench.pipeline.evaluate import compute_extended_metrics
-from autobench.pipeline.orchestrator import aggregate_results, run_benchmark
+from autobench.pipeline.collect import aggregate_results
+from autobench.pipeline.orchestrator import run_benchmark
 from autobench.pipeline.clam.prepare import convert_h5_to_pt
 from autobench.pipeline.prepare import create_task_csv
 from autobench.pipeline.splits import create_strategy_splits

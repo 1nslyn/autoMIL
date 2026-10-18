@@ -484,3 +484,26 @@ class TestStaticGridSchemaGaps:
         summaries = collect_summaries([results_tree])
         frame = summaries_to_frame(summaries)
         assert "n_valid_folds" not in frame.columns
+
+
+class TestFinalizeFromDisk:
+    """The orchestrator's aggregated tables cover every experiment on disk."""
+
+    def test_aggregated_csv_includes_survival_experiments(self, tmp_path):
+        from autobench.pipeline.config import BenchmarkConfig
+        from autobench.pipeline.orchestrator import _finalize_from_disk
+
+        bdir = str(tmp_path / "benchmark_5fold")
+        common = dict(dataset="tcga_luad", framework=Framework.ABMIL,
+                      encoder="uni_v2", model_type="abmil", seed=42)
+        _write_summary(bdir, task_name="kras", **common)
+        _write_summary(bdir, task_name="os", task_type="survival",
+                       survival_loss="nllsurv", **common)
+
+        _finalize_from_disk(BenchmarkConfig(dataset="tcga_luad", benchmark_dir=bdir))
+
+        df = pd.read_csv(os.path.join(bdir, "aggregated", "abmil", "standard.csv"))
+        assert sorted(df["task"]) == ["kras", "os"]
+        survival = df[df["task"] == "os"].iloc[0]
+        assert survival["survival_loss"] == "nllsurv"
+        assert survival["test_c_index_mean"] == pytest.approx(0.59)
