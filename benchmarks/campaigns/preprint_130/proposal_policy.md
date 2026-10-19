@@ -285,7 +285,7 @@ evidence for a TITAN cell.
    restored in `should_stop`. ABMIL decay 0.998 (0.995–0.999 equal): +0.008
    ± 0.009 on the weak task, +0.015 ± 0.004 on the strong one, the same
    under three seeds; +0.016 on KRAS. CLAM 0.9995: +0.007 ± 0.009 and
-   +0.013 on KRAS. nnMIL 0.98: +0.005. DTFD 0.998: +0.003 to +0.007 in AUC
+   +0.013 on KRAS. nnMIL 0.98: +0.005 and −0.001. DTFD 0.998: +0.003 to +0.007 in AUC
    but `val_bacc` −0.015 to −0.05 on every task, so it fails the guard (B4).
    The gain is removed epoch-to-epoch jitter: the smoothing window stops
    paying for a noisy curve. It does not raise the curve.
@@ -299,10 +299,13 @@ evidence for a TITAN cell.
    at batch 4) gives the gain back (−0.029) and EMA on top of batch 4 adds
    nothing (−0.001): what the native plan gets wrong is optimizer progress
    per epoch against the patience, so keep the native lr and spend no
-   attempt on the dose. KRAS v5's +0.046 nnMIL recipe carried this same
-   change. Submit batch 4 in the opening batch: scaling the attention/body
-   lr by 0.1, the other half of the v5 recipe, reversed the sign on CCRCC
-   (−0.010 to −0.020 with guard failures).
+   attempt on the dose. The size follows the under-training: read the
+   baseline's `[selected]` epochs first; where every fold already selects
+   past epoch 25 (the 6-class task) batch 4 is +0.007 ± 0.004, every fold
+   up. KRAS v5's +0.046 nnMIL recipe carried this same change. Submit
+   batch 4 in the opening batch: scaling the attention/body lr by 0.1, the
+   other half of the v5 recipe, reversed the sign on CCRCC (−0.010 to
+   −0.020 with guard failures) and lost on the 6-class task too.
 3. Everything else is task-specific. Test it as a single addition on EMA,
    expect ±0.01, and read B before spending.
 

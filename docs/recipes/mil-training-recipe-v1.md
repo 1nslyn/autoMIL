@@ -1,8 +1,8 @@
 # A training recipe for MIL on small cohorts: what 900 attempts found (v1, draft)
 
-Status: draft of 2026-10-17. Numbers marked *pending* fill in as the last
-development cells finish (the 6-class nnMIL and CLAM cells, the CCRCC
-high_grade transfer check).
+Status: draft of 2026-10-18. Numbers marked *pending* fill in as the last
+development cells finish (the 6-class CLAM cell, the CCRCC high_grade
+transfer check).
 Everything here is validation-only; the held-out readings of the two
 development cohorts are taken once at the end and appear in §7 only as a
 sanity check, never as the measurement.
@@ -17,9 +17,9 @@ seed and measurement untouched) gains:
 |---|---|---|---|---|
 | Weight EMA (bias-corrected, swapped in for validation) | ABMIL 0.998 | +0.008 ± 0.009 | +0.015 ± 0.004 | yes (3 seeds, both tasks) |
 | | CLAM 0.9995 | +0.007 ± 0.009 | pending | — |
-| | nnMIL 0.98 | +0.005 ± 0.009 | pending | — |
+| | nnMIL 0.98 | +0.005 ± 0.009 | −0.001 ± 0.002 | — |
 | | DTFD 0.998 | +0.007 (guard fail) | +0.003 (guard fail) | sign yes, size no |
-| nnMIL batch size 4 (native 24) | nnMIL | **+0.034 ± 0.020, kept** | pending | yes (+0.028 and +0.040 under seeds 43 and 44) |
+| nnMIL batch size 4 (native 24) | nnMIL | **+0.034 ± 0.020, kept** | +0.007 ± 0.004 (every fold up; under the keep margin) | yes (+0.028 and +0.040 under seeds 43 and 44) |
 | Any other piece or stack | all | within ±0.01 or worse | within ±0.003 of its parent | — |
 
 Two findings carry the recipe. Weight EMA is universal: it removes the
@@ -31,7 +31,10 @@ epoch against an epoch-based patience of 10), and batch 4 alone recovers
 +0.034 on CCRCC; the KRAS v5 nnMIL recipe (+0.046) carried the same change.
 Batch 2, 4 and 8 are equal (+0.031 to +0.034) and scaling the lr down with
 the batch gives the gain back, so the quantity that matters is optimizer
-progress per epoch against the patience, not the batch size itself.
+progress per epoch against the patience, not the batch size itself. The
+size of the effect follows the under-training: on the 6-class task, where
+every native fold already selects an epoch past 25, batch 4 is +0.007 ±
+0.004 with every fold up.
 
 The recipes the KRAS trials found (ABMIL warmup + cosine; CLAM label
 smoothing, 512-tile bags, class balancing; DTFD label smoothing + dropout
@@ -73,7 +76,7 @@ average on the KRAS arms will not come from training recipes alone.
   uncached fold (407 s → 63 s).
 - **Budget.** CCRCC: ABMIL 13 + 6 replicate runs, DTFD 12 + 6, CLAM 9 +
   identity, nnMIL 12 + identity + 4 replicate runs; 6-class: ABMIL 17 + 6,
-  DTFD 8, nnMIL and CLAM pending. All jobs ran at low priority beside the official
+  DTFD 8, nnMIL 8, CLAM pending. All jobs ran at low priority beside the official
   trial, one at a time once the machine was shared.
 
 ## 3. Results by cell (validation only)
@@ -110,7 +113,7 @@ folds select epochs 0–4), DTFD 0.003, nnMIL 0.009.
 |---|---|---|---|---|---|
 | ABMIL | 0.883 | EMA + cosine + unfreezing (+ 512 tiles) | +0.017 ± 0.006 | EMA alone +0.011 / +0.015 / +0.019; the stack +0.016 / +0.012 / +0.017 | stack accepted by the rule; equal to EMA under seeds |
 | DTFD-MIL | 0.886 | EMA + lr step at 9 | +0.004 ± 0.003 | — | baseline kept |
-| nnMIL | pending | | | | |
+| nnMIL | 0.890 | batch 4 | +0.007 ± 0.004 | — | baseline kept; every fold up, balanced accuracy +0.046; EMA −0.001, KRAS v5 pieces −0.002 to −0.005, LS 0.1 +0.003 |
 | CLAM-MB | pending | | | | |
 
 ABMIL batch 2 (eight variants on the EMA stack: unfreezing dose and
@@ -166,8 +169,9 @@ Recipe v1 applied with no search (one attempt per arm): *pending*.
 - **nnMIL simple_mil**: batch size 4 (2 to 8 equal) on cohorts below ~400
   training bags, native lr 3e-4 and schedule; never scale the lr down with
   the batch (−0.029); EMA adds nothing on top (−0.001). Expected +0.03 on a
-  cohort of ~200 bags, confirmed under three seeds; the 6-class check is
-  *pending*.
+  cohort whose native run selects early epochs on some fold (CCRCC,
+  confirmed under three seeds) and +0.005 to +0.01 on one that already
+  trains past epoch 25 on every fold (the 6-class task, +0.007 ± 0.004).
 
 ## 6. What this changes for the campaign
 
