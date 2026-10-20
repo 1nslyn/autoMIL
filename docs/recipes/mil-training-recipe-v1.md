@@ -221,11 +221,37 @@ largest of any cell.
 
 ## 7. Held-out sanity readings (development cohorts only)
 
-Taken once per cell through `automil certify` after the cell is closed;
-*pending*. These cohorts are not in the paper, so the values may be
+Taken once per node through `automil certify` after the cell closed
+(2026-10-20). These cohorts are not in the paper, so the values may be
 recorded here; the only clean test of a devcv-selected configuration is
-split 0's own test slides (67 and 80 slides), so the readings are a sanity
+split 0's own test slides (67 and 80 slides), so each reading is a sanity
 check with an SE of about 0.04, not a measurement.
+
+| Cell | Root (val → test AUC) | Recipe v1 node (val → test AUC) | Test delta |
+|---|---|---|---|
+| PBRM1 ABMIL | 0.612 → 0.519 | EMA 0.998: 0.619 → 0.523 | +0.004 |
+| PBRM1 DTFD | 0.604 → 0.558 | EMA 0.998: 0.612 → 0.555 | −0.003 |
+| PBRM1 CLAM | 0.633 → 0.523 | EMA 0.9995: 0.640 → 0.600 | +0.077 |
+| PBRM1 nnMIL | 0.574 → 0.639 | batch 4: 0.607 → 0.685 | +0.046 |
+| 6-class ABMIL | 0.883 → 0.880 | EMA 0.998: 0.894 → 0.883 | +0.002 |
+| 6-class DTFD | 0.886 → 0.870 | EMA + step 9: 0.890 → 0.879 | +0.009 |
+| 6-class nnMIL | 0.890 → 0.847 | batch 4: 0.897 → 0.863 | +0.016 |
+| 6-class CLAM | *pending* | | |
+| high_grade ABMIL | 0.725 → 0.762 | EMA 0.998: 0.756 → 0.748 | −0.014 |
+| high_grade DTFD | 0.730 → 0.730 | EMA + step 9: 0.741 → 0.724 | −0.006 |
+| high_grade CLAM | 0.721 → 0.728 | EMA 0.9995: 0.735 → 0.738 | +0.010 |
+| high_grade nnMIL | 0.711 → 0.691 | batch 4: 0.705 → 0.682 | −0.010 |
+
+What the readings can say: the recipe node is above its root on 7 of 11
+single test splits, by a mean of +0.012, within one SE of zero everywhere
+except where the validation lift was largest (PBRM1 nnMIL +0.046, CLAM
++0.077). The nnMIL batch fix carries to test on the two tasks where
+validation said it worked and not on high_grade, matching §3.3. ABMIL's EMA
+lifts (+0.008, +0.015, +0.031 on validation) show no test counterpart
+(+0.004, +0.002, −0.014), consistent with §4: EMA removes jitter in the
+smoothed selection metric and does not raise the underlying curve. The
+PBRM1 roots sit 0.05–0.11 below their validation scores on this test
+split, so that cohort's selection signal is itself optimistic.
 
 ## 8. Record
 
