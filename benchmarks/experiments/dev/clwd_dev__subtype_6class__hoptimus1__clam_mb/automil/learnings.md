@@ -10,3 +10,11 @@ Root 0.8805 macro AUC (folds 0.94, 0.85, 0.83, 0.88, 0.90; paired SEs 0.001–0.
 - Offline verdict: one admissible attempt (LS 0.2, +0.0024); baseline kept.
 
 Reading: the KRAS v6 CLAM recipe (EMA + LS 0.2 or 512 tiles, +0.021 to +0.025 on KRAS) is worth +0.007 to +0.009 in AUC on this 6-class task and is excluded by the guard: the averaged weights rank better and classify worse at the fixed threshold. EMA + 1024 tiles pending; then the cell closes.
+
+## 2026-10-20 batch 1 complete (9 attempts): cell closed
+
+- EMA 0.9995 + 1024 random tiles: +0.0070 ± 0.0020 in AUC, val_bacc −0.038 ± 0.021, guard fail, like every other EMA variant here.
+- Final offline verdict: one admissible attempt (LS 0.2, +0.0024 ± 0.0049); baseline kept.
+- Held-out sanity reading (split 0 test slides, taken once): root 0.873, EMA 0.873, LS 0.2 0.869, the three-piece stack 0.872. Nothing separates them on 80 slides.
+
+Reading: on this 6-class task CLAM's EMA gains are small in AUC (+0.006 to +0.009), excluded by the balanced-accuracy guard, and absent on the single test split. Recipe v1 for CLAM stays EMA 0.9995 for binary tasks, with the operating-point caveat for multi-class. CLOSED.

@@ -1,8 +1,7 @@
 # A training recipe for MIL on small cohorts: what 900 attempts found (v1, draft)
 
-Status: draft of 2026-10-20. One number is still *pending*: the last
-attempt of the 6-class CLAM cell (EMA + 1024 tiles). The held-out sanity
-readings of §7 follow once that cell closes.
+Status: complete as of 2026-10-20. Every development cell is closed and
+the held-out sanity readings of §7 are taken.
 Everything here is validation-only; the held-out readings of the two
 development cohorts are taken once at the end and appear in §7 only as a
 sanity check, never as the measurement.
@@ -123,7 +122,7 @@ folds select epochs 0–4), DTFD 0.003, nnMIL 0.009.
 | ABMIL | 0.883 | EMA + cosine + unfreezing (+ 512 tiles) | +0.017 ± 0.006 | EMA alone +0.011 / +0.015 / +0.019; the stack +0.016 / +0.012 / +0.017 | stack accepted by the rule; equal to EMA under seeds |
 | DTFD-MIL | 0.886 | EMA + lr step at 9 | +0.004 ± 0.003 | — | baseline kept |
 | nnMIL | 0.890 | batch 4 | +0.007 ± 0.004 | — | baseline kept; every fold up, balanced accuracy +0.046; EMA −0.001, KRAS v5 pieces −0.002 to −0.005, LS 0.1 +0.003 |
-| CLAM-MB | 0.881 | EMA + LS 0.2 + 512 tiles | +0.009 ± 0.003 (guard fail) | — | baseline kept; every EMA variant fails the balanced-accuracy guard (−0.02 to −0.06); LS 0.2 alone +0.002, 512 tiles −0.003; EMA + 1024 tiles *pending* |
+| CLAM-MB | 0.881 | EMA + LS 0.2 + 512 tiles | +0.009 ± 0.003 (guard fail) | — | baseline kept; every EMA variant (+0.006 to +0.009, including EMA + 1024 tiles +0.007) fails the balanced-accuracy guard (−0.02 to −0.06); LS 0.2 alone +0.002, 512 tiles −0.003 |
 
 ABMIL batch 2 (eight variants on the EMA stack: unfreezing dose and
 schedule-free form, EMA 0.995 / 0.999, + 512 tiles, + LS 0.1, + dropout 0.6)
@@ -236,14 +235,14 @@ check with an SE of about 0.04, not a measurement.
 | 6-class ABMIL | 0.883 → 0.880 | EMA 0.998: 0.894 → 0.883 | +0.002 |
 | 6-class DTFD | 0.886 → 0.870 | EMA + step 9: 0.890 → 0.879 | +0.009 |
 | 6-class nnMIL | 0.890 → 0.847 | batch 4: 0.897 → 0.863 | +0.016 |
-| 6-class CLAM | *pending* | | |
+| 6-class CLAM | 0.881 → 0.873 | EMA 0.9995: 0.887 → 0.873 | −0.001 |
 | high_grade ABMIL | 0.725 → 0.762 | EMA 0.998: 0.756 → 0.748 | −0.014 |
 | high_grade DTFD | 0.730 → 0.730 | EMA + step 9: 0.741 → 0.724 | −0.006 |
 | high_grade CLAM | 0.721 → 0.728 | EMA 0.9995: 0.735 → 0.738 | +0.010 |
 | high_grade nnMIL | 0.711 → 0.691 | batch 4: 0.705 → 0.682 | −0.010 |
 
-What the readings can say: the recipe node is above its root on 7 of 11
-single test splits, by a mean of +0.012, within one SE of zero everywhere
+What the readings can say: the recipe node is above its root on 7 of 12
+single test splits, by a mean of +0.011, within one SE of zero everywhere
 except where the validation lift was largest (PBRM1 nnMIL +0.046, CLAM
 +0.077). The nnMIL batch fix carries to test on the two tasks where
 validation said it worked and not on high_grade, matching §3.3. ABMIL's EMA
