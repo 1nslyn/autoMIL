@@ -284,11 +284,16 @@ evidence for a TITAN cell.
    updated after each optimizer step, swapped in at `before_validation` and
    restored in `should_stop`. ABMIL decay 0.998 (0.995–0.999 equal): +0.008
    ± 0.009 on the weak task, +0.015 ± 0.004 on the strong one, the same
-   under three seeds; +0.016 on KRAS. CLAM 0.9995: +0.007 ± 0.009 and
-   +0.013 on KRAS. nnMIL 0.98: +0.005 and −0.001. DTFD 0.998: +0.003 to +0.007 in AUC
-   but `val_bacc` −0.015 to −0.05 on every task, so it fails the guard (B4).
-   The gain is removed epoch-to-epoch jitter: the smoothing window stops
-   paying for a noisy curve. It does not raise the curve.
+   under three seeds, and +0.031 ± 0.013 on a third task whose native folds
+   jitter by up to 0.09 per epoch; +0.016 on KRAS. CLAM 0.9995: +0.007 ±
+   0.009 and +0.014 ± 0.019 on the binary tasks, +0.013 on KRAS; on the
+   6-class task +0.006 ± 0.001 in AUC with `val_bacc` −0.043, guard fail.
+   nnMIL 0.98: +0.005 and −0.001. DTFD 0.998: +0.003 to +0.011 in AUC, with
+   `val_bacc` −0.015 to −0.05 on two of three tasks, so expect the guard to
+   fail (B4). The gain is removed epoch-to-epoch jitter: the smoothing
+   window stops paying for a noisy curve. It does not raise the curve, and
+   its size tracks the native jitter: read the per-epoch lines of the
+   baseline's `run.log` first.
 2. **nnMIL batch size on a small cohort.** The nnMIL plan picks batch 24
    below 400 training bags, which is 9–12 optimizer steps per epoch, and
    the epoch-based patience of 10 then stops folds under-trained (on CCRCC
@@ -300,12 +305,15 @@ evidence for a TITAN cell.
    nothing (−0.001): what the native plan gets wrong is optimizer progress
    per epoch against the patience, so keep the native lr and spend no
    attempt on the dose. The size follows the under-training: read the
-   baseline's `[selected]` epochs first; where every fold already selects
-   past epoch 25 (the 6-class task) batch 4 is +0.007 ± 0.004, every fold
-   up. KRAS v5's +0.046 nnMIL recipe carried this same change. Submit
-   batch 4 in the opening batch: scaling the attention/body lr by 0.1, the
-   other half of the v5 recipe, reversed the sign on CCRCC (−0.010 to
-   −0.020 with guard failures) and lost on the 6-class task too.
+   baseline's `[selected]` epochs first. The fix applies where a native
+   fold stops at the patience with an early selected epoch (CCRCC PBRM1,
+   fold 0 at epoch 0); where every fold trains on it is within noise
+   (+0.007 ± 0.004 on the 6-class task, −0.006 ± 0.015 on CCRCC high_grade
+   with 219 bags). KRAS v5's +0.046 nnMIL recipe carried this same change.
+   Submit batch 4 in the opening batch when a baseline fold stops early:
+   scaling the attention/body lr by 0.1, the other half of the v5 recipe,
+   reversed the sign on CCRCC (−0.010 to −0.020 with guard failures) and
+   lost on the 6-class task too.
 3. Everything else is task-specific. Test it as a single addition on EMA,
    expect ±0.01, and read B before spending.
 
@@ -318,8 +326,9 @@ evidence for a TITAN cell.
 2. CLAM label smoothing 0.2, 512-tile training bags, class-balanced weights
    (each about +0.02 on EMA on KRAS, never stacked there): on CCRCC each
    lost (−0.030, −0.025, −0.029) and the two-, three- and four-piece stacks
-   lost 0.03–0.05 with `val_bacc` −0.04 to −0.08. KRAS-only until the
-   6-class result lands.
+   lost 0.03–0.05 with `val_bacc` −0.04 to −0.08; on the 6-class task LS
+   0.2 alone +0.002, 512 tiles −0.003, and every stack on EMA +0.007 to
+   +0.009 in AUC with `val_bacc` −0.02 to −0.06, guard fail. KRAS-only.
 3. DTFD label smoothing 0.2 + dropout 0.7 (+0.021 on KRAS, with EMA):
    +0.010 ± 0.017 on CCRCC but guard-excluded, −0.002 on the 6-class task.
    Dropout 0.7 alone: +0.005 and −0.012. Dropout 0.5/0.8, label smoothing
@@ -327,10 +336,11 @@ evidence for a TITAN cell.
    lr decay, dropout, pseudo-bags) leaves nothing for a training-only recipe
    on these tasks.
 4. DTFD and EMA: `val_bacc` falls 0.015–0.05 at the fixed threshold while
-   the AUC holds, on every task tested; balanced bag weights do not repair
-   it (−0.011, guard fail). The only EMA form that passed was EMA + an lr
-   step ×0.2 at epoch 9 (+0.004 ± 0.003). Expect the guard to exclude EMA
-   on DTFD.
+   the AUC holds, on two of three tasks; balanced bag weights do not repair
+   it (−0.011, guard fail). EMA + an lr step ×0.2 at epoch 9 passed on the
+   6-class task (+0.004 ± 0.003) and on CCRCC high_grade (+0.011 ± 0.007).
+   CLAM shows the same shift on the 6-class task (A1). Expect the guard to
+   exclude EMA on DTFD and on multi-class CLAM.
 5. Gradual projection unfreezing (0.1× lr to epoch 8, linear to 1× by 16,
    on the EMA stack): ABMIL −0.031 on CCRCC (guard fail); on the 6-class
    task +0.004 over EMA under one seed and 0.000 under three. Earlier
