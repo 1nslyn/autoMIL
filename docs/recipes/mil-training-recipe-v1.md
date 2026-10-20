@@ -1,4 +1,4 @@
-# A training recipe for MIL on small cohorts: what 900 attempts found (v1, draft)
+# A training recipe for MIL on small cohorts: what 900 attempts found (v1)
 
 Status: complete as of 2026-10-20. Every development cell is closed and
 the held-out sanity readings of §7 are taken.
@@ -28,10 +28,11 @@ epoch-to-epoch jitter that the smoothed selection metric pays for, worth
 most), and nothing stacks on it beyond ±0.003. Its limit is the operating
 point: on CLAM (6-class) and DTFD (PBRM1, 6-class) the averaged weights
 rank better but lower balanced accuracy at the fixed threshold by 0.02 to
-0.06, and the companion guard excludes them. nnMIL's native batch size is
-mis-sized for cohorts under 400 training bags (9–12 optimizer steps per
-epoch against an epoch-based patience of 10), and batch 4 alone recovers
-+0.034 on CCRCC; the KRAS v5 nnMIL recipe (+0.046) carried the same change.
+0.06, and the companion guard excludes them. nnMIL's plan picks batch 24
+on cohorts under 400 training bags (9–12 optimizer steps per epoch against
+an epoch-based patience of 10); where that leaves a fold stopped at an
+early epoch, batch 4 alone recovers +0.034 (PBRM1); the KRAS v5 nnMIL
+recipe (+0.046) carried the same change.
 Batch 2, 4 and 8 are equal (+0.031 to +0.034) and scaling the lr down with
 the batch gives the gain back, so the quantity that matters is optimizer
 progress per epoch against the patience, not the batch size itself. The
@@ -64,8 +65,10 @@ KRAS arms will not come from training recipes alone.
   development slides, fixed test slides; seed 42; the same validation
   schema, keep margin (max(0.015, 1 × paired SE)), companion guard
   (`val_bacc`, margin from the class counts) and winner rule (max(0.01,
-  2.93 × pooled paired SE), Sidak-adjusted for the pool size) as the
-  campaign cells.
+  2.93 × pooled paired SE), Sidak-adjusted for the pool size) as the v6
+  campaign cells. The v7 protocol has since replaced the winner rule by
+  deploying the best validation attempt; the verdicts below use the v6
+  rule the cells were materialized with.
 - **Attempts.** Each attempt is one generated policy file from a composite
   recipe template (switches: EMA decay, label smoothing, class weights,
   bag subsampling, warmup/cosine, lr step, minimum epochs, projection
@@ -194,9 +197,11 @@ largest of any cell.
   the balanced-accuracy guard on two of three tasks; if the deployment
   threshold is tuned rather than fixed, EMA 0.998 with the native lr step
   is worth that much.
-- **nnMIL simple_mil**: batch size 4 (2 to 8 equal) on cohorts below ~400
-  training bags, native lr 3e-4 and schedule; never scale the lr down with
-  the batch (−0.029); EMA adds nothing on top (−0.001). Expected +0.03 on a
+- **nnMIL simple_mil**: batch size 4 (2 to 8 equal) when a native fold
+  stops at the patience with an early selected epoch (the plan picks batch
+  24 on cohorts below ~400 training bags), native lr 3e-4 and schedule;
+  never scale the lr down with the batch (−0.029); EMA adds nothing on top
+  (−0.001). Expected +0.03 on a
   cohort whose native run stops a fold at the patience with an early
   selected epoch (PBRM1, confirmed under three seeds), and nothing
   reliable where every fold already improves within the patience window
