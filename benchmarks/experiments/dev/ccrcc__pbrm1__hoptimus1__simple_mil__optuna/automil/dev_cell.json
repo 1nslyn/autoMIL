@@ -1,0 +1,12 @@
+{
+  "arm": "simple_mil",
+  "cell_name": "ccrcc__pbrm1__hoptimus1__simple_mil__optuna",
+  "dataset": "ccrcc",
+  "encoder": "hoptimus1",
+  "framework": "nnmil",
+  "label": "optuna",
+  "model": "simple_mil",
+  "seed": 42,
+  "task": "pbrm1",
+  "task_family": "binary"
+}

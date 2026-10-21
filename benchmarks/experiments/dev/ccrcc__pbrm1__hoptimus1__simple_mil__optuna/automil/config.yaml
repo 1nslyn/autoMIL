@@ -1,0 +1,162 @@
+project:
+  name: ccrcc__pbrm1__hoptimus1__simple_mil__optuna
+  description: 'development cell (not a campaign cell): ccrcc__pbrm1__hoptimus1__simple_mil__optuna'
+task:
+  name: pbrm1
+  type: classification
+  num_classes: 2
+  label_column: label_PBRM1
+data:
+  features_dir: ${AUTOBENCH_CCRCC_ROOT}/trident_output/20x_256px_0px_overlap/features_hoptimus1
+  splits_dir: ${AUTOBENCH_CCRCC_ROOT}/benchmark/splits/devcv/pbrm1
+  mapping_csv: ${AUTOBENCH_CCRCC_ROOT}/CCRCC_metadata.csv
+  num_folds: 5
+  seed: 42
+encoders:
+  primary: hoptimus1
+  available:
+    conch_v15: 768
+    hibou_l: 1024
+    uni_v2: 1536
+    hoptimus1: 1536
+    midnight12k: 1536
+    virchow2: 2560
+    h0_mini: 768
+metrics:
+  primary: val_auc_smooth
+  track:
+  - val_auc_smooth
+  - val_auc
+  - val_bacc
+scoring:
+  formula: val_auc_smooth
+  technique_map: {}
+  accept_margin: 0.015
+  se_multiplier: 1.0
+  guard:
+    metric: val_bacc
+    strategy: devcv
+    margin: 0.0044
+    basis: 'one validation slide: 1/(5 folds x 2 classes x 23 slides in the smallest
+      validation class ''mutant'') = 0.004348, rounded up to the 4-decimal grid the
+      metric is recorded on'
+    validation_class_counts:
+      '0':
+        mutant: 23
+        wildtype: 29
+      '1':
+        mutant: 23
+        wildtype: 28
+      '2':
+        mutant: 23
+        wildtype: 29
+      '3':
+        mutant: 23
+        wildtype: 28
+      '4':
+        mutant: 23
+        wildtype: 28
+registry:
+  mode: architecture-preserving
+  policy_smoke:
+    command:
+    - '{python}'
+    - -m
+    - autobench.pipeline.policy_smoke
+    - --task-family
+    - classification
+    - --arm
+    - nnmil
+    timeout_s: 180
+  allowed_override_options:
+  - --hparams
+  - --policy-variant
+  allowed_variant_kinds:
+  - policy
+  policy_method_imports:
+  - torch
+  - numpy
+  - math
+  - autobench.pipeline.ema
+  - collections
+  - itertools
+  - functools
+  - copy
+  - typing
+  identity_locked_hparams:
+  - no_inst_cluster
+  - bag_weight
+  - model_size
+  - M
+  - L
+  - mDim
+  - numLayer_Res
+  - hidden_dim
+  protected:
+  - benchmarks/src/autobench/pipeline/splits.py
+  - benchmarks/src/autobench/pipeline/prepare.py
+  - benchmarks/src/autobench/pipeline/evaluate.py
+  - benchmarks/src/autobench/pipeline/*/prepare.py
+  - benchmarks/src/autobench/pipeline/*/evaluate.py
+  - benchmarks/src/autobench/pipeline/dtfd/eval.py
+  - benchmarks/src/autobench/pipeline/*/dataset.py
+  - benchmarks/src/autobench/pipeline/*/runner.py
+  - benchmarks/scripts/run_experiment.py
+  - benchmarks/src/autobench/pipeline/results_cache.py
+  - benchmarks/src/autobench/pipeline/results.py
+  - benchmarks/src/autobench/pipeline/val_loss.py
+  - benchmarks/src/autobench/pipeline/abmil/train.py
+  - benchmarks/src/autobench/pipeline/dtfd/train.py
+  - benchmarks/src/autobench/pipeline/titan/train.py
+  - benchmarks/src/autobench/pipeline/selection.py
+  - benchmarks/src/autobench/pipeline/policy_dispatch.py
+  - benchmarks/src/autobench/pipeline/policy_step.py
+  - benchmarks/src/autobench/pipeline/policy_smoke.py
+  - benchmarks/src/autobench/pipeline/*/survival_train.py
+  - benchmarks/lib/nnMIL/training/trainers/classification_trainer.py
+  - benchmarks/lib/nnMIL/training/trainers/survival_trainer.py
+  - benchmarks/lib/nnMIL/training/trainers/survival_porpoise_trainer.py
+  - benchmarks/lib/nnMIL/training/callbacks/early_stopping.py
+  - benchmarks/lib/CLAM/utils/core_utils.py
+  - benchmarks/src/autobench/pipeline/search_space.py
+  - benchmarks/src/autobench/pipeline/hparams.py
+  - benchmarks/src/autobench/pipeline/config.py
+  - benchmarks/src/autobench/config.py
+  - benchmarks/datasets/
+  - benchmarks/scripts/run_feature_extraction.py
+  - benchmarks/src/autobench/data.py
+files:
+  editable:
+  - benchmarks/experiments/dev/ccrcc__pbrm1__hoptimus1__simple_mil__optuna/automil/variants/_policies/*.py
+run:
+  script: null
+  command: python benchmarks/scripts/run_experiment.py --dataset benchmarks/datasets/cptac/ccrcc.yaml
+    --task pbrm1 --encoder hoptimus1 --model simple_mil --framework nnmil --strategy
+    devcv --seed 42 --n_folds 5 --folds 0,1,2,3,4 --no_wandb
+  mil_model: simple_mil
+cap:
+  mode: wall_clock
+  budget: 90d
+  safety_buffer: 1h
+  eval_budget: 200
+orchestrator:
+  poll_interval_sec: 5
+  safety_margin_gb: 2.0
+  default_timeout_min: 1020
+  max_concurrent_per_gpu: 4
+  default_vram_estimate_gb: 6.0
+env:
+  passthrough:
+  - AUTOBENCH_ROOT
+  - AUTOBENCH_CCRCC_ROOT
+  - AUTOBENCH_BAG_CACHE
+  - NNMIL_NUM_WORKERS
+  - OMP_NUM_THREADS
+  - MKL_NUM_THREADS
+  dotenv_files:
+  - benchmarks/.env
+viz:
+  port: 8691
+  host: 127.0.0.1
+training:
+  fold_count: 5
