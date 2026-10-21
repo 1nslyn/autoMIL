@@ -5,9 +5,12 @@ Learning in computational pathology.
 
 > Releases through v1.0 use the phase-based numbering below (`8.0.0` = the v1.0
 > milestone). Post-v1.0 releases follow semver and map to git tags `v1.1.0`,
-> `v1.2.0`, and `v1.2.1`.
+> `v1.2.0`, `v1.2.1`, and `v2.0.0`.
 
-## Unreleased
+## v2.0.0 (2026-10-21, `git tag v2.0.0`)
+
+**Theme: the preprint campaign, single-metric selection, and the dashboard as
+the project site.**
 
 - **Campaign roster reduced from 5 cohorts and 130 cells to 3 cohorts and 78
   cells (declared 2026-08-23).** The campaign runs `tcga_luad`, `tcga_hnsc` and
@@ -443,7 +446,7 @@ Learning in computational pathology.
   tumor grade tasks across two data sources (TCGA + CPTAC), prioritizing
   classification-task diversity over the old ≥100-OS-deaths hard gate. Grid
   math is unchanged: 165 experiments (33/dataset), 825 fold-trainings.
-  Superseded by the 2026-08-23 roster reduction (top of Unreleased): the
+  Superseded by the 2026-08-23 roster reduction (top of v2.0.0): the
   campaign roster is 3 cohorts and 78 cells.
 
 ## v1.2.1 (2026-07-15, `git tag v1.2.1`)
