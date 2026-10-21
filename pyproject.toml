@@ -1,12 +1,11 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling", "hatch-vcs", "hatch-fancy-pypi-readme"]
 build-backend = "hatchling.build"
 
 [project]
 name = "automil"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
 description = "Autonomous agent-driven MIL model improvement for computational pathology"
-readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 # All authors listed name-only so they share the single `Author` field, in order
@@ -75,6 +74,22 @@ automil = "automil.cli:main"
 # truth, so package metadata can't drift from the tag again.
 [tool.hatch.version]
 source = "vcs"
+
+# PyPI renders README.md outside the repo, so its relative links and images
+# would break there. Point them at this release's tag on GitHub instead.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\[(.+?)\]\(((?!https?://|#)\S+?)\)'
+replacement = '[\1](https://github.com/1nslyn/autoMIL/blob/v$HFPR_VERSION/\g<2>)'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(src|srcset)="((?!https?://)[^"]+)"'
+replacement = '\1="https://raw.githubusercontent.com/1nslyn/autoMIL/v$HFPR_VERSION/\g<2>"'
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/automil"]

@@ -7,7 +7,7 @@ name: Publish to PyPI
 #
 # Register the pending publisher with these values:
 #   PyPI Project Name : automil
-#   Owner             : leoyin1127
+#   Owner             : 1nslyn
 #   Repository name   : autoMIL
 #   Workflow name     : publish.yml
 #   Environment name  : pypi
