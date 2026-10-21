@@ -97,6 +97,7 @@ markers = [
 [dependency-groups]
 dev = [
     "numpy>=2.2.6",
+    "optuna>=4.0",
     "pytest>=9.0.2",
     # The framework test suite executes examples/sklearn-iris end to end.
     "scikit-learn>=1.4",

@@ -77,16 +77,17 @@ def copy_luad_inputs(repo: Path) -> Path:
 
 def build_luad_cell(
     dev_cell, repo: Path, *, arm: str = "abmil", eval_budget: int = 200, no_guard: bool = True,
-    seed: int | None = None,
+    seed: int | None = None, label: str | None = None,
 ):
     """``(config, spec, cell_dir)`` of the LUAD KRAS dev cell for ``arm`` inside ``repo``.
 
     Guard-less by default: no test host has the devcv splits mounted, and a cell
-    without them is refused unless ``no_guard`` says it is wanted. ``seed`` reaches
-    the builder only when given, so leaving it out exercises the builder's own default.
+    without them is refused unless ``no_guard`` says it is wanted. ``seed`` and
+    ``label`` reach the builder only when given, so leaving them out exercises the
+    builder's own defaults.
     """
     dataset = repo / LUAD_YAML
-    seeded = {} if seed is None else {"seed": seed}
+    seeded = {**({} if seed is None else {"seed": seed}), **({} if label is None else {"label": label})}
     config = dev_cell.build_dev_config(
         dataset, "kras", "hoptimus1", arm,
         template_path=repo / LUAD_TEMPLATE, eval_budget=eval_budget,

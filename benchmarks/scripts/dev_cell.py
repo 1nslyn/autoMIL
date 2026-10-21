@@ -58,6 +58,8 @@ from autobench.guard_margin import GuardMarginError, derive_guard
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEV_ROOT = Path("benchmarks/experiments/dev")
 TEMPLATE = Path("benchmarks/experiments/tcga_luad/automil/config.yaml")
+#: A label is a lowercase word; the ``seed`` prefix is reserved for replicate suffixes.
+LABEL_PATTERN = re.compile(r"[a-z][a-z0-9]*")
 DEFAULT_ENCODER = "hoptimus1"
 #: arm -> (framework, model): the pairing the campaign manifest pins per roster dataset.
 ARMS: Mapping[str, tuple[str, str]] = {
@@ -101,10 +103,11 @@ class CellSpec:
     framework: str
     model: str
     seed: int
+    label: str | None = None
 
     def record(self) -> dict[str, Any]:
-        """The content of ``automil/dev_cell.json``."""
-        return asdict(self)
+        """The content of ``automil/dev_cell.json``; an unlabelled cell records no label."""
+        return {key: value for key, value in asdict(self).items() if not (key == "label" and value is None)}
 
 
 def _read_yaml_mapping(path: Path, what: str) -> dict[str, Any]:
@@ -123,8 +126,18 @@ def _require_positive_int(value: object, name: str) -> int:
     return value
 
 
-def _resolve(raw: Mapping[str, Any], path: Path, task: str, encoder: str, arm: str, seed: int) -> CellSpec:
+def _check_label(label: str | None) -> None:
+    if label is None:
+        return
+    if not isinstance(label, str) or not LABEL_PATTERN.fullmatch(label) or label.startswith("seed"):
+        raise DevCellError(f"label {label!r} must be a lowercase word (letters and digits, starting with a "
+                           "letter) and must not start with 'seed', which names a replicate")
+
+
+def _resolve(raw: Mapping[str, Any], path: Path, task: str, encoder: str, arm: str, seed: int,
+             label: str | None = None) -> CellSpec:
     _require_positive_int(seed, "seed")
+    _check_label(label)
     dataset = raw.get("name")
     if not isinstance(dataset, str) or not dataset:
         raise DevCellError(f"{path} declares no dataset name")
@@ -145,18 +158,20 @@ def _resolve(raw: Mapping[str, Any], path: Path, task: str, encoder: str, arm: s
         raise DevCellError(f"{path}: task {task!r}: {exc}") from exc
     framework, model = ARMS[arm]
     stem = f"{dataset}__{task}__{encoder}__{arm}"
+    suffix = ("" if seed == PROTOCOL["seed"] else f"__seed{seed}") + ("" if label is None else f"__{label}")
     return CellSpec(
-        cell_name=stem if seed == PROTOCOL["seed"] else f"{stem}__seed{seed}", dataset=dataset, task=task,
-        task_family=family, encoder=encoder, arm=arm, framework=framework, model=model, seed=seed,
+        cell_name=f"{stem}{suffix}", dataset=dataset, task=task, task_family=family, encoder=encoder,
+        arm=arm, framework=framework, model=model, seed=seed, label=label,
     )
 
 
 def resolve_cell(
     dataset_yaml: Path, task: str, encoder: str, arm: str, *, seed: int = PROTOCOL["seed"],
+    label: str | None = None,
 ) -> CellSpec:
     """Validate the request against the dataset YAML and name the cell."""
     path = Path(dataset_yaml)
-    return _resolve(_read_yaml_mapping(path, "dataset YAML"), path, task, encoder, arm, seed)
+    return _resolve(_read_yaml_mapping(path, "dataset YAML"), path, task, encoder, arm, seed, label)
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +251,7 @@ def build_dev_config(
     out_root: Path | None = None,
     no_guard: bool = False,
     seed: int = PROTOCOL["seed"],
+    label: str | None = None,
 ) -> dict[str, Any]:
     """The dev cell's ``automil/config.yaml`` as a dict; writes nothing.
 
@@ -246,14 +262,16 @@ def build_dev_config(
     cell for which none can be derived is refused unless ``no_guard`` asks for a
     cell without one. ``seed`` is the training seed of the run command. The prepared
     splits are reused as they are, so every seed trains on the same folds; a seed other
-    than the protocol's names a replicate cell (``<cell>__seed<N>``).
+    than the protocol's names a replicate cell (``<cell>__seed<N>``). ``label`` names a
+    sibling cell with the same inputs in its own folder (``<cell>__<label>``), for a
+    search method that must not share a graph with the agent's attempts.
     """
     dataset_yaml = Path(dataset_yaml)
     repo_root = Path(repo_root).resolve()
     _require_positive_int(eval_budget, "eval_budget")
     _require_positive_int(max_concurrent_per_gpu, "max_concurrent_per_gpu")
     raw = _read_yaml_mapping(dataset_yaml, "dataset YAML")
-    spec = _resolve(raw, dataset_yaml, task, encoder, arm, seed)
+    spec = _resolve(raw, dataset_yaml, task, encoder, arm, seed, label)
     root_var = _root_env_var(raw, dataset_yaml)
     template = copy.deepcopy(_read_yaml_mapping(template_path, "config template"))
 
@@ -414,12 +432,12 @@ def cmd_materialize(args: argparse.Namespace) -> None:
     out_root = Path(args.out).resolve() if args.out is not None else REPO_ROOT / DEV_ROOT
     dataset_yaml = Path(args.dataset).resolve()
     try:
-        spec = resolve_cell(dataset_yaml, args.task, args.encoder, args.arm, seed=args.seed)
+        spec = resolve_cell(dataset_yaml, args.task, args.encoder, args.arm, seed=args.seed, label=args.label)
         config = build_dev_config(
             dataset_yaml, args.task, args.encoder, args.arm,
             template_path=REPO_ROOT / TEMPLATE, eval_budget=args.eval_budget,
             max_concurrent_per_gpu=args.max_concurrent_per_gpu,
-            repo_root=REPO_ROOT, out_root=out_root, no_guard=args.no_guard, seed=args.seed,
+            repo_root=REPO_ROOT, out_root=out_root, no_guard=args.no_guard, seed=args.seed, label=args.label,
         )
         cell_dir = out_root / spec.cell_name
         status = write_dev_cell(cell_dir, config, spec.record())
@@ -465,6 +483,9 @@ def build_parser() -> argparse.ArgumentParser:
                                   "splits directory is reused wholesale, so the replicate trains on exactly "
                                   "the folds of the seed-%(default)s cell: the seed changes only the "
                                   "training (torch seeding)")
+    materialize.add_argument("--label", default=None,
+                             help="name a sibling cell with the same inputs in its own folder "
+                                  "(<cell>__<label>), e.g. optuna for the menu-AutoML arm")
     materialize.add_argument("--no-guard", action="store_true",
                              help="write the cell without a companion guard (without it, a cell whose "
                                   "devcv splits cannot be found is refused)")

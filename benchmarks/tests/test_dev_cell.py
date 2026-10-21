@@ -233,6 +233,40 @@ def test_a_seed_replicate_has_its_own_cell_folder_and_trains_under_its_seed(dev_
     assert json.loads((cell_dir / "automil" / "dev_cell.json").read_text())["seed"] == 43
 
 
+def test_a_labelled_cell_is_the_same_cell_in_its_own_folder_and_names_the_label_in_its_record(dev_cell, tmp_path):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    base, base_spec, base_dir = build_luad_cell(dev_cell, repo)
+    config, spec, cell_dir = build_luad_cell(dev_cell, repo, label="optuna")
+
+    assert cell_dir.name == f"{base_dir.name}__optuna" == "tcga_luad__kras__hoptimus1__abmil__optuna"
+    assert config["project"]["name"] == cell_dir.name
+    assert config["data"] == base["data"] and config["run"] == base["run"]
+    assert {key for key in config if config[key] != base[key]} == {"project", "files", "viz"}
+    assert spec.record() == {**base_spec.record(), "cell_name": cell_dir.name, "label": "optuna"}
+    assert "label" not in base_spec.record()  # an unlabelled cell's record is unchanged
+    assert build_luad_cell(dev_cell, repo, seed=43, label="optuna")[2].name == f"{base_dir.name}__seed43__optuna"
+
+
+@pytest.mark.parametrize("label", ["", "Optuna", "seed43", "tpe-1", "_x"])
+def test_a_label_is_a_lowercase_word_that_cannot_be_mistaken_for_a_seed_suffix(dev_cell, tmp_path, label):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    with pytest.raises(dev_cell.DevCellError, match="label"):
+        build_luad_cell(dev_cell, repo, label=label)
+
+
+def test_materialize_cli_writes_a_labelled_cell_beside_the_protocol_cell(dev_cell, tmp_path, monkeypatch, capsys):
+    repo = copy_luad_inputs(tmp_path / "repo")
+    monkeypatch.setattr(dev_cell, "REPO_ROOT", repo)
+    argv = ["materialize", "--dataset", str(repo / LUAD_YAML), "--task", "kras", "--arm", "abmil",
+            "--out", str(repo / DEV_ROOT), "--no-guard", "--label", "optuna"]
+    dev_cell.main(argv)
+    labelled = repo / DEV_ROOT / "tcga_luad__kras__hoptimus1__abmil__optuna"
+    assert f"created: {labelled}" in capsys.readouterr().out
+    assert json.loads((labelled / "automil" / "dev_cell.json").read_text())["label"] == "optuna"
+    dev_cell.main(argv)
+    assert f"unchanged: {labelled}" in capsys.readouterr().out
+
+
 def test_replicates_get_their_own_viz_ports_so_they_can_run_side_by_side(dev_cell, tmp_path):
     repo = copy_luad_inputs(tmp_path / "repo")
     ports = {seed: build_luad_cell(dev_cell, repo, seed=seed)[0]["viz"]["port"] for seed in (42, 43, 44)}

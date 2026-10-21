@@ -118,7 +118,7 @@ def load_graph(adir: Path) -> dict[str, Any]:
     return graph
 
 
-def _find_root(nodes: Mapping[str, Any]) -> Mapping[str, Any] | None:
+def find_root(nodes: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """The baseline every attempt is paired against: the parentless executed node that was kept."""
     return next((node for _, node in sorted(nodes.items())
                  if node.get("type") == "executed" and node.get("parent_id") is None
@@ -273,6 +273,20 @@ def _judge(floor: Mapping[str, Any], node: Mapping[str, Any]) -> dict[str, Any] 
     }
 
 
+def guard_standing(config: Mapping[str, Any], nodes: Mapping[str, Any],
+                   node: Mapping[str, Any]) -> dict[str, Any] | None:
+    """``node`` under the cell's companion guard, judged as the readout judges it.
+
+    ``None`` when the cell declares no guard, the root cannot hold anyone to it, the node
+    is the root, or the node is not a complete attempt with per-fold evidence.
+    """
+    root = find_root(nodes)
+    floor = _guard_floor(_declared_guard(config), root)
+    if floor is None or node.get("id") == root["id"]:
+        return None
+    return _judge(floor, node)
+
+
 def _node_row(node: Mapping[str, Any], nodes: Mapping[str, Any], root: Mapping[str, Any] | None,
               adir: Path, framework: str, floor: Mapping[str, Any] | None) -> dict[str, Any]:
     folds = node_fold_primary_values(node)
@@ -362,7 +376,7 @@ def build_readout(cell_dir: Path) -> dict[str, Any]:
     config = load_config(adir)
     nodes = load_graph(adir)["nodes"]
     executed = [node for _, node in sorted(nodes.items()) if node.get("type") == "executed"]
-    root = _find_root(nodes)
+    root = find_root(nodes)
     guard = _declared_guard(config)
     floor = _guard_floor(guard, root)
     rows = [_node_row(node, nodes, root, adir, record["framework"], floor) for node in executed]
@@ -575,7 +589,7 @@ def _submit_root(adir: Path, repo: Path, entry: Entry, nodes: Mapping[str, Any])
 def _require_root_code(adir: Path, repo: Path, nodes: Mapping[str, Any]) -> None:
     """Refuse unless HEAD is the commit the root ran at: an attempt's delta is only a comparison
     when it runs the root's code."""
-    root = _find_root(nodes)
+    root = find_root(nodes)
     if root is None:
         raise DevLoopError("the graph has no executed root to run attempts against; let the baseline finish first")
     ran_at = (_archived_spec(adir, root["id"]) or {}).get("base_commit")
@@ -648,27 +662,36 @@ def _num_classes(adir: Path) -> int:
     return count
 
 
-def run_batch(cell_dir: Path, batch_path: Path, *, emit: Callable[[str], None] = print) -> list[Outcome]:
-    """Propose and submit the entries of ``batch_path`` in order; idempotent.
+def drive_entry(cell_dir: Path, entry: Entry) -> Outcome:
+    """One entry through the driver's path (propose, policy, submit), recorded in the ledger.
 
     An entry already in the graph is skipped, an entry whose parent has not finished
     is skipped and reported, and a proposal an earlier run stranded (policy write or
-    submit failed) is resumed rather than proposed again. The first refusal from the
-    framework stops the batch with its message.
+    submit failed) is resumed rather than proposed again.
+    """
+    adir, record = load_cell(Path(cell_dir).resolve())
+    repo = _git_root(adir)
+    if not (adir / "graph.json").exists():
+        with locked_update(adir / "graph.json"):
+            pass  # ``submit`` registers a node only in an existing graph; its meta seeds from config.yaml
+    outcome = _drive(adir, repo, record["arm"], entry)
+    _remember(adir, outcome)
+    return outcome
+
+
+def run_batch(cell_dir: Path, batch_path: Path, *, emit: Callable[[str], None] = print) -> list[Outcome]:
+    """Propose and submit the entries of ``batch_path`` in order; idempotent (see ``drive_entry``).
+
+    The first refusal from the framework stops the batch with its message.
     """
     adir, record = load_cell(Path(cell_dir).resolve())
     try:
         entries = _BATCH_FILE.parse_batch(Path(batch_path), arm=record["arm"], n_classes=_num_classes(adir))
     except _BATCH_FILE.BatchFileError as exc:
         raise DevLoopError(str(exc)) from exc
-    repo = _git_root(adir)
-    if not (adir / "graph.json").exists():
-        with locked_update(adir / "graph.json"):
-            pass  # ``submit`` registers a node only in an existing graph; its meta seeds from config.yaml
     outcomes: list[Outcome] = []
     for entry in entries:
-        outcome = _drive(adir, repo, record["arm"], entry)
-        _remember(adir, outcome)
+        outcome = drive_entry(cell_dir, entry)
         emit(outcome.line)
         outcomes.append(outcome)
     return outcomes
