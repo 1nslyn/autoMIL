@@ -74,7 +74,7 @@ def test_the_native_run_is_a_point_of_every_arms_menu(space, arm):
     sample = space.sample(FixedTrial(off_draw(space, arm)), arm)
     field, default = space.NATIVE_LR[arm]
     assert sample.constants == {} and sample.hparams == {field: default}
-    assert space.describe(sample) == f"{field}={default:.3g}"
+    assert space.describe(sample) == f"{field}={default:g}"
 
 
 def test_switches_map_to_recipe_constants_and_hparams_by_the_arms_own_names(space):
@@ -84,6 +84,8 @@ def test_switches_map_to_recipe_constants_and_hparams_by_the_arms_own_names(spac
     assert sample.hparams == {"lr": 1e-4, "wd": 1e-3, "droprate_2": 0.7}
     assert sample.params["UNFREEZE"] == "8-16-0.1"  # the study records the key, the recipe gets the tuple
     assert space.describe(sample) == "EMA_DECAY=0.998, MAX_TILES=512, UNFREEZE=(8, 16, 0.1), lr=0.0001, wd=0.001, droprate_2=0.7"
+    fine = space.sample(FixedTrial(off_draw(space, "dtfd_mil", EMA_DECAY=0.9995)), "dtfd_mil")
+    assert space.describe(fine).startswith("EMA_DECAY=0.9995,")  # never rounded to 1
 
 
 def test_tile_caps_only_where_the_bag_seam_is_live_and_the_body_scale_only_on_nnmil(space):

@@ -145,7 +145,7 @@ def sample(trial: Draws, arm: str, *, positive_share: float | None = None) -> Sa
 
 
 def _literal(value: object) -> str:
-    return f"{value:.3g}" if isinstance(value, float) else repr(value)
+    return f"{value:g}" if isinstance(value, float) else repr(value)  # 0.9995 stays 0.9995, not 1
 
 
 def describe(sample: Sample) -> str:

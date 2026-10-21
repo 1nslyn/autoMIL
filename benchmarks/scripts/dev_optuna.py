@@ -276,7 +276,7 @@ def trial_rows(study: optuna.Study) -> list[TrialRow]:
     return [
         TrialRow(trial.number, trial.user_attrs[NAME_ATTR], node_id, trial.state.name,
                  trial.values[0] if trial.values else None, trial.user_attrs.get(GUARD_KEY),
-                 ", ".join(f"{key}={value:.3g}" if isinstance(value, float) else f"{key}={value!r}"
+                 ", ".join(f"{key}={value:g}" if isinstance(value, float) else f"{key}={value!r}"
                            for key, value in trial.params.items()))
         for node_id, trial in sorted(latest.items())
     ]
