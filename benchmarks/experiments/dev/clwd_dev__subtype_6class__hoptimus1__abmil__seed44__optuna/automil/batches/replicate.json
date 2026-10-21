@@ -1,0 +1,68 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "ema998",
+  "parent": "baseline",
+  "desc": "EMA 0.998 of the weights (the loop's leader, for the same-seed comparison)",
+  "axis": "ema",
+  "kind": "regularization",
+  "constants": {
+   "EMA_DECAY": 0.998
+  },
+  "hparams": {}
+ },
+ {
+  "name": "opt_t026",
+  "parent": "baseline",
+  "desc": "Optuna leader t026 (node_0028 of clwd_dev__subtype_6class__hoptimus1__abmil__optuna) replicated under another seed",
+  "axis": "optuna_replicate",
+  "kind": "hp",
+  "constants": {
+   "EMA_DECAY": 0.999,
+   "LS_EPS": 0.05,
+   "MAX_TILES": 1024,
+   "COSINE_EPOCHS": 40,
+   "MIN_EPOCHS": 12,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ]
+  },
+  "hparams": {
+   "lr": 0.0008391046039767567,
+   "max_epochs": 80
+  }
+ },
+ {
+  "name": "opt_t032",
+  "parent": "baseline",
+  "desc": "Optuna leader t032 (node_0034 of clwd_dev__subtype_6class__hoptimus1__abmil__optuna) replicated under another seed",
+  "axis": "optuna_replicate",
+  "kind": "hp",
+  "constants": {
+   "EMA_DECAY": 0.999,
+   "LS_EPS": 0.05,
+   "MAX_TILES": 1024,
+   "COSINE_EPOCHS": 40,
+   "MIN_EPOCHS": 12,
+   "UNFREEZE": [
+    8,
+    16,
+    0.1
+   ]
+  },
+  "hparams": {
+   "lr": 0.0005311415147873673,
+   "weight_decay": 0.001
+  }
+ }
+]
