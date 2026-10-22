@@ -1,0 +1,102 @@
+[
+ {
+  "name": "baseline",
+  "parent": null,
+  "desc": "native recipe (the root)",
+  "axis": null,
+  "kind": null,
+  "constants": null,
+  "hparams": {}
+ },
+ {
+  "name": "b4",
+  "parent": "baseline",
+  "desc": "batch 4 alone (the loop's leader, for the same-seed comparison)",
+  "axis": "batch_size",
+  "kind": "hp",
+  "constants": {},
+  "hparams": {
+   "batch_size": 4
+  }
+ },
+ {
+  "name": "opt_t032",
+  "parent": "baseline",
+  "desc": "Optuna leader t032 (node_0034 of ccrcc__pbrm1__hoptimus1__simple_mil__optuna) replicated under another seed",
+  "axis": "optuna_replicate",
+  "kind": "hp",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "WARMUP_STEPS": 128,
+   "COSINE_EPOCHS": 40,
+   "MIN_EPOCHS": 20
+  },
+  "hparams": {
+   "batch_size": 8,
+   "learning_rate": 0.0004315822406329357,
+   "warmup_epochs": 5
+  }
+ },
+ {
+  "name": "opt_t052",
+  "parent": "baseline",
+  "desc": "Optuna leader t052 (node_0054 of ccrcc__pbrm1__hoptimus1__simple_mil__optuna) replicated under another seed",
+  "axis": "optuna_replicate",
+  "kind": "hp",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "WARMUP_STEPS": 128,
+   "MIN_EPOCHS": 20,
+   "UNFREEZE": [
+    8,
+    16,
+    0.3
+   ]
+  },
+  "hparams": {
+   "batch_size": 8,
+   "learning_rate": 0.0005138821473946127,
+   "warmup_epochs": 5,
+   "weight_decay": 0.0001
+  }
+ },
+ {
+  "name": "opt_t054",
+  "parent": "baseline",
+  "desc": "Optuna leader t054 (node_0056 of ccrcc__pbrm1__hoptimus1__simple_mil__optuna) replicated under another seed",
+  "axis": "optuna_replicate",
+  "kind": "hp",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "WARMUP_STEPS": 128,
+   "COSINE_EPOCHS": 40,
+   "MIN_EPOCHS": 20
+  },
+  "hparams": {
+   "batch_size": 8,
+   "dropout": 0.1,
+   "learning_rate": 0.0004142625807350188,
+   "warmup_epochs": 5
+  }
+ },
+ {
+  "name": "opt_t023",
+  "parent": "baseline",
+  "desc": "Optuna leader t023 (node_0025 of ccrcc__pbrm1__hoptimus1__simple_mil__optuna) replicated under another seed",
+  "axis": "optuna_replicate",
+  "kind": "hp",
+  "constants": {
+   "EMA_DECAY": 0.98,
+   "WARMUP_STEPS": 128,
+   "COSINE_EPOCHS": 40,
+   "MIN_EPOCHS": 20
+  },
+  "hparams": {
+   "batch_size": 8,
+   "dropout": 0.5,
+   "learning_rate": 0.00046470148337172907,
+   "warmup_epochs": 2,
+   "weight_decay": 0.1
+  }
+ }
+]

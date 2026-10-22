@@ -301,7 +301,7 @@ held-out split as in §7.
 |---|---|---|---|---|---|---|
 | PBRM1 ABMIL (root 61.2%) | EMA 0.998: +0.8% / +0.8% | +1.0% ± 2.6% | +3.1% ± 2.2% (t042: EMA 0.995, 2048-tile cap, unfreeze (4, 12, 0.1), lr 2.4e-4, wd 1e-3, dropout 0.25, 80 epochs) | +2.5%, +6.0% / +3.9% | 27 | −0.8% |
 | 6-class ABMIL (root 88.3%) | EMA 0.998: +1.5% / +1.6% | +1.8% ± 0.4%, past the v6 bar (1.6%) | the same trial (t026: EMA 0.999, LS 0.05, 1024-tile cap, cosine 40, min 12 epochs, unfreeze (8, 16, 0.1), lr 8.4e-4, 80 epochs) | +1.7%, +2.0% / +1.8% | 9 | +1.4% |
-| PBRM1 nnMIL (root 57.4%) | batch 4: +3.4% / +3.4% | +4.0% ± 2.4% | +4.4% ± 2.3% (t032: batch 8, EMA 0.98, warmup 128 steps, cosine 40, min 20 epochs, lr 4.3e-4, 5 warmup epochs) | pending (seeds 43, 44 in flight) | 19 | +1.2% |
+| PBRM1 nnMIL (root 57.4%) | batch 4: +3.4% / +3.4% | +4.0% ± 2.4% | +4.4% ± 2.3% (t032: batch 8, EMA 0.98, warmup 128 steps, cosine 40, min 20 epochs, lr 4.3e-4, 5 warmup epochs) | +3.1%, +2.3% / +3.3% (t052 +3.4%, t054 +3.3%, t023 +2.9%) | 19 | +1.2% |
 
 Neither PBRM1 leader clears the v6 bar: with 33 to 41 candidates in the
 pool the pooled SE puts the bar at 5.5% to 8%. The 6-class leader clears
@@ -314,7 +314,9 @@ PBRM1 ABMIL: root 51.9 / 54.5 / 56.7%; t042 56.5 / 57.6 / 54.5% (+4.6, +3.1,
 −2.2; mean +1.8%); t037 mean −2.5%; t026 mean −1.1%; the loop's EMA mean
 +0.1%. 6-class ABMIL: root 88.0 / 88.1 / 88.7%; t026 88.3 / 88.8 / 88.7%
 (mean +0.3%); t032 mean +0.1%; the loop's EMA mean +0.1%. PBRM1 nnMIL:
-pending.
+root 63.9 / 62.2 / 66.3%; t032 67.3 / 66.2 / 66.4% (+3.4, +4.0, 0.0; mean
++2.5%); t054 mean +2.8%; t023 mean +2.6%; t052 mean +1.6%; the loop's
+batch 4 68.5 / 66.8 / 64.8% (+4.6, +4.6, −1.6; mean +2.5%).
 
 **What the comparison says.**
 
@@ -335,10 +337,13 @@ pending.
    validation is +0.3% on test, the same as the loop's EMA. Under either
    search, training recipes move validation by 1% to 4% and the held-out
    split by about 0%.
-4. The nnMIL cell is the positive control: TPE rediscovers the batch-size
-   correction in its first trial (+3.1%) and its leaders all carry batch 8;
-   whether the extra +1% of its warmup, cosine and EMA pieces persists is
-   what the seed replicates will say.
+4. The nnMIL cell is the positive control, and it behaves: TPE rediscovers
+   the batch-size correction in its first trial (+3.1%), every leader
+   carries batch 8, and the extra +1% its warmup, cosine and EMA pieces
+   showed on seed 42 is gone under seeds 43 and 44 (leaders +2.9% to +3.4%
+   over three seeds against batch 4 alone at +3.4%). On the held-out split
+   both carry about +2.5%, the one recipe effect in this study that the
+   sanity readings support, as in §7.
 
 Record: cells `<cell>__optuna` and `<cell>__seed4N__optuna` under
 `benchmarks/experiments/dev/` (study journal `automil/optuna/tpe.journal`,
