@@ -344,7 +344,9 @@ evidence for a TITAN cell.
 5. Gradual projection unfreezing (0.1× lr to epoch 8, linear to 1× by 16,
    on the EMA stack): ABMIL −0.031 on CCRCC (guard fail); on the 6-class
    task +0.004 over EMA under one seed and 0.000 under three. Earlier
-   HNSC/CLAM evidence (+0.012) stands alone.
+   HNSC/CLAM evidence (+0.012) stands alone. Both ABMIL readings were
+   taken under ABMIL's 20-epoch cap; with the cap lifted the picture
+   changes (D).
 6. A late lr step on ABMIL (full lr to epoch 14, then ×0.1): inert, fold
    for fold equal to EMA alone under three seeds; the selected epochs fall
    before the step.
@@ -379,6 +381,16 @@ evidence for a TITAN cell.
 - ABMIL (Adam 5e-4, L2 1e-4, batch 1, 20 fixed epochs): L2 1e-4 is
   load-bearing (−0.010 at 0); lr 1e-4 to 5e-4 equal at constant lr, 6e-4
   −0.016; on the 20-epoch cap, 30/40-epoch cosines did not rescue slow folds.
+  The cap itself is a knob (`--hparams max_epochs`): a 60-trial TPE search
+  over these seams found `max_epochs 80` + EMA 0.995 + a 2048-tile training
+  cap + gradual unfreezing (0.1× lr to epoch 4, 1× by 12) + lr 2.4e-4 at
+  +0.031 on CCRCC PBRM1, +0.025 and +0.060 under seeds 43 and 44 (EMA alone
+  +0.008 over the same seeds); on the 6-class task the same family equalled
+  EMA alone (+0.018 against +0.016). Its held-out counterpart on PBRM1 was
+  +0.018 with a ±0.04 spread on a test split at chance, so read it as a
+  validation effect: a longer run gives the smoothed selection more epochs
+  to choose from. The unfreezing (B5) and cosine verdicts were measured
+  under the cap.
 - CLAM-MB (Adam 1e-4, L2 1e-5, dropout 0.25, weighted sampler, patience 20):
   never submit svm instance losses (crash); `inst_loss=ce` and the scheduler
   seam are no-ops; dropout 0.5, 30% subsampling, input dropout, accumulation
@@ -390,7 +402,12 @@ evidence for a TITAN cell.
   patience 10, dropout 0.25): the submit smoke uses torch Adam, the trainer
   AdamW with two groups, `cosine_lr` and a GradScaler, so test both paths;
   each slide always shows the same ≤3921-patch crop; lr 1.5e-4 −0.029,
-  40 epochs −0.013, instance dropout −0.016, Lookahead −0.028.
+  40 epochs −0.013, instance dropout −0.016, Lookahead −0.028. A 60-trial
+  TPE search over these seams found nothing beyond the batch correction:
+  its leaders (batch 8 + EMA 0.98 + warmup + cosine + a 20-epoch floor) were
+  +0.044 on one seed and +0.033 over three, against batch 4 alone at +0.034
+  over the same three seeds, and both carried about +0.025 to the held-out
+  split.
 - TITAN probe (Linear(768,2), Adam 1e-3, batch 32): centre first (|mean| 12
   exceeds the spread, effective dimension ~13); the best native-cadence
   recipe is a class-balanced covariance basis with a k(e)=min(18, 1+4e)
@@ -400,8 +417,10 @@ evidence for a TITAN cell.
 **E. How to spend the budget given A–D.**
 
 - Opening batch: EMA alone at the arm's decay (A1); for nnMIL also batch 4
-  and batch 8 (A2); then at most one single addition per remaining slot
-  from directions not listed in B, each with its detectable size stated.
+  and batch 8 (A2); for ABMIL also `max_epochs 80` with EMA 0.995, the
+  2048-tile cap and unfreezing (4, 12, 0.1) (D); then at most one single
+  addition per remaining slot from directions not listed in B, each with
+  its detectable size stated.
 - Replicate before you stack: a kept piece gets its two robustness
   neighbours as seed-free variants of dose, not as additions; stacks only
   on a piece that held under every fold.
