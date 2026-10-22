@@ -53,7 +53,11 @@ search never saw, is +0.01 to +0.03 for ABMIL (rising with the native
 curve's jitter), about +0.01 for CLAM, nothing for DTFD under the
 balanced-accuracy guard, plus the occasional correction of a mis-sized
 default (nnMIL's batch where a fold stops early). A +0.05 average on the
-KRAS arms will not come from training recipes alone.
+KRAS arms will not come from training recipes alone. A matched Optuna
+search over the same menu (§9) reaches the same band at the same budget;
+with twice the budget and ABMIL's epoch cap as a knob it finds a
+seed-robust +0.03 to +0.04 on PBRM1 validation that the held-out split
+cannot confirm.
 
 ## 2. Method
 
@@ -267,3 +271,77 @@ split, so that cohort's selection signal is itself optimistic.
   `benchmarks/experiments/dev/_recipes/composite.py`.
 - Earlier evidence: `docs/recipes/trial-synthesis-2026-10-15.md`,
   `docs/recipes/trial-attempts-2026-10-15.csv`, `docs/recipes/playbook-v0.md`.
+
+## 9. The Optuna arm: a matched menu-AutoML search (2026-10-21/22)
+
+Leo's question: is the agent's search better or worse than Optuna on the
+same problem? The claims record (`docs/claims-alignment.md`, row C-a) had
+listed a matched-budget Optuna arm as missing. This section reports in
+percentage points of AUC.
+
+**Design, matched to the agent and nothing loosened.** Sibling cells
+`<cell>__optuna` with identical configs and their own baseline roots (the
+roots reproduced the agent cells' roots fold for fold: 61.15%, 88.28%,
+57.39%). The menu (`benchmarks/scripts/dev_optuna_space.py`) is the composite
+recipe's switches plus each arm's own hyperparameters as the agents used
+them, with the native run a point of it; the learning rate is log-uniform
+over a quarter to four times the arm's default. The driver
+(`benchmarks/scripts/dev_optuna.py`) runs Optuna's TPE sampler (10 random
+start-up trials, multivariate, constant liar), 4 attempts in flight, 60
+trials, with the balanced-accuracy guard as a constraint; every trial goes
+through the batch driver's path, so the readout and the verdict are the
+agent's. Two budgets are read: the first 30 trials (the agent's budget) and
+all 60. Leaders were replicated under seeds 43 and 44 in `__seed4N__optuna`
+cells with fresh roots, beside the loop's own leader, and read once on the
+held-out split as in §7.
+
+**Validation lifts against the root, paired over the five folds.**
+
+| Cell | Loop leader (seed 42 / mean of 3 seeds) | TPE best of 30 | TPE best of 60 | TPE leader under seeds 43, 44 (mean of 3) | Guard fails of 60 | Median trial |
+|---|---|---|---|---|---|---|
+| PBRM1 ABMIL (root 61.2%) | EMA 0.998: +0.8% / +0.8% | +1.0% ± 2.6% | +3.1% ± 2.2% (t042: EMA 0.995, 2048-tile cap, unfreeze (4, 12, 0.1), lr 2.4e-4, wd 1e-3, dropout 0.25, 80 epochs) | +2.5%, +6.0% / +3.9% | 27 | −0.8% |
+| 6-class ABMIL (root 88.3%) | EMA 0.998: +1.5% / +1.6% | +1.8% ± 0.4%, past the v6 bar (1.6%) | the same trial (t026: EMA 0.999, LS 0.05, 1024-tile cap, cosine 40, min 12 epochs, unfreeze (8, 16, 0.1), lr 8.4e-4, 80 epochs) | +1.7%, +2.0% / +1.8% | 9 | +1.4% |
+| PBRM1 nnMIL (root 57.4%) | batch 4: +3.4% / +3.4% | +4.0% ± 2.4% | +4.4% ± 2.3% (t032: batch 8, EMA 0.98, warmup 128 steps, cosine 40, min 20 epochs, lr 4.3e-4, 5 warmup epochs) | pending (seeds 43, 44 in flight) | 19 | +1.2% |
+
+Neither PBRM1 leader clears the v6 bar: with 33 to 41 candidates in the
+pool the pooled SE puts the bar at 5.5% to 8%. The 6-class leader clears
+its bar (1.6%) and the Sidak bar at 51 candidates (1.7%), as the whole top
+six of that cell sits at +1.8% to +1.9%.
+
+**Held-out sanity readings** (split 0's own test slides, dev cohorts only,
+SE about 4% on PBRM1; test AUC, root then leader, under seeds 42 / 43 / 44).
+PBRM1 ABMIL: root 51.9 / 54.5 / 56.7%; t042 56.5 / 57.6 / 54.5% (+4.6, +3.1,
+−2.2; mean +1.8%); t037 mean −2.5%; t026 mean −1.1%; the loop's EMA mean
++0.1%. 6-class ABMIL: root 88.0 / 88.1 / 88.7%; t026 88.3 / 88.8 / 88.7%
+(mean +0.3%); t032 mean +0.1%; the loop's EMA mean +0.1%. PBRM1 nnMIL:
+pending.
+
+**What the comparison says.**
+
+1. At the agent's budget the two searches are equal: +1.0% against +0.8%,
+   +1.8% against +1.5%, +4.0% against +3.4%, each pair within its paired SE.
+   Optuna's 30 trials also spend their first 10 at random and lose 17 of 30
+   to the guard on PBRM1 ABMIL, where the agent's recipes were guard-aware.
+2. The one place Optuna found more, PBRM1 ABMIL at twice the budget, is a
+   search-space difference. Every one of its top six trials trains 40 or 80
+   epochs; the loop and the KRAS agents never varied ABMIL's native 20-epoch
+   cap, and §3c's verdicts on gradual unfreezing (−3.1%) and on cosine
+   schedules were measured under that cap. With the cap lifted, EMA 0.995 +
+   a 2048-tile cap + unfreeze (4, 12, 0.1) is seed-robust at +2.5% to +6.0%
+   on validation. The epoch cap belongs in the agent's priors (§3c, amended).
+3. The held-out split confirms none of it. PBRM1's test split is at chance
+   for every model (52% to 58% AUC, root included), so a +3.9% validation
+   family reads +1.8% with a ±4% spread; on the 6-class task +1.8% on
+   validation is +0.3% on test, the same as the loop's EMA. Under either
+   search, training recipes move validation by 1% to 4% and the held-out
+   split by about 0%.
+4. The nnMIL cell is the positive control: TPE rediscovers the batch-size
+   correction in its first trial (+3.1%) and its leaders all carry batch 8;
+   whether the extra +1% of its warmup, cosine and EMA pieces persists is
+   what the seed replicates will say.
+
+Record: cells `<cell>__optuna` and `<cell>__seed4N__optuna` under
+`benchmarks/experiments/dev/` (study journal `automil/optuna/tpe.journal`,
+learnings.md with the per-cell readings); driver and menu under
+`benchmarks/scripts/`; tests `benchmarks/tests/test_dev_optuna.py`.
+
