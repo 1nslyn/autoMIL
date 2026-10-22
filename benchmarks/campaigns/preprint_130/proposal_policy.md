@@ -268,7 +268,7 @@ Consequences you must design around, not discover:
 
 ## 3c. Prior experience — what 900 earlier attempts settled
 
-Everything below was measured validation-only, under the same five-fold
+Everything below was measured on validation, except two held-out readings in D that come from cohorts outside the roster, under the same five-fold
 development split as this cell, on LUAD KRAS and HNSC grade (790 attempts
 by earlier agents) and on two cohorts outside the roster that an operator
 loop searched to test what transfers: CPTAC CCRCC PBRM1 (weak signal,
@@ -417,10 +417,8 @@ evidence for a TITAN cell.
 **E. How to spend the budget given A–D.**
 
 - Opening batch: EMA alone at the arm's decay (A1); for nnMIL also batch 4
-  and batch 8 (A2); for ABMIL also `max_epochs 80` with EMA 0.995, the
-  2048-tile cap and unfreezing (4, 12, 0.1) (D); then at most one single
-  addition per remaining slot from directions not listed in B, each with
-  its detectable size stated.
+  and batch 8 (A2); then at most one single addition per remaining slot
+  from directions not listed in B, each with its detectable size stated.
 - Replicate before you stack: a kept piece gets its two robustness
   neighbours as seed-free variants of dose, not as additions; stacks only
   on a piece that held under every fold.
