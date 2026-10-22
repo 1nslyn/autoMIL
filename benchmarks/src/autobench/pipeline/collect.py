@@ -76,6 +76,11 @@ def collect_summaries(roots: list[str] | list[tuple[str, str]]) -> list[dict]:
     experiments sit 7. ``glob(..., recursive=True)`` matches both without
     caring which.
 
+    Two summaries with the same ``experiment_id`` under one root raise
+    ``ValueError``: one of them is a stale copy (a backup directory or a
+    pre-seed layout left inside ``results/``), and counting both would put the
+    experiment into every table twice.
+
     Unreadable or absent files are skipped rather than raising: a half-written
     ``summary.json`` (mid-write on a live results tree), a corrupt one, or a
     root with no ``results/`` directory at all must not crash a collection run.
@@ -102,6 +107,7 @@ def collect_summaries(roots: list[str] | list[tuple[str, str]]) -> list[dict]:
             continue
         fallback = label or os.path.basename(os.path.normpath(root))
         pattern = os.path.join(results_root, "**", "summary.json")
+        seen: dict[str, str] = {}
         for path in sorted(glob.glob(pattern, recursive=True)):
             try:
                 with open(path) as f:
@@ -110,6 +116,14 @@ def collect_summaries(roots: list[str] | list[tuple[str, str]]) -> list[dict]:
                 continue
             if not isinstance(summary, dict):
                 continue
+            eid = summary.get("experiment_id")
+            if eid is not None and eid in seen:
+                raise ValueError(
+                    f"experiment {eid!r} has two summaries under {results_root}: "
+                    f"{seen[eid]} and {path}. Move the stale copy out of results/."
+                )
+            if eid is not None:
+                seen[eid] = path
             if not summary.get("dataset"):
                 summary = {**summary, "dataset": fallback}
             summaries.append(summary)
