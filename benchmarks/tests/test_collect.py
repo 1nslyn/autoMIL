@@ -317,6 +317,21 @@ class TestCollectSummaries:
         assert set(per_fold_frame(summaries)["dataset"]) == {"tcga_hnsc"}
         assert set(summaries_to_frame(summaries)["dataset"]) == {"tcga_hnsc"}
 
+    def test_stale_copy_of_an_experiment_fails_loudly(self, tmp_path):
+        root = str(tmp_path / "bench")
+        _write_summary(root, dataset="CPTAC-GBM", framework=Framework.CLAM,
+                       task_name="tp53", encoder="uni_v2", model_type="clam_mb", seed=42)
+        live = next(
+            os.path.join(d, "summary.json")
+            for d, _, files in os.walk(os.path.join(root, "results")) if "summary.json" in files
+        )
+        backup = os.path.join(root, "results", "_backfill_backup", "clam_mb_tp53")
+        os.makedirs(backup)
+        with open(live) as src, open(os.path.join(backup, "summary.json"), "w") as dst:
+            dst.write(src.read())
+        with pytest.raises(ValueError, match="_backfill_backup"):
+            collect_summaries([root])
+
     def test_root_with_no_results_dir_is_skipped(self, tmp_path):
         empty_root = tmp_path / "no_results_here"
         empty_root.mkdir()
